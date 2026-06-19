@@ -178,5 +178,4 @@ assets/
   │   ├── logo.svg
   │   └── COPYRIGHT
   └── characters/     # 角色包目录，用户自行准备，不纳入仓库
-      └── example/    # 示例角色包（仅供参考）
 ```
