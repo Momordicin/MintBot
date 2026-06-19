@@ -1,0 +1,52 @@
+{ 
+  "modelProvider": { 
+    "type": "anthropic", 
+    "ollamaBaseUrl": "http://localhost:11434", 
+    "ollamaModel": "qwen3", 
+    "anthropicApiKey": "", 
+    "openaiApiKey": "", 
+    "openaiBaseUrl": "" 
+  }, 
+  "security": { 
+    "encryptSensitiveFields": true, 
+    "encryptionAlgorithm": "aes-256-gcm", 
+    "keyStorage": "system-keychain" 
+  }, 
+  "memory": { 
+    "recentTrackMaxMessages": 50, 
+    "recentTrackMaxMinutes": 30, 
+    "embeddingQueuePollIntervalMinutes": 5, 
+    "summaryTrigger": { 
+      "pendingCountThreshold": 100, 
+      "oldestPendingAgeMinutes": 120, 
+      "messageCountThreshold": 50, 
+      "lockScreenMinutes": 60 
+    }, 
+    "contextBudget": { 
+      "total": 8000, 
+      "systemPrompt": 1000, 
+      "summary": 1500, 
+      "rag": 2000, 
+      "recentMessages": 3000, 
+      "responseReserve": 500 
+    } 
+  }, 
+  "voice": { 
+    "streamMode": true, 
+    "asrModel": "medium", 
+    "ttsKeepWarmDuringConversation": true 
+  }, 
+  "scheduler": { 
+    "emotionSustainedWindow": 10, 
+    "emotionSustainedMinCount": 6, 
+    "emotionSustainedMinIntensity": 0.6, 
+    "emotionShiftWindow": 5, 
+    "emotionShiftMinIntensity": 0.7, 
+    "cooldownMinutes": 30 
+  }, 
+  "overlay": { 
+    "fullscreenBehavior": "move-to-other-display", 
+    "whitelist": [], 
+    "blacklist": [] 
+  } 
+} 

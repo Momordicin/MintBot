@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+faster-whisper
+transformers
+torch
+sentence-transformers
+blingfire
+python-multipart
+numpy
