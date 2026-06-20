@@ -23,6 +23,7 @@
 !.env.local.example
 config.json
 !config.example.json
+craft.ts
 
 # ======= 数据库文件 / Database Files =======
 **/*.sqlite
