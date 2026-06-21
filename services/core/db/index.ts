@@ -21,36 +21,35 @@ db.pragma('journal_mode = WAL')
 export function initDb() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS Presets (
-      presetId    TEXT    PRIMARY KEY,
-      name        TEXT    NOT NULL,
-      characterId TEXT    NOT NULL,
-      modelType   TEXT    NOT NULL CHECK(modelType IN ('anthropic', 'openai', 'ollama')),
-      modelName   TEXT    NOT NULL,
-      systemPrompt TEXT   NOT NULL,
-      createdAt   INTEGER NOT NULL,
-      updatedAt   INTEGER NOT NULL
+      presetId     TEXT    PRIMARY KEY,
+      name         TEXT    NOT NULL,
+      characterId  TEXT    NOT NULL,
+      modelType    TEXT    NOT NULL CHECK(modelType IN ('anthropic', 'openai', 'ollama')),
+      modelName    TEXT    NOT NULL,
+      systemPrompt TEXT    NOT NULL,
+      createdAt    INTEGER NOT NULL,
+      updatedAt    INTEGER NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS Sessions (
       sessionId      TEXT    PRIMARY KEY,
       presetId       TEXT    NOT NULL,
       presetSnapshot TEXT    NOT NULL,
-      characterId    TEXT    NOT NULL,
       title          TEXT,
       createdAt      INTEGER NOT NULL,
       lastActiveAt   INTEGER NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS Messages (
-      id            INTEGER PRIMARY KEY AUTOINCREMENT,
-      sessionId     TEXT    NOT NULL,
-      role          TEXT    NOT NULL CHECK(role IN ('system', 'user', 'assistant')),
-      content       TEXT    NOT NULL,
-      createdAt     INTEGER NOT NULL,
-      embedded      INTEGER NOT NULL DEFAULT 0,
-      summarized    INTEGER NOT NULL DEFAULT 0,
-      visibleToUser INTEGER NOT NULL DEFAULT 1,
-      trigger       TEXT    CHECK(trigger IN ('user', 'scheduler', 'emotion', 'admin')),
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      sessionId      TEXT    NOT NULL,
+      role           TEXT    NOT NULL CHECK(role IN ('system', 'user', 'assistant')),
+      content        TEXT    NOT NULL,
+      createdAt      INTEGER NOT NULL,
+      embedded       INTEGER NOT NULL DEFAULT 0,
+      summarized     INTEGER NOT NULL DEFAULT 0,
+      visibleToUser  INTEGER NOT NULL DEFAULT 1,
+      trigger        TEXT    CHECK(trigger IN ('user', 'scheduler', 'emotion', 'admin')),
       triggerEventId INTEGER
     );
 

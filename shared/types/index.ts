@@ -60,7 +60,7 @@ export interface Character {
 }
 
 export interface PresetSnapshot {
-  name: string
+  presetId: string
   characterId: string
   modelType: 'anthropic' | 'openai' | 'ollama'
   modelName: string
@@ -72,7 +72,6 @@ export interface Session{
     sessionId: string
     presetId: string             // 关联原始 Preset
     presetSnapshot: string       // JSON.stringify(PresetSnapshot)，创建时写入，只读
-    characterId: string          // 冗余，方便快速查询
     title?: string               // 预留，对用户不可见，算法内部用
     createdAt: number
     lastActiveAt: number
