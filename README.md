@@ -138,15 +138,12 @@ assets/characters/my-character/
 
 ---
 
-## 致谢
-
-设计过程中参考了 [Witsy](https://github.com/nbonamy/witsy)、[Jan.ai](https://github.com/janhq/jan)、[Shinsekai](https://github.com/RachelForster/Shinsekai)、[Open WebUI](https://github.com/open-webui/open-webui) 等开源项目的架构思路。
-
----
-
 ## 免责声明
 
-本软件开源、免费，仅供学习、交流与个人使用。
+本软件开源、免费，任何基于本软件的衍生版本须同样开源。  
+
+若您遇到任何商家基于本软件提供付费服务，请注意其修改后的源代码应依 AGPL-3.0 要求公开。由此产生的任何问题与本软件开发者无关。
+
 
 **生成内容**：本软件的 AI 回复内容由第三方语言模型生成，不代表开发者立场或观点。开发者不对 AI 生成内容的准确性、适当性或任何后果负责。
 
