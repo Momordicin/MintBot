@@ -1,10 +1,9 @@
-// ESM
 import Fastify from 'fastify'
 import path from 'path'
 import fs from 'fs'
 import chokidar from 'chokidar'
 import * as dotenv from 'dotenv'
-
+import { initDb } from './db/index.js'
 
 dotenv.config()
 
@@ -29,24 +28,22 @@ function watchConfig() {
   })
 }
 
-
 const fastify = Fastify({ logger: true })
 
-// health route
 fastify.get('/health', async () => ({ status: 'ok', uptime: process.uptime() }))
 
-// state route
 fastify.get('/state', async () => ({
   sessionId: null,
-  characterName: null,
+  characterId: null,
+  presetSnapshot: null,
   emotion: null,
   embeddingQueue: null,
 }))
 
-
 async function start() {
   loadConfig()
   watchConfig()
+  initDb()
   await fastify.listen({ port: PORT, host: '127.0.0.1' })
   console.log(`[Core] Running on port ${PORT}`)
 }

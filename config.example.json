@@ -1,7 +1,7 @@
 { 
   "modelProvider": { 
-    "type": "anthropic", 
-    "ollamaBaseUrl": "http://localhost:11434", 
+    "type": "ollama-main", 
+    "ollamaBaseUrl": "http://localhost:11434/v1/", 
     "ollamaModel": "qwen3", 
     "anthropicApiKey": "", 
     "openaiApiKey": "", 
