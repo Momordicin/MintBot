@@ -46,6 +46,7 @@
 |---|---|
 | 桌面框架 | Electron + React |
 | 核心服务 | Node.js + Fastify（PM2 守护） |
+| 模型调用 | @anthropic-ai/sdk / OpenAI API / Ollama |
 | 本地模型 | Ollama（可选，Qwen3 / ChatGLM 等） |
 | ASR | faster-whisper（Python HTTP 服务） |
 | TTS | GPT-SoVITS v2（Python HTTP 服务） |
@@ -137,13 +138,9 @@ assets/characters/my-character/
 
 ---
 
-## 参考项目
+## 致谢
 
-- [Witsy](https://github.com/nbonamy/witsy) — Electron + TS 本地 AI 客户端
-- [Jan.ai](https://github.com/janhq/jan) — 本地优先 AI 桌面应用
-- [Shinsekai](https://github.com/RachelForster/Shinsekai) — Python AI 角色伴侣
-- [Mem0](https://github.com/mem0ai/mem0) — 开源 AI 记忆层
-- [LiveKit Agents](https://github.com/livekit/agents) — 语音 AI 管线参考
+设计过程中参考了 [Witsy](https://github.com/nbonamy/witsy)、[Jan.ai](https://github.com/janhq/jan)、[Shinsekai](https://github.com/RachelForster/Shinsekai)、[Open WebUI](https://github.com/open-webui/open-webui) 等开源项目的架构思路。
 
 ---
 

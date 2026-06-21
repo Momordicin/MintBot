@@ -1,6 +1,17 @@
 // 建议索引（写 SQLite schema 时建立）：
 // CREATE INDEX idx_messages_session ON Messages(sessionId, createdAt)
 // CREATE INDEX idx_messages_visible ON Messages(sessionId, visibleToUser)
+
+export interface ModelConfig {
+  type: 'anthropic' | 'openai' | 'ollama'
+  anthropicApiKey?: string
+  openaiApiKey?: string
+  openaiBaseUrl?: string
+  ollamaBaseUrl?: string
+  ollamaModel?: string
+  modelName?: string
+}
+
 export interface ChatMessage{
     role: 'system' | 'user' | 'assistant'
     content: string
@@ -109,4 +120,10 @@ export interface PendingTool {
   tool: string
   args: Record<string, unknown>
   expiresAt: number  // timestamp，默认 30s 超时
+}
+
+export interface CompletionOptions {
+  maxTokens?: number
+  temperature?: number
+  signal?: AbortSignal  // 用于中断流式请求（Phase 6 预留）
 }
