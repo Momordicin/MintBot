@@ -49,5 +49,6 @@
     "whitelist": [], 
     "blacklist": [] 
   },
-  "defaultPresetId": "preset-001"
+  "defaultPresetId": "preset-001", 
+  "streaming": true
 } 
