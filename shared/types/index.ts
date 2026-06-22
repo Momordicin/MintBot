@@ -12,6 +12,18 @@ export interface ModelConfig {
   modelName?: string
 }
 
+export interface ToolSchema {
+  name: string
+  description: string
+  parameters: Record<string, unknown>  // JSON Schema 格式，Phase 5 细化
+}
+
+export interface BuiltContext {
+  system: string
+  messages: ChatMessage[]
+  tools?: ToolSchema[]       // Phase 5 预留
+}
+
 export interface ChatMessage{
     role: 'system' | 'user' | 'assistant'
     content: string

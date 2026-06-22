@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
-import type { ChatMessage, ModelConfig, CompletionOptions } from '../../../shared/types/index'
+import type { ChatMessage, ModelConfig, CompletionOptions, BuiltContext } from '../../../shared/types/index.js'
 
 export class ModelProvider {
   private config: ModelConfig
@@ -10,18 +10,22 @@ export class ModelProvider {
 
   // 流式
   async *complete(
-    messages: ChatMessage[],
+    context: BuiltContext,
     options: CompletionOptions = {}
   ): AsyncIterable<string> {
+    const messagesWithSystem: ChatMessage[] = context.system
+      ? [{ role: 'system', content: context.system }, ...context.messages]
+      : context.messages
+
     switch (this.config.type) {
       case 'anthropic':
-        yield* this.completeAnthropic(messages, options)
+        yield* this.completeAnthropic(context.messages, options, context.system)
         break
       case 'openai':
-        yield* this.completeOpenAI(messages, options)
+        yield* this.completeOpenAI(messagesWithSystem, options)
         break
       case 'ollama':
-        yield* this.completeOllama(messages, options)
+        yield* this.completeOllama(messagesWithSystem, options)
         break
       default:
         throw new Error(`Unknown model provider type: ${this.config.type}`)
@@ -30,11 +34,11 @@ export class ModelProvider {
 
   // 非流式
   async completeSync(
-    messages: ChatMessage[],
+    context: BuiltContext,
     options: CompletionOptions = {}
   ): Promise<string> {
     let result = ''
-    for await (const chunk of this.complete(messages, options)) {
+    for await (const chunk of this.complete(context, options)) {
       result += chunk
     }
     return result
@@ -45,22 +49,21 @@ export class ModelProvider {
 
   private async *completeAnthropic(
     messages: ChatMessage[],
-    options: CompletionOptions
+    options: CompletionOptions,
+    system?: string
   ): AsyncIterable<string> {
     const client = new Anthropic({
       apiKey: this.config.anthropicApiKey ?? process.env.ANTHROPIC_API_KEY,
     })
 
-    const systemMessages = messages.filter(m => m.role === 'system')
     const chatMessages = messages.filter(m => m.role !== 'system')
-    const systemPrompt = systemMessages.map(m => m.content).join('\n')
 
     const stream = await client.messages.stream({
-      model: this.config.modelName ?? (() => { 
-        throw new Error('[ModelProvider] modelName is required in config') 
+      model: this.config.modelName ?? (() => {
+        throw new Error('[ModelProvider] modelName is required in config')
       })(),
       max_tokens: options.maxTokens ?? 1000,
-      system: systemPrompt || undefined,
+      system: system || undefined,
       messages: chatMessages.map(m => ({
         role: m.role as 'user' | 'assistant',
         content: m.content,
@@ -135,9 +138,9 @@ export class ModelProvider {
       signal: options.signal,
     })
 
-    if (!response.ok) {throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`)}
-    if (!response.body) {throw new Error('[ModelProvider] Response body is null')}
-    
+    if (!response.ok) { throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`) }
+    if (!response.body) { throw new Error('[ModelProvider] Response body is null') }
+
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
