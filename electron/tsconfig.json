@@ -1,17 +1,16 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "ES2022",
+    "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "resolveJsonModule": true,
-    "outDir": "dist"
+    "composite": true,
+    "types": ["node", "electron-vite/node"]
   },
-  "include": [
-    "electron/**/*",
-    "services/core/**/*",
-    "shared/**/*"
+  "include": ["./**/*"],
+  "references": [
+    { "path": "../shared" }
   ]
 }

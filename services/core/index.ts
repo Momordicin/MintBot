@@ -4,6 +4,7 @@ import fs from 'fs'
 import chokidar from 'chokidar'
 import * as dotenv from 'dotenv'
 import { initDb } from './db/index.js'
+import { loadSession } from './session/index.js'
 
 dotenv.config()
 
@@ -44,6 +45,10 @@ async function start() {
   loadConfig()
   watchConfig()
   initDb()
+  const defaultPresetId = (config as any)?.defaultPresetId
+  if (defaultPresetId) {
+    loadSession(defaultPresetId)
+  }
   await fastify.listen({ port: PORT, host: '127.0.0.1' })
   console.log(`[Core] Running on port ${PORT}`)
 }

@@ -1,6 +1,6 @@
 { 
   "modelProvider": { 
-    "type": "ollama-main", 
+    "type": "ollama", 
     "ollamaBaseUrl": "http://localhost:11434/v1/", 
     "ollamaModel": "qwen3", 
     "anthropicApiKey": "", 
@@ -48,5 +48,6 @@
     "fullscreenBehavior": "move-to-other-display", 
     "whitelist": [], 
     "blacklist": [] 
-  } 
+  },
+  "defaultPresetId": "preset-001"
 } 
