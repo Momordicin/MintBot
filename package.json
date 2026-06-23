@@ -8,7 +8,11 @@
     "dev:core": "tsx watch services/core/index.ts",
     "dev:ai": "cd services/ai && uvicorn main:app --reload --port 8765",
     "build": "electron-vite build",
-    "preview": "electron-vite preview"
+    "preview": "electron-vite preview",
+    "seed": "tsx services/core/db/seed.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "keywords": [],
   "author": "",
@@ -41,6 +45,7 @@
     "concurrently": "^10.0.3",
     "electron": "^42.4.1",
     "electron-vite": "^5.0.0",
-    "tsx": "^4.22.4"
+    "tsx": "^4.22.4",
+    "vitest": "^4.1.9"
   }
 }

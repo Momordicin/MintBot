@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3'
+import DatabaseConstructor, { Database } from 'better-sqlite3';
 import path from 'path'
 import fs from 'fs'
 import * as dotenv from 'dotenv'
@@ -13,7 +13,7 @@ if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true })
 }
 
-export const db = new Database(DB_PATH)
+export const db: Database = new DatabaseConstructor(DB_PATH);
 
 // 开启 WAL 模式（提升并发读写性能）
 db.pragma('journal_mode = WAL')

@@ -1,7 +1,6 @@
 // services/core/context/buildContext.ts
 import type { BuiltContext, ChatMessage } from '../../../shared/types/index.js'
-import { requireCurrentState } from '../session/index.js'
-import { getHistory } from '../session/index.js'
+import { requireCurrentState, getHistory } from '../session/index.js'
 
 export async function buildContext(userInput: string): Promise<BuiltContext> {
   const { preset } = requireCurrentState()
@@ -9,7 +8,7 @@ export async function buildContext(userInput: string): Promise<BuiltContext> {
 
   const messages: ChatMessage[] = [
     ...history.map(m => ({ role: m.role, content: m.content })),
-    { role: 'user', content: userInput },
+    { role: 'user' as const, content: userInput },
   ]
 
   return {

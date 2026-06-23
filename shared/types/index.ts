@@ -110,7 +110,6 @@ export interface EmbeddingQueueStatus {
 
 export interface AppState {
   sessionId: string | null
-  characterId: string | null
   presetSnapshot: PresetSnapshot | null
   emotion: EmotionState | null        // Phase 2 预留，从最近 Message 解析
   embeddingQueue: EmbeddingQueueStatus | null  // Phase 2 预留

@@ -14,7 +14,7 @@ export class ModelProvider {
     options: CompletionOptions = {}
   ): AsyncIterable<string> {
     const messagesWithSystem: ChatMessage[] = context.system
-      ? [{ role: 'system', content: context.system }, ...context.messages]
+      ? [{ role: 'system' as const, content: context.system }, ...context.messages]
       : context.messages
 
     switch (this.config.type) {

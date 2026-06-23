@@ -21,6 +21,9 @@ let current: SessionState | null = null
 export function loadSession(presetId: string): SessionState {
   const preset = getPresetById(presetId)
   if (!preset) throw new Error(`[Session] Preset not found: ${presetId}`)
+  // TODO Phase 3：加载 preset 后需验证 characterId 对应的角色包是否存在
+  // 检查 assets/characters/{characterId}/manifest.json 是否可读
+  // 不存在时给出明确错误或降级到默认角色，避免立绘加载失败静默报错
 
   let session = getLatestSessionByPreset(presetId)
 
