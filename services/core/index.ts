@@ -8,6 +8,7 @@ import { getCurrentState, loadSession } from './session/index.js'
 import { chatRoutes } from './routes/chat.js'
 import { createModelProvider, ModelProvider } from './providers/ModelProvider.js'
 import type { ModelConfig } from '../../shared/types/index.js'
+import { ensureOllama, stopOllamaIfManaged } from './providers/ollama.js'
 
 dotenv.config()
 
@@ -41,6 +42,7 @@ declare module 'fastify' {
     modelProvider: ModelProvider
   }
 }
+
 const fastify = Fastify({ logger: true })
 
 fastify.get('/health', async () => ({ status: 'ok', uptime: process.uptime() }))
@@ -55,11 +57,23 @@ fastify.get('/state', async () => {
   }
 })
 
-
-
 async function start() {
+  // start() 函数职责太多
+  process.on('SIGINT', async () => {
+    await stopOllamaIfManaged()
+    process.exit(0)
+  })
+
+  process.on('SIGTERM', async () => {
+    await stopOllamaIfManaged()
+    process.exit(0)
+  })
+
+  // loadConfig 和 watchConfig 耦合太紧
   loadConfig()
-  const modelProvider = createModelProvider(config.modelProvider as ModelConfig)
+  const modelConfig = config.modelProvider as ModelConfig | undefined
+  if (!modelConfig) throw new Error('[Config] modelProvider is not configured')
+  const modelProvider = createModelProvider(modelConfig)
 
   fastify.decorate('config', config)
   fastify.decorate('modelProvider', modelProvider)
@@ -67,13 +81,18 @@ async function start() {
   watchConfig()
   initDb()
   
-  const defaultPresetId = (config as any)?.defaultPresetId
+  if (modelConfig?.type === 'ollama') {
+    await ensureOllama(modelConfig.ollamaBaseUrl)
+  }
+  
+  const defaultPresetId = config.defaultPresetId as string | undefined
   if (defaultPresetId) {
     loadSession(defaultPresetId)
   }
   await fastify.register(chatRoutes)  
   await fastify.listen({ port: PORT, host: '127.0.0.1' })
   console.log(`[Core] Running on port ${PORT}`)
+
 }
 
 start().catch(err => {
