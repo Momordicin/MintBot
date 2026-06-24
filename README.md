@@ -143,6 +143,17 @@ assets/characters/my-character/
 ```
 
 ---
+## 参与贡献
+
+项目目前处于底层架构建设阶段，暂不接受外部 PR。欢迎通过以下方式参与：
+
+- ⭐ Star 关注项目进展
+- 🐛 [提交 Issue](https://github.com/Momordicin/MintBot/issues) 反馈 Bug 或建议
+- 🍴 Fork 自行修改使用（遵循 AGPL-3.0）
+
+详见 [CONTRIBUTING.md](./CONTRIBUTING.md)
+
+---
 
 ## 隐私说明
 
