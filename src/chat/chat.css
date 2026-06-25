@@ -1,0 +1,379 @@
+/* ─── 聊天窗口容器 ─────────────────────────────────────── */
+
+.chat-window {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-color: #0f0f14;
+  position: relative;
+  overflow: hidden;
+}
+
+/* ─── Ollama 未就绪 banner ─────────────────────────────── */
+
+.banner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  padding: 8px 16px;
+  font-size: 13px;
+  text-align: center;
+}
+
+.banner--warn {
+  background: rgba(200, 120, 30, 0.85);
+  color: #fff;
+}
+
+/* ─── 聊天区域 ─────────────────────────────────────────── */
+
+.chat-area {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+/* ─── 消息列表 ─────────────────────────────────────────── */
+
+.msg-list {
+  height: 100%;
+  overflow-y: auto;
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  background: rgba(var(--chat-bg-rgb), var(--chat-bg-opacity));
+}
+
+.msg-list__inner {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 100%;
+  justify-content: flex-end;
+}
+
+/* ─── 滚动到底部按钮 ───────────────────────────────────── */
+
+.scroll-btn {
+  position: absolute;
+  bottom: 12px;
+  right: 16px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  font-size: 18px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+}
+
+.scroll-btn:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* ─── 消息行 ───────────────────────────────────────────── */
+
+.msg-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.msg-row--user {
+  justify-content: flex-end;
+}
+
+.msg-row--collapsed {
+  padding-top: 1px;
+}
+
+/* ─── 头像 ─────────────────────────────────────────────── */
+
+.msg-avatar {
+  width: var(--avatar-size);
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-end;
+}
+
+.msg-avatar img {
+  width: var(--avatar-size);
+  height: var(--avatar-size);
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.msg-avatar__placeholder {
+  width: var(--avatar-size);
+  height: var(--avatar-size);
+  border-radius: 50%;
+  background: rgba(120, 90, 180, 0.6);
+}
+
+.msg-avatar__placeholder--user {
+  background: rgba(80, 140, 200, 0.6);
+}
+
+/* ─── 消息列 ───────────────────────────────────────────── */
+
+.msg-col {
+  display: flex;
+  flex-direction: column;
+  max-width: 68%;
+  gap: 3px;
+}
+
+.msg-row--user .msg-col {
+  align-items: flex-end;
+}
+
+/* ─── 气泡 + 时间戳包装 ────────────────────────────────── */
+
+.msg-bubble-wrap {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.msg-row--user .msg-bubble-wrap {
+  flex-direction: row-reverse;
+}
+
+/* ─── 时间戳：平时隐藏，hover 显示 ────────────────────── */
+
+.msg-time {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+}
+
+.msg-row:hover .msg-time {
+  opacity: 1;
+}
+
+/* ─── 气泡 ─────────────────────────────────────────────── */
+
+.msg-bubble {
+  padding: 8px 12px;
+  border-radius: var(--bubble-radius);
+  font-size: 14px;
+  line-height: 1.6;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.msg-bubble--bot {
+  background: var(--bubble-bot-bg);
+  color: var(--bubble-bot-text);
+  border-bottom-left-radius: 4px;
+}
+
+.msg-bubble--user {
+  background: var(--bubble-user-bg);
+  color: var(--bubble-user-text);
+  border-bottom-right-radius: 4px;
+}
+
+.msg-bubble--error {
+  background: rgba(180, 60, 60, 0.6);
+  color: rgba(255, 220, 220, 0.9);
+}
+
+/* ─── 系统消息 ─────────────────────────────────────────── */
+
+.msg-system {
+  text-align: center;
+  padding: 6px 16px;
+  font-size: 12px;
+  color: var(--system-msg-text);
+}
+
+/* ─── 三点输入动效 ─────────────────────────────────────── */
+
+.typing-indicator {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.typing-avatar {
+  width: var(--avatar-size);
+  height: var(--avatar-size);
+  border-radius: 50%;
+  background: rgba(120, 90, 180, 0.6);
+  flex-shrink: 0;
+}
+
+.typing-bubble {
+  background: var(--bubble-bot-bg);
+  border-radius: var(--bubble-radius);
+  border-bottom-left-radius: 4px;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.5);
+  animation: typing-dot 1.2s infinite ease-in-out;
+}
+
+.dot:nth-child(2) { animation-delay: 0.2s; }
+.dot:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes typing-dot {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+
+/* ─── 输入区域容器 ─────────────────────────────────────── */
+
+.input-area {
+  background: var(--input-bg);
+  border-top: 1px solid var(--input-border);
+  padding: 8px 12px 6px;
+  display: flex;
+  flex-direction: column;
+}
+
+.input-area-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ─── 输入行（textarea + 发送按钮） ───────────────────── */
+
+.input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.input-bar__textarea {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--input-border);
+  border-radius: 8px;
+  color: var(--input-text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.5;
+  padding: 8px 12px;
+  resize: none;
+  outline: none;
+  min-height: 36px;
+  max-height: 120px;
+  overflow-y: auto;
+  transition: border-color 0.15s;
+}
+
+.input-bar__textarea::placeholder {
+  color: var(--input-placeholder);
+}
+
+.input-bar__textarea:focus {
+  border-color: rgba(120, 90, 180, 0.6);
+}
+
+/* ─── 发送按钮（小飞机） ───────────────────────────────── */
+
+.send-btn {
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: opacity 0.15s, transform 0.15s;
+}
+
+.send-btn:hover:not(:disabled) {
+  opacity: 0.85;
+  transform: translateX(2px) translateY(-2px);
+}
+
+.send-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.send-icon {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+}
+
+/* ─── 工具栏行 ─────────────────────────────────────────── */
+
+.toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.toolbar-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--input-border);
+  margin: 0 6px;
+  flex-shrink: 0;
+}
+
+/* ─── 工具按钮 ─────────────────────────────────────────── */
+
+.tool-btn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.35);
+  cursor: not-allowed;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.5;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+/* ─── 设置按钮（和工具栏左侧隔离） ────────────────────── */
+
+.settings-btn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.25);
+  cursor: not-allowed;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.4;
+  flex-shrink: 0;
+}

@@ -27,12 +27,9 @@ export async function chatRoutes(fastify: FastifyInstance) {
       return reply.status(500).send({ error: 'Failed to build context' })
     }
 
-    // ─── 写入用户消息 ──────────────────────────────────────
-
     addMessage('user', message, 'user')
 
-    // ─── 建立 SSE 连接 ─────────────────────────────────────
-
+    reply.raw.setHeader('Access-Control-Allow-Origin', 'http://localhost:5173')
     reply.raw.setHeader('Content-Type', 'text/event-stream')
     reply.raw.setHeader('Cache-Control', 'no-cache')
     reply.raw.setHeader('Connection', 'keep-alive')
@@ -48,16 +45,13 @@ export async function chatRoutes(fastify: FastifyInstance) {
       let fullReply = ''
 
       if (streaming) {
-        // ─── 流式模式 ────────────────────────────────────────
+        // ─── 流式模式：累积 chunk，Phase 4 开放逐句推送 ───────
         for await (const chunk of fastify.modelProvider.complete(context)) {
           fullReply += chunk
-          send('message_chunk', { text: chunk })
         }
       } else {
         // ─── 非流式模式 ──────────────────────────────────────
-        // Phase 后期：全文生成后切割为多段发送
         fullReply = await fastify.modelProvider.completeSync(context)
-        send('message_chunk', { text: fullReply })
       }
 
       // ─── 解析 JSON 回复（emotion 占位）──────────────────────
@@ -72,10 +66,11 @@ export async function chatRoutes(fastify: FastifyInstance) {
         // 模型没有返回 JSON，直接用原文
       }
 
-      // ─── 写入 assistant 消息 ─────────────────────────────
       const messageId = addMessage('assistant', replyText, 'user')
-
-      send('message_done', { messageId: String(messageId) })
+ 
+      // message_done 带完整文本，前端直接显示，无需累积 chunk
+      // Phase 4：句子切割完成后，改为逐句推 message_chunk，前端追加气泡
+      send('message_done', { messageId: String(messageId), text: replyText })
       send('emotion', {
         self: emotion?.self ?? null,
         perceived_user: emotion?.perceived_user ?? null,
@@ -83,6 +78,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
     } catch (err) {
       // ─── 连接建立后的错误，走 SSE system 事件 ───────────────
+      console.error('[Chat] Error:', err)
       send('system', { type: 'error', payload: { message: 'Model call failed' } })
     } finally {
       reply.raw.end()

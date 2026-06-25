@@ -9,6 +9,9 @@ import { chatRoutes } from './routes/chat.js'
 import { createModelProvider, ModelProvider } from './providers/ModelProvider.js'
 import type { ModelConfig } from '../../shared/types/index.js'
 import { ensureOllama, isOllamaRunning, getOllamaBaseUrl, stopOllamaIfManaged } from './providers/ollama.js'
+import fastifyStatic from '@fastify/static'
+import fastifyCors from '@fastify/cors'
+
 
 dotenv.config()
 
@@ -99,6 +102,16 @@ async function start() {
   if (defaultPresetId) {
     loadSession(defaultPresetId)
   }
+
+  await fastify.register(fastifyCors, {
+  origin: ['http://localhost:5173', 'http://127.0.0.1:5173'],
+  })
+
+  await fastify.register(fastifyStatic, {
+  root: path.resolve(process.cwd(), 'data/wallpapers'),
+  prefix: '/wallpapers/',
+  })
+  
   await fastify.register(chatRoutes)  
   await fastify.listen({ port: PORT, host: '127.0.0.1' })
   console.log(`[Core] Running on port ${PORT}`)
