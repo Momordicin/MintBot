@@ -21,7 +21,7 @@
 | 工具 | 版本要求 | 说明 |
 |---|---|---|
 | Node.js | 20+ | 核心服务和 Electron |
-| pnpm | 8+ | 包管理器，不接受 npm / yarn |
+| pnpm | 见 `package.json` | 包管理器，不接受 npm / yarn |
 | Python | 3.10+ | AI 模型服务（Phase 4 语音功能需要） |
 | Ollama | 最新版 | 可选，本地模型推理 |
 
@@ -47,7 +47,6 @@ pnpm install
 ### 3. 配置环境
 
 ```bash
-# 复制配置模板
 cp .env.example .env
 cp config.example.json config.json
 ```
@@ -56,8 +55,6 @@ cp config.example.json config.json
 
 ```dotenv
 DB_ENCRYPTION_KEY=your-32-char-encryption-key-here
-ANTHROPIC_API_KEY=sk-ant-...   # 使用 Anthropic 时填写
-OPENAI_API_KEY=sk-...          # 使用 OpenAI 时填写
 ```
 
 编辑 `config.json`，配置模型提供商：
@@ -66,14 +63,14 @@ OPENAI_API_KEY=sk-...          # 使用 OpenAI 时填写
 {
   "modelProvider": {
     "type": "ollama",
-    "ollamaBaseUrl": "http://localhost:11434/v1/",
+    "ollamaBaseUrl": "http://localhost:11434",
     "ollamaModel": "qwen3"
   },
   "defaultPresetId": "preset-001"
 }
 ```
 
-> 如果使用 Anthropic 或 OpenAI，将 `type` 改为 `"anthropic"` 或 `"openai"`，并填入对应 API Key。
+> 如果使用 Anthropic 或 OpenAI，将 `type` 改为 `"anthropic"` 或 `"openai"`，并在 `config.json` 里填入对应 `anthropicApiKey` 或 `openaiApiKey`。所有模型接口配置通过 `config.json` 配置。
 
 ### 4. 初始化数据库
 
@@ -82,20 +79,37 @@ OPENAI_API_KEY=sk-...          # 使用 OpenAI 时填写
 pnpm seed
 ```
 
+首次运行必须执行。幂等操作，重复运行不会重复写入。
+
 ### 5. 启动开发环境
 
+核心服务和 Electron 需要分两个终端分别启动：
+
+**终端一：核心服务**
+```bash
+pnpm dev:core
+```
+
+**终端二：Electron**
 ```bash
 pnpm dev
 ```
 
-这会同时启动：
-- Electron 窗口（渲染进程）
-- Node.js 核心服务（Fastify，端口 3000）
+### 6. 生产环境启动（PM2）
 
-Windows 用户：首次运行 pnpm start:core 需要管理员终端，之后普通终端即可。
-Linux/macOS 用户：直接 pnpm start:core 即可。
+先编译：
+```bash
+pnpm build:core
+```
 
-### 6. 运行测试
+再启动：
+```bash
+# Windows 用户首次运行需要管理员终端，之后普通终端即可
+# Linux/macOS 用户直接运行
+pnpm start:core
+```
+
+### 7. 运行测试
 
 ```bash
 pnpm test
@@ -113,17 +127,19 @@ MintBot/
 │   ├── main/
 │   └── preload/
 ├── src/                    # 渲染进程（React UI）
-│   ├── chat/               # 聊天窗口
-│   ├── overlay/            # 桌面悬浮窗
-│   └── settings/           # 设置页
+│   ├── assets/             # 静态资源（字体、图标等）
+│   ├── chat/               # 聊天窗口组件
+│   ├── overlay/            # 桌面悬浮窗（Phase 3）
+│   ├── settings/           # 设置页（Phase 7）
+│   └── styles/             # 全局样式和 CSS 变量
 ├── services/
 │   ├── core/               # Node.js Fastify 核心服务
 │   │   ├── context/        # buildContext()，对话上下文组装
-│   │   ├── db/             # SQLite 初始化、加密、seed 脚本
+│   │   ├── db/             # SQLite 初始化、migration、加密、seed
 │   │   ├── providers/      # ModelProvider（Anthropic/OpenAI/Ollama）
 │   │   ├── routes/         # REST + SSE 路由
 │   │   └── session/        # Session 管理、消息读写
-│   └── ai/                 # Python FastAPI AI 模型服务
+│   └── ai/                 # Python FastAPI AI 模型服务（Phase 4）
 │       ├── asr/            # faster-whisper 语音识别
 │       ├── tts/            # GPT-SoVITS v2 语音合成
 │       └── embedding/      # BGE-large 向量 embedding
@@ -132,8 +148,13 @@ MintBot/
 ├── assets/
 │   ├── brand/              # 品牌资产（版权保留，不开源）
 │   └── characters/         # 角色包（用户自行准备，不纳入仓库）
+├── data/                   # 运行时数据（gitignore）
+│   ├── db.sqlite           # 主数据库
+│   └── wallpapers/         # 用户背景图片
+├── out/                    # 编译产物（gitignore）
+├── ecosystem.config.cjs    # PM2 配置
 ├── .env.example            # 环境变量模板
-├── config.example.json     # 配置文件模板
+└── config.example.json     # 配置文件模板
 └── vitest.config.ts        # 测试配置
 ```
 
@@ -154,6 +175,36 @@ MintBot/
   - `electron/`、`src/`：`bundler`（electron-vite 编译）
   - `services/core/`、`shared/`：`NodeNext`（tsx 直接运行）
 - import 路径必须带 `.js` 后缀（ESM 规范）
+
+### SQLite Schema Migration
+
+所有 schema 变更通过 `PRAGMA user_version` 版本号追踪，禁止直接修改建表语句。
+
+**添加新字段的流程：**
+
+1. 在 `services/core/db/index.ts` 的 `runMigrations()` 里添加新版本块：
+
+```typescript
+if (current < N) {
+  db.exec(`ALTER TABLE Xxx ADD COLUMN newField TEXT`)
+  db.pragma(`user_version = N`)
+  console.log('[DB] Migration vN: ...')
+}
+```
+
+2. 更新 `shared/types/index.ts` 里对应的 interface
+3. 更新 `services/core/session/queries.ts` 里的读写函数
+4. 更新 `services/core/db/seed.ts`
+5. 更新 `services/core/session/queries.test.ts`
+
+**规则：**
+- 每个版本块必须幂等（重复执行不报错）
+- 版本号严格递增，不允许跳号
+- 建表语句（`CREATE TABLE IF NOT EXISTS`）保持 v0 初始状态，增量变更全部在 migration 块里
+
+版本历史：
+- **v0**：初始建表（Presets、Sessions、Messages、Summaries）
+- **v1**：Preset 表加 `wallpaperPath TEXT`
 
 ### 测试
 
@@ -193,6 +244,7 @@ docs: update README with pnpm setup instructions
 ### 配置外置原则
 
 - 所有路径、地址、密钥必须走 `.env` 或 `config.json`，**禁止硬编码**
+- 模型相关配置（API Key、模型名、地址）只走 `config.json`，不走环境变量
 - 不允许在代码里出现绝对路径
 
 ---
@@ -222,10 +274,47 @@ MintBot 的底层架构仍在积极建设中（记忆系统、悬浮窗、语音
 
 > 角色包不纳入主仓库，请通过单独渠道分享。
 
-如果你想贡献示例角色包，需要确保：
+角色包放在 `assets/characters/角色名/` 目录下，包含以下文件：
 
+```
+assets/characters/my-character/
+  ├── manifest.json     # 角色配置
+  ├── avatar.png        # 聊天窗口头像
+  ├── idle.gif
+  ├── happy.gif
+  └── ...
+```
+
+`manifest.json` 完整格式：
+
+```json
+{
+  "name": "my-character",
+  "version": "1.0",
+  "displayName": "显示用名字",
+  "description": "角色简介，设置页展示用",
+  "tags": ["温柔", "治愈"],
+  "avatar": "avatar.png",
+  "format": "gif",
+  "emotions": {
+    "idle":    { "gif": "idle.gif",    "png": "idle.png" },
+    "happy":   { "gif": "happy.gif",   "png": "happy.png" },
+    "curious": { "gif": "curious.gif", "png": "curious.png" },
+    "sleep":   { "gif": "sleep.gif",   "png": "sleep.png" }
+  },
+  "fallback": "idle",
+  "voice": {
+    "tts_model": "GPT-SoVITS-v2",
+    "reference_audio": "voice_ref.wav",
+    "language": "zh"
+  }
+}
+```
+
+如果你想贡献示例角色包，需要确保：
 - 立绘资产为**原创**或 **CC0 授权**，版权清晰
-- 包含完整的 `manifest.json`，情绪标签覆盖至少：`idle`、`happy`、`curious`、`sleep`
+- 情绪标签覆盖至少：`idle`、`happy`、`curious`、`sleep`
+- 建议包含完整的 `manifest.json`
 - 不包含任何违反 AGPL-3.0 的内容
 
 ---
