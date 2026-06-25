@@ -7,7 +7,9 @@
     "dev": "electron-vite dev",
     "dev:core": "tsx watch services/core/index.ts",
     "dev:ai": "cd services/ai && uvicorn main:app --reload --port 8765",
+    "start:core": "pm2 start ecosystem.config.cjs",
     "build": "electron-vite build",
+    "build:core": "pnpm exec tsc -p shared/tsconfig.json && pnpm exec tsc -p services/core/tsconfig.json",
     "preview": "electron-vite preview",
     "seed": "tsx services/core/db/seed.ts",
     "typecheck": "tsc --noEmit",
@@ -48,6 +50,7 @@
     "electron": "^42.4.1",
     "electron-vite": "^5.0.0",
     "tsx": "^4.22.4",
+    "typescript": "^6.0.3",
     "vite": "^8.1.0",
     "vitest": "^4.1.9"
   }

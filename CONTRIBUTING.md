@@ -92,6 +92,9 @@ pnpm dev
 - Electron 窗口（渲染进程）
 - Node.js 核心服务（Fastify，端口 3000）
 
+Windows 用户：首次运行 pnpm start:core 需要管理员终端，之后普通终端即可。
+Linux/macOS 用户：直接 pnpm start:core 即可。
+
 ### 6. 运行测试
 
 ```bash
