@@ -6,21 +6,21 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-AGPL--3.0-blue" />
-  <img src="https://img.shields.io/badge/status-Phase%201-orange" />
+  <img src="https://img.shields.io/badge/status-In%20Development-orange" />
   <img src="https://img.shields.io/github/commit-activity/m/Momordicin/MintBot" />
   <img src="https://img.shields.io/github/last-commit/Momordicin/MintBot" />
 </p>
 
 一个运行在本地的 AI 角色伴侣桌面应用。支持自定义角色设定，语音对话，桌面悬浮窗，以及长期记忆。数据完全留在本机，隐私优先。
 
-> 🔨 Phase 1 开发中 · 核心对话链路 · 欢迎 Star 关注后续进展
+> ⚠️ 目前仅支持 Windows，macOS 暂不兼容
 
 ---
 
 ## 功能特性
 
 **对话**
-- 与自定义 AI 角色实时对话，SSE 流式输出
+- 与自定义 AI 角色实时对话，"对方输入中"动效 + 完整消息一次性显示，类即时通讯体验
 - 支持多段回复，模拟真实对话节奏
 - 消息历史完整留存
 
@@ -72,7 +72,7 @@
 
 ## 开发阶段
 
-- [ ] Phase 1：核心对话链路
+- [x] Phase 1：核心对话链路（后端完成，React UI 开发中）
 - [ ] Phase 2：记忆系统
 - [ ] Phase 3：悬浮窗 + 窗口管理
 - [ ] Phase 4：语音
@@ -88,7 +88,7 @@
 
 **前置依赖**
 - Node.js 20+
-- pnpm 8+
+- pnpm（版本见 `package.json`）
 - Python 3.10+
 - （可选）Ollama 或 OpenAI / Anthropic API Key 二选一
 
@@ -105,10 +105,14 @@ cp .env.example .env
 cp config.example.json config.json
 # 编辑 config.json，填入 API Key 或配置本地 Ollama
 
-# 初始化数据库（插入测试 preset）
+# 初始化数据库（幂等写入测试 preset，首次运行必须执行）
 pnpm seed
 
-# 启动开发环境
+# 启动核心服务（Fastify，独立进程）
+# 开发阶段：pnpm --filter services/core dev
+# 生产环境：pm2 start ecosystem.config.js（PM2 配置完善后更新此处）
+
+# 启动桌面应用（Electron + React）
 pnpm dev
 ```
 
@@ -121,6 +125,7 @@ pnpm dev
 ```
 assets/characters/my-character/
   ├── manifest.json     # 情绪标签 → 立绘文件映射
+  ├── avatar.png        # 聊天窗口头像
   ├── idle.gif
   ├── happy.gif
   └── ...
@@ -131,6 +136,11 @@ assets/characters/my-character/
 ```json
 {
   "name": "my-character",
+  "version": "1.0",
+  "displayName": "显示用名字",
+  "description": "角色简介，设置页展示用",
+  "tags": ["温柔", "治愈"],
+  "avatar": "avatar.png",
   "format": "gif",
   "emotions": {
     "idle":    { "gif": "idle.gif",    "png": "idle.png" },
@@ -138,11 +148,17 @@ assets/characters/my-character/
     "curious": { "gif": "curious.gif", "png": "curious.png" },
     "sleep":   { "gif": "sleep.gif",   "png": "sleep.png" }
   },
-  "fallback": "idle"
+  "fallback": "idle",
+  "voice": {
+    "tts_model": "GPT-SoVITS-v2",
+    "reference_audio": "voice_ref.wav",
+    "language": "zh"
+  }
 }
 ```
 
 ---
+
 ## 参与贡献
 
 项目目前处于底层架构建设阶段，暂不接受外部 PR。欢迎通过以下方式参与：
@@ -175,8 +191,6 @@ assets/characters/my-character/
 **角色包版权**：用户自行准备和使用的角色包（包括立绘、语音素材等）的版权责任由用户自行承担。请勿使用未经授权的版权素材。开发者不对用户使用的第三方素材产生的任何版权纠纷负责。
 
 **使用风险**：本软件按现状提供，不附带任何明示或暗示的保证。用户自行承担使用本软件的全部风险。
-
-**数据隐私**：本软件所有数据存储在用户本地设备，开发者不收集、不存储、不传输任何用户数据。
 
 ---
 
