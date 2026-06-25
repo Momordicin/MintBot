@@ -53,7 +53,7 @@ export class ModelProvider {
     system?: string
   ): AsyncIterable<string> {
     const client = new Anthropic({
-      apiKey: this.config.anthropicApiKey ?? process.env.ANTHROPIC_API_KEY,
+      apiKey: this.config.anthropicApiKey,
     })
 
     const chatMessages = messages.filter(m => m.role !== 'system')
@@ -89,7 +89,7 @@ export class ModelProvider {
   ): AsyncIterable<string> {
     yield* ModelProvider.callOpenAICompatible(
       this.config.openaiBaseUrl ?? 'https://api.openai.com/v1',
-      this.config.openaiApiKey ?? process.env.OPENAI_API_KEY ?? 'no-key',
+      this.config.openaiApiKey ?? 'no-key',
       this.config.modelName ?? 'gpt-4o',
       messages,
       options

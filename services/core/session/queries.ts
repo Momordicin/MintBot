@@ -34,7 +34,7 @@ export function upsertPreset(preset: Omit<Preset, 'createdAt' | 'updatedAt'>): v
       updatedAt = excluded.updatedAt
   `).run({
     ...preset,
-    wallpaperPath: preset.wallpaperPath ?? undefined,
+    wallpaperPath: preset.wallpaperPath ?? null,
     systemPrompt: encrypt(preset.systemPrompt),
     createdAt: now,
     updatedAt: now,

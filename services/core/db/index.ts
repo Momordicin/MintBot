@@ -18,7 +18,7 @@ export const db: Database = new DatabaseConstructor(DB_PATH);
 // 开启 WAL 模式（提升并发读写性能）
 db.pragma('journal_mode = WAL')
  
-function runMigrations(db: Database) {
+function runMigrations() {
   const current = db.pragma('user_version', { simple: true }) as number
  
   if (current < 1) {
@@ -79,6 +79,6 @@ export function initDb() {
     CREATE INDEX IF NOT EXISTS idx_summaries_session ON Summaries(sessionId);
   `)
  
-  runMigrations(db)
+  runMigrations()
   console.log('[DB] Initialized')
 }

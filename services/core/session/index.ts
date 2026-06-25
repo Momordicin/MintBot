@@ -9,11 +9,15 @@ import {
   appendMessage,
 } from './queries.js'
 
+export function setReplying(value: boolean): void {
+  const state = requireCurrentState()
+  state.isReplying = value
+}
+
 interface SessionState {
   session: Session
   preset: Preset
   isReplying: boolean
-  messageQueue: Array<{ role: Message['role'], content: string, trigger: Message['trigger'] }>
 }
 
 let current: SessionState | null = null
@@ -52,7 +56,7 @@ export function loadSession(presetId: string): SessionState {
     console.log(`[Session] Resumed session ${session.sessionId} for preset ${presetId}`)
   }
 
-  current = { session, preset, isReplying: false, messageQueue: [] }
+  current = { session, preset, isReplying: false}
   return current
 }
 
