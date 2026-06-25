@@ -26,6 +26,7 @@ describe('Preset', () => {
       characterId: 'char-001',
       modelType: 'ollama',
       modelName: 'qwen3',
+      wallpaperPath: undefined,
       systemPrompt: '你是一个AI助手',
     })
     const preset = getPresetById('p1')
@@ -35,8 +36,8 @@ describe('Preset', () => {
   })
 
   it('upsertPreset 同一 presetId 再次调用是更新不是报错', () => {
-    upsertPreset({ presetId: 'p1', name: '原名', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: '原始' })
-    upsertPreset({ presetId: 'p1', name: '新名', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: '更新' })
+    upsertPreset({ presetId: 'p1', name: '原名', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: '原始', wallpaperPath: undefined })
+    upsertPreset({ presetId: 'p1', name: '新名', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: '更新', wallpaperPath: undefined })
     const preset = getPresetById('p1')
     expect(preset!.name).toBe('新名')
     expect(preset!.systemPrompt).toBe('更新')
@@ -47,9 +48,17 @@ describe('Preset', () => {
   })
 
   it('getAllPresets 返回所有 preset', () => {
-    upsertPreset({ presetId: 'p1', name: 'A', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: 'a' })
-    upsertPreset({ presetId: 'p2', name: 'B', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: 'b' })
+    upsertPreset({ presetId: 'p1', name: 'A', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: 'a', wallpaperPath: undefined })
+    upsertPreset({ presetId: 'p2', name: 'B', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: 'b', wallpaperPath: undefined })
     expect(getAllPresets()).toHaveLength(2)
+  })
+ 
+  it('wallpaperPath 写入 null 读出为 undefined，写入路径读出正确', () => {
+    upsertPreset({ presetId: 'p1', name: 'A', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: 'a', wallpaperPath: undefined })
+    expect(getPresetById('p1')!.wallpaperPath).toBeUndefined()
+ 
+    upsertPreset({ presetId: 'p1', name: 'A', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: 'a', wallpaperPath: 'data/wallpapers/bg.png' })
+    expect(getPresetById('p1')!.wallpaperPath).toBe('data/wallpapers/bg.png')
   })
 })
 

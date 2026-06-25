@@ -4,20 +4,32 @@ import fs from 'fs'
 import * as dotenv from 'dotenv'
 
 dotenv.config()
-
+ 
 const DB_PATH = process.env.DB_PATH ?? './data/db.sqlite'
-
+ 
 // 确保 data 目录存在
 const dbDir = path.dirname(DB_PATH)
 if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true })
 }
-
+ 
 export const db: Database = new DatabaseConstructor(DB_PATH);
-
+ 
 // 开启 WAL 模式（提升并发读写性能）
 db.pragma('journal_mode = WAL')
-
+ 
+function runMigrations(db: Database) {
+  const current = db.pragma('user_version', { simple: true }) as number
+ 
+  if (current < 1) {
+    db.exec(`ALTER TABLE Presets ADD COLUMN wallpaperPath TEXT`)
+    db.pragma('user_version = 1')
+    console.log('[DB] Migration v1: added wallpaperPath to Presets')
+  }
+ 
+  // if (current < 2) { ... }
+}
+ 
 export function initDb() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS Presets (
@@ -30,7 +42,7 @@ export function initDb() {
       createdAt    INTEGER NOT NULL,
       updatedAt    INTEGER NOT NULL
     );
-
+ 
     CREATE TABLE IF NOT EXISTS Sessions (
       sessionId      TEXT    PRIMARY KEY,
       presetId       TEXT    NOT NULL,
@@ -39,7 +51,7 @@ export function initDb() {
       createdAt      INTEGER NOT NULL,
       lastActiveAt   INTEGER NOT NULL
     );
-
+ 
     CREATE TABLE IF NOT EXISTS Messages (
       id             INTEGER PRIMARY KEY AUTOINCREMENT,
       sessionId      TEXT    NOT NULL,
@@ -52,7 +64,7 @@ export function initDb() {
       trigger        TEXT    CHECK(trigger IN ('user', 'scheduler', 'emotion', 'admin')),
       triggerEventId INTEGER
     );
-
+ 
     CREATE TABLE IF NOT EXISTS Summaries (
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
       sessionId     TEXT    NOT NULL,
@@ -61,11 +73,12 @@ export function initDb() {
       toMessageId   INTEGER NOT NULL,
       createdAt     INTEGER NOT NULL
     );
-
+ 
     CREATE INDEX IF NOT EXISTS idx_messages_session ON Messages(sessionId, createdAt);
     CREATE INDEX IF NOT EXISTS idx_messages_visible ON Messages(sessionId, visibleToUser);
     CREATE INDEX IF NOT EXISTS idx_summaries_session ON Summaries(sessionId);
   `)
-
+ 
+  runMigrations(db)
   console.log('[DB] Initialized')
 }

@@ -25,21 +25,21 @@ export interface BuiltContext {
 }
 
 export interface ChatMessage{
-    role: 'system' | 'user' | 'assistant'
-    content: string
+  role: 'system' | 'user' | 'assistant'
+  content: string
 }
 
 export interface Message{
-    id: number
-    sessionId: string
-    role: 'system' | 'user' | 'assistant'
-    content: string         // 多模态时改为Json
-    createdAt: number
-    embedded: boolean           // Phase 2 预留
-    summarized: boolean           // Phase 2 预留
-    visibleToUser: boolean
-    trigger?: 'user' | 'scheduler' | 'emotion' | 'admin'  // Phase 6 预留
-    triggerEventId: number | null     // Phase 6 预留
+  id: number
+  sessionId: string
+  role: 'system' | 'user' | 'assistant'
+  content: string         // 多模态时改为Json
+  createdAt: number
+  embedded: boolean           // Phase 2 预留
+  summarized: boolean           // Phase 2 预留
+  visibleToUser: boolean
+  trigger?: 'user' | 'scheduler' | 'emotion' | 'admin'  // Phase 6 预留
+  triggerEventId: number | null     // Phase 6 预留
 }
 
 // 建议索引（写 SQLite schema 时建立）：
@@ -60,6 +60,7 @@ export interface Preset {
   characterId: string
   modelType: 'anthropic' | 'openai' | 'ollama'
   modelName: string
+  wallpaperPath?: string
   systemPrompt: string
   createdAt: number
   updatedAt: number
@@ -82,12 +83,12 @@ export interface PresetSnapshot {
 }
 
 export interface Session{
-    sessionId: string
-    presetId: string             // 关联原始 Preset
-    presetSnapshot: PresetSnapshot       // JSON.stringify(PresetSnapshot)，创建时写入，只读
-    title?: string               // 预留，对用户不可见，算法内部用
-    createdAt: number
-    lastActiveAt: number
+  sessionId: string
+  presetId: string             // 关联原始 Preset
+  presetSnapshot: PresetSnapshot       // JSON.stringify(PresetSnapshot)，创建时写入，只读
+  title?: string               // 预留，对用户不可见，算法内部用
+  createdAt: number
+  lastActiveAt: number
 }
 
 export interface EmotionLabel {

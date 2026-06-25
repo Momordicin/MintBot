@@ -3,12 +3,11 @@ import { spawn, ChildProcess } from 'child_process'
 let ollamaProcess: ChildProcess | null = null
 let ollamaManagedByUs = false
 
-function getOllamaBaseUrl(baseUrl?: string): string {
-  const url = baseUrl ?? process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434/v1'
-  return url.replace('/v1', '')
+export function getOllamaBaseUrl(baseUrl?: string): string {
+  return baseUrl ?? 'http://localhost:11434'
 }
 
-async function isOllamaRunning(baseUrl: string): Promise<boolean> {
+export async function isOllamaRunning(baseUrl: string): Promise<boolean> {
   try {
     const response = await fetch(`${baseUrl}/api/tags`, {
       signal: AbortSignal.timeout(3000),

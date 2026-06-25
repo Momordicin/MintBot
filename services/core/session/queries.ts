@@ -9,29 +9,32 @@ export function getPresetById(presetId: string): Preset | null {
   if (!row) return null
   return {
     ...row,
+    wallpaperPath: row.wallpaperPath ?? undefined,
     systemPrompt: decrypt(row.systemPrompt),
   }
 }
 
 export function getAllPresets(): Preset[] {
   const rows = db.prepare(`SELECT * FROM Presets ORDER BY updatedAt DESC`).all() as any[]
-  return rows.map(row => ({ ...row, systemPrompt: decrypt(row.systemPrompt) }))
+  return rows.map(row => ({ ...row, wallpaperPath: row.wallpaperPath ?? undefined, systemPrompt: decrypt(row.systemPrompt) }))
 }
 
 export function upsertPreset(preset: Omit<Preset, 'createdAt' | 'updatedAt'>): void {
   const now = Date.now()
   db.prepare(`
-    INSERT INTO Presets (presetId, name, characterId, modelType, modelName, systemPrompt, createdAt, updatedAt)
-    VALUES (@presetId, @name, @characterId, @modelType, @modelName, @systemPrompt, @createdAt, @updatedAt)
+    INSERT INTO Presets (presetId, name, characterId, modelType, modelName, wallpaperPath, systemPrompt, createdAt, updatedAt)
+    VALUES (@presetId, @name, @characterId, @modelType, @modelName, @wallpaperPath, @systemPrompt, @createdAt, @updatedAt)
     ON CONFLICT(presetId) DO UPDATE SET
       name = excluded.name,
       characterId = excluded.characterId,
       modelType = excluded.modelType,
       modelName = excluded.modelName,
+      wallpaperPath = excluded.wallpaperPath,
       systemPrompt = excluded.systemPrompt,
       updatedAt = excluded.updatedAt
   `).run({
     ...preset,
+    wallpaperPath: preset.wallpaperPath ?? undefined,
     systemPrompt: encrypt(preset.systemPrompt),
     createdAt: now,
     updatedAt: now,

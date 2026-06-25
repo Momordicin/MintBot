@@ -8,7 +8,7 @@ import { getCurrentState, loadSession } from './session/index.js'
 import { chatRoutes } from './routes/chat.js'
 import { createModelProvider, ModelProvider } from './providers/ModelProvider.js'
 import type { ModelConfig } from '../../shared/types/index.js'
-import { ensureOllama, stopOllamaIfManaged } from './providers/ollama.js'
+import { ensureOllama, isOllamaRunning, getOllamaBaseUrl, stopOllamaIfManaged } from './providers/ollama.js'
 
 dotenv.config()
 
@@ -49,11 +49,21 @@ fastify.get('/health', async () => ({ status: 'ok', uptime: process.uptime() }))
 
 fastify.get('/state', async () => {
   const state = getCurrentState()
+  const snapshot = state?.session.presetSnapshot ?? null
+
+  let ollamaReady: boolean | null = null
+  if (snapshot?.modelType === 'ollama') {
+    const modelConfig = fastify.config.modelProvider as ModelConfig | undefined
+    const baseUrl = getOllamaBaseUrl(modelConfig?.ollamaBaseUrl)
+    ollamaReady = await isOllamaRunning(baseUrl)
+  }
+
   return {
     sessionId: state?.session.sessionId ?? null,
-    presetSnapshot: state?.session.presetSnapshot ?? null,
-    emotion: null,        // Phase 2
-    embeddingQueue: null, // Phase 2
+    presetSnapshot: snapshot,
+    ollamaReady,
+    emotion: null,
+    embeddingQueue: null,
   }
 })
 

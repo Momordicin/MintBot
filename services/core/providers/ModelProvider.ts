@@ -171,11 +171,5 @@ export class ModelProvider {
 }
 
 export function createModelProvider(config: ModelConfig): ModelProvider {
-  // 环境变量兜底
-  if (!config.anthropicApiKey) config.anthropicApiKey = process.env.ANTHROPIC_API_KEY
-  if (!config.openaiApiKey) config.openaiApiKey = process.env.OPENAI_API_KEY
-  if (!config.ollamaBaseUrl) config.ollamaBaseUrl = process.env.OLLAMA_BASE_URL
-  if (!config.ollamaModel) config.ollamaModel = process.env.OLLAMA_MODEL
-
   return new ModelProvider(config)
 }
