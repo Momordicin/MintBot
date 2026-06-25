@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { MessageList } from './MessageList'
 import { InputBar } from './InputBar'
 import { MessageData } from './MessageBubble'
@@ -25,12 +25,16 @@ interface AppState {
 }
 
 export function ChatWindow() {
+  const hasFetched = useRef(false)
   const [messages, setMessages] = useState<MessageData[]>([])
   const [isReplying, setIsReplying] = useState(false)
   const [appState, setAppState] = useState<AppState | null>(null)
   const [wallpaperUrl, setWallpaperUrl] = useState<string | null>(null)
 
   useEffect(() => {
+    if (hasFetched.current) return
+    hasFetched.current = true
+
     fetch(`${CORE_URL}/state`)
       .then(r => r.json())
       .then((state: AppState) => {

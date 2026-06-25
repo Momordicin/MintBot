@@ -111,7 +111,7 @@ pnpm seed
 # 启动核心服务（Fastify，独立进程）
 # 开发阶段：pnpm --filter services/core dev
 # 生产环境：pm2 start ecosystem.config.cjs
-# 生产环境：Windows 用户首次运行需要管理员权限，之后普通终端即可
+# 生产环境：Windows 用户首次运行需要管理员权限，之后 pm2 stop mintbot-core; pm2 kill; 最后就可以在普通终端运行了
 pnpm start:core
 
 # 启动桌面应用（Electron + React）
