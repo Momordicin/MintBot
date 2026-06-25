@@ -1,0 +1,7 @@
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
+settings:
+  electron_mirror: https://npmmirror.com/mirrors/electron/
+onlyBuiltDependencies:
+  - electron

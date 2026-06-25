@@ -1,0 +1,78 @@
+@font-face {
+  font-family: 'Noto Sans SC';
+  src: url('../assets/fonts/static/NotoSansSC-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Noto Sans SC';
+  src: url('../assets/fonts/static/NotoSansSC-Medium.ttf') format('truetype');
+  font-weight: 500;
+  font-display: swap;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  /* 字体 */
+  --font: 'Noto Sans SC', system-ui, sans-serif;
+
+  /* 聊天区域半透明（Phase 1 写死，后期设置页控制） */
+  --chat-bg-rgb: 15, 15, 20;
+  --chat-bg-opacity: 0.65;
+
+  /* 气泡颜色 */
+  --bubble-user-bg: rgba(200, 200, 210, 0.25);
+  --bubble-user-text: #e8e8f0;
+  --bubble-bot-bg: rgba(45, 45, 49, 0.8);
+  --bubble-bot-text: #d3d3d9;
+
+  /* 输入框 */
+  --input-bg: rgba(20, 20, 28, 0.90);
+  --input-border: rgba(255, 255, 255, 0.10);
+  --input-text: #e8e8f0;
+  --input-placeholder: rgba(255, 255, 255, 0.35);
+
+  /* 时间戳、次要文字 */
+  --text-secondary: rgba(255, 255, 255, 0.40);
+
+  /* 系统消息（错误状态） */
+  --system-msg-text: rgba(255, 255, 255, 0.45);
+
+  /* 滚动条 */
+  --scrollbar-thumb: rgba(255, 255, 255, 0.15);
+
+  /* 尺寸 */
+  --avatar-size: 32px;
+  --bubble-radius: 12px;
+  --input-height: 52px;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: var(--font);
+  font-weight: 400;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--bubble-bot-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 滚动条样式 */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 2px;
+}

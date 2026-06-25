@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "composite": true,
+    "types": ["node", "electron-vite/node"]
+  },
+  "include": ["./**/*"],
+  "references": [
+    { "path": "../shared" }
+  ]
+}
