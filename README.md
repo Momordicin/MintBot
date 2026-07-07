@@ -61,7 +61,7 @@
 | 本地模型 | Ollama（可选，Qwen3 / ChatGLM 等） |
 | ASR | faster-whisper（Python HTTP 服务） |
 | TTS | GPT-SoVITS v2（Python HTTP 服务） |
-| Embedding | BGE-large（Python HTTP 服务） |
+| Embedding | BGE-large/BGE-M3（Python HTTP 服务） |
 | 数据库 | SQLite + sqlite-vec |
 | Win32 FFI | koffi |
 | 配置热生效 | chokidar |
