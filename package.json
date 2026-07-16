@@ -37,7 +37,8 @@
     "dotenv": "^17.4.2",
     "fastify": "^5.8.5",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "sqlite-vec": "^0.1.9"
   },
   "devDependencies": {
     "@electron-toolkit/preload": "^3.0.2",

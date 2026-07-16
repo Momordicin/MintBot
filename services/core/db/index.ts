@@ -1,7 +1,9 @@
 import DatabaseConstructor, { Database } from 'better-sqlite3';
+import * as sqliteVec from 'sqlite-vec'
 import path from 'path'
 import fs from 'fs'
 import * as dotenv from 'dotenv'
+
 
 dotenv.config()
  
@@ -26,11 +28,22 @@ function runMigrations() {
     db.pragma('user_version = 1')
     console.log('[DB] Migration v1: added wallpaperPath to Presets')
   }
- 
-  // if (current < 2) { ... }
+
+  if (current < 2) {
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS message_embeddings USING vec0(
+      message_id INTEGER PRIMARY KEY,
+      embedding FLOAT[1024]
+    )
+  `)
+  db.pragma('user_version = 2')
+  console.log('[DB] Migration v2: created message_embeddings vec table')
+  }
+
 }
  
 export function initDb() {
+  sqliteVec.load(db)
   db.exec(`
     CREATE TABLE IF NOT EXISTS Presets (
       presetId     TEXT    PRIMARY KEY,

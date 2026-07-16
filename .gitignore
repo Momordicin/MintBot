@@ -78,6 +78,8 @@ node_modules/
 /frontend/playwright-report
 /frontend/test-results
 # 打包编译产物 / Packaging artifacts
+**/dist/
+**/*.tsbuildinfo
 **/*.spec
 **/*.exe
 **/*.zip

@@ -1,4 +1,3 @@
-// services/core/context/buildContext.ts
 import type { BuiltContext, ChatMessage } from '../../../shared/types/index.js'
 import { requireCurrentState, getHistory } from '../session/index.js'
 
