@@ -3,6 +3,7 @@ uvicorn[standard]
 faster-whisper
 torch
 FlagEmbedding
+transformers
 blingfire
 python-multipart
 numpy
