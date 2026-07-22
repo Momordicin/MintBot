@@ -1,8 +1,12 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'crypto'
+import { getEncryptSensitiveFields } from '../config/security.js'
 
 const ALGORITHM = 'aes-256-gcm'
 const IV_LENGTH = 12
 const TAG_LENGTH = 16
+
+// 注意：切换 encryptSensitiveFields 开关不支持对已有数据重新加密/解密迁移（超出本次范围）。
+// 某一模式下写入的数据必须以同一模式读回，中途切换会导致已写入数据无法正确解密/显示为密文。
 
 function getKey(): Buffer {
   const key = process.env.DB_ENCRYPTION_KEY
@@ -13,6 +17,7 @@ function getKey(): Buffer {
 }
 
 export function encrypt(text: string): string {
+  if (!getEncryptSensitiveFields()) return text
   const key = getKey()
   const iv = randomBytes(IV_LENGTH)
   const cipher = createCipheriv(ALGORITHM, key, iv)
@@ -22,6 +27,7 @@ export function encrypt(text: string): string {
 }
 
 export function decrypt(data: string): string {
+  if (!getEncryptSensitiveFields()) return data
   const key = getKey()
   const buf = Buffer.from(data, 'base64')
   const iv = buf.subarray(0, IV_LENGTH)

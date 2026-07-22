@@ -14,6 +14,7 @@
 .vscode/
 .sublime-project/
 .tern/
+CLAUDE.md
 
 # ======= 环境变量文件 / Env Files =======
 # 忽略私有配置，保留示例模板 / Ignore private config, keep examples

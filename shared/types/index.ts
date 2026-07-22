@@ -24,6 +24,17 @@ export interface BuiltContext {
   tools?: ToolSchema[]       // Phase 5 预留
 }
 
+export interface MessageEntity {
+  id: number
+  messageId: number
+  sessionId: string
+  type: 'person' | 'event' | 'preference' | 'place' | 'other'
+  value: string
+  validFrom: number
+  validUntil: number | null
+  createdAt: number
+}
+
 export interface ChatMessage{
   role: 'system' | 'user' | 'assistant'
   content: string

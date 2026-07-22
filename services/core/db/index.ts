@@ -3,6 +3,7 @@ import * as sqliteVec from 'sqlite-vec'
 import path from 'path'
 import fs from 'fs'
 import * as dotenv from 'dotenv'
+import { getEncryptSensitiveFields } from '../config/security.js'
 
 
 dotenv.config()
@@ -40,6 +41,42 @@ function runMigrations() {
   console.log('[DB] Migration v2: created message_embeddings vec table')
   }
 
+  if (current < 3) {
+    // vec0 虚拟表不支持 ALTER 添加 PARTITION KEY，需 drop + 重建；
+    // message_embeddings 目前无 embedding 生产者写入，表为空，drop 安全
+    db.exec(`
+      DROP TABLE IF EXISTS message_embeddings;
+
+      CREATE VIRTUAL TABLE message_embeddings USING vec0(
+        message_id INTEGER PRIMARY KEY,
+        session_id TEXT PARTITION KEY,
+        embedding FLOAT[1024]
+      );
+
+      CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
+        content,
+        message_id UNINDEXED,
+        session_id UNINDEXED,
+        tokenize = 'unicode61'
+      );
+
+      CREATE TABLE IF NOT EXISTS MessageEntities (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        messageId   INTEGER NOT NULL,
+        sessionId   TEXT    NOT NULL,
+        type        TEXT    NOT NULL,  -- person / event / preference / place / other
+        value       TEXT    NOT NULL,
+        validFrom   INTEGER NOT NULL,  -- Unix 毫秒，事实生效时间
+        validUntil  INTEGER,           -- NULL 表示当前仍有效，双时态设计
+        createdAt   INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_entities_session ON MessageEntities(sessionId);
+      CREATE INDEX IF NOT EXISTS idx_entities_type ON MessageEntities(sessionId, type);
+    `)
+    db.pragma('user_version = 3')
+    console.log('[DB] Migration v3: repartitioned message_embeddings by session_id, added message_fts + MessageEntities')
+  }
 }
  
 export function initDb() {
@@ -93,5 +130,11 @@ export function initDb() {
   `)
  
   runMigrations()
+  const encrypt = getEncryptSensitiveFields()
+  console.log(
+    encrypt
+      ? '[DB] encryptSensitiveFields = true (AES-256-GCM, FTS disabled)'
+      : '[DB] encryptSensitiveFields = false (plaintext at rest, FTS enabled)'
+  )
   console.log('[DB] Initialized')
 }
