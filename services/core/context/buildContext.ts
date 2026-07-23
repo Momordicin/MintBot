@@ -1,6 +1,7 @@
 import type { BuiltContext, ChatMessage } from '../../../shared/types/index.js'
 import { requireCurrentState, getHistory } from '../session/index.js'
 import { shouldTriggerRetrieval, retrieveMemories } from '../memory/retrieval.js'
+import { getEmotionState } from '../session/queries.js'
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
 
 // 双轨记忆边界（TDD §3.8）：近期轨道 = 最近 N 条 **且** 最近 M 分钟内的消息，取交集
@@ -30,6 +31,14 @@ export async function buildContext(
   ]
 
   let system = preset.systemPrompt  // Phase 2：在这里拼入摘要、RAG召回、情绪状态等
+
+  // 情绪状态注入（TDD §3.9）：self 情绪驱动回复风格，维持语气连贯性。
+  // 本地同步查询，无外部调用开销，不需要像 RAG 召回那样加触发门槛，每次都尝试注入。
+  // perceived_user 在 Phase 2 阶段恒为 null，不处理。
+  const emotion = getEmotionState(session.sessionId)
+  if (emotion) {
+    system = `${system}\n\n你当前的情绪状态是「${emotion.self.label}」，强度为 ${emotion.self.intensity}，请让回复的语气与这一情绪保持连贯。`
+  }
 
   if (shouldTriggerRetrieval(userInput)) {
     const memories = await retrieveMemories(session.sessionId, userInput, { embedding: deps.embedding })

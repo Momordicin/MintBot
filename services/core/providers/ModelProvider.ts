@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
-import type { ChatMessage, ModelConfig, CompletionOptions, BuiltContext } from '../../../shared/types/index.js'
+import type { ChatMessage, ModelConfig, CompletionOptions, BuiltContext, Preset } from '../../../shared/types/index.js'
 
 export class ModelProvider {
   private config: ModelConfig
@@ -68,7 +68,7 @@ export class ModelProvider {
         role: m.role as 'user' | 'assistant',
         content: m.content,
       })),
-    })
+    }, { signal: options.signal })
 
     for await (const event of stream) {
       if (
@@ -172,4 +172,17 @@ export class ModelProvider {
 
 export function createModelProvider(config: ModelConfig): ModelProvider {
   return new ModelProvider(config)
+}
+
+// 按 preset 构建 provider：completeAnthropic/completeOpenAI 读 config.modelName，
+// 但 completeOllama 读的是另一个字段 config.ollamaModel，不看 config.modelName——
+// 因此不能简单 spread 覆盖 modelName，必须按 modelType 分支写入对应字段
+export function createModelProviderForPreset(preset: Preset, globalConfig: ModelConfig): ModelProvider {
+  const config: ModelConfig = { ...globalConfig, type: preset.modelType }
+  if (preset.modelType === 'ollama') {
+    config.ollamaModel = preset.modelName
+  } else {
+    config.modelName = preset.modelName
+  }
+  return createModelProvider(config)
 }

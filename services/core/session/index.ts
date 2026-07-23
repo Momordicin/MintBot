@@ -41,6 +41,7 @@ export function loadSession(presetId: string): SessionState {
       characterId: preset.characterId, 
       modelType: preset.modelType,
       modelName: preset.modelName,
+      wallpaperPath: preset.wallpaperPath,
       systemPrompt: preset.systemPrompt,
     }
     session = {
@@ -91,14 +92,17 @@ export function getHistory(limit = 50): Message[] {
   return getRecentMessages(session.sessionId, limit)
 }
 
+// sessionId 必须由调用方显式传入（请求开始时捕获的 session），不回退读全局"当前 session"。
+// 原因：调用方（如 chat.ts）可能在 await 模型回复期间被 preset 切换请求打断，
+// 若在此处重新读取全局状态，消息会被错误地记到切换后的新 session 上。
 export function addMessage(
+  sessionId: string,
   role: Message['role'],
   content: string,
   trigger: Message['trigger'] = 'user'
 ): number {
-  const { session } = requireCurrentState()
   const id = appendMessage({
-    sessionId: session.sessionId,
+    sessionId,
     role,
     content,
     createdAt: Date.now(),
@@ -108,6 +112,6 @@ export function addMessage(
     trigger,
     triggerEventId: null,
   })
-  touchSession(session.sessionId)
+  touchSession(sessionId)
   return id
 }

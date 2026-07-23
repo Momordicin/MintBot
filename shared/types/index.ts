@@ -96,6 +96,7 @@ export interface PresetSnapshot {
   characterId: string
   modelType: 'anthropic' | 'openai' | 'ollama'
   modelName: string
+  wallpaperPath?: string
   systemPrompt: string
   // 后期扩展：hooks、角色包配置等
 }

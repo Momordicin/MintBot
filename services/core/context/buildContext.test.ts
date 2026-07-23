@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { initDb } from '../db/index.js'
 import { db } from '../db/index.js'
-import { upsertPreset, appendMessage, insertEntity } from '../session/queries.js'
+import { upsertPreset, appendMessage, insertEntity, upsertEmotionState } from '../session/queries.js'
 import { loadSession, getCurrentState } from '../session/index.js'
 import { buildContext } from './buildContext.js'
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
@@ -28,6 +28,7 @@ beforeEach(() => {
   db.exec(`
     DELETE FROM Messages; DELETE FROM Sessions; DELETE FROM Presets; DELETE FROM Summaries;
     DELETE FROM message_fts; DELETE FROM message_embeddings; DELETE FROM MessageEntities;
+    DELETE FROM EmotionStates;
   `)
   upsertPreset({
     presetId: 'p1',
@@ -63,7 +64,8 @@ describe('buildContext', () => {
 
   it('有历史消息时正确拼入', async () => {
     const { addMessage } = await import('../session/index.js')
-    addMessage('user', '历史消息', 'user')
+    const sessionId = getCurrentState()!.session.sessionId
+    addMessage(sessionId, 'user', '历史消息', 'user')
     const ctx = await buildContext('新消息', { embedding: fakeEmbeddingProvider() })
     expect(ctx.messages).toHaveLength(2)
     expect(ctx.messages[0].content).toBe('历史消息')
@@ -109,5 +111,39 @@ describe('buildContext', () => {
   it('不触发召回时 system 保持原样', async () => {
     const ctx = await buildContext('好的', { embedding: fakeEmbeddingProvider() })
     expect(ctx.system).toBe('你是一个AI助手')
+  })
+
+  it('有情绪状态时 system 包含情绪标签与强度', async () => {
+    const sessionId = getCurrentState()!.session.sessionId
+    upsertEmotionState(sessionId, { self: { label: 'curious', intensity: 0.7 }, perceived_user: null })
+
+    const ctx = await buildContext('好的', { embedding: fakeEmbeddingProvider() })
+
+    expect(ctx.system).toContain('curious')
+    expect(ctx.system).toContain('0.7')
+  })
+
+  it('没有情绪状态时（新 session）system 就是 preset.systemPrompt，不多不少', async () => {
+    const ctx = await buildContext('好的', { embedding: fakeEmbeddingProvider() })
+    expect(ctx.system).toBe('你是一个AI助手')
+  })
+
+  it('同时触发情绪注入和 RAG 召回时，两段内容都出现在 system 中且互不干扰', async () => {
+    const sessionId = getCurrentState()!.session.sessionId
+    upsertEmotionState(sessionId, { self: { label: 'happy', intensity: 0.5 }, perceived_user: null })
+
+    const msgId = appendMessage({
+      sessionId, role: 'user', content: '我们聊过日本旅行的事', createdAt: Date.now() - 60 * 60 * 1000,
+      embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null,
+    })
+    insertEntity({ messageId: msgId, sessionId, type: 'place', value: '日本', validFrom: Date.now() })
+
+    const ctx = await buildContext('你还记得日本的事吗', { embedding: fakeEmbeddingProvider() })
+
+    expect(ctx.system).toContain('happy')
+    expect(ctx.system).toContain('0.5')
+    expect(ctx.system).toContain('以下是相关的历史对话片段')
+    expect(ctx.system).toContain('我们聊过日本旅行的事')
+    expect(ctx.system.indexOf('happy')).toBeLessThan(ctx.system.indexOf('以下是相关的历史对话片段'))
   })
 })

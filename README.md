@@ -36,9 +36,9 @@
 
 **记忆系统**
 - 双轨记忆：近期对话直接注入 context，历史对话 RAG 召回
-- BGE-large 向量 embedding，sqlite-vec 本地索引
+- bge-m3 向量 embedding，sqlite-vec 本地索引
 - 自动摘要压缩，实体聚合
-- 双向情绪引擎：角色情绪 + 用户情绪感知
+- 情绪状态引擎（Phase 2 基础版）：当前仅实现角色自身（self）情绪的解析与持久化；感知用户情绪（perceived_user）为占位设计，完整的双向情绪模型（self 与 perceived_user 互相影响）为后续规划
 
 **人机交互**
 - 本地系统操作：启动应用、调整音量、截图等
@@ -61,7 +61,7 @@
 | 本地模型 | Ollama（可选，Qwen3 / ChatGLM 等） |
 | ASR | faster-whisper（Python HTTP 服务） |
 | TTS | GPT-SoVITS v2（Python HTTP 服务） |
-| Embedding | BGE-large（Python HTTP 服务） |
+| Embedding | bge-m3（Python HTTP 服务） |
 | 数据库 | SQLite + sqlite-vec |
 | Win32 FFI | koffi |
 | 配置热生效 | chokidar |

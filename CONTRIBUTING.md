@@ -134,15 +134,18 @@ MintBot/
 │   └── styles/             # 全局样式和 CSS 变量
 ├── services/
 │   ├── core/               # Node.js Fastify 核心服务
+│   │   ├── config/         # 配置访问（加密开关等）
 │   │   ├── context/        # buildContext()，对话上下文组装
 │   │   ├── db/             # SQLite 初始化、migration、加密、seed
+│   │   ├── memory/         # 记忆系统（embedding 队列、召回、摘要、实体抽取）
 │   │   ├── providers/      # ModelProvider（Anthropic/OpenAI/Ollama）
 │   │   ├── routes/         # REST + SSE 路由
 │   │   └── session/        # Session 管理、消息读写
-│   └── ai/                 # Python FastAPI AI 模型服务（Phase 4）
-│       ├── asr/            # faster-whisper 语音识别
-│       ├── tts/            # GPT-SoVITS v2 语音合成
-│       └── embedding/      # BGE-large 向量 embedding
+│   └── ai/                 # Python FastAPI AI 模型服务
+│       ├── embedding/      # bge-m3 向量 embedding
+│       ├── ner/            # 本地 NER 实体抽取（bert4ner-base-chinese）
+│       ├── asr/            # faster-whisper 语音识别（Phase 4，目录占位，尚未实现）
+│       └── tts/            # GPT-SoVITS v2 语音合成（Phase 4，目录占位，尚未实现）
 ├── shared/
 │   └── types/              # 跨进程共用 TypeScript 类型定义
 ├── assets/
@@ -205,6 +208,9 @@ if (current < N) {
 版本历史：
 - **v0**：初始建表（Presets、Sessions、Messages、Summaries）
 - **v1**：Preset 表加 `wallpaperPath TEXT`
+- **v2**：创建 `message_embeddings` 向量表（sqlite-vec vec0，`FLOAT[1024]`）
+- **v3**：重建 `message_embeddings` 按 `session_id` 分区（PARTITION KEY），新增 `message_fts`（FTS5）全文索引表与 `MessageEntities` 实体表（含索引）
+- **v4**：创建 `EmotionStates` 情绪状态表
 
 ### 测试
 
