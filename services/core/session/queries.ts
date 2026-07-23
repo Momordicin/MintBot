@@ -1,7 +1,7 @@
 import { db } from '../db/index.js'
 import { encrypt, decrypt } from '../db/crypto.js'
 import { getEncryptSensitiveFields } from '../config/security.js'
-import type { Message, Session, Preset, PresetSnapshot, MessageEntity, Summary } from '../../../shared/types/index.js'
+import type { Message, Session, Preset, PresetSnapshot, MessageEntity, Summary, EmotionState } from '../../../shared/types/index.js'
 
 // ─── Preset ───────────────────────────────────────────────
 
@@ -342,4 +342,46 @@ export function insertSummaryAndMarkMessages(
     return summaryId
   })
   return run()
+}
+
+// ─── EmotionState（session 当前情绪状态，可覆盖，非历史时间线）───
+// 情绪标签/强度不属于 TDD §3.6 加密字段范围（消息内容、角色设定、API Key、摘要、实体聚合结果），
+// 因此不过 encrypt()/decrypt()
+
+export function upsertEmotionState(sessionId: string, emotion: EmotionState): void {
+  db.prepare(`
+    INSERT INTO EmotionStates
+      (sessionId, selfLabel, selfIntensity, perceivedUserLabel, perceivedUserIntensity, updatedAt)
+    VALUES
+      (@sessionId, @selfLabel, @selfIntensity, @perceivedUserLabel, @perceivedUserIntensity, @updatedAt)
+    ON CONFLICT(sessionId) DO UPDATE SET
+      selfLabel = excluded.selfLabel,
+      selfIntensity = excluded.selfIntensity,
+      perceivedUserLabel = excluded.perceivedUserLabel,
+      perceivedUserIntensity = excluded.perceivedUserIntensity,
+      updatedAt = excluded.updatedAt
+  `).run({
+    sessionId,
+    selfLabel: emotion.self.label,
+    selfIntensity: emotion.self.intensity,
+    perceivedUserLabel: emotion.perceived_user?.label ?? null,
+    perceivedUserIntensity: emotion.perceived_user?.intensity ?? null,
+    updatedAt: Date.now(),
+  })
+}
+
+export function getEmotionState(sessionId: string): EmotionState | null {
+  const row = db.prepare(`SELECT * FROM EmotionStates WHERE sessionId = ?`).get(sessionId) as any
+  if (!row) return null
+  return {
+    self: { label: row.selfLabel, intensity: row.selfIntensity },
+    perceived_user: row.perceivedUserLabel === null
+      ? null
+      : { label: row.perceivedUserLabel, intensity: row.perceivedUserIntensity },
+  }
+}
+
+// "清零"按删除理解：删除后 getEmotionState 自然返回 null
+export function resetEmotionState(sessionId: string): void {
+  db.prepare(`DELETE FROM EmotionStates WHERE sessionId = ?`).run(sessionId)
 }

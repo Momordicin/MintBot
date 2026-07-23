@@ -77,6 +77,23 @@ function runMigrations() {
     db.pragma('user_version = 3')
     console.log('[DB] Migration v3: repartitioned message_embeddings by session_id, added message_fts + MessageEntities')
   }
+
+  if (current < 4) {
+    // 每个 session 当前情绪状态（可覆盖，非历史时间线）；perceivedUser* 两列按 TDD §3.9
+    // 完整结构建表，Phase 2 基础版恒为 NULL，避免将来实现 perceived_user 时再次迁移
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS EmotionStates (
+        sessionId          TEXT    PRIMARY KEY,
+        selfLabel          TEXT    NOT NULL,
+        selfIntensity      REAL    NOT NULL,
+        perceivedUserLabel TEXT,
+        perceivedUserIntensity REAL,
+        updatedAt          INTEGER NOT NULL
+      );
+    `)
+    db.pragma('user_version = 4')
+    console.log('[DB] Migration v4: created EmotionStates table')
+  }
 }
  
 export function initDb() {

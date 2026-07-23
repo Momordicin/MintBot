@@ -7,6 +7,7 @@ import {
   touchSession,
   getRecentMessages,
   appendMessage,
+  resetEmotionState,
 } from './queries.js'
 
 export function setReplying(value: boolean): void {
@@ -64,8 +65,12 @@ export function loadSession(presetId: string): SessionState {
 
 export function switchPreset(presetId: string): SessionState {
   console.log(`[Session] Switching to preset ${presetId}`)
-  current = null  // 清空当前状态，情绪状态 Phase 2 在这里一并清零
-  return loadSession(presetId)
+  current = null
+  const state = loadSession(presetId)
+  // 角色切换时自动清零情绪状态（TDD §3.9），无论是新建 session 还是恢复的旧 session
+  // （旧 session 之前可能已有情绪记录，也要清掉）
+  resetEmotionState(state.session.sessionId)
+  return state
 }
 
 // ─── 读取当前状态 ──────────────────────────────────────────

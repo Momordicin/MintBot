@@ -5,6 +5,7 @@ import chokidar from 'chokidar'
 import * as dotenv from 'dotenv'
 import { initDb } from './db/index.js'
 import { getCurrentState, loadSession } from './session/index.js'
+import { getEmotionState } from './session/queries.js'
 import { chatRoutes } from './routes/chat.js'
 import { createModelProvider, ModelProvider } from './providers/ModelProvider.js'
 import { BGEProvider, type EmbeddingProvider } from './providers/EmbeddingProvider.js'
@@ -67,7 +68,7 @@ fastify.get('/state', async () => {
     sessionId: state?.session.sessionId ?? null,
     presetSnapshot: snapshot,
     ollamaReady,
-    emotion: null,
+    emotion: state ? getEmotionState(state.session.sessionId) : null,
     embeddingQueue: null,
   }
 })

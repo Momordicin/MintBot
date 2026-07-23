@@ -20,6 +20,9 @@ import {
   closeEntity,
   indexMessageFts,
   searchMessagesFts,
+  upsertEmotionState,
+  getEmotionState,
+  resetEmotionState,
 } from './queries.js'
 
 initDb()
@@ -27,6 +30,7 @@ beforeEach(() => {
   db.exec(`
     DELETE FROM Messages; DELETE FROM Sessions; DELETE FROM Presets; DELETE FROM Summaries;
     DELETE FROM message_embeddings; DELETE FROM message_fts; DELETE FROM MessageEntities;
+    DELETE FROM EmotionStates;
   `)
 })
 
@@ -310,6 +314,38 @@ describe('Encryption modes (encryptSensitiveFields)', () => {
 
     const msgs = getRecentMessages('s1')
     expect(msgs[0].content).toBe('线上加密消息')
+  })
+})
+
+// ─── EmotionState ─────────────────────────────────────────
+
+describe('EmotionState', () => {
+  it('upsertEmotionState 写入后 getEmotionState 能读回', () => {
+    upsertEmotionState('s1', { self: { label: 'curious', intensity: 0.7 }, perceived_user: null })
+    const emotion = getEmotionState('s1')
+    expect(emotion).toEqual({ self: { label: 'curious', intensity: 0.7 }, perceived_user: null })
+  })
+
+  it('getEmotionState 查不存在的 sessionId 返回 null', () => {
+    expect(getEmotionState('not-exist')).toBeNull()
+  })
+
+  it('resetEmotionState 删除后 getEmotionState 变 null', () => {
+    upsertEmotionState('s1', { self: { label: 'happy', intensity: 0.5 }, perceived_user: null })
+    resetEmotionState('s1')
+    expect(getEmotionState('s1')).toBeNull()
+  })
+
+  it('同一 sessionId 第二次 upsert 覆盖而不是报错', () => {
+    upsertEmotionState('s1', { self: { label: 'happy', intensity: 0.5 }, perceived_user: null })
+    upsertEmotionState('s1', { self: { label: 'sad', intensity: 0.3 }, perceived_user: null })
+    const emotion = getEmotionState('s1')
+    expect(emotion!.self).toEqual({ label: 'sad', intensity: 0.3 })
+  })
+
+  it('perceived_user 为 null 时往返仍为 null（Phase 2 占位）', () => {
+    upsertEmotionState('s1', { self: { label: 'idle', intensity: 0.1 }, perceived_user: null })
+    expect(getEmotionState('s1')!.perceived_user).toBeNull()
   })
 })
 

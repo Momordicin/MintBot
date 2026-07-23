@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify'
 import { requireCurrentState, addMessage } from '../session/index.js'
 import { buildContext } from '../context/buildContext.js'
+import { parseSelfEmotion } from '../session/emotion.js'
+import { upsertEmotionState } from '../session/queries.js'
 
 export async function chatRoutes(fastify: FastifyInstance) {
   fastify.post<{
@@ -14,8 +16,9 @@ export async function chatRoutes(fastify: FastifyInstance) {
       return reply.status(400).send({ error: 'message is required' })
     }
 
+    let state
     try {
-      requireCurrentState()
+      state = requireCurrentState()
     } catch {
       return reply.status(503).send({ error: 'No active session' })
     }
@@ -54,26 +57,36 @@ export async function chatRoutes(fastify: FastifyInstance) {
         fullReply = await fastify.modelProvider.completeSync(context)
       }
 
-      // ─── 解析 JSON 回复（emotion 占位）──────────────────────
+      // ─── 解析 JSON 回复，取出 reply 文本（emotion 解析见下方 parseSelfEmotion）───
       let replyText = fullReply
-      let emotion = null
 
       try {
         const parsed = JSON.parse(fullReply)
         replyText = parsed.reply ?? fullReply
-        emotion = parsed.emotion ?? null
       } catch {
         // 模型没有返回 JSON，直接用原文
       }
 
       const messageId = addMessage('assistant', replyText, 'user')
- 
+
       // message_done 带完整文本，前端直接显示，无需累积 chunk
       // Phase 4：句子切割完成后，改为逐句推 message_chunk，前端追加气泡
       send('message_done', { messageId: String(messageId), text: replyText })
+
+      // self 情绪校验通过才落库；模型没按格式回复（校验失败/字段缺失）时不落库也不报错，
+      // 保持现有降级风格。持久化异常不应影响本轮对话的正常返回
+      const selfEmotion = parseSelfEmotion(fullReply)
+      if (selfEmotion) {
+        try {
+          upsertEmotionState(state.session.sessionId, { self: selfEmotion, perceived_user: null })
+        } catch (err) {
+          console.error('[Chat] Failed to persist emotion state:', err)
+        }
+      }
+
       send('emotion', {
-        self: emotion?.self ?? null,
-        perceived_user: emotion?.perceived_user ?? null,
+        self: selfEmotion,
+        perceived_user: null,  // Phase 2 基础版故意留空占位，不透传模型的尝试性输出，不是遗漏
       })
 
     } catch (err) {

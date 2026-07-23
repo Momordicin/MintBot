@@ -116,7 +116,7 @@ export interface EmotionLabel {
 
 export interface EmotionState {
   self: EmotionLabel
-  perceived_user: EmotionLabel
+  perceived_user: EmotionLabel | null  // Phase 2 基础版留空占位，Phase 后续实现前恒为 null
 }
 
 export interface EmbeddingQueueStatus {
