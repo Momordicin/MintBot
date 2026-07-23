@@ -1,7 +1,7 @@
 import type { BuiltContext, ChatMessage } from '../../../shared/types/index.js'
 import { requireCurrentState, getHistory } from '../session/index.js'
 import { shouldTriggerRetrieval, retrieveMemories } from '../memory/retrieval.js'
-import { getEmotionState } from '../session/queries.js'
+import { getEmotionState, getSummaries } from '../session/queries.js'
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
 
 // 双轨记忆边界（TDD §3.8）：近期轨道 = 最近 N 条 **且** 最近 M 分钟内的消息，取交集
@@ -38,6 +38,16 @@ export async function buildContext(
   const emotion = getEmotionState(session.sessionId)
   if (emotion) {
     system = `${system}\n\n你当前的情绪状态是「${emotion.self.label}」，强度为 ${emotion.self.intensity}，请让回复的语气与这一情绪保持连贯。`
+  }
+
+  // 历史摘要注入（TDD §3.8 双轨记忆方案）：与情绪状态/RAG 召回同样的机制，追加到 system
+  // 字符串而不放进 messages[]（Anthropic 分支会过滤掉 messages[] 里的 system 角色）。
+  // 当前先注入全部摘要，不限制条数、不做 token 预算裁剪——session 长期运行、摘要数量增长后
+  // 可能需要限制条数/接入 token 预算分配，Phase 2 现阶段先不做。
+  const summaries = getSummaries(session.sessionId)
+  if (summaries.length > 0) {
+    const summaryText = summaries.map(s => s.content).join('\n')
+    system = `${system}\n\n以下是之前对话的历史摘要：\n${summaryText}`
   }
 
   if (shouldTriggerRetrieval(userInput)) {

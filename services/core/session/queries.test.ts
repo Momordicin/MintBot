@@ -25,6 +25,10 @@ import {
   upsertEmotionState,
   getEmotionState,
   resetEmotionState,
+  getSessionsWithPendingSummaries,
+  getPendingSummaryCount,
+  getSummaries,
+  insertSummary,
 } from './queries.js'
 
 initDb()
@@ -181,6 +185,32 @@ describe('Messages', () => {
     expect(msgs[0].embedded).toBe(true)
     expect(msgs[0].summarized).toBe(false)
     expect(msgs[0].visibleToUser).toBe(true)
+  })
+})
+
+// ─── Pending summaries (Messages.summarized) ───────────────
+
+describe('getSessionsWithPendingSummaries / getPendingSummaryCount', () => {
+  it('无待摘要消息时 getSessionsWithPendingSummaries 返回空数组，getPendingSummaryCount 返回 0', () => {
+    expect(getSessionsWithPendingSummaries()).toEqual([])
+    expect(getPendingSummaryCount('s1')).toBe(0)
+  })
+
+  it('有待摘要消息时能正确列出 session 并统计数量', () => {
+    appendMessage({ sessionId: 's1', role: 'user', content: 'a', createdAt: 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's1', role: 'user', content: 'b', createdAt: 2000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's2', role: 'user', content: 'c', createdAt: 3000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's2', role: 'user', content: 'd', createdAt: 4000, embedded: false, summarized: true, visibleToUser: true, trigger: 'user', triggerEventId: null })
+
+    expect(getSessionsWithPendingSummaries().sort()).toEqual(['s1', 's2'])
+    expect(getPendingSummaryCount('s1')).toBe(2)
+    expect(getPendingSummaryCount('s2')).toBe(1)
+  })
+
+  it('session 内消息全部已摘要时不再出现在 getSessionsWithPendingSummaries 中', () => {
+    appendMessage({ sessionId: 's1', role: 'user', content: 'a', createdAt: 1000, embedded: false, summarized: true, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    expect(getSessionsWithPendingSummaries()).toEqual([])
+    expect(getPendingSummaryCount('s1')).toBe(0)
   })
 })
 
@@ -410,5 +440,45 @@ describe('FTS (message_fts)', () => {
     const raw = db.prepare(`SELECT COUNT(*) as count FROM message_fts`).get() as any
     expect(raw.count).toBe(0)
     expect(searchMessagesFts('cat')).toEqual([])
+  })
+})
+
+// ─── Summaries ────────────────────────────────────────────
+
+describe('getSummaries', () => {
+  it('没有摘要时返回空数组', () => {
+    expect(getSummaries('s1')).toEqual([])
+  })
+
+  it('按 createdAt 升序返回该 session 的全部摘要，content 解密正确（往返验证）', () => {
+    // insertSummary 内部用 Date.now() 写入 createdAt（不暴露可控参数），这里插入后直接改写
+    // createdAt 确保两条摘要时间戳不同，避免同一毫秒内插入导致排序断言不稳定
+    const id1 = insertSummary({ sessionId: 's1', content: '第一段摘要', fromMessageId: 1, toMessageId: 2 })
+    const id2 = insertSummary({ sessionId: 's1', content: '第二段摘要', fromMessageId: 3, toMessageId: 4 })
+    insertSummary({ sessionId: 's2', content: '别的会话摘要', fromMessageId: 1, toMessageId: 1 })
+    db.prepare(`UPDATE Summaries SET createdAt = 1000 WHERE id = ?`).run(id1)
+    db.prepare(`UPDATE Summaries SET createdAt = 2000 WHERE id = ?`).run(id2)
+
+    const summaries = getSummaries('s1')
+    expect(summaries).toHaveLength(2)
+    expect(summaries[0].id).toBe(id1)
+    expect(summaries[0].content).toBe('第一段摘要')
+    expect(summaries[1].id).toBe(id2)
+    expect(summaries[1].content).toBe('第二段摘要')
+  })
+
+  it('encryptSensitiveFields=true 时落盘 content 非明文，getSummaries 解密后仍能正确还原', () => {
+    const prevFlag = process.env.ENCRYPT_SENSITIVE_FIELDS
+    process.env.ENCRYPT_SENSITIVE_FIELDS = 'true'
+    try {
+      const id = insertSummary({ sessionId: 's1', content: '加密摘要正文', fromMessageId: 1, toMessageId: 1 })
+      const raw = db.prepare(`SELECT content FROM Summaries WHERE id = ?`).get(id) as any
+      expect(raw.content).not.toBe('加密摘要正文')
+
+      const summaries = getSummaries('s1')
+      expect(summaries[0].content).toBe('加密摘要正文')
+    } finally {
+      process.env.ENCRYPT_SENSITIVE_FIELDS = prevFlag
+    }
   })
 })

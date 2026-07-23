@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { initDb } from '../db/index.js'
 import { db } from '../db/index.js'
-import { upsertPreset, appendMessage, insertEntity, upsertEmotionState } from '../session/queries.js'
+import { upsertPreset, appendMessage, insertEntity, upsertEmotionState, insertSummary } from '../session/queries.js'
 import { loadSession, getCurrentState } from '../session/index.js'
 import { buildContext } from './buildContext.js'
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
@@ -145,5 +145,38 @@ describe('buildContext', () => {
     expect(ctx.system).toContain('以下是相关的历史对话片段')
     expect(ctx.system).toContain('我们聊过日本旅行的事')
     expect(ctx.system.indexOf('happy')).toBeLessThan(ctx.system.indexOf('以下是相关的历史对话片段'))
+  })
+
+  it('有摘要时 system 包含摘要内容', async () => {
+    const sessionId = getCurrentState()!.session.sessionId
+    insertSummary({ sessionId, content: '用户之前提到喜欢猫，在阿里巴巴工作', fromMessageId: 1, toMessageId: 2 })
+
+    const ctx = await buildContext('好的', { embedding: fakeEmbeddingProvider() })
+
+    expect(ctx.system).toContain('用户之前提到喜欢猫，在阿里巴巴工作')
+  })
+
+  it('没有摘要时 system 不受影响', async () => {
+    const ctx = await buildContext('好的', { embedding: fakeEmbeddingProvider() })
+    expect(ctx.system).toBe('你是一个AI助手')
+  })
+
+  it('摘要 + 情绪 + RAG 三者同时存在时都正确出现在 system 中', async () => {
+    const sessionId = getCurrentState()!.session.sessionId
+    insertSummary({ sessionId, content: '历史摘要正文', fromMessageId: 1, toMessageId: 2 })
+    upsertEmotionState(sessionId, { self: { label: 'happy', intensity: 0.5 }, perceived_user: null })
+
+    const msgId = appendMessage({
+      sessionId, role: 'user', content: '我们聊过日本旅行的事', createdAt: Date.now() - 60 * 60 * 1000,
+      embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null,
+    })
+    insertEntity({ messageId: msgId, sessionId, type: 'place', value: '日本', validFrom: Date.now() })
+
+    const ctx = await buildContext('你还记得日本的事吗', { embedding: fakeEmbeddingProvider() })
+
+    expect(ctx.system).toContain('历史摘要正文')
+    expect(ctx.system).toContain('happy')
+    expect(ctx.system).toContain('以下是相关的历史对话片段')
+    expect(ctx.system).toContain('我们聊过日本旅行的事')
   })
 })

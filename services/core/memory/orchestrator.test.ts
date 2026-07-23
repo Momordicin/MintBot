@@ -1,14 +1,18 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { db, initDb } from '../db/index.js'
-import { appendMessage, getPendingEmbeddingCount, getCurrentEntities } from '../session/queries.js'
+import { appendMessage, getPendingEmbeddingCount, getCurrentEntities, getPendingSummaryCount } from '../session/queries.js'
 import { runOrganizeModeTick, isInDefaultOrganizeWindow } from './orchestrator.js'
+import { recordSystemEvent } from '../system/lockState.js'
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
 import type { NERProvider } from '../providers/NERProvider.js'
 import type { EntityModelProvider } from './entityExtractor.js'
 
 initDb()
 beforeEach(() => {
-  db.exec(`DELETE FROM Messages; DELETE FROM message_embeddings; DELETE FROM message_fts; DELETE FROM MessageEntities;`)
+  db.exec(`DELETE FROM Messages; DELETE FROM message_embeddings; DELETE FROM message_fts; DELETE FROM MessageEntities; DELETE FROM Summaries;`)
+  // lockState 是模块级内存状态，跨测试用例复用同一模块实例，每个用例开始前重置为未锁屏，
+  // 避免前一个用例里 recordSystemEvent('lock-screen', ...) 的状态泄漏到后续用例
+  recordSystemEvent('unlock-screen')
 })
 
 // 确定性假 embedding provider（与 embedQueue.test.ts 同款风格）
@@ -79,6 +83,7 @@ describe('runOrganizeModeTick', () => {
       totalProcessed: 3,
       totalEntitiesInserted: 3,
       totalEntitiesClosed: 0,
+      summariesGenerated: 0,
     })
     expect(getPendingEmbeddingCount()).toBe(0)
 
@@ -100,11 +105,11 @@ describe('runOrganizeModeTick', () => {
       () => NOW_IN_WINDOW
     )
 
-    expect(result).toEqual({ triggered: false, batches: 0, totalProcessed: 0, totalEntitiesInserted: 0, totalEntitiesClosed: 0 })
+    expect(result).toEqual({ triggered: false, batches: 0, totalProcessed: 0, totalEntitiesInserted: 0, totalEntitiesClosed: 0, summariesGenerated: 0 })
     expect(getPendingEmbeddingCount()).toBe(102)
   })
 
-  it('不在低活跃时间窗口内时不触发，即使 pendingCount 很高且无活跃对话', async () => {
+  it('不在低活跃时间窗口内时 embedding 阶段不触发；摘要阶段独立判断，101 条待摘要消息超过消息数阈值 50，仍会触发摘要生成（摘要触发规则不要求处于低活跃时间窗口）', async () => {
     for (let i = 0; i < 101; i++) {
       addMessage(`旧消息${i}`, NOW_OUT_OF_WINDOW - 200 * MIN + i)
     }
@@ -115,7 +120,7 @@ describe('runOrganizeModeTick', () => {
       () => NOW_OUT_OF_WINDOW
     )
 
-    expect(result).toEqual({ triggered: false, batches: 0, totalProcessed: 0, totalEntitiesInserted: 0, totalEntitiesClosed: 0 })
+    expect(result).toEqual({ triggered: false, batches: 0, totalProcessed: 0, totalEntitiesInserted: 0, totalEntitiesClosed: 0, summariesGenerated: 1 })
     expect(getPendingEmbeddingCount()).toBe(101)
   })
 
@@ -130,7 +135,7 @@ describe('runOrganizeModeTick', () => {
       () => NOW_IN_WINDOW
     )
 
-    expect(result).toEqual({ triggered: false, batches: 0, totalProcessed: 0, totalEntitiesInserted: 0, totalEntitiesClosed: 0 })
+    expect(result).toEqual({ triggered: false, batches: 0, totalProcessed: 0, totalEntitiesInserted: 0, totalEntitiesClosed: 0, summariesGenerated: 0 })
     expect(getPendingEmbeddingCount()).toBe(5)
   })
 
@@ -228,9 +233,103 @@ describe('runOrganizeModeTick', () => {
       totalProcessed: 0,
       totalEntitiesInserted: 2,
       totalEntitiesClosed: 0,
+      summariesGenerated: 0,
     })
     // embedding 失败，消息保持 pending，留待下次整理模式运行时重试
     expect(getPendingEmbeddingCount()).toBe(2)
+  })
+})
+
+// 与 addMessage 同款风格，多加一个 sessionId 参数，供多 session 独立处理的测试使用
+function addMessageFor(sessionId: string, content: string, createdAt: number): number {
+  return appendMessage({
+    sessionId, role: 'user', content, createdAt,
+    embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null,
+  })
+}
+
+describe('runOrganizeModeTick — 摘要阶段', () => {
+  it('消息数超过阈值（>50）时触发摘要，摘要生成后 getPendingSummaryCount 正确下降', async () => {
+    for (let i = 0; i < 51; i++) {
+      addMessage(`消息${i}`, NOW_IN_WINDOW - 10 * MIN + i)
+    }
+
+    const result = await runOrganizeModeTick(
+      { embedding: fakeEmbedding(), ner: emptyNer(), model: emptyModel() },
+      200,
+      () => NOW_IN_WINDOW
+    )
+
+    expect(result.summariesGenerated).toBe(1)
+    expect(getPendingSummaryCount('s1')).toBe(0)
+  })
+
+  it('消息数不够（<50），但锁屏超过 60 分钟 + 处于低活跃时间窗口内时也能触发摘要', async () => {
+    for (let i = 0; i < 5; i++) {
+      addMessage(`消息${i}`, NOW_IN_WINDOW - 10 * MIN + i)
+    }
+    // 模拟锁屏发生在 61 分钟前（> 60min 阈值），NOW_IN_WINDOW 本身处于低活跃时间窗口（凌晨 2 点）
+    recordSystemEvent('lock-screen', NOW_IN_WINDOW - 61 * MIN)
+
+    const result = await runOrganizeModeTick(
+      { embedding: fakeEmbedding(), ner: emptyNer(), model: emptyModel() },
+      200,
+      () => NOW_IN_WINDOW
+    )
+
+    expect(result.summariesGenerated).toBe(1)
+    expect(getPendingSummaryCount('s1')).toBe(0)
+  })
+
+  it('有活跃对话（最近 5 分钟内有消息）时，即使消息数超阈值也不触发摘要阶段', async () => {
+    for (let i = 0; i < 51; i++) {
+      addMessage(`消息${i}`, NOW_IN_WINDOW - 10 * MIN + i)
+    }
+    addMessage('刚发的消息', NOW_IN_WINDOW - 1 * MIN)
+
+    const result = await runOrganizeModeTick(
+      { embedding: fakeEmbedding(), ner: emptyNer(), model: emptyModel() },
+      200,
+      () => NOW_IN_WINDOW
+    )
+
+    expect(result.summariesGenerated).toBe(0)
+    expect(getPendingSummaryCount('s1')).toBe(52)
+  })
+
+  it('一个 session 的待摘要消息远超阈值时，循环生成多次摘要直到降到阈值以下', async () => {
+    // 500 条：每次 generateSummary 默认最多处理 200 条，需要 3 次调用（200 + 200 + 100）才能清空
+    for (let i = 0; i < 500; i++) {
+      addMessage(`消息${i}`, NOW_IN_WINDOW - 200 * MIN + i)
+    }
+
+    const result = await runOrganizeModeTick(
+      { embedding: fakeEmbedding(), ner: emptyNer(), model: emptyModel() },
+      200,
+      () => NOW_IN_WINDOW
+    )
+
+    expect(result.summariesGenerated).toBe(3)
+    expect(getPendingSummaryCount('s1')).toBe(0)
+  })
+
+  it('多个 session 都有待摘要消息时，都能各自独立被处理', async () => {
+    for (let i = 0; i < 60; i++) {
+      addMessageFor('s1', `s1消息${i}`, NOW_IN_WINDOW - 10 * MIN + i)
+    }
+    for (let i = 0; i < 60; i++) {
+      addMessageFor('s2', `s2消息${i}`, NOW_IN_WINDOW - 10 * MIN + i)
+    }
+
+    const result = await runOrganizeModeTick(
+      { embedding: fakeEmbedding(), ner: emptyNer(), model: emptyModel() },
+      200,
+      () => NOW_IN_WINDOW
+    )
+
+    expect(result.summariesGenerated).toBe(2)
+    expect(getPendingSummaryCount('s1')).toBe(0)
+    expect(getPendingSummaryCount('s2')).toBe(0)
   })
 })
 

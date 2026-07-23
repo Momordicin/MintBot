@@ -223,6 +223,18 @@ export function getPendingSummaryMessages(sessionId: string, limit = 200): Messa
   }))
 }
 
+// 有待摘要消息的 session 列表，供整理模式编排器（orchestrator.ts）遍历处理
+export function getSessionsWithPendingSummaries(): string[] {
+  const rows = db.prepare(`SELECT DISTINCT sessionId FROM Messages WHERE summarized = 0`).all() as any[]
+  return rows.map(row => row.sessionId)
+}
+
+// 对应 session 的待摘要消息数，供 shouldTriggerSummary 的 messageCountSinceLastSummary 输入使用
+export function getPendingSummaryCount(sessionId: string): number {
+  const row = db.prepare(`SELECT COUNT(*) as count FROM Messages WHERE sessionId = ? AND summarized = 0`).get(sessionId) as any
+  return row.count
+}
+
 export function markMessagesSummarized(messageIds: number[]): void {
   if (messageIds.length === 0) return
   const placeholders = messageIds.map(() => '?').join(',')
@@ -355,6 +367,12 @@ export function insertSummaryAndMarkMessages(
     return summaryId
   })
   return run()
+}
+
+// 按 createdAt 升序返回该 session 的全部摘要，供 buildContext.ts 注入历史摘要使用
+export function getSummaries(sessionId: string): Summary[] {
+  const rows = db.prepare(`SELECT * FROM Summaries WHERE sessionId = ? ORDER BY createdAt ASC`).all(sessionId) as any[]
+  return rows.map(row => ({ ...row, content: decrypt(row.content) }))
 }
 
 // ─── EmotionState（session 当前情绪状态，可覆盖，非历史时间线）───

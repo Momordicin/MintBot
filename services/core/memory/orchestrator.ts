@@ -2,19 +2,23 @@ import { schedule, type ScheduledTask } from 'node-cron'
 import type { FastifyInstance } from 'fastify'
 import { extractEntities, type EntityModelProvider } from './entityExtractor.js'
 import { processEmbedQueue } from './embedQueue.js'
+import { shouldTriggerSummary, generateSummary } from './summarizer.js'
 import {
   getPendingEmbeddingCount,
   getPendingEmbeddingMessages,
   getMostRecentMessageTime,
   getOldestUnsummarizedMessageTime,
+  getSessionsWithPendingSummaries,
+  getPendingSummaryCount,
 } from '../session/queries.js'
+import { getLockScreenMinutes } from '../system/lockState.js'
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
 import type { NERProvider } from '../providers/NERProvider.js'
 import type { EmbeddingQueueStatus } from '../../../shared/types/index.js'
 
 // 整理模式编排器（TDD §3.8）。本模块只负责"何时 + 循环多少批"，不重新实现
-// embedding（embedQueue.ts）或实体抽取（entityExtractor.ts）本身的批处理逻辑，
-// 也不涉及摘要触发/调度（summarizer.ts 的调度留给后续任务）。
+// embedding（embedQueue.ts）、实体抽取（entityExtractor.ts）或摘要生成（summarizer.ts）
+// 本身的处理逻辑。
 
 const ACTIVE_CONVERSATION_WINDOW_MS = 5 * 60 * 1000
 const PENDING_COUNT_THRESHOLD = 100
@@ -70,6 +74,7 @@ export interface OrganizeModeTickResult {
   totalProcessed: number
   totalEntitiesInserted: number
   totalEntitiesClosed: number
+  summariesGenerated: number
 }
 
 // 单次整理 tick：满足触发条件时按批处理（实体抽取 + embedding 共用同一批 pending 消息——
@@ -112,7 +117,38 @@ export async function runOrganizeModeTick(
     if (processed === 0) break
   }
 
-  return { triggered: batches > 0, batches, totalProcessed, totalEntitiesInserted, totalEntitiesClosed }
+  // 摘要阶段（TDD §3.8 摘要触发逻辑）：与上面的 embedding+实体阶段各自独立触发（不要求
+  // pendingCount>100 OR oldestPendingAge>120min 这条 embedding 专用规则），但同样遵守
+  // "不与活跃对话抢资源"这条整理模式通用原则——有活跃对话时跳过整个摘要阶段。
+  let summariesGenerated = 0
+
+  if (!computeActiveConversation(getNow())) {
+    for (const sessionId of getSessionsWithPendingSummaries()) {
+      // 每次循环重新检查活跃对话状态和触发规则（含消息数），一个 session 的待摘要消息
+      // 远超阈值时会连续生成多次摘要，直到降到阈值以下或者活跃对话状态变化为止
+      while (!computeActiveConversation(getNow())) {
+        const shouldSummarize = shouldTriggerSummary({
+          messageCountSinceLastSummary: getPendingSummaryCount(sessionId),
+          lockScreenMinutes: getLockScreenMinutes(getNow()),
+          isLowActivityWindow: isInDefaultOrganizeWindow(getNow()),
+        })
+        if (!shouldSummarize) break
+
+        const result = await generateSummary(sessionId, { model: deps.model })
+        if (result === null) break
+        summariesGenerated++
+      }
+    }
+  }
+
+  return {
+    triggered: batches > 0,
+    batches,
+    totalProcessed,
+    totalEntitiesInserted,
+    totalEntitiesClosed,
+    summariesGenerated,
+  }
 }
 
 // 后台每 5 分钟轮询（TDD §3.8），返回 ScheduledTask 供调用方在进程退出时 .stop()
