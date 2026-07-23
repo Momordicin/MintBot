@@ -22,7 +22,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
     let context
     try {
-      context = await buildContext(message)
+      context = await buildContext(message, { embedding: fastify.embeddingProvider })
     } catch {
       return reply.status(500).send({ error: 'Failed to build context' })
     }

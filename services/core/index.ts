@@ -7,6 +7,7 @@ import { initDb } from './db/index.js'
 import { getCurrentState, loadSession } from './session/index.js'
 import { chatRoutes } from './routes/chat.js'
 import { createModelProvider, ModelProvider } from './providers/ModelProvider.js'
+import { BGEProvider, type EmbeddingProvider } from './providers/EmbeddingProvider.js'
 import type { ModelConfig } from '../../shared/types/index.js'
 import { ensureOllama, isOllamaRunning, getOllamaBaseUrl, stopOllamaIfManaged } from './providers/ollama.js'
 import fastifyStatic from '@fastify/static'
@@ -43,6 +44,7 @@ declare module 'fastify' {
   interface FastifyInstance {
     config: Record<string, unknown>
     modelProvider: ModelProvider
+    embeddingProvider: EmbeddingProvider
   }
 }
 
@@ -90,6 +92,7 @@ async function start() {
 
   fastify.decorate('config', config)
   fastify.decorate('modelProvider', modelProvider)
+  fastify.decorate('embeddingProvider', new BGEProvider())
 
   watchConfig()
   initDb()

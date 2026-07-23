@@ -24,6 +24,13 @@ export interface BuiltContext {
   tools?: ToolSchema[]       // Phase 5 预留
 }
 
+export interface NerEntity {
+  text: string
+  label: string   // 原始 NER 标签（PER/ORG/LOC/TIME），MessageEntity.type 映射由 entityExtractor 负责
+  start: number
+  end: number
+}
+
 export interface MessageEntity {
   id: number
   messageId: number

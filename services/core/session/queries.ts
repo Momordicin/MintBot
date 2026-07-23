@@ -1,7 +1,7 @@
 import { db } from '../db/index.js'
 import { encrypt, decrypt } from '../db/crypto.js'
 import { getEncryptSensitiveFields } from '../config/security.js'
-import type { Message, Session, Preset, PresetSnapshot, MessageEntity } from '../../../shared/types/index.js'
+import type { Message, Session, Preset, PresetSnapshot, MessageEntity, Summary } from '../../../shared/types/index.js'
 
 // ─── Preset ───────────────────────────────────────────────
 
@@ -179,6 +179,43 @@ export function markMessageEmbedded(messageId: number): void {
   db.prepare(`UPDATE Messages SET embedded = 1 WHERE id = ?`).run(messageId)
 }
 
+// 按 id 批量取消息（已解密），供 RAG 召回（retrieval.ts）按融合排序回查原文使用
+export function getMessagesByIds(ids: number[]): Message[] {
+  if (ids.length === 0) return []
+  const placeholders = ids.map(() => '?').join(',')
+  const rows = db.prepare(`SELECT * FROM Messages WHERE id IN (${placeholders})`).all(...ids) as any[]
+
+  return rows.map(row => ({
+    ...row,
+    content: decrypt(row.content),
+    embedded: row.embedded === 1,
+    summarized: row.summarized === 1,
+    visibleToUser: row.visibleToUser === 1,
+  }))
+}
+
+// 与 Messages.summarized 标志配套的待摘要消息查询（按 session），供摘要生成（summarizer.ts）使用。
+// limit 与 embedQueue.ts 的 batchSize 同款默认值（200），避免一次性把过大的 backlog 塞进单次模型调用
+export function getPendingSummaryMessages(sessionId: string, limit = 200): Message[] {
+  const rows = db.prepare(`
+    SELECT * FROM Messages WHERE sessionId = ? AND summarized = 0 ORDER BY createdAt ASC, id ASC LIMIT ?
+  `).all(sessionId, limit) as any[]
+
+  return rows.map(row => ({
+    ...row,
+    content: decrypt(row.content),
+    embedded: row.embedded === 1,
+    summarized: row.summarized === 1,
+    visibleToUser: row.visibleToUser === 1,
+  }))
+}
+
+export function markMessagesSummarized(messageIds: number[]): void {
+  if (messageIds.length === 0) return
+  const placeholders = messageIds.map(() => '?').join(',')
+  db.prepare(`UPDATE Messages SET summarized = 1 WHERE id IN (${placeholders})`).run(...messageIds)
+}
+
 // ─── Entities (MessageEntities，双时态) ───────────────────────
 
 export function insertEntity(entity: Omit<MessageEntity, 'id' | 'createdAt' | 'validUntil'> & { validUntil?: number | null }): number {
@@ -279,4 +316,30 @@ export function searchMessagesFts(query: string, sessionId?: string, limit = 10)
     sessionId: row.session_id,
     rank: row.rank,
   }))
+}
+
+// ─── Summaries ────────────────────────────────────────────
+// content 属于 TDD §3.6 加密字段范围（消息内容、角色设定、API Key、摘要、实体聚合结果），
+// 与 Messages/MessageEntities 一致过 encrypt()/decrypt()
+
+export function insertSummary(summary: Omit<Summary, 'id' | 'createdAt'>): number {
+  const result = db.prepare(`
+    INSERT INTO Summaries (sessionId, content, fromMessageId, toMessageId, createdAt)
+    VALUES (@sessionId, @content, @fromMessageId, @toMessageId, @createdAt)
+  `).run({ ...summary, content: encrypt(summary.content), createdAt: Date.now() })
+  return result.lastInsertRowid as number
+}
+
+// insertSummary + markMessagesSummarized 事务化组合：摘要生成（summarizer.ts）使用这个而非
+// 分别调用两者，避免进程在两步之间崩溃导致"写完 Summary 但消息未标记"或反过来的中间态
+export function insertSummaryAndMarkMessages(
+  summary: Omit<Summary, 'id' | 'createdAt'>,
+  messageIds: number[]
+): number {
+  const run = db.transaction(() => {
+    const summaryId = insertSummary(summary)
+    markMessagesSummarized(messageIds)
+    return summaryId
+  })
+  return run()
 }
