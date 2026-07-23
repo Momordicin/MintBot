@@ -10,8 +10,10 @@ import { chatRoutes } from './routes/chat.js'
 import { presetRoutes } from './routes/presets.js'
 import { createModelProvider, ModelProvider } from './providers/ModelProvider.js'
 import { BGEProvider, type EmbeddingProvider } from './providers/EmbeddingProvider.js'
+import { Bert4NerProvider, type NERProvider } from './providers/NERProvider.js'
 import type { ModelConfig } from '../../shared/types/index.js'
 import { ensureOllama, stopOllamaIfManaged } from './providers/ollama.js'
+import { startOrganizeModeScheduler } from './memory/orchestrator.js'
 import { buildStatePayload } from './state.js'
 import fastifyStatic from '@fastify/static'
 import fastifyCors from '@fastify/cors'
@@ -48,6 +50,7 @@ declare module 'fastify' {
     config: Record<string, unknown>
     modelProvider: ModelProvider
     embeddingProvider: EmbeddingProvider
+    nerProvider: NERProvider
   }
 }
 
@@ -57,14 +60,18 @@ fastify.get('/health', async () => ({ status: 'ok', uptime: process.uptime() }))
 
 fastify.get('/state', async () => buildStatePayload(fastify))
 
+let organizeModeTask: ReturnType<typeof startOrganizeModeScheduler> | undefined
+
 async function start() {
   // start() 函数职责太多
   process.on('SIGINT', async () => {
+    organizeModeTask?.stop()
     await stopOllamaIfManaged()
     process.exit(0)
   })
 
   process.on('SIGTERM', async () => {
+    organizeModeTask?.stop()
     await stopOllamaIfManaged()
     process.exit(0)
   })
@@ -78,9 +85,12 @@ async function start() {
   fastify.decorate('config', config)
   fastify.decorate('modelProvider', modelProvider)
   fastify.decorate('embeddingProvider', new BGEProvider())
+  fastify.decorate('nerProvider', new Bert4NerProvider())
 
   watchConfig()
   initDb()
+
+  organizeModeTask = startOrganizeModeScheduler(fastify)
 
   // 全局配置或任意 preset 用 ollama，都需要确保 ollama 已启动（per-preset provider 构建
   // 依赖 preset.modelType，而不仅仅是全局配置）

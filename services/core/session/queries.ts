@@ -179,6 +179,19 @@ export function markMessageEmbedded(messageId: number): void {
   db.prepare(`UPDATE Messages SET embedded = 1 WHERE id = ?`).run(messageId)
 }
 
+// 全表（不分 session）最近一条消息的 createdAt，供整理模式编排器判断 activeConversation
+// （TDD §3.8："最近 5 分钟内是否有消息"，为全局判断，不分 session）
+export function getMostRecentMessageTime(): number | null {
+  const row = db.prepare(`SELECT MAX(createdAt) as maxCreatedAt FROM Messages`).get() as any
+  return row.maxCreatedAt ?? null
+}
+
+// 全表（不分 session）最早一条未摘要消息的 createdAt，供 EmbeddingQueueStatus.oldestUnsummarizedAge 使用
+export function getOldestUnsummarizedMessageTime(): number | null {
+  const row = db.prepare(`SELECT MIN(createdAt) as minCreatedAt FROM Messages WHERE summarized = 0`).get() as any
+  return row.minCreatedAt ?? null
+}
+
 // 按 id 批量取消息（已解密），供 RAG 召回（retrieval.ts）按融合排序回查原文使用
 export function getMessagesByIds(ids: number[]): Message[] {
   if (ids.length === 0) return []

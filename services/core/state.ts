@@ -3,6 +3,7 @@ import type { ModelConfig } from '../../shared/types/index.js'
 import { getCurrentState } from './session/index.js'
 import { getEmotionState } from './session/queries.js'
 import { getOllamaBaseUrl, isOllamaRunning } from './providers/ollama.js'
+import { computeEmbeddingQueueStatus } from './memory/orchestrator.js'
 
 // GET /state 和 POST /switch-preset 返回同一套结构，抽成共享函数避免两处重复维护
 export async function buildStatePayload(fastify: FastifyInstance) {
@@ -21,6 +22,6 @@ export async function buildStatePayload(fastify: FastifyInstance) {
     presetSnapshot: snapshot,
     ollamaReady,
     emotion: state ? getEmotionState(state.session.sessionId) : null,
-    embeddingQueue: null,
+    embeddingQueue: computeEmbeddingQueueStatus(),
   }
 }

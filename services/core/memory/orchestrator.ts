@@ -1,0 +1,129 @@
+import { schedule, type ScheduledTask } from 'node-cron'
+import type { FastifyInstance } from 'fastify'
+import { extractEntities, type EntityModelProvider } from './entityExtractor.js'
+import { processEmbedQueue } from './embedQueue.js'
+import {
+  getPendingEmbeddingCount,
+  getPendingEmbeddingMessages,
+  getMostRecentMessageTime,
+  getOldestUnsummarizedMessageTime,
+} from '../session/queries.js'
+import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
+import type { NERProvider } from '../providers/NERProvider.js'
+import type { EmbeddingQueueStatus } from '../../../shared/types/index.js'
+
+// 整理模式编排器（TDD §3.8）。本模块只负责"何时 + 循环多少批"，不重新实现
+// embedding（embedQueue.ts）或实体抽取（entityExtractor.ts）本身的批处理逻辑，
+// 也不涉及摘要触发/调度（summarizer.ts 的调度留给后续任务）。
+
+const ACTIVE_CONVERSATION_WINDOW_MS = 5 * 60 * 1000
+const PENDING_COUNT_THRESHOLD = 100
+const OLDEST_PENDING_AGE_THRESHOLD_MIN = 120
+
+// 进程内存状态：最近一次整理模式实际跑过 embedding 批次的时间戳，供 EmbeddingQueueStatus.lastEmbeddingRun
+// 使用。不持久化到 DB（TDD §3.8 只要求维护监控状态，未要求跨进程重启保留），进程重启后重置为 0。
+let lastEmbeddingRun = 0
+
+// TODO(Phase 2 config module): 这是硬编码的默认低活跃时间窗口（夜间 22:00-08:00，本机系统时区），
+// 作为过渡方案。真正的用户自定义可整理时间窗口（如"我今天 10 点之后不用电脑"）需要等独立的 config
+// 模块 + 对话式意图识别接入后替换，届时本函数会被替换为读取用户配置的时间窗口判断。
+export function isInDefaultOrganizeWindow(timestamp: number): boolean {
+  const hour = new Date(timestamp).getHours()
+  return hour >= 22 || hour < 8
+}
+
+function computeActiveConversation(now: number): boolean {
+  const mostRecent = getMostRecentMessageTime()
+  return mostRecent !== null && now - mostRecent < ACTIVE_CONVERSATION_WINDOW_MS
+}
+
+// 供整理模式触发判断和 GET /state 共用，避免两处重复计算 EmbeddingQueueStatus
+export function computeEmbeddingQueueStatus(now: number = Date.now()): EmbeddingQueueStatus {
+  const pendingCount = getPendingEmbeddingCount()
+  const [oldestPending] = getPendingEmbeddingMessages(1)
+  const oldestPendingAge = oldestPending ? (now - oldestPending.createdAt) / 60_000 : 0
+
+  const oldestUnsummarized = getOldestUnsummarizedMessageTime()
+  const oldestUnsummarizedAge = oldestUnsummarized !== null ? (now - oldestUnsummarized) / (24 * 60 * 60 * 1000) : 0
+
+  return {
+    pendingCount,
+    oldestPendingAge,
+    oldestUnsummarizedAge,
+    activeConversation: computeActiveConversation(now),
+    lastEmbeddingRun,
+  }
+}
+
+// TDD §3.8 触发整理公式：(pendingCount>100 OR oldestPendingAge>120min) AND !activeConversation
+// AND 当前时间 IN 可整理时间窗口
+function shouldTriggerOrganizeMode(now: number): boolean {
+  const status = computeEmbeddingQueueStatus(now)
+  const pendingConditionMet =
+    status.pendingCount > PENDING_COUNT_THRESHOLD || status.oldestPendingAge > OLDEST_PENDING_AGE_THRESHOLD_MIN
+  return pendingConditionMet && !status.activeConversation && isInDefaultOrganizeWindow(now)
+}
+
+export interface OrganizeModeTickResult {
+  triggered: boolean
+  batches: number
+  totalProcessed: number
+  totalEntitiesInserted: number
+  totalEntitiesClosed: number
+}
+
+// 单次整理 tick：满足触发条件时按批处理（实体抽取 + embedding 共用同一批 pending 消息——
+// getPendingEmbeddingMessages 只查询一次，同一个 batch 变量同时传给 extractEntities 和
+// processEmbedQueue，避免两次独立查询之间（extractEntities 内部有真实的 NER/主模型网络 I/O
+// 耗时）新插入的消息被第二次查询的 LIMIT 窗口纳入，进而被误标记为 embedded 却从未经过实体抽取，
+// TDD §3.8"每次最多处理 200 条 pending 记录，分批执行...处理完检查条件是否仍满足，满足则继续下一批"），
+// 每批处理完重新评估触发条件，不满足则停止。
+//
+// getNow 每次循环迭代重新调用（而非在函数入口冻结一次 now），保证 activeConversation 等实时状态
+// 在多批次执行期间（Layer 3 主模型调用可能耗时较长）如果用户中途开始聊天，下一次评估能立即感知到
+// 并停止，符合 TDD"不占用对话时的计算资源"的设计初衷；测试可传入受控推进的假时钟。
+//
+// 若某批 embedding 全部失败（processEmbedQueue 返回 processed=0），按 embedQueue.ts 自身的失败补偿
+// 语义（"留待下次整理模式运行时重试"，即下次 tick 而非同一 tick 内立即重试）立即停止本次 tick，
+// 避免在同一 tick 内对持续失败的 provider 无限重试。
+export async function runOrganizeModeTick(
+  deps: { embedding: EmbeddingProvider; ner: NERProvider; model: EntityModelProvider },
+  batchSize = 200,
+  getNow: () => number = Date.now
+): Promise<OrganizeModeTickResult> {
+  let batches = 0
+  let totalProcessed = 0
+  let totalEntitiesInserted = 0
+  let totalEntitiesClosed = 0
+
+  while (shouldTriggerOrganizeMode(getNow())) {
+    const batch = getPendingEmbeddingMessages(batchSize)
+    if (batch.length === 0) break
+
+    const { inserted, closed } = await extractEntities(batch, { ner: deps.ner, model: deps.model })
+    const { processed } = await processEmbedQueue(deps.embedding, batchSize, batch)
+
+    batches++
+    totalProcessed += processed
+    totalEntitiesInserted += inserted
+    totalEntitiesClosed += closed
+    lastEmbeddingRun = Date.now()
+
+    if (processed === 0) break
+  }
+
+  return { triggered: batches > 0, batches, totalProcessed, totalEntitiesInserted, totalEntitiesClosed }
+}
+
+// 后台每 5 分钟轮询（TDD §3.8），返回 ScheduledTask 供调用方在进程退出时 .stop()
+export function startOrganizeModeScheduler(fastify: FastifyInstance): ScheduledTask {
+  return schedule('*/5 * * * *', () => {
+    runOrganizeModeTick({
+      embedding: fastify.embeddingProvider,
+      ner: fastify.nerProvider,
+      model: fastify.modelProvider,
+    }).catch(err => {
+      console.error('[OrganizeMode] tick failed:', err)
+    })
+  })
+}

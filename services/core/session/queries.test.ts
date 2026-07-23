@@ -14,6 +14,8 @@ import {
   getPendingEmbeddingMessages,
   getPendingEmbeddingCount,
   markMessageEmbedded,
+  getMostRecentMessageTime,
+  getOldestUnsummarizedMessageTime,
   insertEntity,
   getCurrentEntities,
   getEntitiesAsOf,
@@ -239,6 +241,26 @@ describe('Embeddings', () => {
 
     markMessageEmbedded(id1)
     expect(getPendingEmbeddingCount()).toBe(1)
+  })
+
+  it('getMostRecentMessageTime 无消息时返回 null，有消息时返回全表最大 createdAt（不分 session）', () => {
+    expect(getMostRecentMessageTime()).toBeNull()
+
+    appendMessage({ sessionId: 's1', role: 'user', content: 'a', createdAt: 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's2', role: 'user', content: 'b', createdAt: 3000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's1', role: 'user', content: 'c', createdAt: 2000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+
+    expect(getMostRecentMessageTime()).toBe(3000)
+  })
+
+  it('getOldestUnsummarizedMessageTime 无未摘要消息时返回 null，有时返回全表最小 createdAt（不分 session）', () => {
+    expect(getOldestUnsummarizedMessageTime()).toBeNull()
+
+    appendMessage({ sessionId: 's1', role: 'user', content: 'a', createdAt: 2000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's2', role: 'user', content: 'b', createdAt: 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's1', role: 'user', content: 'c', createdAt: 500, embedded: false, summarized: true, visibleToUser: true, trigger: 'user', triggerEventId: null })
+
+    expect(getOldestUnsummarizedMessageTime()).toBe(1000)
   })
 })
 
