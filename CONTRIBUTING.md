@@ -211,6 +211,7 @@ if (current < N) {
 - **v2**：创建 `message_embeddings` 向量表（sqlite-vec vec0，`FLOAT[1024]`）
 - **v3**：重建 `message_embeddings` 按 `session_id` 分区（PARTITION KEY），新增 `message_fts`（FTS5）全文索引表与 `MessageEntities` 实体表（含索引）
 - **v4**：创建 `EmotionStates` 情绪状态表
+- **v5**：drop 并重建 `message_fts`，分词器由 `unicode61` 换成 `simple`（DIV-002 中文关键词召回修复），触发 `needsFtsBackfill` 信号回填已 `embedded` 的历史消息
 
 ### 测试
 

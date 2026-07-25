@@ -85,8 +85,9 @@ async function start() {
 
   fastify.decorate('config', config)
   fastify.decorate('modelProvider', modelProvider)
-  fastify.decorate('embeddingProvider', new BGEProvider())
-  fastify.decorate('nerProvider', new Bert4NerProvider())
+  const aiBaseUrl = `http://localhost:${process.env.AI_PORT ?? '8765'}`
+  fastify.decorate('embeddingProvider', new BGEProvider(aiBaseUrl))
+  fastify.decorate('nerProvider', new Bert4NerProvider(aiBaseUrl))
 
   watchConfig()
   const { needsFtsBackfill } = initDb()
