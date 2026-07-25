@@ -24,6 +24,24 @@ export interface BuiltContext {
   tools?: ToolSchema[]       // Phase 5 预留
 }
 
+export interface NerEntity {
+  text: string
+  label: string   // 原始 NER 标签（PER/ORG/LOC/TIME），MessageEntity.type 映射由 entityExtractor 负责
+  start: number
+  end: number
+}
+
+export interface MessageEntity {
+  id: number
+  messageId: number
+  sessionId: string
+  type: 'person' | 'event' | 'preference' | 'place' | 'other'
+  value: string
+  validFrom: number
+  validUntil: number | null
+  createdAt: number
+}
+
 export interface ChatMessage{
   role: 'system' | 'user' | 'assistant'
   content: string
@@ -78,6 +96,7 @@ export interface PresetSnapshot {
   characterId: string
   modelType: 'anthropic' | 'openai' | 'ollama'
   modelName: string
+  wallpaperPath?: string
   systemPrompt: string
   // 后期扩展：hooks、角色包配置等
 }
@@ -98,7 +117,7 @@ export interface EmotionLabel {
 
 export interface EmotionState {
   self: EmotionLabel
-  perceived_user: EmotionLabel
+  perceived_user: EmotionLabel | null  // Phase 2 基础版留空占位，Phase 后续实现前恒为 null
 }
 
 export interface EmbeddingQueueStatus {

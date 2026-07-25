@@ -4,11 +4,18 @@ import fs from 'fs'
 import chokidar from 'chokidar'
 import * as dotenv from 'dotenv'
 import { initDb } from './db/index.js'
-import { getCurrentState, loadSession } from './session/index.js'
+import { loadSession } from './session/index.js'
+import { getAllPresets, backfillMessageFts } from './session/queries.js'
 import { chatRoutes } from './routes/chat.js'
+import { presetRoutes } from './routes/presets.js'
+import { internalRoutes } from './routes/internal.js'
 import { createModelProvider, ModelProvider } from './providers/ModelProvider.js'
+import { BGEProvider, type EmbeddingProvider } from './providers/EmbeddingProvider.js'
+import { Bert4NerProvider, type NERProvider } from './providers/NERProvider.js'
 import type { ModelConfig } from '../../shared/types/index.js'
-import { ensureOllama, isOllamaRunning, getOllamaBaseUrl, stopOllamaIfManaged } from './providers/ollama.js'
+import { ensureOllama, stopOllamaIfManaged } from './providers/ollama.js'
+import { startOrganizeModeScheduler } from './memory/orchestrator.js'
+import { buildStatePayload } from './state.js'
 import fastifyStatic from '@fastify/static'
 import fastifyCors from '@fastify/cors'
 
@@ -43,6 +50,8 @@ declare module 'fastify' {
   interface FastifyInstance {
     config: Record<string, unknown>
     modelProvider: ModelProvider
+    embeddingProvider: EmbeddingProvider
+    nerProvider: NERProvider
   }
 }
 
@@ -50,34 +59,20 @@ const fastify = Fastify({ logger: true })
 
 fastify.get('/health', async () => ({ status: 'ok', uptime: process.uptime() }))
 
-fastify.get('/state', async () => {
-  const state = getCurrentState()
-  const snapshot = state?.session.presetSnapshot ?? null
+fastify.get('/state', async () => buildStatePayload(fastify))
 
-  let ollamaReady: boolean | null = null
-  if (snapshot?.modelType === 'ollama') {
-    const modelConfig = fastify.config.modelProvider as ModelConfig | undefined
-    const baseUrl = getOllamaBaseUrl(modelConfig?.ollamaBaseUrl)
-    ollamaReady = await isOllamaRunning(baseUrl)
-  }
-
-  return {
-    sessionId: state?.session.sessionId ?? null,
-    presetSnapshot: snapshot,
-    ollamaReady,
-    emotion: null,
-    embeddingQueue: null,
-  }
-})
+let organizeModeTask: ReturnType<typeof startOrganizeModeScheduler> | undefined
 
 async function start() {
   // start() 函数职责太多
   process.on('SIGINT', async () => {
+    organizeModeTask?.stop()
     await stopOllamaIfManaged()
     process.exit(0)
   })
 
   process.on('SIGTERM', async () => {
+    organizeModeTask?.stop()
     await stopOllamaIfManaged()
     process.exit(0)
   })
@@ -90,14 +85,26 @@ async function start() {
 
   fastify.decorate('config', config)
   fastify.decorate('modelProvider', modelProvider)
+  const aiBaseUrl = `http://localhost:${process.env.AI_PORT ?? '8765'}`
+  fastify.decorate('embeddingProvider', new BGEProvider(aiBaseUrl))
+  fastify.decorate('nerProvider', new Bert4NerProvider(aiBaseUrl))
 
   watchConfig()
-  initDb()
-  
-  if (modelConfig?.type === 'ollama') {
-    await ensureOllama(modelConfig.ollamaBaseUrl)
+  const { needsFtsBackfill } = initDb()
+  if (needsFtsBackfill) {
+    const backfilledCount = backfillMessageFts()
+    console.log(`[Core] Backfilled ${backfilledCount} message(s) into message_fts after tokenizer migration`)
   }
-  
+
+  organizeModeTask = startOrganizeModeScheduler(fastify)
+
+  // 全局配置或任意 preset 用 ollama，都需要确保 ollama 已启动（per-preset provider 构建
+  // 依赖 preset.modelType，而不仅仅是全局配置）
+  const anyPresetUsesOllama = getAllPresets().some(p => p.modelType === 'ollama')
+  if (modelConfig?.type === 'ollama' || anyPresetUsesOllama) {
+    await ensureOllama(modelConfig?.ollamaBaseUrl)
+  }
+
   const defaultPresetId = config.defaultPresetId as string | undefined
   if (defaultPresetId) {
     loadSession(defaultPresetId)
@@ -112,7 +119,9 @@ async function start() {
   prefix: '/wallpapers/',
   })
   
-  await fastify.register(chatRoutes)  
+  await fastify.register(chatRoutes)
+  await fastify.register(presetRoutes)
+  await fastify.register(internalRoutes)
   await fastify.listen({ port: PORT, host: '127.0.0.1' })
   console.log(`[Core] Running on port ${PORT}`)
 

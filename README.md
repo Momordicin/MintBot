@@ -24,28 +24,28 @@
 - 支持多段回复，模拟真实对话节奏
 - 消息历史完整留存
 
-**桌面悬浮窗**
+**桌面悬浮窗**（Phase 3，规划中，尚未实现）
 - 聊天窗口最小化后自动切换至桌面悬浮窗，后台常驻
 - 根据活跃窗口自动置顶 / 隐藏 / 跳屏
 - 角色立绘根据情绪标签实时切换（支持 GIF 动图和静态图片）
 
-**语音**
+**语音**（Phase 4，规划中，尚未实现）
 - 语音输入（faster-whisper ASR）
 - 语音回复（GPT-SoVITS v2，流式合成，首句即播）
 - 情绪标签指导语音语调
 
 **记忆系统**
 - 双轨记忆：近期对话直接注入 context，历史对话 RAG 召回
-- BGE-large 向量 embedding，sqlite-vec 本地索引
+- bge-m3 向量 embedding，sqlite-vec 本地索引
 - 自动摘要压缩，实体聚合
-- 双向情绪引擎：角色情绪 + 用户情绪感知
+- 情绪状态引擎（Phase 2 基础版）：当前仅实现角色自身（self）情绪的解析与持久化；感知用户情绪（perceived_user）为占位设计，完整的双向情绪模型（self 与 perceived_user 互相影响）为后续规划
 
-**人机交互**
+**人机交互**（Phase 5 / 6，规划中，尚未实现）
 - 本地系统操作：启动应用、调整音量、截图等
 - MCP 扩展接口（预留）
 - 主动对话调度器：定时、事件、情绪阈值触发
 
-**手机端**
+**手机端**（Phase 7，规划中，尚未实现）
 - 通过 Cloudflare Tunnel 访问本地服务
 - 与桌面端共享会话，实时同步
 
@@ -61,7 +61,7 @@
 | 本地模型 | Ollama（可选，Qwen3 / ChatGLM 等） |
 | ASR | faster-whisper（Python HTTP 服务） |
 | TTS | GPT-SoVITS v2（Python HTTP 服务） |
-| Embedding | BGE-large/BGE-M3（Python HTTP 服务） |
+| Embedding | bge-m3（Python HTTP 服务） |
 | 数据库 | SQLite + sqlite-vec |
 | Win32 FFI | koffi |
 | 配置热生效 | chokidar |
@@ -72,8 +72,8 @@
 
 ## 开发阶段
 
-- [x] Phase 1：核心对话链路（后端完成，React UI 开发中）
-- [ ] Phase 2：记忆系统
+- [x] Phase 1：核心对话链路
+- [ ] Phase 2：记忆系统 (记忆库方案学研中)
 - [ ] Phase 3：悬浮窗 + 窗口管理
 - [ ] Phase 4：语音
 - [ ] Phase 5：人机交互工具 + MCP
@@ -177,8 +177,8 @@ assets/characters/my-character/
 
 - 所有对话数据存储在本地 SQLite，不上传任何服务器
 - 使用外部 API（Anthropic / OpenAI）时，对话内容会发送至对应服务商；隐私优先用户建议配置本地 Ollama
-- 敏感字段（消息内容、API Key）支持 AES-256-GCM 字段级加密
-- 本地部署密钥由系统密钥链（Windows Credential Manager）托管，不落磁盘明文
+- 敏感字段（消息内容、角色设定、实体信息、摘要）支持 AES-256-GCM 字段级加密，可通过配置开关，线上部署时启用
+- 加密密钥当前通过环境变量（`.env` 的 `DB_ENCRYPTION_KEY`）读取；由系统密钥链（Windows Credential Manager）托管密钥、不落磁盘明文的方案仍在规划中，尚未实现
 
 ---
 

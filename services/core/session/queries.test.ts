@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { db, initDb } from '../db/index.js'
 import {
   getPresetById,
@@ -9,12 +9,44 @@ import {
   touchSession,
   getRecentMessages,
   appendMessage,
+  upsertMessageEmbedding,
+  searchSimilarMessages,
+  getPendingEmbeddingMessages,
+  getPendingEmbeddingCount,
+  markMessageEmbedded,
+  getMostRecentMessageTime,
+  getOldestUnsummarizedMessageTime,
+  insertEntity,
+  getCurrentEntities,
+  getEntitiesAsOf,
+  closeEntity,
+  indexMessageFts,
+  searchMessagesFts,
+  backfillMessageFts,
+  upsertEmotionState,
+  getEmotionState,
+  resetEmotionState,
+  getSessionsWithPendingSummaries,
+  getPendingSummaryCount,
+  getSummaries,
+  insertSummary,
 } from './queries.js'
 
 initDb()
 beforeEach(() => {
-  db.exec(`DELETE FROM Messages; DELETE FROM Sessions; DELETE FROM Presets; DELETE FROM Summaries;`)
+  db.exec(`
+    DELETE FROM Messages; DELETE FROM Sessions; DELETE FROM Presets; DELETE FROM Summaries;
+    DELETE FROM message_embeddings; DELETE FROM message_fts; DELETE FROM MessageEntities;
+    DELETE FROM EmotionStates;
+  `)
 })
+
+// 构造确定性的 1024 维测试向量：仅在指定维度写入值，其余补零
+function vec(dim: number, value: number): number[] {
+  const v = new Array(1024).fill(0)
+  v[dim] = value
+  return v
+}
 
 // ─── Preset ───────────────────────────────────────────────
 
@@ -154,5 +186,385 @@ describe('Messages', () => {
     expect(msgs[0].embedded).toBe(true)
     expect(msgs[0].summarized).toBe(false)
     expect(msgs[0].visibleToUser).toBe(true)
+  })
+})
+
+// ─── Pending summaries (Messages.summarized) ───────────────
+
+describe('getSessionsWithPendingSummaries / getPendingSummaryCount', () => {
+  it('无待摘要消息时 getSessionsWithPendingSummaries 返回空数组，getPendingSummaryCount 返回 0', () => {
+    expect(getSessionsWithPendingSummaries()).toEqual([])
+    expect(getPendingSummaryCount('s1')).toBe(0)
+  })
+
+  it('有待摘要消息时能正确列出 session 并统计数量', () => {
+    appendMessage({ sessionId: 's1', role: 'user', content: 'a', createdAt: 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's1', role: 'user', content: 'b', createdAt: 2000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's2', role: 'user', content: 'c', createdAt: 3000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's2', role: 'user', content: 'd', createdAt: 4000, embedded: false, summarized: true, visibleToUser: true, trigger: 'user', triggerEventId: null })
+
+    expect(getSessionsWithPendingSummaries().sort()).toEqual(['s1', 's2'])
+    expect(getPendingSummaryCount('s1')).toBe(2)
+    expect(getPendingSummaryCount('s2')).toBe(1)
+  })
+
+  it('session 内消息全部已摘要时不再出现在 getSessionsWithPendingSummaries 中', () => {
+    appendMessage({ sessionId: 's1', role: 'user', content: 'a', createdAt: 1000, embedded: false, summarized: true, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    expect(getSessionsWithPendingSummaries()).toEqual([])
+    expect(getPendingSummaryCount('s1')).toBe(0)
+  })
+})
+
+// ─── Embeddings ───────────────────────────────────────────
+
+describe('Embeddings', () => {
+  it('upsertMessageEmbedding 写入后 searchSimilarMessages 能按距离排序召回', () => {
+    upsertMessageEmbedding(1, 's1', vec(0, 1))     // 与 query 完全一致
+    upsertMessageEmbedding(2, 's1', vec(0, 0.9))   // 较接近
+    upsertMessageEmbedding(3, 's1', vec(0, -1))    // 较远
+
+    const results = searchSimilarMessages(vec(0, 1), 2)
+    expect(results).toHaveLength(2)
+    expect(results[0].messageId).toBe(1)
+    expect(results[1].messageId).toBe(2)
+    expect(results[0].distance).toBeLessThan(results[1].distance)
+  })
+
+  it('searchSimilarMessages 按 sessionId 过滤', () => {
+    upsertMessageEmbedding(1, 's1', vec(0, 1))
+    upsertMessageEmbedding(2, 's2', vec(0, 1))
+
+    const results = searchSimilarMessages(vec(0, 1), 5, 's1')
+    expect(results).toHaveLength(1)
+    expect(results[0].messageId).toBe(1)
+    expect(results[0].sessionId).toBe('s1')
+  })
+
+  // vec0 PARTITION KEY 修复验证：session_id 声明为 PARTITION KEY 后，
+  // 会话内语料超过 k 时，按会话过滤的 KNN 查询仍应返回该会话内真正最近的邻居，
+  // 不会被另一会话中距离更近但不属于该会话的向量挤出结果集（旧的“先全局 top-k 再过滤”实现会漏召回）
+  it('vec0 PARTITION KEY：会话内语料超过 k 时，按会话过滤仍返回该会话真正的最近邻', () => {
+    // s1: 5 条，与 query 距离依次增大
+    for (let i = 0; i < 5; i++) {
+      upsertMessageEmbedding(i + 1, 's1', vec(0, 1 - i * 0.01))
+    }
+    // s2: 10 条，与 query 完全一致（distance = 0），比 s1 任何一条都更接近
+    for (let i = 0; i < 10; i++) {
+      upsertMessageEmbedding(100 + i, 's2', vec(0, 1))
+    }
+
+    const k = 3
+    const results = searchSimilarMessages(vec(0, 1), k, 's1')
+    expect(results).toHaveLength(k)
+    expect(results.map(r => r.messageId)).toEqual([1, 2, 3])
+    expect(results.every(r => r.sessionId === 's1')).toBe(true)
+  })
+
+  it('getPendingEmbeddingMessages / getPendingEmbeddingCount / markMessageEmbedded 配套流程', () => {
+    const id1 = appendMessage({ sessionId: 's1', role: 'user', content: '待处理1', createdAt: 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's1', role: 'user', content: '待处理2', createdAt: 2000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's1', role: 'user', content: '已处理', createdAt: 3000, embedded: true, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+
+    expect(getPendingEmbeddingCount()).toBe(2)
+    const pending = getPendingEmbeddingMessages()
+    expect(pending).toHaveLength(2)
+    expect(pending[0].content).toBe('待处理1')
+
+    markMessageEmbedded(id1)
+    expect(getPendingEmbeddingCount()).toBe(1)
+  })
+
+  it('getMostRecentMessageTime 无消息时返回 null，有消息时返回全表最大 createdAt（不分 session）', () => {
+    expect(getMostRecentMessageTime()).toBeNull()
+
+    appendMessage({ sessionId: 's1', role: 'user', content: 'a', createdAt: 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's2', role: 'user', content: 'b', createdAt: 3000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's1', role: 'user', content: 'c', createdAt: 2000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+
+    expect(getMostRecentMessageTime()).toBe(3000)
+  })
+
+  it('getOldestUnsummarizedMessageTime 无未摘要消息时返回 null，有时返回全表最小 createdAt（不分 session）', () => {
+    expect(getOldestUnsummarizedMessageTime()).toBeNull()
+
+    appendMessage({ sessionId: 's1', role: 'user', content: 'a', createdAt: 2000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's2', role: 'user', content: 'b', createdAt: 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's1', role: 'user', content: 'c', createdAt: 500, embedded: false, summarized: true, visibleToUser: true, trigger: 'user', triggerEventId: null })
+
+    expect(getOldestUnsummarizedMessageTime()).toBe(1000)
+  })
+})
+
+// ─── Entities ─────────────────────────────────────────────
+
+describe('Entities', () => {
+  it('insertEntity 后 getCurrentEntities 能读回，value 解密正确', () => {
+    insertEntity({ messageId: 1, sessionId: 's1', type: 'preference', value: '喜欢猫', validFrom: 1000 })
+    const entities = getCurrentEntities('s1')
+    expect(entities).toHaveLength(1)
+    expect(entities[0].value).toBe('喜欢猫')
+    expect(entities[0].validUntil).toBeNull()
+  })
+
+  it('getCurrentEntities 按 type 过滤', () => {
+    insertEntity({ messageId: 1, sessionId: 's1', type: 'preference', value: '喜欢猫', validFrom: 1000 })
+    insertEntity({ messageId: 2, sessionId: 's1', type: 'person', value: '同事小李', validFrom: 1000 })
+    const preferences = getCurrentEntities('s1', 'preference')
+    expect(preferences).toHaveLength(1)
+    expect(preferences[0].value).toBe('喜欢猫')
+  })
+
+  it('closeEntity 双时态关闭后 getCurrentEntities 不再返回，但历史仍在表中', () => {
+    const id = insertEntity({ messageId: 1, sessionId: 's1', type: 'preference', value: '喜欢猫', validFrom: 1000 })
+    closeEntity(id, 5000)
+    expect(getCurrentEntities('s1')).toHaveLength(0)
+
+    const row = db.prepare(`SELECT * FROM MessageEntities WHERE id = ?`).get(id) as any
+    expect(row.validUntil).toBe(5000)
+  })
+
+  it('getEntitiesAsOf 返回指定时间点仍有效的实体', () => {
+    const id = insertEntity({ messageId: 1, sessionId: 's1', type: 'preference', value: '喜欢猫', validFrom: 1000 })
+    closeEntity(id, 5000)
+
+    expect(getEntitiesAsOf('s1', 3000)).toHaveLength(1)
+    expect(getEntitiesAsOf('s1', 6000)).toHaveLength(0)
+  })
+})
+
+// ─── Encryption modes (encryptSensitiveFields) ─────────────
+// getEncryptSensitiveFields() 读取的是 process.env.ENCRYPT_SENSITIVE_FIELDS，本身不做缓存，
+// 因此测试内直接读写该环境变量即可让 crypto.ts 的判断实时生效，无需额外的测试 hook
+describe('Encryption modes (encryptSensitiveFields)', () => {
+  const prevFlag = process.env.ENCRYPT_SENSITIVE_FIELDS
+  afterEach(() => {
+    process.env.ENCRYPT_SENSITIVE_FIELDS = prevFlag
+  })
+
+  it('encryptSensitiveFields=false（本地默认）：消息内容明文落盘且可正常读回', () => {
+    delete process.env.ENCRYPT_SENSITIVE_FIELDS
+    const id = appendMessage({
+      sessionId: 's1', role: 'user', content: '本地明文消息', createdAt: Date.now(),
+      embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null,
+    })
+
+    const raw = db.prepare(`SELECT content FROM Messages WHERE id = ?`).get(id) as any
+    expect(raw.content).toBe('本地明文消息')
+
+    const msgs = getRecentMessages('s1')
+    expect(msgs[0].content).toBe('本地明文消息')
+  })
+
+  it('encryptSensitiveFields=true（线上部署）：消息内容加密落盘，读回后解密正确', () => {
+    process.env.ENCRYPT_SENSITIVE_FIELDS = 'true'
+    const id = appendMessage({
+      sessionId: 's1', role: 'user', content: '线上加密消息', createdAt: Date.now(),
+      embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null,
+    })
+
+    const raw = db.prepare(`SELECT content FROM Messages WHERE id = ?`).get(id) as any
+    expect(raw.content).not.toBe('线上加密消息')
+
+    const msgs = getRecentMessages('s1')
+    expect(msgs[0].content).toBe('线上加密消息')
+  })
+})
+
+// ─── EmotionState ─────────────────────────────────────────
+
+describe('EmotionState', () => {
+  it('upsertEmotionState 写入后 getEmotionState 能读回', () => {
+    upsertEmotionState('s1', { self: { label: 'curious', intensity: 0.7 }, perceived_user: null })
+    const emotion = getEmotionState('s1')
+    expect(emotion).toEqual({ self: { label: 'curious', intensity: 0.7 }, perceived_user: null })
+  })
+
+  it('getEmotionState 查不存在的 sessionId 返回 null', () => {
+    expect(getEmotionState('not-exist')).toBeNull()
+  })
+
+  it('resetEmotionState 删除后 getEmotionState 变 null', () => {
+    upsertEmotionState('s1', { self: { label: 'happy', intensity: 0.5 }, perceived_user: null })
+    resetEmotionState('s1')
+    expect(getEmotionState('s1')).toBeNull()
+  })
+
+  it('同一 sessionId 第二次 upsert 覆盖而不是报错', () => {
+    upsertEmotionState('s1', { self: { label: 'happy', intensity: 0.5 }, perceived_user: null })
+    upsertEmotionState('s1', { self: { label: 'sad', intensity: 0.3 }, perceived_user: null })
+    const emotion = getEmotionState('s1')
+    expect(emotion!.self).toEqual({ label: 'sad', intensity: 0.3 })
+  })
+
+  it('perceived_user 为 null 时往返仍为 null（Phase 2 占位）', () => {
+    upsertEmotionState('s1', { self: { label: 'idle', intensity: 0.1 }, perceived_user: null })
+    expect(getEmotionState('s1')!.perceived_user).toBeNull()
+  })
+})
+
+// ─── FTS (message_fts) ──────────────────────────────────────
+// tokenize = 'simple'（wangfenjin/simple，libsimple 扩展，DIV-002 修复）：中文按逐字符子串
+// 索引，可命中任意跨"词"边界的子串；英文仍按连续字母整词索引，行为与旧的 unicode61 一致。
+// 拼音检索（官方文档提到的功能）实测未生效，不在本次修复范围内，不在此断言。
+describe('FTS (message_fts)', () => {
+  const prevFlag = process.env.ENCRYPT_SENSITIVE_FIELDS
+  afterEach(() => {
+    process.env.ENCRYPT_SENSITIVE_FIELDS = prevFlag
+  })
+
+  it('encryptSensitiveFields=false：写入索引后可通过关键词召回', () => {
+    delete process.env.ENCRYPT_SENSITIVE_FIELDS
+    indexMessageFts(1, 's1', 'cat likes fish very much')
+    indexMessageFts(2, 's1', 'today is a sunny day')
+
+    const results = searchMessagesFts('cat')
+    expect(results).toHaveLength(1)
+    expect(results[0].messageId).toBe(1)
+    expect(results[0].sessionId).toBe('s1')
+  })
+
+  it('encryptSensitiveFields=false：按 sessionId 过滤只返回该会话命中', () => {
+    delete process.env.ENCRYPT_SENSITIVE_FIELDS
+    indexMessageFts(1, 's1', 'cat likes fish')
+    indexMessageFts(2, 's2', 'cat likes fish too')
+
+    const results = searchMessagesFts('cat', 's1')
+    expect(results).toHaveLength(1)
+    expect(results[0].messageId).toBe(1)
+    expect(results[0].sessionId).toBe('s1')
+  })
+
+  it('encryptSensitiveFields=true：写入为 no-op，搜索直接返回空数组（召回退化为纯向量检索）', () => {
+    process.env.ENCRYPT_SENSITIVE_FIELDS = 'true'
+    indexMessageFts(1, 's1', 'cat likes fish')
+
+    const raw = db.prepare(`SELECT COUNT(*) as count FROM message_fts`).get() as any
+    expect(raw.count).toBe(0)
+    expect(searchMessagesFts('cat')).toEqual([])
+  })
+
+  it('中文 2 字词可命中（DIV-002）', () => {
+    delete process.env.ENCRYPT_SENSITIVE_FIELDS
+    indexMessageFts(1, 's1', '我喜欢猫和狗')
+    indexMessageFts(2, 's1', '今天天气很好')
+
+    const results = searchMessagesFts('喜欢')
+    expect(results).toHaveLength(1)
+    expect(results[0].messageId).toBe(1)
+  })
+
+  it('中文单字可命中', () => {
+    delete process.env.ENCRYPT_SENSITIVE_FIELDS
+    indexMessageFts(1, 's1', '我喜欢猫和狗')
+
+    const results = searchMessagesFts('猫')
+    expect(results).toHaveLength(1)
+    expect(results[0].messageId).toBe(1)
+  })
+
+  it('专有名词（游戏名/人名）可命中', () => {
+    delete process.env.ENCRYPT_SENSITIVE_FIELDS
+    indexMessageFts(1, 's1', '我最近在玩原神')
+    indexMessageFts(2, 's1', '张三昨天来找我了')
+
+    expect(searchMessagesFts('原神')).toHaveLength(1)
+    expect(searchMessagesFts('张三')).toHaveLength(1)
+  })
+
+  it('跨"词"边界的中文子串可命中（逐字符索引，不依赖分词边界）', () => {
+    delete process.env.ENCRYPT_SENSITIVE_FIELDS
+    indexMessageFts(1, 's1', '我喜欢猫和狗')
+
+    // "欢猫" 横跨"喜欢"和"猫"两个词边界，不是一个真实存在的词
+    const results = searchMessagesFts('欢猫')
+    expect(results).toHaveLength(1)
+    expect(results[0].messageId).toBe(1)
+  })
+})
+
+// backfillMessageFts 是 v5 迁移（DIV-002：message_fts 分词器换成 simple）里"回填已 embedded
+// 历史消息"那一步的实现，这里直接单测这个函数本身，而不是重跑一次完整迁移（迁移只在
+// initDb() 首次建库时按 user_version 触发一次）
+describe('backfillMessageFts (v5 迁移回填逻辑)', () => {
+  const prevFlag = process.env.ENCRYPT_SENSITIVE_FIELDS
+  afterEach(() => {
+    process.env.ENCRYPT_SENSITIVE_FIELDS = prevFlag
+  })
+
+  it('embedded=1 但未出现在 message_fts 里的历史消息（模拟迁移前 drop 后的状态），回填后可被关键词召回', () => {
+    delete process.env.ENCRYPT_SENSITIVE_FIELDS
+    // 模拟迁移场景：这些消息在旧表里已经 embedded=1，但 message_fts 表刚被 drop + 重建，是空的
+    const id1 = appendMessage({
+      sessionId: 's1', role: 'user', content: '我喜欢猫和狗',
+      createdAt: 1000, embedded: true, summarized: false, visibleToUser: true,
+      trigger: 'user', triggerEventId: null,
+    })
+    const id2 = appendMessage({
+      sessionId: 's1', role: 'user', content: '今天天气很好',
+      createdAt: 2000, embedded: true, summarized: false, visibleToUser: true,
+      trigger: 'user', triggerEventId: null,
+    })
+
+    expect(searchMessagesFts('猫')).toEqual([])
+
+    const backfilledCount = backfillMessageFts()
+    expect(backfilledCount).toBe(2)
+
+    const results = searchMessagesFts('猫')
+    expect(results).toHaveLength(1)
+    expect(results[0].messageId).toBe(id1)
+    void id2
+  })
+
+  it('未 embedded 的消息不参与回填', () => {
+    delete process.env.ENCRYPT_SENSITIVE_FIELDS
+    appendMessage({
+      sessionId: 's1', role: 'user', content: '还没处理的消息',
+      createdAt: 1000, embedded: false, summarized: false, visibleToUser: true,
+      trigger: 'user', triggerEventId: null,
+    })
+
+    expect(backfillMessageFts()).toBe(0)
+    expect(searchMessagesFts('处理')).toEqual([])
+  })
+})
+
+// ─── Summaries ────────────────────────────────────────────
+
+describe('getSummaries', () => {
+  it('没有摘要时返回空数组', () => {
+    expect(getSummaries('s1')).toEqual([])
+  })
+
+  it('按 createdAt 升序返回该 session 的全部摘要，content 解密正确（往返验证）', () => {
+    // insertSummary 内部用 Date.now() 写入 createdAt（不暴露可控参数），这里插入后直接改写
+    // createdAt 确保两条摘要时间戳不同，避免同一毫秒内插入导致排序断言不稳定
+    const id1 = insertSummary({ sessionId: 's1', content: '第一段摘要', fromMessageId: 1, toMessageId: 2 })
+    const id2 = insertSummary({ sessionId: 's1', content: '第二段摘要', fromMessageId: 3, toMessageId: 4 })
+    insertSummary({ sessionId: 's2', content: '别的会话摘要', fromMessageId: 1, toMessageId: 1 })
+    db.prepare(`UPDATE Summaries SET createdAt = 1000 WHERE id = ?`).run(id1)
+    db.prepare(`UPDATE Summaries SET createdAt = 2000 WHERE id = ?`).run(id2)
+
+    const summaries = getSummaries('s1')
+    expect(summaries).toHaveLength(2)
+    expect(summaries[0].id).toBe(id1)
+    expect(summaries[0].content).toBe('第一段摘要')
+    expect(summaries[1].id).toBe(id2)
+    expect(summaries[1].content).toBe('第二段摘要')
+  })
+
+  it('encryptSensitiveFields=true 时落盘 content 非明文，getSummaries 解密后仍能正确还原', () => {
+    const prevFlag = process.env.ENCRYPT_SENSITIVE_FIELDS
+    process.env.ENCRYPT_SENSITIVE_FIELDS = 'true'
+    try {
+      const id = insertSummary({ sessionId: 's1', content: '加密摘要正文', fromMessageId: 1, toMessageId: 1 })
+      const raw = db.prepare(`SELECT content FROM Summaries WHERE id = ?`).get(id) as any
+      expect(raw.content).not.toBe('加密摘要正文')
+
+      const summaries = getSummaries('s1')
+      expect(summaries[0].content).toBe('加密摘要正文')
+    } finally {
+      process.env.ENCRYPT_SENSITIVE_FIELDS = prevFlag
+    }
   })
 })

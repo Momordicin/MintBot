@@ -12,6 +12,7 @@
     "build:core": "pnpm exec tsc -p shared/tsconfig.json && pnpm exec tsc -p services/core/tsconfig.json",
     "preview": "electron-vite preview",
     "seed": "tsx services/core/db/seed.ts",
+    "demo:fts": "tsx scripts/demos/fts-chinese-search.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
@@ -36,8 +37,10 @@
     "chokidar": "^5.0.0",
     "dotenv": "^17.4.2",
     "fastify": "^5.8.5",
+    "node-cron": "^4.6.0",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "sqlite-vec": "^0.1.9"
   },
   "devDependencies": {
     "@electron-toolkit/preload": "^3.0.2",

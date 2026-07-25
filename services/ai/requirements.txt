@@ -1,9 +1,9 @@
 fastapi
 uvicorn[standard]
 faster-whisper
-transformers
 torch
-sentence-transformers
+FlagEmbedding
+transformers
 blingfire
 python-multipart
 numpy

@@ -7,6 +7,7 @@ import {
   touchSession,
   getRecentMessages,
   appendMessage,
+  resetEmotionState,
 } from './queries.js'
 
 export function setReplying(value: boolean): void {
@@ -40,6 +41,7 @@ export function loadSession(presetId: string): SessionState {
       characterId: preset.characterId, 
       modelType: preset.modelType,
       modelName: preset.modelName,
+      wallpaperPath: preset.wallpaperPath,
       systemPrompt: preset.systemPrompt,
     }
     session = {
@@ -64,8 +66,12 @@ export function loadSession(presetId: string): SessionState {
 
 export function switchPreset(presetId: string): SessionState {
   console.log(`[Session] Switching to preset ${presetId}`)
-  current = null  // 清空当前状态，情绪状态 Phase 2 在这里一并清零
-  return loadSession(presetId)
+  current = null
+  const state = loadSession(presetId)
+  // 角色切换时自动清零情绪状态（TDD §3.9），无论是新建 session 还是恢复的旧 session
+  // （旧 session 之前可能已有情绪记录，也要清掉）
+  resetEmotionState(state.session.sessionId)
+  return state
 }
 
 // ─── 读取当前状态 ──────────────────────────────────────────
@@ -86,14 +92,17 @@ export function getHistory(limit = 50): Message[] {
   return getRecentMessages(session.sessionId, limit)
 }
 
+// sessionId 必须由调用方显式传入（请求开始时捕获的 session），不回退读全局"当前 session"。
+// 原因：调用方（如 chat.ts）可能在 await 模型回复期间被 preset 切换请求打断，
+// 若在此处重新读取全局状态，消息会被错误地记到切换后的新 session 上。
 export function addMessage(
+  sessionId: string,
   role: Message['role'],
   content: string,
   trigger: Message['trigger'] = 'user'
 ): number {
-  const { session } = requireCurrentState()
   const id = appendMessage({
-    sessionId: session.sessionId,
+    sessionId,
     role,
     content,
     createdAt: Date.now(),
@@ -103,6 +112,6 @@ export function addMessage(
     trigger,
     triggerEventId: null,
   })
-  touchSession(session.sessionId)
+  touchSession(sessionId)
   return id
 }
