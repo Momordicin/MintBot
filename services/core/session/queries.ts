@@ -343,6 +343,20 @@ export function searchMessagesFts(query: string, sessionId?: string, limit = 10)
   }))
 }
 
+// v5 迁移回填（DIV-002：message_fts 分词器换成 simple 后 drop + 重建）：把已 embedded 的历史
+// 消息重新索引进新表，否则它们会永久从关键词召回里消失（向量召回不受影响）。放在 session 层
+// 而不是 db/index.ts 里，是为了保持 "session → db" 单向依赖，不让 db 层反向 import session 层。
+// 调用方：services/core/index.ts 在 initDb() 返回 needsFtsBackfill=true 时调用一次。
+export function backfillMessageFts(): number {
+  const embeddedMessages = db.prepare(`
+    SELECT id, sessionId, content FROM Messages WHERE embedded = 1
+  `).all() as { id: number; sessionId: string; content: string }[]
+  for (const msg of embeddedMessages) {
+    indexMessageFts(msg.id, msg.sessionId, decrypt(msg.content))
+  }
+  return embeddedMessages.length
+}
+
 // ─── Summaries ────────────────────────────────────────────
 // content 属于 TDD §3.6 加密字段范围（消息内容、角色设定、API Key、摘要、实体聚合结果），
 // 与 Messages/MessageEntities 一致过 encrypt()/decrypt()

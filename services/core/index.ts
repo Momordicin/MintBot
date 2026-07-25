@@ -5,7 +5,7 @@ import chokidar from 'chokidar'
 import * as dotenv from 'dotenv'
 import { initDb } from './db/index.js'
 import { loadSession } from './session/index.js'
-import { getAllPresets } from './session/queries.js'
+import { getAllPresets, backfillMessageFts } from './session/queries.js'
 import { chatRoutes } from './routes/chat.js'
 import { presetRoutes } from './routes/presets.js'
 import { internalRoutes } from './routes/internal.js'
@@ -89,7 +89,11 @@ async function start() {
   fastify.decorate('nerProvider', new Bert4NerProvider())
 
   watchConfig()
-  initDb()
+  const { needsFtsBackfill } = initDb()
+  if (needsFtsBackfill) {
+    const backfilledCount = backfillMessageFts()
+    console.log(`[Core] Backfilled ${backfilledCount} message(s) into message_fts after tokenizer migration`)
+  }
 
   organizeModeTask = startOrganizeModeScheduler(fastify)
 

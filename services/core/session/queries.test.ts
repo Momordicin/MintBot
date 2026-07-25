@@ -22,6 +22,7 @@ import {
   closeEntity,
   indexMessageFts,
   searchMessagesFts,
+  backfillMessageFts,
   upsertEmotionState,
   getEmotionState,
   resetEmotionState,
@@ -402,9 +403,9 @@ describe('EmotionState', () => {
 })
 
 // ─── FTS (message_fts) ──────────────────────────────────────
-// tokenize = 'unicode61' 对连续中文字符会整体切成一个 token（不做分词），
-// 因此测试用例使用空格分隔的词以验证 INSERT / MATCH / session 过滤 / 开关本身的行为，
-// 而不是验证中文分词效果（分词方案由 TDD/迁移既定，不在本次改动范围内）
+// tokenize = 'simple'（wangfenjin/simple，libsimple 扩展，DIV-002 修复）：中文按逐字符子串
+// 索引，可命中任意跨"词"边界的子串；英文仍按连续字母整词索引，行为与旧的 unicode61 一致。
+// 拼音检索（官方文档提到的功能）实测未生效，不在本次修复范围内，不在此断言。
 describe('FTS (message_fts)', () => {
   const prevFlag = process.env.ENCRYPT_SENSITIVE_FIELDS
   afterEach(() => {
@@ -440,6 +441,91 @@ describe('FTS (message_fts)', () => {
     const raw = db.prepare(`SELECT COUNT(*) as count FROM message_fts`).get() as any
     expect(raw.count).toBe(0)
     expect(searchMessagesFts('cat')).toEqual([])
+  })
+
+  it('中文 2 字词可命中（DIV-002）', () => {
+    delete process.env.ENCRYPT_SENSITIVE_FIELDS
+    indexMessageFts(1, 's1', '我喜欢猫和狗')
+    indexMessageFts(2, 's1', '今天天气很好')
+
+    const results = searchMessagesFts('喜欢')
+    expect(results).toHaveLength(1)
+    expect(results[0].messageId).toBe(1)
+  })
+
+  it('中文单字可命中', () => {
+    delete process.env.ENCRYPT_SENSITIVE_FIELDS
+    indexMessageFts(1, 's1', '我喜欢猫和狗')
+
+    const results = searchMessagesFts('猫')
+    expect(results).toHaveLength(1)
+    expect(results[0].messageId).toBe(1)
+  })
+
+  it('专有名词（游戏名/人名）可命中', () => {
+    delete process.env.ENCRYPT_SENSITIVE_FIELDS
+    indexMessageFts(1, 's1', '我最近在玩原神')
+    indexMessageFts(2, 's1', '张三昨天来找我了')
+
+    expect(searchMessagesFts('原神')).toHaveLength(1)
+    expect(searchMessagesFts('张三')).toHaveLength(1)
+  })
+
+  it('跨"词"边界的中文子串可命中（逐字符索引，不依赖分词边界）', () => {
+    delete process.env.ENCRYPT_SENSITIVE_FIELDS
+    indexMessageFts(1, 's1', '我喜欢猫和狗')
+
+    // "欢猫" 横跨"喜欢"和"猫"两个词边界，不是一个真实存在的词
+    const results = searchMessagesFts('欢猫')
+    expect(results).toHaveLength(1)
+    expect(results[0].messageId).toBe(1)
+  })
+})
+
+// backfillMessageFts 是 v5 迁移（DIV-002：message_fts 分词器换成 simple）里"回填已 embedded
+// 历史消息"那一步的实现，这里直接单测这个函数本身，而不是重跑一次完整迁移（迁移只在
+// initDb() 首次建库时按 user_version 触发一次）
+describe('backfillMessageFts (v5 迁移回填逻辑)', () => {
+  const prevFlag = process.env.ENCRYPT_SENSITIVE_FIELDS
+  afterEach(() => {
+    process.env.ENCRYPT_SENSITIVE_FIELDS = prevFlag
+  })
+
+  it('embedded=1 但未出现在 message_fts 里的历史消息（模拟迁移前 drop 后的状态），回填后可被关键词召回', () => {
+    delete process.env.ENCRYPT_SENSITIVE_FIELDS
+    // 模拟迁移场景：这些消息在旧表里已经 embedded=1，但 message_fts 表刚被 drop + 重建，是空的
+    const id1 = appendMessage({
+      sessionId: 's1', role: 'user', content: '我喜欢猫和狗',
+      createdAt: 1000, embedded: true, summarized: false, visibleToUser: true,
+      trigger: 'user', triggerEventId: null,
+    })
+    const id2 = appendMessage({
+      sessionId: 's1', role: 'user', content: '今天天气很好',
+      createdAt: 2000, embedded: true, summarized: false, visibleToUser: true,
+      trigger: 'user', triggerEventId: null,
+    })
+
+    expect(searchMessagesFts('猫')).toEqual([])
+
+    const backfilledCount = backfillMessageFts()
+    expect(backfilledCount).toBe(2)
+
+    const results = searchMessagesFts('猫')
+    expect(results).toHaveLength(1)
+    expect(results[0].messageId).toBe(id1)
+    void id2
+  })
+
+  it('未 embedded 的消息不参与回填', () => {
+    delete process.env.ENCRYPT_SENSITIVE_FIELDS
+    appendMessage({
+      sessionId: 's1', role: 'user', content: '还没处理的消息',
+      createdAt: 1000, embedded: false, summarized: false, visibleToUser: true,
+      trigger: 'user', triggerEventId: null,
+    })
+
+    expect(backfillMessageFts()).toBe(0)
+    expect(searchMessagesFts('处理')).toEqual([])
   })
 })
 
