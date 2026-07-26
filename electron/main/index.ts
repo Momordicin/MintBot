@@ -1,5 +1,6 @@
-import { app, BrowserWindow, Menu, globalShortcut, powerMonitor } from 'electron'
-import { join } from 'path'
+import { app, BrowserWindow, Menu, globalShortcut, powerMonitor, ipcMain, dialog } from 'electron'
+import { join, basename } from 'path'
+import { readFile, stat } from 'fs/promises'
 import { is } from '@electron-toolkit/utils'
 
 // 核心服务地址：与渲染层 ChatWindow.tsx 的 CORE_URL 各自独立定义（两边本来就是独立代码，
@@ -16,6 +17,32 @@ function notifySystemEvent(type: 'lock-screen' | 'unlock-screen'): void {
     body: JSON.stringify({ type }),
   }).catch(() => {})
 }
+
+// 与 services/core/routes/presets.ts 的 bodyLimit 保持一致：超过这个大小的文件注定会被
+// 服务端拒绝，在读入内存、经 IPC 结构化克隆之前就提前拦掉，省掉一次必然失败的传输
+const WALLPAPER_MAX_BYTES = 10 * 1024 * 1024
+
+// 壁纸本地选图：主进程只负责调起系统文件选择框、读取文件字节并转发给渲染层，
+// 不做扩展名校验/存储路径决策（那些是核心服务的业务逻辑，见 docs/MintBot_TDD.md 壁纸存储约定）
+ipcMain.handle('select-wallpaper-file', async () => {
+  const result = await dialog.showOpenDialog({
+    properties: ['openFile'],
+    filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }]
+  })
+  if (result.canceled || result.filePaths.length === 0) return null
+
+  const filePath = result.filePaths[0]
+  const { size } = await stat(filePath)
+  if (size > WALLPAPER_MAX_BYTES) {
+    // null 已经被用来表示"用户取消选择"（非失败），这里是真的失败场景，
+    // 用 invoke() 的 reject 通道传递，交给渲染层已有的 try/catch 处理
+    throw new Error('file-too-large')
+  }
+
+  const buffer = await readFile(filePath)
+  // Buffer 经 IPC 结构化克隆时可能无法正确还原，显式转成 Uint8Array 传递
+  return { data: new Uint8Array(buffer), filename: basename(filePath) }
+})
 
 function createWindow() {
   const win = new BrowserWindow({
