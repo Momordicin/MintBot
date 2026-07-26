@@ -45,13 +45,14 @@ export async function retrieveMemories(
   sessionId: string,
   queryText: string,
   deps: { embedding: EmbeddingProvider },
-  k = 5
+  k = 5,
+  signal?: AbortSignal
 ): Promise<Message[]> {
   const scores = new Map<number, number>()
 
   // 向量路
   try {
-    const queryVector = await deps.embedding.embed(queryText)
+    const queryVector = await deps.embedding.embed(queryText, signal)
     const vecResults = searchSimilarMessages(queryVector, k * 2, sessionId)
     addRrfScores(scores, vecResults.map(r => r.messageId))
   } catch (err) {

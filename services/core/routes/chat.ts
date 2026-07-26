@@ -6,6 +6,19 @@ import { upsertEmotionState } from '../session/queries.js'
 import { createModelProviderForPreset } from '../providers/ModelProvider.js'
 import type { ModelConfig } from '../../../shared/types/index.js'
 
+// ─── 回复队列（单会话场景下的串行化）──────────────────────
+// MintBot 同一时刻只有一个 SessionState（services/core/session/index.ts 的 current 是单例，
+// 不是按 sessionId 分区的 map），前端也刻意允许用户在回复进行中继续发送新消息，
+// 因此 /chat 的实际处理必须整体排成一条全局 FIFO 队列，逐条串行执行，
+// 避免并发 buildContext/addMessage/upsertEmotionState 导致的乱序与互相覆盖
+let queueTail: Promise<void> = Promise.resolve()
+
+function enqueue<T>(task: () => Promise<T>): Promise<T> {
+  const result = queueTail.then(task)
+  queueTail = result.then(() => undefined, () => undefined) // 链条本身永远 resolve，单次失败不会卡住后续任务
+  return result // 调用方仍然拿到真实的结果/reject
+}
+
 export async function chatRoutes(fastify: FastifyInstance) {
   fastify.post<{
     Body: { message: string }
@@ -38,86 +51,111 @@ export async function chatRoutes(fastify: FastifyInstance) {
     const abortController = new AbortController()
     reply.raw.once('close', () => abortController.abort())
 
-    let context
-    try {
-      context = await buildContext(message, { embedding: fastify.embeddingProvider })
-    } catch {
-      return reply.status(500).send({ error: 'Failed to build context' })
-    }
-
-    addMessage(sessionId, 'user', message, 'user')
-
-    // 按当前请求捕获的 preset 构建 provider，而不是用全局单例 fastify.modelProvider，
-    // 保证并发切换 preset 时本次请求仍使用它开始时的模型配置
-    const modelProvider = createModelProviderForPreset(state.preset, fastify.config.modelProvider as ModelConfig)
-
-    reply.raw.setHeader('Access-Control-Allow-Origin', 'http://localhost:5173')
-    reply.raw.setHeader('Content-Type', 'text/event-stream')
-    reply.raw.setHeader('Cache-Control', 'no-cache')
-    reply.raw.setHeader('Connection', 'keep-alive')
-    reply.raw.flushHeaders()
-
-    // 连接已经关闭（客户端提前断开）时不再写入，避免往已关闭的 socket 写数据
-    const send = (event: string, data: unknown) => {
-      if (reply.raw.writableEnded || reply.raw.destroyed) return
-      reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
-    }
-
-    const streaming = (fastify.config?.streaming as boolean) ?? true
-
-    try {
-      let fullReply = ''
-
-      if (streaming) {
-        // ─── 流式模式：累积 chunk，Phase 4 开放逐句推送 ───────
-        for await (const chunk of modelProvider.complete(context, { signal: abortController.signal })) {
-          fullReply += chunk
-        }
-      } else {
-        // ─── 非流式模式 ──────────────────────────────────────
-        fullReply = await modelProvider.completeSync(context, { signal: abortController.signal })
+    // ─── 实际处理排入全局回复队列，与其它 /chat 请求串行执行 ───────
+    await enqueue(async () => {
+      // 排队等待期间客户端已经放弃这个请求（提前断连/连接已结束）：轮到它时不再做任何
+      // 工作——不发起模型调用，不跑 buildContext，也不写消息，避免为一个没人等待的请求
+      // 白白占用队列时间、写入无意义的历史记录
+      if (reply.raw.destroyed || reply.raw.writableEnded || abortController.signal.aborted) {
+        return
       }
 
-      // ─── 解析 JSON 回复，取出 reply 文本（emotion 解析见下方 parseSelfEmotion）───
-      let replyText = fullReply
+      let context
+      try {
+        context = await buildContext(message, { embedding: fastify.embeddingProvider, signal: abortController.signal })
+      } catch {
+        // buildContext 内部的 embedding 调用现在会被客户端断连提前 abort（AbortError），
+        // 这种情况下连接本来就已经死了，往一个已关闭/已结束的连接发 500 毫无意义——
+        // 只有连接仍存活时才是真正需要告知客户端的 buildContext 失败
+        if (reply.raw.destroyed || reply.raw.writableEnded || abortController.signal.aborted) {
+          return
+        }
+        return reply.status(500).send({ error: 'Failed to build context' })
+      }
+
+      // buildContext 成功返回不代表连接仍然存活——它内部的 embedding 调用可能已经被
+      // 客户端断连触发的 abort 提前打断（走的是上面的 catch 分支之外，vector 检索路径自身
+      // 吞掉了 AbortError 并直接返回无 RAG 结果的 context），这种情况下 buildContext 会
+      // 正常 return 而不抛错。若这里不再检查一次，就会把一个没人等待的请求的用户消息
+      // 永久写入历史记录，却永远不会有对应的 assistant 回复
+      if (reply.raw.destroyed || reply.raw.writableEnded || abortController.signal.aborted) {
+        return
+      }
+
+      addMessage(sessionId, 'user', message, 'user')
+
+      // 按当前请求捕获的 preset 构建 provider，而不是用全局单例 fastify.modelProvider，
+      // 保证并发切换 preset 时本次请求仍使用它开始时的模型配置
+      const modelProvider = createModelProviderForPreset(state.preset, fastify.config.modelProvider as ModelConfig)
+
+      reply.raw.setHeader('Access-Control-Allow-Origin', 'http://localhost:5173')
+      reply.raw.setHeader('Content-Type', 'text/event-stream')
+      reply.raw.setHeader('Cache-Control', 'no-cache')
+      reply.raw.setHeader('Connection', 'keep-alive')
+      reply.raw.flushHeaders()
+
+      // 连接已经关闭（客户端提前断开）时不再写入，避免往已关闭的 socket 写数据
+      const send = (event: string, data: unknown) => {
+        if (reply.raw.writableEnded || reply.raw.destroyed) return
+        reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+      }
+
+      const streaming = (fastify.config?.streaming as boolean) ?? true
 
       try {
-        const parsed = JSON.parse(fullReply)
-        replyText = parsed.reply ?? fullReply
-      } catch {
-        // 模型没有返回 JSON，直接用原文
-      }
+        let fullReply = ''
 
-      const messageId = addMessage(sessionId, 'assistant', replyText, 'user')
+        if (streaming) {
+          // ─── 流式模式：累积 chunk，Phase 4 开放逐句推送 ───────
+          for await (const chunk of modelProvider.complete(context, { signal: abortController.signal })) {
+            fullReply += chunk
+          }
+        } else {
+          // ─── 非流式模式 ──────────────────────────────────────
+          fullReply = await modelProvider.completeSync(context, { signal: abortController.signal })
+        }
 
-      // message_done 带完整文本，前端直接显示，无需累积 chunk
-      // Phase 4：句子切割完成后，改为逐句推 message_chunk，前端追加气泡
-      send('message_done', { messageId: String(messageId), text: replyText })
+        // ─── 解析 JSON 回复，取出 reply 文本（emotion 解析见下方 parseSelfEmotion）───
+        let replyText = fullReply
 
-      // self 情绪校验通过才落库；模型没按格式回复（校验失败/字段缺失）时不落库也不报错，
-      // 保持现有降级风格。持久化异常不应影响本轮对话的正常返回
-      const selfEmotion = parseSelfEmotion(fullReply)
-      if (selfEmotion) {
         try {
-          upsertEmotionState(sessionId, { self: selfEmotion, perceived_user: null })
-        } catch (err) {
-          console.error('[Chat] Failed to persist emotion state:', err)
+          const parsed = JSON.parse(fullReply)
+          replyText = parsed.reply ?? fullReply
+        } catch {
+          // 模型没有返回 JSON，直接用原文
+        }
+
+        const messageId = addMessage(sessionId, 'assistant', replyText, 'user')
+
+        // message_done 带完整文本，前端直接显示，无需累积 chunk
+        // Phase 4：句子切割完成后，改为逐句推 message_chunk，前端追加气泡
+        send('message_done', { messageId: String(messageId), text: replyText })
+
+        // self 情绪校验通过才落库；模型没按格式回复（校验失败/字段缺失）时不落库也不报错，
+        // 保持现有降级风格。持久化异常不应影响本轮对话的正常返回
+        const selfEmotion = parseSelfEmotion(fullReply)
+        if (selfEmotion) {
+          try {
+            upsertEmotionState(sessionId, { self: selfEmotion, perceived_user: null })
+          } catch (err) {
+            console.error('[Chat] Failed to persist emotion state:', err)
+          }
+        }
+
+        send('emotion', {
+          self: selfEmotion,
+          perceived_user: null,  // Phase 2 基础版故意留空占位，不透传模型的尝试性输出，不是遗漏
+        })
+
+      } catch (err) {
+        // ─── 连接建立后的错误，走 SSE system 事件 ───────────────
+        console.error('[Chat] Error:', err)
+        send('system', { type: 'error', payload: { message: 'Model call failed' } })
+      } finally {
+        if (!reply.raw.writableEnded && !reply.raw.destroyed) {
+          reply.raw.end()
         }
       }
-
-      send('emotion', {
-        self: selfEmotion,
-        perceived_user: null,  // Phase 2 基础版故意留空占位，不透传模型的尝试性输出，不是遗漏
-      })
-
-    } catch (err) {
-      // ─── 连接建立后的错误，走 SSE system 事件 ───────────────
-      console.error('[Chat] Error:', err)
-      send('system', { type: 'error', payload: { message: 'Model call failed' } })
-    } finally {
-      if (!reply.raw.writableEnded && !reply.raw.destroyed) {
-        reply.raw.end()
-      }
-    }
+    })
   })
 }

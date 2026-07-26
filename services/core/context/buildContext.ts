@@ -26,7 +26,7 @@ const ENTITY_TYPE_ORDER: MessageEntity['type'][] = ['person', 'event', 'preferen
 
 export async function buildContext(
   userInput: string,
-  deps: { embedding: EmbeddingProvider }
+  deps: { embedding: EmbeddingProvider; signal?: AbortSignal }
 ): Promise<BuiltContext> {
   const { session, preset } = requireCurrentState()
 
@@ -80,7 +80,7 @@ export async function buildContext(
   }
 
   if (shouldTriggerRetrieval(userInput)) {
-    const memories = await retrieveMemories(session.sessionId, userInput, { embedding: deps.embedding })
+    const memories = await retrieveMemories(session.sessionId, userInput, { embedding: deps.embedding }, 5, deps.signal)
     if (memories.length > 0) {
       const snippets = memories.map(m => `- ${m.content}`).join('\n')
       system = `${system}\n\n以下是相关的历史对话片段：\n${snippets}`

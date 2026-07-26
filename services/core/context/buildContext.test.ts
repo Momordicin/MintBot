@@ -252,6 +252,29 @@ describe('buildContext', () => {
     expect(ctx.system).toContain('我们聊过日本旅行的事')
   })
 
+  it('触发召回时，deps.signal 会原样转发到 embedding.embed，用于客户端断连时向下取消', async () => {
+    const sessionId = getCurrentState()!.session.sessionId
+    const msgId = appendMessage({
+      sessionId, role: 'user', content: '我们聊过日本旅行的事', createdAt: Date.now() - 60 * 60 * 1000,
+      embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null,
+    })
+    insertEntity({ messageId: msgId, sessionId, type: 'place', value: '日本', validFrom: Date.now() })
+
+    let receivedSignal: AbortSignal | undefined
+    const capturingEmbeddingProvider: EmbeddingProvider = {
+      embed: async (_text: string, signal?: AbortSignal) => {
+        receivedSignal = signal
+        return new Array(1024).fill(0)
+      },
+      embedBatch: async (texts: string[]) => texts.map(() => new Array(1024).fill(0)),
+    }
+    const controller = new AbortController()
+
+    await buildContext('你还记得日本的事吗', { embedding: capturingEmbeddingProvider, signal: controller.signal })
+
+    expect(receivedSignal).toBe(controller.signal)
+  })
+
   it('已关闭（validUntil 已设置）的历史实体不会被注入', async () => {
     const sessionId = getCurrentState()!.session.sessionId
     const entityId = insertEntity({ messageId: 1, sessionId, type: 'event', value: '过去的事', validFrom: Date.now() - 1000 })
