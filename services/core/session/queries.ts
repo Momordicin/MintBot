@@ -42,6 +42,13 @@ export function upsertPreset(preset: Omit<Preset, 'createdAt' | 'updatedAt'>): v
   })
 }
 
+// 壁纸上传后单独更新 wallpaperPath，不走 upsertPreset 整体替换（避免要求调用方在只想改
+// 一个字段时也要传完整 Preset 对象）
+export function updatePresetWallpaper(presetId: string, wallpaperPath: string): void {
+  db.prepare(`UPDATE Presets SET wallpaperPath = ?, updatedAt = ? WHERE presetId = ?`)
+    .run(wallpaperPath, Date.now(), presetId)
+}
+
 // ─── Session ──────────────────────────────────────────────
 
 export function getLatestSessionByPreset(presetId: string): Session | null {

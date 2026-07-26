@@ -118,7 +118,13 @@ async function start() {
   root: path.resolve(process.cwd(), 'data/wallpapers'),
   prefix: '/wallpapers/',
   })
-  
+
+  await fastify.register(fastifyStatic, {
+  root: path.resolve(process.cwd(), 'assets/characters'),
+  prefix: '/characters/',
+  decorateReply: false,
+  })
+
   await fastify.register(chatRoutes)
   await fastify.register(presetRoutes)
   await fastify.register(internalRoutes)
