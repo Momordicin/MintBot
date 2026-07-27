@@ -37,6 +37,7 @@ function fakeEmbeddingProvider(queryVectorIndex = 0): EmbeddingProvider {
     async embedBatch(texts: string[]) {
       return Promise.all(texts.map(() => this.embed('')))
     },
+    async unload() { return true },
   }
 }
 
@@ -48,6 +49,7 @@ function failingEmbeddingProvider(): EmbeddingProvider {
     async embedBatch() {
       throw new Error('embed boom')
     },
+    async unload() { return true },
   }
 }
 
@@ -115,6 +117,23 @@ describe('retrieveMemories — RRF 融合', () => {
   it('三路均无命中时返回空数组', async () => {
     const results = await retrieveMemories('s1', '完全不相关的查询', { embedding: fakeEmbeddingProvider(0) }, 3)
     expect(results).toEqual([])
+  })
+
+  it('传入 signal 时会原样转发给 embedding.embed，用于向下取消进行中的向量检索请求', async () => {
+    let receivedSignal: AbortSignal | undefined
+    const capturingEmbeddingProvider: EmbeddingProvider = {
+      embed: async (_text: string, signal?: AbortSignal) => {
+        receivedSignal = signal
+        return oneHotVector(0)
+      },
+      embedBatch: async (texts: string[]) => texts.map(() => oneHotVector(0)),
+      unload: async () => true,
+    }
+    const controller = new AbortController()
+
+    await retrieveMemories('s1', 'kiwi', { embedding: capturingEmbeddingProvider }, 3, controller.signal)
+
+    expect(receivedSignal).toBe(controller.signal)
   })
 
   it('融合排序有命中，但按 id 回查消息（getMessagesByIds）失败时返回空数组而不抛出', async () => {

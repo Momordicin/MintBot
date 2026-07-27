@@ -1,10 +1,26 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { initDb } from '../db/index.js'
 import { db } from '../db/index.js'
 import { upsertPreset, appendMessage, insertEntity, closeEntity, upsertEmotionState, insertSummary } from '../session/queries.js'
 import { loadSession, getCurrentState } from '../session/index.js'
 import { buildContext } from './buildContext.js'
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
+
+// 与迁移前硬编码常量/config.example.json 默认值保持一致，其余测试用例依赖这些默认值
+// （足够大的预算）不触发裁剪，行为与迁移前一致
+const DEFAULT_TEST_MEMORY_CONFIG = {
+  recentTrackMaxMessages: 50,
+  recentTrackMaxMinutes: 30,
+  organizeWindowStartHour: 22,
+  organizeWindowEndHour: 8,
+  summaryTrigger: { pendingCountThreshold: 100, oldestPendingAgeMinutes: 120, messageCountThreshold: 50, lockScreenMinutes: 60 },
+  contextBudget: { total: 8000, systemPrompt: 1000, summary: 1500, rag: 2000, recentMessages: 3000, responseReserve: 500 },
+}
+let mockMemoryConfig = structuredClone(DEFAULT_TEST_MEMORY_CONFIG)
+
+vi.mock('../config/index.js', () => ({
+  getMemoryConfig: () => mockMemoryConfig,
+}))
 
 initDb()
 
@@ -15,6 +31,7 @@ function fakeEmbeddingProvider(): EmbeddingProvider {
     async embed() {
       return new Array(1024).fill(0)
     },
+    async unload() { return true },
     async embedBatch(texts: string[]) {
       return texts.map(() => new Array(1024).fill(0))
     },
@@ -23,6 +40,7 @@ function fakeEmbeddingProvider(): EmbeddingProvider {
 
 const prevFlag = process.env.ENCRYPT_SENSITIVE_FIELDS
 beforeEach(() => {
+  mockMemoryConfig = structuredClone(DEFAULT_TEST_MEMORY_CONFIG)
   // FTS 召回断言要求本地模式（encryptSensitiveFields=false，本地默认）
   delete process.env.ENCRYPT_SENSITIVE_FIELDS
   db.exec(`
@@ -252,6 +270,30 @@ describe('buildContext', () => {
     expect(ctx.system).toContain('我们聊过日本旅行的事')
   })
 
+  it('触发召回时，deps.signal 会原样转发到 embedding.embed，用于客户端断连时向下取消', async () => {
+    const sessionId = getCurrentState()!.session.sessionId
+    const msgId = appendMessage({
+      sessionId, role: 'user', content: '我们聊过日本旅行的事', createdAt: Date.now() - 60 * 60 * 1000,
+      embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null,
+    })
+    insertEntity({ messageId: msgId, sessionId, type: 'place', value: '日本', validFrom: Date.now() })
+
+    let receivedSignal: AbortSignal | undefined
+    const capturingEmbeddingProvider: EmbeddingProvider = {
+      embed: async (_text: string, signal?: AbortSignal) => {
+        receivedSignal = signal
+        return new Array(1024).fill(0)
+      },
+      embedBatch: async (texts: string[]) => texts.map(() => new Array(1024).fill(0)),
+      unload: async () => true,
+    }
+    const controller = new AbortController()
+
+    await buildContext('你还记得日本的事吗', { embedding: capturingEmbeddingProvider, signal: controller.signal })
+
+    expect(receivedSignal).toBe(controller.signal)
+  })
+
   it('已关闭（validUntil 已设置）的历史实体不会被注入', async () => {
     const sessionId = getCurrentState()!.session.sessionId
     const entityId = insertEntity({ messageId: 1, sessionId, type: 'event', value: '过去的事', validFrom: Date.now() - 1000 })
@@ -261,5 +303,124 @@ describe('buildContext', () => {
 
     expect(ctx.system).not.toContain('过去的事')
     expect(ctx.system).not.toContain('以下是已知的用户信息')
+  })
+})
+
+describe('buildContext — token（字符数近似）预算裁剪', () => {
+  it('近期消息总字符数超出 contextBudget.recentMessages 时，从最旧一端裁剪，只保留最新的消息', async () => {
+    const sessionId = getCurrentState()!.session.sessionId
+    const now = Date.now()
+    appendMessage({
+      sessionId, role: 'user', content: 'AAAAAAAAAA', createdAt: now - 3 * 60 * 1000,
+      embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null,
+    })
+    appendMessage({
+      sessionId, role: 'user', content: 'BBBBBBBBBB', createdAt: now - 2 * 60 * 1000,
+      embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null,
+    })
+    // 预算只够容纳最后一条历史消息（10 字符），两条加起来 20 超预算，应从最旧一端（AAA...）裁剪
+    mockMemoryConfig.contextBudget.recentMessages = 10
+
+    const ctx = await buildContext('新消息', { embedding: fakeEmbeddingProvider() })
+
+    const contents = ctx.messages.map(m => m.content)
+    expect(contents).not.toContain('AAAAAAAAAA')
+    expect(contents).toContain('BBBBBBBBBB')
+    expect(contents).toContain('新消息')
+  })
+
+  it('近期消息预算小于任意一条消息时，也至少保留最新的一条，不会裁到 0 条', async () => {
+    const sessionId = getCurrentState()!.session.sessionId
+    const now = Date.now()
+    appendMessage({
+      sessionId, role: 'user', content: 'AAAAAAAAAA', createdAt: now - 1 * 60 * 1000,
+      embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null,
+    })
+    mockMemoryConfig.contextBudget.recentMessages = 1
+
+    const ctx = await buildContext('新消息', { embedding: fakeEmbeddingProvider() })
+
+    const contents = ctx.messages.map(m => m.content)
+    expect(contents).toContain('AAAAAAAAAA')
+    expect(contents).toContain('新消息')
+  })
+
+  it('近期消息总字符数未超预算时不裁剪（不回归已有行为）', async () => {
+    const sessionId = getCurrentState()!.session.sessionId
+    const now = Date.now()
+    appendMessage({
+      sessionId, role: 'user', content: '历史消息', createdAt: now - 1 * 60 * 1000,
+      embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null,
+    })
+    mockMemoryConfig.contextBudget.recentMessages = 3000
+
+    const ctx = await buildContext('新消息', { embedding: fakeEmbeddingProvider() })
+
+    expect(ctx.messages).toHaveLength(2)
+    expect(ctx.messages[0].content).toBe('历史消息')
+  })
+
+  it('历史摘要总字符数超出 contextBudget.summary 时，从最旧一端（createdAt 升序的最前面）裁剪', async () => {
+    const sessionId = getCurrentState()!.session.sessionId
+    insertSummary({ sessionId, content: 'AAAAAAAAAA', fromMessageId: 1, toMessageId: 2 })
+    insertSummary({ sessionId, content: 'BBBBBBBBBB', fromMessageId: 3, toMessageId: 4 })
+    mockMemoryConfig.contextBudget.summary = 10
+
+    const ctx = await buildContext('好的', { embedding: fakeEmbeddingProvider() })
+
+    expect(ctx.system).not.toContain('AAAAAAAAAA')
+    expect(ctx.system).toContain('BBBBBBBBBB')
+  })
+
+  it('历史摘要总字符数未超预算时不裁剪（不回归已有行为）', async () => {
+    const sessionId = getCurrentState()!.session.sessionId
+    insertSummary({ sessionId, content: '历史摘要正文', fromMessageId: 1, toMessageId: 2 })
+    mockMemoryConfig.contextBudget.summary = 1500
+
+    const ctx = await buildContext('好的', { embedding: fakeEmbeddingProvider() })
+
+    expect(ctx.system).toContain('历史摘要正文')
+  })
+
+  it('RAG 召回片段总字符数超出 contextBudget.rag 时，从排名最低的一端（数组末尾）裁剪', async () => {
+    const sessionId = getCurrentState()!.session.sessionId
+    const now = Date.now()
+    // entity 匹配路：两条消息各自关联一个值为"日本"的实体（子串命中查询文本），validFrom
+    // 更晚的实体排在 getCurrentEntities 前面 → rank 更靠前 → RRF 分数更高 → messageB 排名更高。
+    // 消息内容本身故意不含中文、与查询文本无字符重叠，避免 FTS 路引入额外的不确定命中
+    const msgIdA = appendMessage({
+      sessionId, role: 'user', content: 'AAAAAAAAAA', createdAt: now - 60 * 60 * 1000,
+      embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null,
+    })
+    insertEntity({ messageId: msgIdA, sessionId, type: 'place', value: '日本', validFrom: now - 2000 })
+
+    const msgIdB = appendMessage({
+      sessionId, role: 'user', content: 'BBBBBBBBBB', createdAt: now - 50 * 60 * 1000,
+      embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null,
+    })
+    insertEntity({ messageId: msgIdB, sessionId, type: 'place', value: '日本', validFrom: now - 1000 })
+
+    // 预算只够容纳排名最高（messageB）一条片段的字符数，两条加起来超预算，应从排名最低
+    // （messageA）一端裁剪
+    mockMemoryConfig.contextBudget.rag = 10
+
+    const ctx = await buildContext('你还记得日本的事吗', { embedding: fakeEmbeddingProvider() })
+
+    expect(ctx.system).not.toContain('AAAAAAAAAA')
+    expect(ctx.system).toContain('BBBBBBBBBB')
+  })
+
+  it('RAG 召回片段总字符数未超预算时不裁剪（不回归已有行为）', async () => {
+    const sessionId = getCurrentState()!.session.sessionId
+    const msgId = appendMessage({
+      sessionId, role: 'user', content: '我们聊过日本旅行的事', createdAt: Date.now() - 60 * 60 * 1000,
+      embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null,
+    })
+    insertEntity({ messageId: msgId, sessionId, type: 'place', value: '日本', validFrom: Date.now() })
+    mockMemoryConfig.contextBudget.rag = 2000
+
+    const ctx = await buildContext('你还记得日本的事吗', { embedding: fakeEmbeddingProvider() })
+
+    expect(ctx.system).toContain('我们聊过日本旅行的事')
   })
 })

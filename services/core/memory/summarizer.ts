@@ -1,5 +1,6 @@
 import { getPendingSummaryMessages, insertSummaryAndMarkMessages } from '../session/queries.js'
 import type { Message, BuiltContext, CompletionOptions } from '../../../shared/types/index.js'
+import { getMemoryConfig } from '../config/index.js'
 
 // 摘要触发规则 + 生成（TDD §3.8 摘要触发逻辑）。
 // shouldTriggerSummary 只负责布尔逻辑本身：lockScreenMinutes / isLowActivityWindow 目前没有
@@ -17,17 +18,16 @@ export interface SummaryModelProvider {
 }
 
 // 示例默认规则（TDD §3.8）：(时间段 ∈ 低活跃时段 AND 锁屏时长 > 60min) OR 消息数 > 50
-const LOCK_SCREEN_MINUTES_THRESHOLD = 60
-const MESSAGE_COUNT_THRESHOLD = 50
-
+// 两个阈值来自独立 config 模块（memory.summaryTrigger.lockScreenMinutes / messageCountThreshold）
 export function shouldTriggerSummary(input: {
   messageCountSinceLastSummary: number
   lockScreenMinutes: number
   isLowActivityWindow: boolean
 }): boolean {
   const { messageCountSinceLastSummary, lockScreenMinutes, isLowActivityWindow } = input
-  const lowActivityAndLocked = isLowActivityWindow && lockScreenMinutes > LOCK_SCREEN_MINUTES_THRESHOLD
-  const tooManyMessages = messageCountSinceLastSummary > MESSAGE_COUNT_THRESHOLD
+  const { lockScreenMinutes: lockScreenMinutesThreshold, messageCountThreshold } = getMemoryConfig().summaryTrigger
+  const lowActivityAndLocked = isLowActivityWindow && lockScreenMinutes > lockScreenMinutesThreshold
+  const tooManyMessages = messageCountSinceLastSummary > messageCountThreshold
   return lowActivityAndLocked || tooManyMessages
 }
 

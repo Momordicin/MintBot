@@ -1,13 +1,30 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import Fastify from 'fastify'
 import { initDb, db } from '../db/index.js'
+import { decrypt } from '../db/crypto.js'
 import { upsertPreset, getEmotionState } from '../session/queries.js'
 import * as queries from '../session/queries.js'
 import { loadSession } from '../session/index.js'
 import { chatRoutes } from './chat.js'
 import * as ModelProviderModule from '../providers/ModelProvider.js'
+import * as BuildContextModule from '../context/buildContext.js'
 import type { ModelProvider } from '../providers/ModelProvider.js'
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
+
+// chat.ts 内部读取 getModelProviderConfig()（原来的 fastify.config.modelProvider）；
+// buildContext.ts（chat.ts 内部调用）也依赖同一个 config 模块的 getMemoryConfig()——
+// mock 整个模块时两者都要提供，否则 buildContext.ts 拿到的 getMemoryConfig 会是 undefined
+vi.mock('../config/index.js', () => ({
+  getModelProviderConfig: vi.fn(() => ({ type: 'ollama', ollamaModel: 'qwen3' })),
+  getMemoryConfig: vi.fn(() => ({
+    recentTrackMaxMessages: 50,
+    recentTrackMaxMinutes: 30,
+    organizeWindowStartHour: 22,
+    organizeWindowEndHour: 8,
+    summaryTrigger: { pendingCountThreshold: 100, oldestPendingAgeMinutes: 120, messageCountThreshold: 50, lockScreenMinutes: 60 },
+    contextBudget: { total: 8000, systemPrompt: 1000, summary: 1500, rag: 2000, recentMessages: 3000, responseReserve: 500 },
+  })),
+}))
 
 initDb()
 
@@ -40,6 +57,7 @@ function fakeEmbeddingProvider(): EmbeddingProvider {
     async embedBatch(texts: string[]) {
       return texts.map(() => new Array(1024).fill(0))
     },
+    async unload() { return true },
   }
 }
 
@@ -55,7 +73,7 @@ async function buildTestApp(fakeReply: string) {
   }
   const createSpy = vi.spyOn(ModelProviderModule, 'createModelProviderForPreset')
     .mockReturnValue(fakeModelProvider as unknown as ModelProvider)
-  fastify.decorate('config', { streaming: false, modelProvider: { type: 'ollama', ollamaModel: 'qwen3' } })
+  fastify.decorate('streamingEnabled', false)
   fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
   await fastify.register(chatRoutes)
   return { fastify, createSpy }
@@ -137,7 +155,7 @@ describe('POST /chat', () => {
     }
   })
 
-  it('按请求捕获的 preset 和 fastify.config.modelProvider 构建 provider', async () => {
+  it('按请求捕获的 preset 和 getModelProviderConfig() 构建 provider', async () => {
     const { preset } = loadSession('p1')
     const { fastify, createSpy } = await buildTestApp(JSON.stringify({ reply: '嗯嗯' }))
 
@@ -156,7 +174,7 @@ describe('POST /chat', () => {
     const onRequestPromise = new Promise<void>(resolve => { onRequestDone = resolve })
 
     const fastify = Fastify()
-    fastify.decorate('config', { streaming: false, modelProvider: { type: 'ollama', ollamaModel: 'qwen3' } })
+    fastify.decorate('streamingEnabled', false)
     fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
     fastify.addHook('onRequest', (_request, reply, done) => {
       capturedReply = reply
@@ -204,7 +222,7 @@ describe('POST /chat', () => {
   })
 
   it('客户端在 buildContext 执行期间断开：close 监听器注册得足够早，没有错过这个窗口', async () => {
-    loadSession('p1')
+    const { session } = loadSession('p1')
 
     let capturedReply: { raw: import('http').ServerResponse } | undefined
     let onRequestDone: () => void
@@ -222,10 +240,11 @@ describe('POST /chat', () => {
         return embedPromise
       },
       embedBatch: async (texts: string[]) => texts.map(() => new Array(1024).fill(0)),
+      unload: async () => true,
     }
 
     const fastify = Fastify()
-    fastify.decorate('config', { streaming: false, modelProvider: { type: 'ollama', ollamaModel: 'qwen3' } })
+    fastify.decorate('streamingEnabled', false)
     fastify.decorate('embeddingProvider', slowEmbeddingProvider)
     fastify.addHook('onRequest', (_request, reply, done) => {
       capturedReply = reply
@@ -233,16 +252,13 @@ describe('POST /chat', () => {
       done()
     })
 
-    // 注意：这里必须在 completeSync 被调用的那一刻就把 signal.aborted 拍成一个布尔值快照，
-    // 不能只保留 options/signal 的对象引用——signal 是可变对象，请求结束时的正常 close
-    // （成功完成后 socket 也会触发一次 close）会让引用的 .aborted 事后变成 true，
-    // 掩盖"注册得太晚导致提前断连时根本没被置为 aborted"这个真正要测的 bug
-    let abortedAtCallTime: boolean | undefined
+    // buildContext 成功之后新增的第三处守卫会在 signal 已 aborted 时直接 return，
+    // 不再往下走到 modelProvider——因此这里改为断言 completeSync 从未被调用，
+    // 用它来证明 close 监听器注册得足够早：如果注册得太晚（signal 没能及时变成 aborted），
+    // 这个守卫就会形同虚设，completeSync 反而会被调用到
+    const completeSyncMock = vi.fn(async () => JSON.stringify({ reply: '嗯嗯' }))
     vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
-      completeSync: async (_context: unknown, options: { signal?: AbortSignal }) => {
-        abortedAtCallTime = options.signal?.aborted
-        return JSON.stringify({ reply: '嗯嗯' })
-      },
+      completeSync: completeSyncMock,
     } as unknown as ModelProvider)
 
     await fastify.register(chatRoutes)
@@ -258,14 +274,265 @@ describe('POST /chat', () => {
     // 模拟客户端在 buildContext 执行期间断开——此时 close 监听器必须已经注册好
     capturedReply!.raw.emit('close')
 
-    // 放行 buildContext，让它跑完，请求继续往下走到 modelProvider.completeSync
+    // 放行 buildContext，让它跑完
     resolveEmbed!(new Array(1024).fill(0))
-    // 等 completeSync 被调用的微任务跑完（不等 injectPromise 本身——emit('close') 之后
-    // light-my-request 会把它判定为提前断开并 reject，不代表 handler 内部已经跑完）
+    // 等 buildContext 成功之后的守卫、addMessage 等微任务跑完（不等 injectPromise 本身——
+    // emit('close') 之后 light-my-request 会把它判定为提前断开并 reject，不代表 handler 内部已经跑完）
     await new Promise(resolve => setImmediate(resolve))
 
-    // 断连发生在 buildContext 期间、早于 completeSync 被调用，但 completeSync 被调用那一刻
-    // 拿到的 signal 依然应该已经是 aborted——证明 close 监听器注册得足够早，没有错过这个更早的窗口
-    expect(abortedAtCallTime).toBe(true)
+    // 断连发生在 buildContext 期间、早于 buildContext 返回，buildContext 返回后的守卫
+    // 应当已经能看到 aborted 的 signal 并直接 return——证明 close 监听器注册得足够早，
+    // 没有错过这个更早的窗口
+    expect(completeSyncMock).not.toHaveBeenCalled()
+
+    const rows = db.prepare('SELECT role, content FROM Messages WHERE sessionId = ?')
+      .all(session.sessionId) as Array<{ role: string; content: string }>
+    expect(rows).toEqual([])
+  })
+
+  it('客户端在 buildContext 的 embedding 调用进行中断开：signal 一路传到 embed()，abort 后立即取消而不是一直挂起等 5 秒超时，且该请求的用户消息不会被落库', async () => {
+    const { session } = loadSession('p1')
+
+    let capturedReply: { raw: import('http').ServerResponse } | undefined
+    let onRequestDone: () => void
+    const onRequestPromise = new Promise<void>(resolve => { onRequestDone = resolve })
+
+    // 复刻 BGEProvider 修复后的真实行为：fetch 的 signal 一旦 abort，请求本身 reject（AbortError），
+    // 而不是像旧行为那样一直挂起等 5 秒固定超时——这里通过监听 signal 的 abort 事件模拟同样效果。
+    // retrieval.ts 向量路本身已有 try/catch（既有正确行为，本次不改），所以这次 abort 会被
+    // retrieveMemories 内部吞掉，buildContext 本身不会因此抛出——这里只验证 signal 确实一路
+    // 传到 embed() 并让它的 promise 及时 settle，不再无限期挂起
+    let capturedEmbedSignal: AbortSignal | undefined
+    let embedCalled: () => void
+    const embedCalledPromise = new Promise<void>(resolve => { embedCalled = resolve })
+    let embedSettled = false
+    const slowEmbeddingProvider: EmbeddingProvider = {
+      embed: (_text: string, signal?: AbortSignal) => {
+        capturedEmbedSignal = signal
+        embedCalled()
+        return new Promise<number[]>((_resolve, reject) => {
+          signal?.addEventListener('abort', () => {
+            embedSettled = true
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+          })
+        })
+      },
+      embedBatch: async (texts: string[]) => texts.map(() => new Array(1024).fill(0)),
+      unload: async () => true,
+    }
+
+    const fastify = Fastify()
+    fastify.decorate('streamingEnabled', false)
+    fastify.decorate('embeddingProvider', slowEmbeddingProvider)
+    fastify.addHook('onRequest', (_request, reply, done) => {
+      capturedReply = reply
+      onRequestDone()
+      done()
+    })
+
+    vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
+      completeSync: async () => JSON.stringify({ reply: '嗯嗯' }),
+    } as unknown as ModelProvider)
+
+    await fastify.register(chatRoutes)
+
+    // "记得" 命中回忆类关键词，确保 buildContext 内部真的会走到 retrieveMemories → embed()
+    const injectPromise = fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你还记得吗' } })
+    injectPromise.catch(() => {})
+
+    await onRequestPromise
+    await embedCalledPromise
+    expect(capturedEmbedSignal?.aborted).toBe(false)
+    expect(embedSettled).toBe(false)
+
+    // 模拟客户端在 embedding 调用进行中断开
+    capturedReply!.raw.emit('close')
+
+    // 等 close 监听器触发 abortController.abort() 的微任务跑完
+    await new Promise(resolve => setImmediate(resolve))
+
+    // 修复前：embed() 从未收到任何 signal，这里会一直是 undefined/false，请求实际要跑满 5 秒
+    // 固定超时才会继续。修复后：signal 立即变为 aborted，embed() 的 promise 也随之立即 settle
+    expect(capturedEmbedSignal?.aborted).toBe(true)
+    expect(embedSettled).toBe(true)
+
+    // buildContext 因为 retrieval.ts 既有的 try/catch 吞掉了这次 abort，会正常 return（不抛错），
+    // 但连接此时已经死了——buildContext 成功之后必须再检查一次连接状态，否则这条注定不会有
+    // 任何 assistant 回复的用户消息会被永久落库。等 addMessage 之后的微任务跑完，确认
+    // Messages 表里这个 sessionId 下没有任何一行（既没有 user，也没有 assistant）
+    await new Promise(resolve => setImmediate(resolve))
+    const rows = db.prepare('SELECT role, content FROM Messages WHERE sessionId = ?')
+      .all(session.sessionId) as Array<{ role: string; content: string }>
+    expect(rows).toEqual([])
+  })
+
+  it('buildContext 失败但客户端连接已经断开：catch 块直接 return，不再尝试发送任何响应', async () => {
+    let capturedReply: { raw: import('http').ServerResponse } | undefined
+    let onRequestDone: () => void
+    const onRequestPromise = new Promise<void>(resolve => { onRequestDone = resolve })
+
+    let buildContextCalled: () => void
+    const buildContextCalledPromise = new Promise<void>(resolve => { buildContextCalled = resolve })
+    let rejectBuildContext: (err: unknown) => void
+    const buildContextPromise = new Promise((_resolve, reject) => { rejectBuildContext = reject })
+    const buildContextSpy = vi.spyOn(BuildContextModule, 'buildContext').mockImplementation(async () => {
+      buildContextCalled()
+      return buildContextPromise as never
+    })
+
+    try {
+      loadSession('p1')
+
+      const fastify = Fastify()
+      fastify.decorate('streamingEnabled', false)
+      fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
+      fastify.addHook('onRequest', (_request, reply, done) => {
+        capturedReply = reply
+        onRequestDone()
+        done()
+      })
+
+      await fastify.register(chatRoutes)
+
+      const injectPromise = fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+      injectPromise.catch(() => {})
+
+      await onRequestPromise
+      await buildContextCalledPromise
+
+      // buildContext 仍在执行期间就 spy 好 status，确保能捕捉到 catch 块是否尝试发送响应
+      const statusSpy = vi.spyOn(capturedReply!, 'status')
+
+      // 客户端在 buildContext 执行期间断开
+      Object.defineProperty(capturedReply!.raw, 'destroyed', { value: true, configurable: true })
+      capturedReply!.raw.emit('close')
+
+      // 此时才让 buildContext 失败（与真实的 embedding abort 场景时序一致：断连发生在先，
+      // buildContext 抛出在后）
+      rejectBuildContext!(new Error('boom, unrelated to abort'))
+      await new Promise(resolve => setImmediate(resolve))
+
+      expect(statusSpy).not.toHaveBeenCalled()
+    } finally {
+      buildContextSpy.mockRestore()
+    }
+  })
+
+  it('buildContext 因非断连原因失败，但连接仍然存活：照常返回 500（守卫只在连接已死时才跳过发送）', async () => {
+    const buildContextSpy = vi.spyOn(BuildContextModule, 'buildContext').mockRejectedValue(new Error('boom'))
+
+    try {
+      const { fastify } = await buildTestApp(JSON.stringify({ reply: '嗯嗯' }))
+      const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+
+      expect(response.statusCode).toBe(500)
+      expect(JSON.parse(response.payload)).toEqual({ error: 'Failed to build context' })
+    } finally {
+      buildContextSpy.mockRestore()
+    }
+  })
+
+  it('并发发送两条消息时按到达顺序串行处理：落库顺序是严格的发送序，不会因第二条模型先返回而抢先', async () => {
+    const { session } = loadSession('p1')
+
+    // 第一条请求的模型调用人为卡住，只有测试手动放行才 resolve——
+    // 如果 /chat 的处理没有被串行化，第二条请求会在这段等待期间抢先跑完并落库
+    let resolveFirstComplete: (v: string) => void
+    const firstCompletePromise = new Promise<string>(resolve => { resolveFirstComplete = resolve })
+    let signalFirstCalled: () => void
+    const firstCalledPromise = new Promise<void>(resolve => { signalFirstCalled = resolve })
+
+    let callCount = 0
+    vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockImplementation(() => {
+      callCount += 1
+      if (callCount === 1) {
+        signalFirstCalled()
+        return { completeSync: async () => firstCompletePromise } as unknown as ModelProvider
+      }
+      return { completeSync: async () => JSON.stringify({ reply: '第二条回复' }) } as unknown as ModelProvider
+    })
+
+    const fastify = Fastify()
+    fastify.decorate('streamingEnabled', false)
+    fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
+    await fastify.register(chatRoutes)
+
+    const p1 = fastify.inject({ method: 'POST', url: '/chat', payload: { message: '第一条' } })
+    // 等第一条请求真正跑到模型调用这一步（此时它正卡在 completeSync 上等待），
+    // 再发出第二条请求，确保第二条是在第一条已经进入队列处理中途时才到达
+    await firstCalledPromise
+
+    const p2 = fastify.inject({ method: 'POST', url: '/chat', payload: { message: '第二条' } })
+
+    // 给第二条请求一点时间，看它是否会抢先跑到 createModelProviderForPreset——
+    // 串行化正确时，第二条此刻应该仍卡在队列里，callCount 还停留在 1
+    await new Promise(resolve => setImmediate(resolve))
+    expect(callCount).toBe(1)
+
+    resolveFirstComplete!(JSON.stringify({ reply: '第一条回复' }))
+    await Promise.all([p1, p2])
+
+    const rows = db.prepare('SELECT role, content FROM Messages WHERE sessionId = ? ORDER BY id ASC')
+      .all(session.sessionId) as Array<{ role: string; content: string }>
+    const ordered = rows.map(r => ({ role: r.role, content: decrypt(r.content) }))
+
+    expect(ordered).toEqual([
+      { role: 'user', content: '第一条' },
+      { role: 'assistant', content: '第一条回复' },
+      { role: 'user', content: '第二条' },
+      { role: 'assistant', content: '第二条回复' },
+    ])
+  })
+
+  it('排队等待期间客户端已断开：轮到该请求处理时直接跳过，不发起模型调用，也不落库', async () => {
+    const { session } = loadSession('p1')
+
+    const capturedReplies: Array<{ raw: import('http').ServerResponse }> = []
+    const fastify = Fastify()
+    fastify.decorate('streamingEnabled', false)
+    fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
+    fastify.addHook('onRequest', (_request, reply, done) => {
+      capturedReplies.push(reply)
+      done()
+    })
+
+    // 第一条请求卡住，让第二条请求有机会先排进队列，再被模拟断开
+    let resolveFirstComplete: (v: string) => void
+    const firstCompletePromise = new Promise<string>(resolve => { resolveFirstComplete = resolve })
+    const completeSyncMock = vi.fn(async () => firstCompletePromise)
+    vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
+      completeSync: completeSyncMock,
+    } as unknown as ModelProvider)
+
+    await fastify.register(chatRoutes)
+
+    const p1 = fastify.inject({ method: 'POST', url: '/chat', payload: { message: '第一条' } })
+    const p2 = fastify.inject({ method: 'POST', url: '/chat', payload: { message: '第二条（会被断开）' } })
+
+    // 等两个请求都跑过 onRequest 钩子，拿到各自的 reply.raw 引用
+    await new Promise(resolve => setImmediate(resolve))
+    expect(capturedReplies).toHaveLength(2)
+
+    // 模拟第二条请求在排队等待期间（还没轮到它处理）客户端已经断开
+    Object.defineProperty(capturedReplies[1].raw, 'destroyed', { value: true, configurable: true })
+    capturedReplies[1].raw.emit('close')
+
+    // 放行第一条请求，让队列继续往下轮到第二条
+    resolveFirstComplete!(JSON.stringify({ reply: '第一条回复' }))
+    // 断开场景下不关心两个 inject() 最终各自 settle 成什么，用 allSettled 稳妥地把两者都消费掉，
+    // 避免 promise rejection 未被处理
+    await Promise.allSettled([p1, p2])
+
+    // completeSync 全程只应该被第一条请求调用过一次，第二条被跳过，模型调用从未发生
+    expect(completeSyncMock).toHaveBeenCalledTimes(1)
+
+    const rows = db.prepare('SELECT role, content FROM Messages WHERE sessionId = ? ORDER BY id ASC')
+      .all(session.sessionId) as Array<{ role: string; content: string }>
+    const ordered = rows.map(r => ({ role: r.role, content: decrypt(r.content) }))
+
+    expect(ordered).toEqual([
+      { role: 'user', content: '第一条' },
+      { role: 'assistant', content: '第一条回复' },
+    ])
   })
 })

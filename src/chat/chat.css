@@ -13,6 +13,12 @@
   overflow: hidden;
 }
 
+/* ─── Embedding 未就绪：头像置灰 ───────────────────────── */
+
+.chat-window--embedding-not-ready .msg-avatar img {
+  filter: grayscale(100%);
+}
+
 /* ─── Ollama 未就绪 banner ─────────────────────────────── */
 
 .banner {

@@ -14,26 +14,30 @@ import {
 import { getLockScreenMinutes } from '../system/lockState.js'
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
 import type { NERProvider } from '../providers/NERProvider.js'
+import { getLastActivityAt } from '../providers/aiActivity.js'
 import type { EmbeddingQueueStatus } from '../../../shared/types/index.js'
+import { getMemoryConfig } from '../config/index.js'
 
 // 整理模式编排器（TDD §3.8）。本模块只负责"何时 + 循环多少批"，不重新实现
 // embedding（embedQueue.ts）、实体抽取（entityExtractor.ts）或摘要生成（summarizer.ts）
 // 本身的处理逻辑。
 
+// ACTIVE_CONVERSATION_WINDOW_MS 是固定的活跃对话窗口，不对应任何 config.json 字段，
+// 不属于本次 config 模块迁移范围
 const ACTIVE_CONVERSATION_WINDOW_MS = 5 * 60 * 1000
-const PENDING_COUNT_THRESHOLD = 100
-const OLDEST_PENDING_AGE_THRESHOLD_MIN = 120
+const IDLE_UNLOAD_THRESHOLD_MS = 20 * 60 * 1000
 
 // 进程内存状态：最近一次整理模式实际跑过 embedding 批次的时间戳，供 EmbeddingQueueStatus.lastEmbeddingRun
 // 使用。不持久化到 DB（TDD §3.8 只要求维护监控状态，未要求跨进程重启保留），进程重启后重置为 0。
 let lastEmbeddingRun = 0
 
-// TODO(Phase 2 config module): 这是硬编码的默认低活跃时间窗口（夜间 22:00-08:00，本机系统时区），
-// 作为过渡方案。真正的用户自定义可整理时间窗口（如"我今天 10 点之后不用电脑"）需要等独立的 config
-// 模块 + 对话式意图识别接入后替换，届时本函数会被替换为读取用户配置的时间窗口判断。
+// 默认低活跃时间窗口（夜间 22:00-08:00，本机系统时区），窗口起止小时来自独立 config 模块
+// （memory.organizeWindowStartHour / organizeWindowEndHour）。真正的用户自定义可整理时间窗口
+// （如"我今天 10 点之后不用电脑"）需要对话式意图识别接入后才能支持，这里仍是固定时间窗口。
 export function isInDefaultOrganizeWindow(timestamp: number): boolean {
+  const { organizeWindowStartHour, organizeWindowEndHour } = getMemoryConfig()
   const hour = new Date(timestamp).getHours()
-  return hour >= 22 || hour < 8
+  return hour >= organizeWindowStartHour || hour < organizeWindowEndHour
 }
 
 function computeActiveConversation(now: number): boolean {
@@ -63,8 +67,9 @@ export function computeEmbeddingQueueStatus(now: number = Date.now()): Embedding
 // AND 当前时间 IN 可整理时间窗口
 function shouldTriggerOrganizeMode(now: number): boolean {
   const status = computeEmbeddingQueueStatus(now)
+  const { pendingCountThreshold, oldestPendingAgeMinutes } = getMemoryConfig().summaryTrigger
   const pendingConditionMet =
-    status.pendingCount > PENDING_COUNT_THRESHOLD || status.oldestPendingAge > OLDEST_PENDING_AGE_THRESHOLD_MIN
+    status.pendingCount > pendingCountThreshold || status.oldestPendingAge > oldestPendingAgeMinutes
   return pendingConditionMet && !status.activeConversation && isInDefaultOrganizeWindow(now)
 }
 
@@ -137,6 +142,19 @@ export async function runOrganizeModeTick(
         const result = await generateSummary(sessionId, { model: deps.model })
         if (result === null) break
         summariesGenerated++
+      }
+    }
+  }
+
+  // 空闲释放（本次改动新增）：embedding 与 NER 共用同一个"最近 AI 活动"信号（aiActivity.ts），
+  // 空闲达到 20 分钟即释放两个模型的显存/内存占用。放在本函数最末尾、embedding+实体批次循环
+  // 和摘要循环都已跑完之后再判断，两次 unload 各自独立失败（Promise.allSettled）不影响另一个，
+  // 也不让本 tick 抛出
+  if (getNow() - getLastActivityAt() >= IDLE_UNLOAD_THRESHOLD_MS) {
+    const idleResults = await Promise.allSettled([deps.embedding.unload(), deps.ner.unload()])
+    for (const result of idleResults) {
+      if (result.status === 'rejected') {
+        console.error('[OrganizeMode] idle-unload failed:', result.reason)
       }
     }
   }

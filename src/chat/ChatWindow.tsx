@@ -22,6 +22,7 @@ interface AppState {
   sessionId: string | null
   presetSnapshot: PresetSnapshot | null
   ollamaReady: boolean | null
+  embeddingReady: boolean
   emotion: null
   embeddingQueue: null
 }
@@ -35,6 +36,16 @@ function wallpaperUrlFor(snapshot: PresetSnapshot | null): string {
   return snapshot?.wallpaperPath
     ? `${CORE_URL}/wallpapers/${encodeURIComponent(snapshot.wallpaperPath)}`
     : DEFAULT_WALLPAPER_URL
+}
+
+// 三处独立刷新触发（轮询 / 窗口聚焦 / 发消息时机）共用的简单只读 fetch，不接入
+// switchPresetControllerRef / wallpaperControllerRef 的 abort 机制——embeddingReady 是全局状态，
+// 不绑定某次 preset 切换的上下文，见任务范围说明
+function fetchEmbeddingReady(): Promise<boolean | undefined> {
+  return fetch(`${CORE_URL}/embedding-ready`)
+    .then(r => r.json())
+    .then((data: { embeddingReady: boolean }) => data.embeddingReady)
+    .catch(() => undefined)
 }
 
 async function fetchAvatarUrl(characterId: string, signal?: AbortSignal): Promise<string | undefined> {
@@ -56,6 +67,9 @@ export function ChatWindow() {
   const [messages, setMessages] = useState<MessageData[]>([])
   const [isReplying, setIsReplying] = useState(false)
   const [appState, setAppState] = useState<AppState | null>(null)
+  // 保守默认值：挂载时的初始 /state 请求返回前，先当作"未就绪"处理（头像置灰），
+  // 避免在真正尚未预热完成时短暂显示"已就绪"的误导状态
+  const [embeddingReady, setEmbeddingReady] = useState<boolean>(false)
   const [wallpaperUrl, setWallpaperUrl] = useState<string | null>(null)
   const [avatarUrl, setAvatarUrl] = useState<string | undefined>(undefined)
   const [presets, setPresets] = useState<PresetOption[]>([])
@@ -96,6 +110,7 @@ export function ChatWindow() {
         switchPresetControllerRef.current = controller
 
         setAppState(state)
+        setEmbeddingReady(state.embeddingReady)
         setWallpaperUrl(wallpaperUrlFor(state.presetSnapshot))
         if (state.presetSnapshot?.characterId) {
           fetchAvatarUrl(state.presetSnapshot.characterId, controller.signal).then(url => {
@@ -114,6 +129,31 @@ export function ChatWindow() {
       .catch(() => {
         // preset 列表拉取失败不影响主聊天流程，静默忽略即可
       })
+  }, [])
+
+  // 预热期间轮询：embeddingReady 为 false 时每 3 秒查一次轻量端点，一旦变为 true 就停止轮询
+  useEffect(() => {
+    if (embeddingReady) return
+
+    const interval = setInterval(() => {
+      fetchEmbeddingReady().then(ready => {
+        if (ready !== undefined) setEmbeddingReady(ready)
+      })
+    }, 3000)
+
+    return () => clearInterval(interval)
+  }, [embeddingReady])
+
+  // 窗口重新聚焦时刷新：独立于轮询，即使当前 embeddingReady 已经是 true 也要检查——
+  // 用于捕捉"窗口失焦期间因空闲被整理模式释放"这种情况
+  useEffect(() => {
+    const handler = () => {
+      fetchEmbeddingReady().then(ready => {
+        if (ready !== undefined) setEmbeddingReady(ready)
+      })
+    }
+    window.addEventListener('focus', handler)
+    return () => window.removeEventListener('focus', handler)
   }, [])
 
   const switchPreset = useCallback(async (presetId: string) => {
@@ -235,6 +275,14 @@ export function ChatWindow() {
   }
 
   const sendMessage = useCallback(async (text: string) => {
+    // 发消息时机刷新：仅当当前没有在途的 /chat 请求时才顺带查一次（有在途请求说明近期已经
+    // 活跃，没必要额外发起）；fire-and-forget，不 await，不能延迟或阻挡下面的实际发送
+    if (activeControllersRef.current.size === 0) {
+      fetchEmbeddingReady().then(ready => {
+        if (ready !== undefined) setEmbeddingReady(ready)
+      })
+    }
+
     setMessages(prev => [...prev, {
       id: Date.now().toString(),
       role: 'user' as const,
@@ -298,7 +346,7 @@ export function ChatWindow() {
 
   return (
     <div
-      className="chat-window"
+      className={`chat-window${embeddingReady ? '' : ' chat-window--embedding-not-ready'}`}
       style={wallpaperUrl ? { backgroundImage: `url(${wallpaperUrl})` } : undefined}
     >
       {appState?.ollamaReady === false && (

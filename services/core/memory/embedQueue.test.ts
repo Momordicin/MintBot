@@ -32,6 +32,7 @@ function fakeProvider(): EmbeddingProvider {
         return v
       })
     },
+    async unload() { return true },
   }
 }
 
@@ -43,6 +44,7 @@ function failingProvider(): EmbeddingProvider {
     async embedBatch() {
       throw new Error('boom')
     },
+    async unload() { return true },
   }
 }
 

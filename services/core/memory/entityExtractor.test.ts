@@ -23,6 +23,7 @@ function emptyNer(): NERProvider {
   return {
     async extract() { return [] },
     async extractBatch(texts: string[]) { return texts.map(() => []) },
+    async unload() { return true },
   }
 }
 
@@ -34,6 +35,7 @@ function nerReturning(results: NerEntity[][]): NERProvider {
   return {
     async extract() { return results[0] ?? [] },
     async extractBatch() { return results },
+    async unload() { return true },
   }
 }
 
@@ -45,6 +47,7 @@ function throwingNer(): NERProvider {
   return {
     async extract() { throw new Error('ner boom') },
     async extractBatch() { throw new Error('ner boom') },
+    async unload() { return true },
   }
 }
 

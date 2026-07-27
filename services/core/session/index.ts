@@ -10,15 +10,9 @@ import {
   resetEmotionState,
 } from './queries.js'
 
-export function setReplying(value: boolean): void {
-  const state = requireCurrentState()
-  state.isReplying = value
-}
-
 interface SessionState {
   session: Session
   preset: Preset
-  isReplying: boolean
 }
 
 let current: SessionState | null = null
@@ -58,7 +52,7 @@ export function loadSession(presetId: string): SessionState {
     console.log(`[Session] Resumed session ${session.sessionId} for preset ${presetId}`)
   }
 
-  current = { session, preset, isReplying: false}
+  current = { session, preset }
   return current
 }
 
