@@ -48,6 +48,9 @@ craft.ts
 **/*.pt
 **/*.pth
 **/*.ckpt
+# 第三方预编译扩展 + 词典，由 pnpm setup:vendor 从 GitHub Release 下载还原
+# Vendored third-party binary + dict, restored by `pnpm setup:vendor`
+/services/core/db/vendor/
 # 全局日志 / Global log files
 **/*.log
 

@@ -12,6 +12,7 @@
     "build:core": "pnpm exec tsc -p shared/tsconfig.json && pnpm exec tsc -p services/core/tsconfig.json",
     "preview": "electron-vite preview",
     "seed": "tsx services/core/db/seed.ts",
+    "setup:vendor": "tsx scripts/setup-vendor.ts",
     "demo:fts": "tsx scripts/demos/fts-chinese-search.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
