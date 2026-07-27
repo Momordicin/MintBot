@@ -14,7 +14,7 @@
     "seed": "tsx services/core/db/seed.ts",
     "setup:vendor": "tsx scripts/setup-vendor.ts",
     "demo:fts": "tsx scripts/demos/fts-chinese-search.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --build tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest"
   },

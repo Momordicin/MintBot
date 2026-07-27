@@ -2,7 +2,7 @@
 // 目前唯一消费方是 src/chat/ChatWindow.tsx 的壁纸选择功能。
 export interface ElectronAPI {
   platform: string
-  selectWallpaperFile: () => Promise<{ data: Uint8Array; filename: string } | null>
+  selectWallpaperFile: () => Promise<{ data: Uint8Array<ArrayBuffer>; filename: string } | null>
 }
 
 declare global {

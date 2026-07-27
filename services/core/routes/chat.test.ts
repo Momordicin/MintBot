@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import Fastify from 'fastify'
+import type { FastifyReply } from 'fastify'
 import { initDb, db } from '../db/index.js'
 import { decrypt } from '../db/crypto.js'
 import { upsertPreset, getEmotionState } from '../session/queries.js'
@@ -367,7 +368,7 @@ describe('POST /chat', () => {
   })
 
   it('buildContext 失败但客户端连接已经断开：catch 块直接 return，不再尝试发送任何响应', async () => {
-    let capturedReply: { raw: import('http').ServerResponse } | undefined
+    let capturedReply: FastifyReply | undefined
     let onRequestDone: () => void
     const onRequestPromise = new Promise<void>(resolve => { onRequestDone = resolve })
 
