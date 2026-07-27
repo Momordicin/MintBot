@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import Fastify from 'fastify'
 import fs from 'fs'
 import path from 'path'
@@ -7,6 +7,12 @@ import { upsertPreset, getPresetById } from '../session/queries.js'
 import { loadSession } from '../session/index.js'
 import { presetRoutes } from './presets.js'
 import { buildStatePayload } from '../state.js'
+
+// buildStatePayload 内部读取 getModelProviderConfig().ollamaBaseUrl，mock 掉独立 config
+// 模块（而不是依赖真实的本地 config.json），保证测试结果不受本机 config.json 内容影响
+vi.mock('../config/index.js', () => ({
+  getModelProviderConfig: vi.fn(() => ({ type: 'ollama' })),
+}))
 
 initDb()
 
@@ -35,11 +41,10 @@ beforeEach(() => {
   })
 })
 
-// 起一个干净的 Fastify 实例，config.modelProvider 只需满足 buildStatePayload 内部读取
-// ollamaBaseUrl 的类型要求，本测试不断言 ollamaReady 的具体值
+// 起一个干净的 Fastify 实例；buildStatePayload 内部读取的 modelProvider 配置已通过上面的
+// vi.mock('../config/index.js') 提供，本测试不断言 ollamaReady 的具体值
 async function buildTestApp() {
   const fastify = Fastify()
-  fastify.decorate('config', { modelProvider: { type: 'ollama' } })
   await fastify.register(presetRoutes)
   return fastify
 }
@@ -159,7 +164,7 @@ describe('POST /presets/:presetId/wallpaper', () => {
     })
 
     // 上传响应之外，独立再调一次 buildStatePayload，模拟之后的 GET /state / POST /switch-preset
-    const statePayload = await buildStatePayload(fastify)
+    const statePayload = await buildStatePayload()
     expect(statePayload.presetSnapshot?.wallpaperPath).toBe(savedFilename)
   })
 

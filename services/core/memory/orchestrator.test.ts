@@ -8,6 +8,19 @@ import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
 import type { NERProvider } from '../providers/NERProvider.js'
 import type { EntityModelProvider } from './entityExtractor.js'
 
+// 阈值 / 时间窗口现在来自独立 config 模块，mock 成与迁移前硬编码常量完全一致的值，
+// 保证本文件已有的断言（写死在各用例里的具体数字）继续成立
+vi.mock('../config/index.js', () => ({
+  getMemoryConfig: () => ({
+    recentTrackMaxMessages: 50,
+    recentTrackMaxMinutes: 30,
+    organizeWindowStartHour: 22,
+    organizeWindowEndHour: 8,
+    summaryTrigger: { pendingCountThreshold: 100, oldestPendingAgeMinutes: 120, messageCountThreshold: 50, lockScreenMinutes: 60 },
+    contextBudget: { total: 8000, systemPrompt: 1000, summary: 1500, rag: 2000, recentMessages: 3000, responseReserve: 500 },
+  }),
+}))
+
 initDb()
 beforeEach(() => {
   db.exec(`DELETE FROM Messages; DELETE FROM message_embeddings; DELETE FROM message_fts; DELETE FROM MessageEntities; DELETE FROM Summaries;`)

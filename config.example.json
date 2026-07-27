@@ -10,10 +10,12 @@
   "security": {
     "keyStorage": "system-keychain"
   },
-  "memory": { 
-    "recentTrackMaxMessages": 50, 
-    "recentTrackMaxMinutes": 30, 
-    "embeddingQueuePollIntervalMinutes": 5, 
+  "memory": {
+    "recentTrackMaxMessages": 50,
+    "recentTrackMaxMinutes": 30,
+    "organizeWindowStartHour": 22,
+    "organizeWindowEndHour": 8,
+    "embeddingQueuePollIntervalMinutes": 5,
     "summaryTrigger": { 
       "pendingCountThreshold": 100, 
       "oldestPendingAgeMinutes": 120, 

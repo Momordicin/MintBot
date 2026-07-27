@@ -1,13 +1,12 @@
-import type { FastifyInstance } from 'fastify'
-import type { ModelConfig } from '../../shared/types/index.js'
 import { getCurrentState } from './session/index.js'
 import { getEmotionState, getPresetById } from './session/queries.js'
 import { getOllamaBaseUrl, isOllamaRunning } from './providers/ollama.js'
 import { getAiBaseUrl, isEmbeddingReady } from './providers/EmbeddingProvider.js'
 import { computeEmbeddingQueueStatus } from './memory/orchestrator.js'
+import { getModelProviderConfig } from './config/index.js'
 
 // GET /state 和 POST /switch-preset 返回同一套结构，抽成共享函数避免两处重复维护
-export async function buildStatePayload(fastify: FastifyInstance) {
+export async function buildStatePayload() {
   const state = getCurrentState()
   const frozenSnapshot = state?.session.presetSnapshot ?? null
 
@@ -22,8 +21,7 @@ export async function buildStatePayload(fastify: FastifyInstance) {
 
   let ollamaReady: boolean | null = null
   if (snapshot?.modelType === 'ollama') {
-    const modelConfig = fastify.config.modelProvider as ModelConfig | undefined
-    const baseUrl = getOllamaBaseUrl(modelConfig?.ollamaBaseUrl)
+    const baseUrl = getOllamaBaseUrl(getModelProviderConfig().ollamaBaseUrl)
     ollamaReady = await isOllamaRunning(baseUrl)
   }
 

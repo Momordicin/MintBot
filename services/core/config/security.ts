@@ -1,6 +1,5 @@
-// TODO(Phase 2 config module): this is a stopgap single-flag accessor. The
-// standalone config module (cross-module reads + hot-reload, per TDD §3.6
-// Phase 2 checklist) will absorb this.
+// 注意：这个开关有意保持独立于 config/index.ts 的标准 config.json 合并逻辑之外，不是遗漏——
+// 部署驱动、只读环境变量，不支持 config.json 配置或运行时热更新（见下方说明）。
 
 // 部署驱动的加密开关（TDD §3.6）：本地部署默认明文，线上 / VPS 部署务必设为 true。
 // false → 敏感字段明文落盘 + FTS 索引可用；true → AES-256-GCM 加密落盘 + FTS 不落盘（仅向量召回）。

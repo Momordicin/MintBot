@@ -4,7 +4,7 @@ import { buildContext } from '../context/buildContext.js'
 import { parseSelfEmotion } from '../session/emotion.js'
 import { upsertEmotionState } from '../session/queries.js'
 import { createModelProviderForPreset } from '../providers/ModelProvider.js'
-import type { ModelConfig } from '../../../shared/types/index.js'
+import { getModelProviderConfig } from '../config/index.js'
 
 // ─── 回复队列（单会话场景下的串行化）──────────────────────
 // MintBot 同一时刻只有一个 SessionState（services/core/session/index.ts 的 current 是单例，
@@ -86,7 +86,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
       // 按当前请求捕获的 preset 构建 provider，而不是用全局单例 fastify.modelProvider，
       // 保证并发切换 preset 时本次请求仍使用它开始时的模型配置
-      const modelProvider = createModelProviderForPreset(state.preset, fastify.config.modelProvider as ModelConfig)
+      const modelProvider = createModelProviderForPreset(state.preset, getModelProviderConfig())
 
       reply.raw.setHeader('Access-Control-Allow-Origin', 'http://localhost:5173')
       reply.raw.setHeader('Content-Type', 'text/event-stream')
@@ -100,7 +100,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
         reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
       }
 
-      const streaming = (fastify.config?.streaming as boolean) ?? true
+      const streaming = fastify.streamingEnabled
 
       try {
         let fullReply = ''

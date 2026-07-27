@@ -1,8 +1,21 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { db, initDb } from '../db/index.js'
 import { decrypt } from '../db/crypto.js'
 import { appendMessage } from '../session/queries.js'
 import { shouldTriggerSummary, generateSummary, type SummaryModelProvider } from './summarizer.js'
+
+// lockScreenMinutes / messageCountThreshold 现在来自独立 config 模块，mock 成与迁移前硬编码
+// 常量完全一致的值（60 / 50），保证本文件已有的真值表断言继续成立
+vi.mock('../config/index.js', () => ({
+  getMemoryConfig: () => ({
+    recentTrackMaxMessages: 50,
+    recentTrackMaxMinutes: 30,
+    organizeWindowStartHour: 22,
+    organizeWindowEndHour: 8,
+    summaryTrigger: { pendingCountThreshold: 100, oldestPendingAgeMinutes: 120, messageCountThreshold: 50, lockScreenMinutes: 60 },
+    contextBudget: { total: 8000, systemPrompt: 1000, summary: 1500, rag: 2000, recentMessages: 3000, responseReserve: 500 },
+  }),
+}))
 
 initDb()
 beforeEach(() => {

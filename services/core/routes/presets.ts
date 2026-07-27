@@ -31,7 +31,7 @@ export async function presetRoutes(fastify: FastifyInstance) {
     }
 
     // 与 GET /state 返回同一套结构，方便前端直接用返回值刷新页面
-    return buildStatePayload(fastify)
+    return buildStatePayload()
   })
 
   // 本服务目前唯一的原始二进制 body 接口（其余都是 JSON）。content type parser 按
@@ -76,6 +76,6 @@ export async function presetRoutes(fastify: FastifyInstance) {
 
     // buildStatePayload 内部会重新读取 Presets.wallpaperPath 覆盖冻结快照里的值，
     // 因此这里直接返回即可反映刚写入的新壁纸
-    return await buildStatePayload(fastify)
+    return await buildStatePayload()
   })
 }

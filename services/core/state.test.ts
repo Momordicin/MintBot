@@ -1,7 +1,12 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import Fastify from 'fastify'
 import { initDb } from './db/index.js'
 import { buildStatePayload } from './state.js'
+
+// 本文件的用例不涉及 modelType === 'ollama' 分支（没有已加载的 preset/session），
+// buildStatePayload 内部不会读到 getModelProviderConfig()，mock 只是满足模块可导入
+vi.mock('./config/index.js', () => ({
+  getModelProviderConfig: vi.fn(() => ({ type: 'ollama' })),
+}))
 
 initDb()
 
@@ -18,9 +23,7 @@ describe('buildStatePayload — embeddingReady', () => {
       json: async () => ({ status: 'ok', embedding_loaded: true, ner_loaded: false }),
     }))
 
-    const fastify = Fastify()
-    fastify.decorate('config', {})
-    const payload = await buildStatePayload(fastify)
+    const payload = await buildStatePayload()
 
     expect(payload.embeddingReady).toBe(true)
   })
@@ -31,9 +34,7 @@ describe('buildStatePayload — embeddingReady', () => {
       json: async () => ({ status: 'ok', embedding_loaded: false, ner_loaded: false }),
     }))
 
-    const fastify = Fastify()
-    fastify.decorate('config', {})
-    const payload = await buildStatePayload(fastify)
+    const payload = await buildStatePayload()
 
     expect(payload.embeddingReady).toBe(false)
   })
@@ -41,9 +42,7 @@ describe('buildStatePayload — embeddingReady', () => {
   it('AI 服务不可达时，embeddingReady 为 false，不向上抛出', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')))
 
-    const fastify = Fastify()
-    fastify.decorate('config', {})
-    const payload = await buildStatePayload(fastify)
+    const payload = await buildStatePayload()
 
     expect(payload.embeddingReady).toBe(false)
   })

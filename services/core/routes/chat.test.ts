@@ -11,6 +11,21 @@ import * as BuildContextModule from '../context/buildContext.js'
 import type { ModelProvider } from '../providers/ModelProvider.js'
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
 
+// chat.ts 内部读取 getModelProviderConfig()（原来的 fastify.config.modelProvider）；
+// buildContext.ts（chat.ts 内部调用）也依赖同一个 config 模块的 getMemoryConfig()——
+// mock 整个模块时两者都要提供，否则 buildContext.ts 拿到的 getMemoryConfig 会是 undefined
+vi.mock('../config/index.js', () => ({
+  getModelProviderConfig: vi.fn(() => ({ type: 'ollama', ollamaModel: 'qwen3' })),
+  getMemoryConfig: vi.fn(() => ({
+    recentTrackMaxMessages: 50,
+    recentTrackMaxMinutes: 30,
+    organizeWindowStartHour: 22,
+    organizeWindowEndHour: 8,
+    summaryTrigger: { pendingCountThreshold: 100, oldestPendingAgeMinutes: 120, messageCountThreshold: 50, lockScreenMinutes: 60 },
+    contextBudget: { total: 8000, systemPrompt: 1000, summary: 1500, rag: 2000, recentMessages: 3000, responseReserve: 500 },
+  })),
+}))
+
 initDb()
 
 beforeEach(() => {
@@ -58,7 +73,7 @@ async function buildTestApp(fakeReply: string) {
   }
   const createSpy = vi.spyOn(ModelProviderModule, 'createModelProviderForPreset')
     .mockReturnValue(fakeModelProvider as unknown as ModelProvider)
-  fastify.decorate('config', { streaming: false, modelProvider: { type: 'ollama', ollamaModel: 'qwen3' } })
+  fastify.decorate('streamingEnabled', false)
   fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
   await fastify.register(chatRoutes)
   return { fastify, createSpy }
@@ -140,7 +155,7 @@ describe('POST /chat', () => {
     }
   })
 
-  it('按请求捕获的 preset 和 fastify.config.modelProvider 构建 provider', async () => {
+  it('按请求捕获的 preset 和 getModelProviderConfig() 构建 provider', async () => {
     const { preset } = loadSession('p1')
     const { fastify, createSpy } = await buildTestApp(JSON.stringify({ reply: '嗯嗯' }))
 
@@ -159,7 +174,7 @@ describe('POST /chat', () => {
     const onRequestPromise = new Promise<void>(resolve => { onRequestDone = resolve })
 
     const fastify = Fastify()
-    fastify.decorate('config', { streaming: false, modelProvider: { type: 'ollama', ollamaModel: 'qwen3' } })
+    fastify.decorate('streamingEnabled', false)
     fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
     fastify.addHook('onRequest', (_request, reply, done) => {
       capturedReply = reply
@@ -229,7 +244,7 @@ describe('POST /chat', () => {
     }
 
     const fastify = Fastify()
-    fastify.decorate('config', { streaming: false, modelProvider: { type: 'ollama', ollamaModel: 'qwen3' } })
+    fastify.decorate('streamingEnabled', false)
     fastify.decorate('embeddingProvider', slowEmbeddingProvider)
     fastify.addHook('onRequest', (_request, reply, done) => {
       capturedReply = reply
@@ -307,7 +322,7 @@ describe('POST /chat', () => {
     }
 
     const fastify = Fastify()
-    fastify.decorate('config', { streaming: false, modelProvider: { type: 'ollama', ollamaModel: 'qwen3' } })
+    fastify.decorate('streamingEnabled', false)
     fastify.decorate('embeddingProvider', slowEmbeddingProvider)
     fastify.addHook('onRequest', (_request, reply, done) => {
       capturedReply = reply
@@ -369,7 +384,7 @@ describe('POST /chat', () => {
       loadSession('p1')
 
       const fastify = Fastify()
-      fastify.decorate('config', { streaming: false, modelProvider: { type: 'ollama', ollamaModel: 'qwen3' } })
+      fastify.decorate('streamingEnabled', false)
       fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
       fastify.addHook('onRequest', (_request, reply, done) => {
         capturedReply = reply
@@ -438,7 +453,7 @@ describe('POST /chat', () => {
     })
 
     const fastify = Fastify()
-    fastify.decorate('config', { streaming: false, modelProvider: { type: 'ollama', ollamaModel: 'qwen3' } })
+    fastify.decorate('streamingEnabled', false)
     fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
     await fastify.register(chatRoutes)
 
@@ -474,7 +489,7 @@ describe('POST /chat', () => {
 
     const capturedReplies: Array<{ raw: import('http').ServerResponse }> = []
     const fastify = Fastify()
-    fastify.decorate('config', { streaming: false, modelProvider: { type: 'ollama', ollamaModel: 'qwen3' } })
+    fastify.decorate('streamingEnabled', false)
     fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
     fastify.addHook('onRequest', (_request, reply, done) => {
       capturedReplies.push(reply)
