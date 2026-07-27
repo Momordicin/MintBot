@@ -42,6 +42,7 @@ function fakeEmbeddingProvider(): EmbeddingProvider {
     async embedBatch(texts: string[]) {
       return texts.map(() => new Array(1024).fill(0))
     },
+    async unload() { return true },
   }
 }
 
@@ -224,6 +225,7 @@ describe('POST /chat', () => {
         return embedPromise
       },
       embedBatch: async (texts: string[]) => texts.map(() => new Array(1024).fill(0)),
+      unload: async () => true,
     }
 
     const fastify = Fastify()
@@ -301,6 +303,7 @@ describe('POST /chat', () => {
         })
       },
       embedBatch: async (texts: string[]) => texts.map(() => new Array(1024).fill(0)),
+      unload: async () => true,
     }
 
     const fastify = Fastify()

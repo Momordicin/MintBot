@@ -77,6 +77,7 @@ describe('POST /switch-preset', () => {
     expect(body.presetSnapshot.wallpaperPath).toBe('p2-bg.jpg')
     expect(body).toHaveProperty('sessionId')
     expect(body).toHaveProperty('ollamaReady')
+    expect(body).toHaveProperty('embeddingReady')
     expect(body).toHaveProperty('emotion')
     expect(body).toHaveProperty('embeddingQueue')
   })

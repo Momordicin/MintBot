@@ -37,6 +37,7 @@ function fakeEmbeddingProvider(queryVectorIndex = 0): EmbeddingProvider {
     async embedBatch(texts: string[]) {
       return Promise.all(texts.map(() => this.embed('')))
     },
+    async unload() { return true },
   }
 }
 
@@ -48,6 +49,7 @@ function failingEmbeddingProvider(): EmbeddingProvider {
     async embedBatch() {
       throw new Error('embed boom')
     },
+    async unload() { return true },
   }
 }
 
@@ -125,6 +127,7 @@ describe('retrieveMemories — RRF 融合', () => {
         return oneHotVector(0)
       },
       embedBatch: async (texts: string[]) => texts.map(() => oneHotVector(0)),
+      unload: async () => true,
     }
     const controller = new AbortController()
 

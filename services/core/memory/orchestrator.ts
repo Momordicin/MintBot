@@ -14,6 +14,7 @@ import {
 import { getLockScreenMinutes } from '../system/lockState.js'
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
 import type { NERProvider } from '../providers/NERProvider.js'
+import { getLastActivityAt } from '../providers/aiActivity.js'
 import type { EmbeddingQueueStatus } from '../../../shared/types/index.js'
 
 // 整理模式编排器（TDD §3.8）。本模块只负责"何时 + 循环多少批"，不重新实现
@@ -23,6 +24,7 @@ import type { EmbeddingQueueStatus } from '../../../shared/types/index.js'
 const ACTIVE_CONVERSATION_WINDOW_MS = 5 * 60 * 1000
 const PENDING_COUNT_THRESHOLD = 100
 const OLDEST_PENDING_AGE_THRESHOLD_MIN = 120
+const IDLE_UNLOAD_THRESHOLD_MS = 20 * 60 * 1000
 
 // 进程内存状态：最近一次整理模式实际跑过 embedding 批次的时间戳，供 EmbeddingQueueStatus.lastEmbeddingRun
 // 使用。不持久化到 DB（TDD §3.8 只要求维护监控状态，未要求跨进程重启保留），进程重启后重置为 0。
@@ -137,6 +139,19 @@ export async function runOrganizeModeTick(
         const result = await generateSummary(sessionId, { model: deps.model })
         if (result === null) break
         summariesGenerated++
+      }
+    }
+  }
+
+  // 空闲释放（本次改动新增）：embedding 与 NER 共用同一个"最近 AI 活动"信号（aiActivity.ts），
+  // 空闲达到 20 分钟即释放两个模型的显存/内存占用。放在本函数最末尾、embedding+实体批次循环
+  // 和摘要循环都已跑完之后再判断，两次 unload 各自独立失败（Promise.allSettled）不影响另一个，
+  // 也不让本 tick 抛出
+  if (getNow() - getLastActivityAt() >= IDLE_UNLOAD_THRESHOLD_MS) {
+    const idleResults = await Promise.allSettled([deps.embedding.unload(), deps.ner.unload()])
+    for (const result of idleResults) {
+      if (result.status === 'rejected') {
+        console.error('[OrganizeMode] idle-unload failed:', result.reason)
       }
     }
   }

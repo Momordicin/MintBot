@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { BGEProvider } from './EmbeddingProvider.js'
+import { getLastActivityAt } from './aiActivity.js'
 
 // BGEProvider.embedBatch 的 signal 合并逻辑（AbortSignal.any([callerSignal, 5s超时])）
 // 是这次修复的核心：调用方（/chat 请求）传入自己的 signal 时，外部 abort 应该立刻
@@ -47,5 +48,78 @@ describe('BGEProvider.embedBatch — 外部 signal 取消', () => {
     const result = await provider.embedBatch(['hello'])
 
     expect(result).toEqual([[1, 2, 3]])
+  })
+})
+
+describe('BGEProvider — 共享活动追踪（aiActivity）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('embedBatch 在发起 fetch 之前就记录了一次活动', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ embeddings: [[1, 2, 3]] }),
+    })))
+
+    const before = Date.now()
+    const provider = new BGEProvider()
+    await provider.embedBatch(['hello'])
+
+    expect(getLastActivityAt()).toBeGreaterThanOrEqual(before)
+  })
+
+  it('embed（委托给 embedBatch）同样会记录活动', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ embeddings: [[1, 2, 3]] }),
+    })))
+
+    const before = Date.now()
+    const provider = new BGEProvider()
+    await provider.embed('hello')
+
+    expect(getLastActivityAt()).toBeGreaterThanOrEqual(before)
+  })
+})
+
+describe('BGEProvider.unload', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('POST {baseUrl}/embed/unload，返回响应体里的 unloaded 布尔值', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ unloaded: true }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const provider = new BGEProvider()
+    const result = await provider.unload()
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('http://localhost:8765/embed/unload')
+    expect(init.method).toBe('POST')
+    expect(init.signal).toBeInstanceOf(AbortSignal)
+    expect(result).toBe(true)
+  })
+
+  it('响应体 unloaded 为 false 时（如模型仍在使用中被拒绝）原样返回', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ unloaded: false }),
+    }))
+
+    const provider = new BGEProvider()
+    expect(await provider.unload()).toBe(false)
+  })
+
+  it('响应非 ok 时抛出 [Embedding] HTTP {status} 错误', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503 }))
+
+    const provider = new BGEProvider()
+    await expect(provider.unload()).rejects.toThrow('[Embedding] HTTP 503')
   })
 })

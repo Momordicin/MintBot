@@ -3,6 +3,7 @@ import type { ModelConfig } from '../../shared/types/index.js'
 import { getCurrentState } from './session/index.js'
 import { getEmotionState, getPresetById } from './session/queries.js'
 import { getOllamaBaseUrl, isOllamaRunning } from './providers/ollama.js'
+import { getAiBaseUrl, isEmbeddingReady } from './providers/EmbeddingProvider.js'
 import { computeEmbeddingQueueStatus } from './memory/orchestrator.js'
 
 // GET /state 和 POST /switch-preset 返回同一套结构，抽成共享函数避免两处重复维护
@@ -26,10 +27,15 @@ export async function buildStatePayload(fastify: FastifyInstance) {
     ollamaReady = await isOllamaRunning(baseUrl)
   }
 
+  // 仅供挂载时的初始 /state 拉取使用；渲染层高频刷新走轻量的 GET /embedding-ready
+  // （复用同一个 isEmbeddingReady 健康检查逻辑，不重复实现）
+  const embeddingReady = await isEmbeddingReady(getAiBaseUrl())
+
   return {
     sessionId: state?.session.sessionId ?? null,
     presetSnapshot: snapshot,
     ollamaReady,
+    embeddingReady,
     emotion: state ? getEmotionState(state.session.sessionId) : null,
     embeddingQueue: computeEmbeddingQueueStatus(),
   }

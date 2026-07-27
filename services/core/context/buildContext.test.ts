@@ -15,6 +15,7 @@ function fakeEmbeddingProvider(): EmbeddingProvider {
     async embed() {
       return new Array(1024).fill(0)
     },
+    async unload() { return true },
     async embedBatch(texts: string[]) {
       return texts.map(() => new Array(1024).fill(0))
     },
@@ -267,6 +268,7 @@ describe('buildContext', () => {
         return new Array(1024).fill(0)
       },
       embedBatch: async (texts: string[]) => texts.map(() => new Array(1024).fill(0)),
+      unload: async () => true,
     }
     const controller = new AbortController()
 

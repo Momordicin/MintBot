@@ -9,8 +9,9 @@ import { getAllPresets, backfillMessageFts } from './session/queries.js'
 import { chatRoutes } from './routes/chat.js'
 import { presetRoutes } from './routes/presets.js'
 import { internalRoutes } from './routes/internal.js'
+import { statusRoutes } from './routes/status.js'
 import { createModelProvider, ModelProvider } from './providers/ModelProvider.js'
-import { BGEProvider, type EmbeddingProvider } from './providers/EmbeddingProvider.js'
+import { BGEProvider, getAiBaseUrl, type EmbeddingProvider } from './providers/EmbeddingProvider.js'
 import { Bert4NerProvider, type NERProvider } from './providers/NERProvider.js'
 import type { ModelConfig } from '../../shared/types/index.js'
 import { ensureOllama, stopOllamaIfManaged } from './providers/ollama.js'
@@ -85,8 +86,14 @@ async function start() {
 
   fastify.decorate('config', config)
   fastify.decorate('modelProvider', modelProvider)
-  const aiBaseUrl = `http://localhost:${process.env.AI_PORT ?? '8765'}`
+  const aiBaseUrl = getAiBaseUrl()
   fastify.decorate('embeddingProvider', new BGEProvider(aiBaseUrl))
+  // 非阻塞预热：不 await，不能延迟 fastify.listen()，失败只记录日志（下一次真实 /embed
+  // 调用时 load_model() 会照常懒加载，预热失败不影响功能，只是错过了提前加载的时机）。
+  // bge-m3 冷加载耗时不确定，可能超过 embed() 默认的 5 秒超时，这里显式给这次预热调用
+  // 更宽松的 30 秒上限，避免仅仅因为模型还在加载中就打印误导性的失败日志（FastAPI 端
+  // 同步路由本身仍会继续跑完加载，不受这里超时与否影响）
+  fastify.embeddingProvider.embed('ping', undefined, 30000).catch(err => console.error('[Startup] embedding warm-up failed:', err))
   fastify.decorate('nerProvider', new Bert4NerProvider(aiBaseUrl))
 
   watchConfig()
@@ -128,6 +135,7 @@ async function start() {
   await fastify.register(chatRoutes)
   await fastify.register(presetRoutes)
   await fastify.register(internalRoutes)
+  await fastify.register(statusRoutes)
   await fastify.listen({ port: PORT, host: '127.0.0.1' })
   console.log(`[Core] Running on port ${PORT}`)
 

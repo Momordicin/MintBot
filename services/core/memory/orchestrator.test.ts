@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { db, initDb } from '../db/index.js'
 import { appendMessage, getPendingEmbeddingCount, getCurrentEntities, getPendingSummaryCount } from '../session/queries.js'
 import { runOrganizeModeTick, isInDefaultOrganizeWindow } from './orchestrator.js'
 import { recordSystemEvent } from '../system/lockState.js'
+import { recordActivity } from '../providers/aiActivity.js'
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
 import type { NERProvider } from '../providers/NERProvider.js'
 import type { EntityModelProvider } from './entityExtractor.js'
@@ -29,6 +30,7 @@ function fakeEmbedding(): EmbeddingProvider {
         return v
       })
     },
+    async unload() { return true },
   }
 }
 
@@ -36,6 +38,7 @@ function failingEmbedding(): EmbeddingProvider {
   return {
     async embed() { throw new Error('boom') },
     async embedBatch() { throw new Error('boom') },
+    async unload() { return true },
   }
 }
 
@@ -44,6 +47,7 @@ function emptyNer(): NERProvider {
   return {
     async extract() { return [] },
     async extractBatch(texts: string[]) { return texts.map(() => []) },
+    async unload() { return true },
   }
 }
 
@@ -176,6 +180,7 @@ describe('runOrganizeModeTick', () => {
         sneakedId = addMessage('用户中途插入的新消息', NOW_IN_WINDOW - 1 * MIN)
         return texts.map(() => [])
       },
+      async unload() { return true },
     }
 
     const result = await runOrganizeModeTick(
@@ -330,6 +335,118 @@ describe('runOrganizeModeTick — 摘要阶段', () => {
     expect(result.summariesGenerated).toBe(2)
     expect(getPendingSummaryCount('s1')).toBe(0)
     expect(getPendingSummaryCount('s2')).toBe(0)
+  })
+})
+
+// aiActivity 是进程级单例模块（没有 reset 接口），每个用例开始前自己调用一次 recordActivity()
+// 校准基准，不依赖模块的初始值或其它用例是否碰过它——保证用例之间互不干扰
+describe('runOrganizeModeTick — 空闲释放（embedding + NER unload）', () => {
+  it('距离最近一次 AI 活动已超过 20 分钟时，tick 结束时会调用 embedding.unload() 和 ner.unload()', async () => {
+    recordActivity()
+    const embeddingUnload = vi.fn(async () => true)
+    const nerUnload = vi.fn(async () => true)
+    const embedding: EmbeddingProvider = { ...fakeEmbedding(), unload: embeddingUnload }
+    const ner: NERProvider = { ...emptyNer(), unload: nerUnload }
+
+    await runOrganizeModeTick(
+      { embedding, ner, model: emptyModel() },
+      200,
+      () => Date.now() + 21 * MIN
+    )
+
+    expect(embeddingUnload).toHaveBeenCalledTimes(1)
+    expect(nerUnload).toHaveBeenCalledTimes(1)
+  })
+
+  it('距离最近一次 AI 活动不足 20 分钟时，不调用 unload', async () => {
+    recordActivity()
+    const embeddingUnload = vi.fn(async () => true)
+    const nerUnload = vi.fn(async () => true)
+    const embedding: EmbeddingProvider = { ...fakeEmbedding(), unload: embeddingUnload }
+    const ner: NERProvider = { ...emptyNer(), unload: nerUnload }
+
+    await runOrganizeModeTick(
+      { embedding, ner, model: emptyModel() },
+      200,
+      () => Date.now()
+    )
+
+    expect(embeddingUnload).not.toHaveBeenCalled()
+    expect(nerUnload).not.toHaveBeenCalled()
+  })
+
+  it('embedding.unload() 失败不影响 ner.unload() 被调用，也不让 tick 抛出', async () => {
+    recordActivity()
+    const embeddingUnload = vi.fn(async () => { throw new Error('embed unload boom') })
+    const nerUnload = vi.fn(async () => true)
+    const embedding: EmbeddingProvider = { ...fakeEmbedding(), unload: embeddingUnload }
+    const ner: NERProvider = { ...emptyNer(), unload: nerUnload }
+
+    await expect(runOrganizeModeTick(
+      { embedding, ner, model: emptyModel() },
+      200,
+      () => Date.now() + 21 * MIN
+    )).resolves.toBeDefined()
+
+    expect(embeddingUnload).toHaveBeenCalledTimes(1)
+    expect(nerUnload).toHaveBeenCalledTimes(1)
+  })
+
+  // 用 vi.useFakeTimers 只接管 Date：需要真实控制 recordActivity() 内部 Date.now() 与
+  // getNow() 之间的先后关系（普通的 "Date.now() + 21*MIN" 写法做不到——两次调用在同步测试
+  // 执行期间几乎是同一真实时刻，无法区分"tick 开始前的旧活动"和"批次内产生的新活动"），
+  // 同时也需要 isInDefaultOrganizeWindow 等窗口判断落在确定的、可控的时刻，不受真实系统时钟
+  // 影响
+  it('tick 自己批次内的 embedding/ner 调用产生的活动会重置空闲计时，不会被末尾的空闲检查误判为空闲', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(NOW_IN_WINDOW)
+      addMessage('我喜欢猫', NOW_IN_WINDOW - 130 * MIN)
+      addMessage('我的老板是王总', NOW_IN_WINDOW - 129 * MIN)
+      addMessage('我在阿里巴巴工作', NOW_IN_WINDOW - 128 * MIN)
+
+      // 模拟很久以前（tick 开始前）发生过一次 AI 活动
+      recordActivity()
+      // 推进系统时钟到超过 20 分钟空闲阈值的时间点，再开始这次 tick——如果 tick 自己
+      // 批次内的 embedding/ner 调用不产生新的活动记录，末尾的空闲检查会误判为已空闲
+      vi.setSystemTime(NOW_IN_WINDOW + 21 * MIN)
+
+      const embeddingUnload = vi.fn(async () => true)
+      const nerUnload = vi.fn(async () => true)
+      // 与本文件顶部的 fakeEmbedding()/emptyNer() 不同：这两个假 provider 在 embedBatch/
+      // extractBatch 里自己调用 recordActivity()，模拟真实 BGEProvider/Bert4NerProvider
+      // 的行为（真实 provider 的每个方法开始时都会调用 recordActivity()）
+      const embedding: EmbeddingProvider = {
+        async embed(text) {
+          const [v] = await this.embedBatch([text])
+          return v
+        },
+        async embedBatch(texts) {
+          recordActivity()
+          return texts.map((_, i) => {
+            const v = new Array(1024).fill(0)
+            v[i] = 1
+            return v
+          })
+        },
+        unload: embeddingUnload,
+      }
+      const ner: NERProvider = {
+        async extract() { return [] },
+        async extractBatch(texts) {
+          recordActivity()
+          return texts.map(() => [])
+        },
+        unload: nerUnload,
+      }
+
+      await runOrganizeModeTick({ embedding, ner, model: emptyModel() }, 200)
+
+      expect(embeddingUnload).not.toHaveBeenCalled()
+      expect(nerUnload).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
