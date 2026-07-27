@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  core:
+    # DB init loads a Windows-only libsimple DLL (services/core/db/index.ts, initDb()),
+    # so tests can only run on a Windows runner until another platform's binary is vendored.
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Restore vendored libsimple DLL
+        run: pnpm setup:vendor
+
+      - name: Bootstrap .env.test
+        run: Copy-Item .env.test.example .env.test
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Build core
+        run: pnpm build:core
+
+      - name: Test
+        run: pnpm test

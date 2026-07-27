@@ -6,6 +6,7 @@
     "strict": true,
     "skipLibCheck": true,
     "composite": true,
+    "outDir": "./dist",
     "declarationDir": "./dist"
   },
   "include": ["./**/*"]
