@@ -73,7 +73,7 @@
 ## 开发阶段
 
 - [x] Phase 1：核心对话链路
-- [ ] Phase 2：记忆系统（大部分已实现，剩 2 项已知缺口：config 模块独立抽取、Context token 预算分配）
+- [x] Phase 2：记忆系统
 - [ ] Phase 3：悬浮窗 + 窗口管理
 - [ ] Phase 4：语音
 - [ ] Phase 5：人机交互工具 + MCP
