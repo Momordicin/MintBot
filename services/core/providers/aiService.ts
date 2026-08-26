@@ -51,11 +51,16 @@ export async function ensureAiService(baseUrl: string): Promise<void> {
 
   let stderrOutput = ''
   try {
-    // stderr 走 pipe 而不是 ignore：Python 侧的启动失败模式（依赖缺失、端口占用、
-    // import 报错）比 Ollama 多得多，全部丢弃会导致下面的超时日志除了"超时"什么都看不出
+    // stderr/stdout 都走 pipe 而不是 ignore：
+    // - stderr：Python 侧的启动失败模式（依赖缺失、端口占用、import 报错）比 Ollama 多得多，
+    //   全部丢弃会导致下面的超时日志除了"超时"什么都看不出
+    // - stdout：load_model() 之类的加载进度 print（比如 bge-m3/bert4ner 懒加载触发时）之前
+    //   完全被丢弃，用户看不到任何进度，只能盯着一个不会变化的 embedding_loaded=false。
+    //   转发到 Node 控制台，且不像 stderr 那样只在启动等待窗口内累积——加载可能发生在
+    //   启动之后很久（RAG 召回/整理模式触发的懒加载），要一直转发，不能提前摘掉监听
     aiProcess = spawn(pythonPath, ['-m', 'uvicorn', 'main:app', '--port', port], {
       cwd: path.resolve(process.cwd(), 'services/ai'),
-      stdio: ['ignore', 'ignore', 'pipe'],
+      stdio: ['ignore', 'pipe', 'pipe'],
     })
   } catch (err) {
     // spawn 同步抛出的场景（如 EMFILE），不能让它冒泡到 ensureAiService 的调用方——
@@ -63,6 +68,10 @@ export async function ensureAiService(baseUrl: string): Promise<void> {
     console.error('[AiService] Failed to spawn:', err instanceof Error ? err.message : err)
     return
   }
+
+  aiProcess.stdout?.on('data', chunk => {
+    console.log(`[AiService] ${chunk.toString().trimEnd()}`)
+  })
 
   aiProcess.stderr?.on('data', chunk => {
     stderrOutput += chunk.toString()
