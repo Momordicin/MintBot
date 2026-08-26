@@ -108,6 +108,11 @@ cp config.example.json config.json
 # 初始化数据库（幂等写入测试 preset，首次运行必须执行）
 pnpm seed
 
+# 初始化 Python AI 服务的虚拟环境（services/ai，ASR/TTS/Embedding 等本地模型服务）
+# 假设本机 PATH 上已有 python 命令（Python 3.10+）；首次 clone 后需要跑一次，
+# 之后 requirements.txt 有更新时重新跑一次即可同步依赖
+pnpm setup:ai
+
 # 启动核心服务（Fastify，独立进程）
 # 开发阶段：pnpm --filter services/core dev
 # 生产环境：pm2 start ecosystem.config.cjs
@@ -117,6 +122,8 @@ pnpm start:core
 # 启动桌面应用（Electron + React）
 pnpm dev
 ```
+
+Python AI 服务（services/ai，ASR / TTS / Embedding 等本地模型服务）由核心服务自动启停：`pnpm start:core` / `pnpm dev:core` 启动核心服务时，如果检测到 AI 服务还没在运行会自动拉起对应的 `.venv` 中的进程，退出核心服务时一并停掉本次由它自己启动的实例，不需要再手动跑 `pnpm dev:ai`。`pnpm dev:ai` 仍然保留，供需要热重载调试 Python 代码时手动启动使用——核心服务检测到它已经在跑就不会重复启动，但也不会在退出时帮你停掉这个手动启动的实例（需要自己 Ctrl+C）。这个"检测到已在运行"的判断依赖两边用同一个端口：`pnpm dev:ai` 目前硬编码 `--port 8765`，不读 `.env` 里的 `AI_PORT`，如果你改了 `AI_PORT` 又想用 `dev:ai` 热重载调试，需要手动把端口对齐，否则核心服务会以为没人在跑而额外启动第二个实例。
 
 ---
 

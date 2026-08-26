@@ -15,6 +15,7 @@ import { BGEProvider, getAiBaseUrl, type EmbeddingProvider } from './providers/E
 import { Bert4NerProvider, type NERProvider } from './providers/NERProvider.js'
 import { startConfigWatcher, getModelProviderConfig } from './config/index.js'
 import { ensureOllama, stopOllamaIfManaged } from './providers/ollama.js'
+import { ensureAiService, stopAiServiceIfManaged } from './providers/aiService.js'
 import { startOrganizeModeScheduler } from './memory/orchestrator.js'
 import { buildStatePayload } from './state.js'
 import fastifyStatic from '@fastify/static'
@@ -71,12 +72,14 @@ async function start() {
   process.on('SIGINT', async () => {
     organizeModeTask?.stop()
     await stopOllamaIfManaged()
+    await stopAiServiceIfManaged()
     process.exit(0)
   })
 
   process.on('SIGTERM', async () => {
     organizeModeTask?.stop()
     await stopOllamaIfManaged()
+    await stopAiServiceIfManaged()
     process.exit(0)
   })
 
@@ -84,13 +87,15 @@ async function start() {
   fastify.decorate('streamingEnabled', readStreamingEnabled())
   const aiBaseUrl = getAiBaseUrl()
   fastify.decorate('embeddingProvider', new BGEProvider(aiBaseUrl))
-  // 非阻塞预热：不 await，不能延迟 fastify.listen()，失败只记录日志（下一次真实 /embed
-  // 调用时 load_model() 会照常懒加载，预热失败不影响功能，只是错过了提前加载的时机）。
-  // bge-m3 冷加载耗时不确定，可能超过 embed() 默认的 5 秒超时，这里显式给这次预热调用
-  // 更宽松的 30 秒上限，避免仅仅因为模型还在加载中就打印误导性的失败日志（FastAPI 端
-  // 同步路由本身仍会继续跑完加载，不受这里超时与否影响）
-  fastify.embeddingProvider.embed('ping', undefined, 30000).catch(err => console.error('[Startup] embedding warm-up failed:', err))
   fastify.decorate('nerProvider', new Bert4NerProvider(aiBaseUrl))
+  // 非阻塞：不 await，不能延迟 fastify.listen()。ensureAiService 内部的健康检查轮询可能
+  // 耗时数秒到 30 秒（Python 侧 torch/模型库 import 比 Ollama 更重，且 tsx watch 热重载时
+  // 几乎每次都会触发一次冷启动），等它 resolve 后再发预热请求，保证预热发出时服务大概率
+  // 已经监听；两者失败都只记录日志，不影响功能（下一次真实 /embed 调用时 load_model()
+  // 会照常懒加载，只是错过了提前加载的时机）
+  ensureAiService(aiBaseUrl)
+    .then(() => fastify.embeddingProvider.embed('ping', undefined, 30000))
+    .catch(err => console.error('[Startup] AI service startup / embedding warm-up failed:', err))
 
   startConfigWatcher(() => {
     fastify.modelProvider = createModelProvider(getModelProviderConfig())
