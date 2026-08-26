@@ -100,6 +100,48 @@ export function getRecentMessages(sessionId: string, limit = 50): Message[] {
     }))
 }
 
+// 分页查询：用 id（autoincrement，单调递增，等价于插入顺序/createdAt 顺序）做游标，而非
+// createdAt（时间戳可能重复，不适合做唯一游标）。beforeId 未传时取最新一页；传了时取
+// id < beforeId 的一页。多取 limit + 1 条来判断 hasMore，避免额外一次 COUNT(*) 查询。
+// 供 GET /messages（routes/messages.ts）分页展示历史消息使用，不影响 getRecentMessages
+// （buildContext.ts 消费路径）的行为
+export function getMessagesPage(
+  sessionId: string,
+  limit: number,
+  beforeId?: number
+): { messages: Message[]; hasMore: boolean } {
+  const rows = (beforeId !== undefined
+    ? db.prepare(`
+        SELECT * FROM Messages
+        WHERE sessionId = ? AND visibleToUser = 1 AND id < ?
+        ORDER BY id DESC
+        LIMIT ?
+      `).all(sessionId, beforeId, limit + 1)
+    : db.prepare(`
+        SELECT * FROM Messages
+        WHERE sessionId = ? AND visibleToUser = 1
+        ORDER BY id DESC
+        LIMIT ?
+      `).all(sessionId, limit + 1)
+  ) as any[]
+
+  const hasMore = rows.length > limit
+
+  return {
+    hasMore,
+    messages: rows
+      .slice(0, limit)
+      .reverse()  // 返回正序
+      .map(row => ({
+        ...row,
+        content: decrypt(row.content),
+        embedded: row.embedded === 1,
+        summarized: row.summarized === 1,
+        visibleToUser: row.visibleToUser === 1,
+      })),
+  }
+}
+
 export function appendMessage(msg: Omit<Message, 'id'>): number {
   const result = db.prepare(`
     INSERT INTO Messages

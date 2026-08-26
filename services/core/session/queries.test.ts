@@ -8,6 +8,7 @@ import {
   createSession,
   touchSession,
   getRecentMessages,
+  getMessagesPage,
   appendMessage,
   upsertMessageEmbedding,
   searchSimilarMessages,
@@ -186,6 +187,70 @@ describe('Messages', () => {
     expect(msgs[0].embedded).toBe(true)
     expect(msgs[0].summarized).toBe(false)
     expect(msgs[0].visibleToUser).toBe(true)
+  })
+})
+
+describe('getMessagesPage', () => {
+  it('limit 生效，返回最近 limit 条，正序排列，hasMore 为 true', () => {
+    for (let i = 0; i < 5; i++) {
+      appendMessage({ sessionId: 's1', role: 'user', content: `消息${i}`, createdAt: i * 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    }
+    const { messages, hasMore } = getMessagesPage('s1', 3)
+    expect(messages.map(m => m.content)).toEqual(['消息2', '消息3', '消息4'])
+    expect(hasMore).toBe(true)
+  })
+
+  it('没有更多数据时 hasMore 为 false', () => {
+    for (let i = 0; i < 3; i++) {
+      appendMessage({ sessionId: 's1', role: 'user', content: `消息${i}`, createdAt: i * 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    }
+    const { messages, hasMore } = getMessagesPage('s1', 3)
+    expect(messages).toHaveLength(3)
+    expect(hasMore).toBe(false)
+  })
+
+  it('beforeId 正确排除新消息，只取更旧的一页', () => {
+    const ids: number[] = []
+    for (let i = 0; i < 5; i++) {
+      ids.push(appendMessage({ sessionId: 's1', role: 'user', content: `消息${i}`, createdAt: i * 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null }))
+    }
+    const { messages, hasMore } = getMessagesPage('s1', 3, ids[3])
+    expect(messages.map(m => m.content)).toEqual(['消息0', '消息1', '消息2'])
+    expect(hasMore).toBe(false)
+  })
+
+  it('连续翻页不重复不遗漏：7 条消息 limit=3 翻 3 页', () => {
+    for (let i = 0; i < 7; i++) {
+      appendMessage({ sessionId: 's1', role: 'user', content: `消息${i}`, createdAt: i * 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    }
+
+    const page1 = getMessagesPage('s1', 3)
+    expect(page1.messages.map(m => m.content)).toEqual(['消息4', '消息5', '消息6'])
+    expect(page1.hasMore).toBe(true)
+
+    const page2 = getMessagesPage('s1', 3, page1.messages[0].id)
+    expect(page2.messages.map(m => m.content)).toEqual(['消息1', '消息2', '消息3'])
+    expect(page2.hasMore).toBe(true)
+
+    const page3 = getMessagesPage('s1', 3, page2.messages[0].id)
+    expect(page3.messages.map(m => m.content)).toEqual(['消息0'])
+    expect(page3.hasMore).toBe(false)
+  })
+
+  it('过滤 visibleToUser = false 的消息', () => {
+    appendMessage({ sessionId: 's1', role: 'user', content: '可见', createdAt: 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's1', role: 'user', content: '不可见', createdAt: 2000, embedded: false, summarized: false, visibleToUser: false, trigger: 'scheduler', triggerEventId: null })
+    const { messages } = getMessagesPage('s1', 10)
+    expect(messages).toHaveLength(1)
+    expect(messages[0].content).toBe('可见')
+  })
+
+  it('多 session 隔离，不跨 session 泄漏', () => {
+    appendMessage({ sessionId: 's1', role: 'user', content: 's1消息', createdAt: 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's2', role: 'user', content: 's2消息', createdAt: 2000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    const { messages } = getMessagesPage('s1', 10)
+    expect(messages).toHaveLength(1)
+    expect(messages[0].content).toBe('s1消息')
   })
 })
 
