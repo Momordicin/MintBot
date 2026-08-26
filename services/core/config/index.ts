@@ -61,6 +61,7 @@ const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
 
 let currentMemoryConfig: MemoryConfig = DEFAULT_MEMORY_CONFIG
 let currentModelProviderConfig: ModelConfig | undefined
+let currentBackgroundModelProviderConfig: ModelConfig | undefined
 let loaded = false
 
 // 单个数字字段的按字段合并：存在且类型正确则使用，否则告警 + 回退到该字段自己的默认值
@@ -113,6 +114,7 @@ function load(): boolean {
       console.warn('[Config] config.json 不存在或解析失败，全部字段使用默认值:', err)
       currentMemoryConfig = mergeMemoryConfig(undefined)
       currentModelProviderConfig = undefined
+      currentBackgroundModelProviderConfig = undefined
       loaded = true
     } else {
       console.warn('[Config] config.json 重新加载失败，保留上一次的有效配置:', err)
@@ -129,6 +131,15 @@ function load(): boolean {
     currentModelProviderConfig = undefined
     console.warn('[Config] modelProvider 缺失或类型错误')
   }
+
+  // backgroundModelProvider 是可选字段（整理模式独立模型配置）：缺失是正常情况，不 warn，
+  // getBackgroundModelProviderConfig() 会 fallback 到 modelProvider
+  const backgroundModelProviderRaw = (raw as Record<string, unknown>)?.backgroundModelProvider
+  currentBackgroundModelProviderConfig =
+    backgroundModelProviderRaw && typeof backgroundModelProviderRaw === 'object'
+      ? (backgroundModelProviderRaw as ModelConfig)
+      : undefined
+
   loaded = true
   return true
 }
@@ -157,4 +168,11 @@ export function getModelProviderConfig(): ModelConfig {
   ensureLoaded()
   if (!currentModelProviderConfig) throw new Error('[Config] modelProvider is not configured')
   return currentModelProviderConfig
+}
+
+// 整理模式（摘要生成、实体抽取）的可选独立模型配置：未配置 backgroundModelProvider 时
+// fallback 到 modelProvider，保证没有设置这个可选字段的用户行为与迁移前完全一致
+export function getBackgroundModelProviderConfig(): ModelConfig {
+  ensureLoaded()
+  return currentBackgroundModelProviderConfig ?? getModelProviderConfig()
 }

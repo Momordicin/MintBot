@@ -31,6 +31,8 @@ import {
   getPendingSummaryCount,
   getSummaries,
   insertSummary,
+  getMessageCreatedAtByIds,
+  getSupersededMessageIds,
 } from './queries.js'
 
 initDb()
@@ -394,6 +396,62 @@ describe('Entities', () => {
 
     expect(getEntitiesAsOf('s1', 3000)).toHaveLength(1)
     expect(getEntitiesAsOf('s1', 6000)).toHaveLength(0)
+  })
+})
+
+// ─── getMessageCreatedAtByIds（RAG 召回新鲜度加成排序用）─────
+describe('getMessageCreatedAtByIds', () => {
+  it('按 id 批量返回 createdAt', () => {
+    const id1 = appendMessage({ sessionId: 's1', role: 'user', content: 'a', createdAt: 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    const id2 = appendMessage({ sessionId: 's1', role: 'user', content: 'b', createdAt: 2000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+
+    const result = getMessageCreatedAtByIds([id1, id2])
+
+    expect(result.get(id1)).toBe(1000)
+    expect(result.get(id2)).toBe(2000)
+  })
+
+  it('传入不存在的 id 时该 id 不出现在返回的 Map 中', () => {
+    const id1 = appendMessage({ sessionId: 's1', role: 'user', content: 'a', createdAt: 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+
+    const result = getMessageCreatedAtByIds([id1, 99999])
+
+    expect(result.get(id1)).toBe(1000)
+    expect(result.has(99999)).toBe(false)
+    expect(result.size).toBe(1)
+  })
+
+  it('空数组输入返回空 Map', () => {
+    expect(getMessageCreatedAtByIds([])).toEqual(new Map())
+  })
+})
+
+// ─── getSupersededMessageIds（RAG 召回"可能已过时"标注用）────
+describe('getSupersededMessageIds', () => {
+  it('消息关联的实体已被 closeEntity 关闭时，该消息 id 出现在返回的 Set 中', () => {
+    const entityId = insertEntity({ messageId: 1, sessionId: 's1', type: 'preference', value: '喜欢猫', validFrom: 1000 })
+    closeEntity(entityId, 5000)
+
+    const result = getSupersededMessageIds([1])
+
+    expect(result.has(1)).toBe(true)
+  })
+
+  it('实体未关闭（validUntil IS NULL）的消息不会被误判为过时', () => {
+    insertEntity({ messageId: 1, sessionId: 's1', type: 'preference', value: '喜欢猫', validFrom: 1000 })
+
+    const result = getSupersededMessageIds([1])
+
+    expect(result.has(1)).toBe(false)
+  })
+
+  it('传入不存在关联实体的 id 不会出现在返回的 Set 中', () => {
+    const result = getSupersededMessageIds([12345])
+    expect(result.has(12345)).toBe(false)
+  })
+
+  it('空数组输入返回空 Set', () => {
+    expect(getSupersededMessageIds([])).toEqual(new Set())
   })
 })
 

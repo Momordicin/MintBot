@@ -222,3 +222,81 @@ describe('config/index — getModelProviderConfig', () => {
     expect(() => getModelProviderConfig()).toThrow()
   })
 })
+
+describe('config/index — getBackgroundModelProviderConfig', () => {
+  it('配置了 backgroundModelProvider 时返回它自己', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      modelProvider: { type: 'ollama', ollamaBaseUrl: 'http://localhost:11434' },
+      backgroundModelProvider: { type: 'anthropic', anthropicApiKey: 'sk-bg', modelName: 'claude-strong' },
+    }))
+    const { startConfigWatcher, getBackgroundModelProviderConfig } = await import('./index.js')
+
+    startConfigWatcher()
+
+    expect(getBackgroundModelProviderConfig()).toEqual({
+      type: 'anthropic',
+      anthropicApiKey: 'sk-bg',
+      modelName: 'claude-strong',
+    })
+  })
+
+  it('未配置 backgroundModelProvider 时 fallback 到 getModelProviderConfig()，且不 warn', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      modelProvider: { type: 'ollama', ollamaBaseUrl: 'http://localhost:11434' },
+    }))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { startConfigWatcher, getBackgroundModelProviderConfig, getModelProviderConfig } = await import('./index.js')
+
+    startConfigWatcher()
+
+    expect(getBackgroundModelProviderConfig()).toEqual(getModelProviderConfig())
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('backgroundModelProvider'))
+  })
+
+  it('backgroundModelProvider 类型错误（非对象）时同样 fallback，不报错、不 warn', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      modelProvider: { type: 'ollama', ollamaBaseUrl: 'http://localhost:11434' },
+      backgroundModelProvider: 'not-an-object',
+    }))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { startConfigWatcher, getBackgroundModelProviderConfig, getModelProviderConfig } = await import('./index.js')
+
+    startConfigWatcher()
+
+    expect(() => getBackgroundModelProviderConfig()).not.toThrow()
+    expect(getBackgroundModelProviderConfig()).toEqual(getModelProviderConfig())
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('backgroundModelProvider'))
+  })
+
+  it('modelProvider 和 backgroundModelProvider 都缺失时，fallback 链路仍然抛出和 getModelProviderConfig 一样的错误', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({ memory: {} }))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { startConfigWatcher, getBackgroundModelProviderConfig } = await import('./index.js')
+
+    startConfigWatcher()
+
+    expect(() => getBackgroundModelProviderConfig()).toThrow()
+  })
+
+  it('热更新场景：先配置了 backgroundModelProvider，后续 config.json 里删掉该字段，重新加载后正确回退到主模型配置，不保留旧实例的值', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      modelProvider: { type: 'ollama', ollamaBaseUrl: 'http://localhost:11434' },
+      backgroundModelProvider: { type: 'anthropic', anthropicApiKey: 'sk-bg', modelName: 'claude-strong' },
+    }))
+    const onMock = vi.fn()
+    watchMock.mockReturnValue({ on: onMock })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { startConfigWatcher, getBackgroundModelProviderConfig, getModelProviderConfig } = await import('./index.js')
+
+    startConfigWatcher()
+    expect(getBackgroundModelProviderConfig()).toEqual({ type: 'anthropic', anthropicApiKey: 'sk-bg', modelName: 'claude-strong' })
+
+    const changeCallback = onMock.mock.calls.find(call => call[0] === 'change')?.[1]
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      modelProvider: { type: 'ollama', ollamaBaseUrl: 'http://localhost:11434' },
+    }))
+    changeCallback()
+
+    expect(getBackgroundModelProviderConfig()).toEqual(getModelProviderConfig())
+  })
+})

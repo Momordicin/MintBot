@@ -13,7 +13,7 @@ import { messageRoutes } from './routes/messages.js'
 import { createModelProvider, ModelProvider } from './providers/ModelProvider.js'
 import { BGEProvider, getAiBaseUrl, type EmbeddingProvider } from './providers/EmbeddingProvider.js'
 import { Bert4NerProvider, type NERProvider } from './providers/NERProvider.js'
-import { startConfigWatcher, getModelProviderConfig } from './config/index.js'
+import { startConfigWatcher, getModelProviderConfig, getBackgroundModelProviderConfig } from './config/index.js'
 import { ensureOllama, stopOllamaIfManaged } from './providers/ollama.js'
 import { ensureAiService, stopAiServiceIfManaged } from './providers/aiService.js'
 import { startOrganizeModeScheduler } from './memory/orchestrator.js'
@@ -30,6 +30,7 @@ const CONFIG_PATH = path.resolve(process.cwd(), 'config.json')
 declare module 'fastify' {
   interface FastifyInstance {
     modelProvider: ModelProvider
+    backgroundModelProvider: ModelProvider
     embeddingProvider: EmbeddingProvider
     nerProvider: NERProvider
     streamingEnabled: boolean
@@ -84,6 +85,7 @@ async function start() {
   })
 
   fastify.decorate('modelProvider', createModelProvider(getModelProviderConfig()))
+  fastify.decorate('backgroundModelProvider', createModelProvider(getBackgroundModelProviderConfig()))
   fastify.decorate('streamingEnabled', readStreamingEnabled())
   const aiBaseUrl = getAiBaseUrl()
   fastify.decorate('embeddingProvider', new BGEProvider(aiBaseUrl))
@@ -99,6 +101,7 @@ async function start() {
 
   startConfigWatcher(() => {
     fastify.modelProvider = createModelProvider(getModelProviderConfig())
+    fastify.backgroundModelProvider = createModelProvider(getBackgroundModelProviderConfig())
     fastify.streamingEnabled = readStreamingEnabled()
     console.log('[Config] modelProvider reloaded')
   })

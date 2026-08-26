@@ -4,8 +4,8 @@ import { getMemoryConfig } from '../config/index.js'
 
 // 摘要触发规则 + 生成（TDD §3.8 摘要触发逻辑）。
 // shouldTriggerSummary 只负责布尔逻辑本身：lockScreenMinutes / isLowActivityWindow 目前没有
-// 真实数据源（Win32 锁屏监听是 Phase 3、时间窗口调度依赖 node-cron，package.json 尚未安装该依赖），
-// 本模块不引入 node-cron、不做任何调度 / 定时器，调用方（未来的调度器）负责采集并喂入这些参数——
+// 真实数据源（Win32 锁屏监听是 Phase 3 才会实现），本模块不做任何调度 / 定时器，
+// 调用方（memory/orchestrator.ts 的 node-cron 调度器）负责采集并喂入这些参数——
 // 这是有意缩小的范围，不是遗漏。
 //
 // generateSummary 只负责"取一个 session 的待摘要消息 → 生成摘要文本 → 落库 + 标记"，

@@ -1,7 +1,7 @@
 import type { BuiltContext, ChatMessage, MessageEntity } from '../../../shared/types/index.js'
 import { requireCurrentState, getHistory } from '../session/index.js'
 import { shouldTriggerRetrieval, retrieveMemories } from '../memory/retrieval.js'
-import { getEmotionState, getSummaries, getCurrentEntities } from '../session/queries.js'
+import { getEmotionState, getSummaries, getCurrentEntities, getSupersededMessageIds } from '../session/queries.js'
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
 import { getMemoryConfig } from '../config/index.js'
 
@@ -110,7 +110,16 @@ export async function buildContext(
       'lowest-ranked'
     )
     if (memories.length > 0) {
-      const snippets = memories.map(m => `- ${m.content}`).join('\n')
+      // 标注"可能已过时"：消息关联的实体若已被 closeEntity 关闭，说明消息里提到的信息后来被
+      // 更新过。不剔除消息本身（可能还包含其它仍然有效的内容），只在拼进 prompt 时加提示前缀，
+      // 让模型自己判断权重。查询失败时降级为"视为没有过时的"，不影响本轮召回结果正常注入
+      let supersededIds = new Set<number>()
+      try {
+        supersededIds = getSupersededMessageIds(memories.map(m => m.id))
+      } catch (err) {
+        console.error('[BuildContext] fetching superseded message ids failed, skipping annotation:', err)
+      }
+      const snippets = memories.map(m => `- ${supersededIds.has(m.id) ? '（可能已过时）' : ''}${m.content}`).join('\n')
       system = `${system}\n\n以下是相关的历史对话片段：\n${snippets}`
     }
   }

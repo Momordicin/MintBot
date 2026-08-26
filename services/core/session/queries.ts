@@ -241,6 +241,15 @@ export function getOldestUnsummarizedMessageTime(): number | null {
   return row.minCreatedAt ?? null
 }
 
+// 按 id 批量取消息的 createdAt（不解密，只取时间戳），供 RAG 召回（retrieval.ts）在最终 top-k
+// 确定之前对候选分数做新鲜度加成排序使用——避免对全部候选做一次完整解密（getMessagesByIds）
+export function getMessageCreatedAtByIds(ids: number[]): Map<number, number> {
+  if (ids.length === 0) return new Map()
+  const placeholders = ids.map(() => '?').join(',')
+  const rows = db.prepare(`SELECT id, createdAt FROM Messages WHERE id IN (${placeholders})`).all(...ids) as { id: number; createdAt: number }[]
+  return new Map(rows.map(row => [row.id, row.createdAt]))
+}
+
 // 按 id 批量取消息（已解密），供 RAG 召回（retrieval.ts）按融合排序回查原文使用
 export function getMessagesByIds(ids: number[]): Message[] {
   if (ids.length === 0) return []
@@ -347,6 +356,19 @@ export function getEntitiesAsOf(sessionId: string, timestamp: number, type?: Mes
 // 双时态关闭：不硬删除历史，只标记失效时间
 export function closeEntity(id: number, validUntil: number = Date.now()): void {
   db.prepare(`UPDATE MessageEntities SET validUntil = ? WHERE id = ?`).run(validUntil, id)
+}
+
+// 判断哪些消息关联的实体已被后续对话更新过（entityExtractor.ts Layer 3 检测到实体值变更时
+// 调用 closeEntity 关闭旧实体行）：只要某条消息在 MessageEntities 里存在至少一条已关闭
+// （validUntil IS NOT NULL）的记录，就认为该消息内容可能已过时，供 RAG 召回片段标注使用
+// （buildContext.ts）。不影响 getCurrentEntities 等其它查询，仅是一次独立的只读判断
+export function getSupersededMessageIds(ids: number[]): Set<number> {
+  if (ids.length === 0) return new Set()
+  const placeholders = ids.map(() => '?').join(',')
+  const rows = db.prepare(`
+    SELECT DISTINCT messageId FROM MessageEntities WHERE messageId IN (${placeholders}) AND validUntil IS NOT NULL
+  `).all(...ids) as { messageId: number }[]
+  return new Set(rows.map(row => row.messageId))
 }
 
 // ─── FTS (message_fts，与 encryptSensitiveFields 共用同一开关) ───

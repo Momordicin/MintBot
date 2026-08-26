@@ -3,6 +3,7 @@ import { MessageList } from './MessageList'
 import { InputBar } from './InputBar'
 import { MessageData } from './MessageBubble'
 import { parseSSE } from './sse'
+import type { AppState, PresetSnapshot } from '../../shared/types/index.js'
 import './chat.css'
 
 const CORE_URL = 'http://127.0.0.1:3000'
@@ -11,25 +12,6 @@ const DEFAULT_WALLPAPER_URL = `${CORE_URL}/wallpapers/bg.jpg`
 // 不是 TDD 强制的具体规定
 const INITIAL_HISTORY_LIMIT = 3
 const LOAD_MORE_HISTORY_LIMIT = 20
-
-interface PresetSnapshot {
-  presetId: string
-  name: string
-  characterId: string
-  modelType: string
-  modelName: string
-  wallpaperPath?: string
-  systemPrompt: string
-}
-
-interface AppState {
-  sessionId: string | null
-  presetSnapshot: PresetSnapshot | null
-  ollamaReady: boolean | null
-  embeddingReady: boolean
-  emotion: null
-  embeddingQueue: null
-}
 
 interface PresetOption {
   presetId: string

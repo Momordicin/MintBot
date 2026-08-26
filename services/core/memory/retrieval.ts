@@ -3,6 +3,7 @@ import {
   searchMessagesFts,
   getCurrentEntities,
   getMessagesByIds,
+  getMessageCreatedAtByIds,
 } from '../session/queries.js'
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
 import type { Message } from '../../../shared/types/index.js'
@@ -17,6 +18,21 @@ import type { Message } from '../../../shared/types/index.js'
 
 // RRF（Reciprocal Rank Fusion）标准平滑常数，避免排名靠前的结果分数过度陡峭
 const RRF_K = 60
+
+// 新鲜度加成（缩小与 Zep/Graphiti 等主流记忆系统在"时间感知"上的差距）：只对最近
+// RECENCY_BOOST_WINDOW_DAYS 天内的内容给一个随时间线性衰减到 0 的加成，超出窗口后加成为 0，
+// 绝不倒扣分——旧记忆依然按原有 RRF 相关性正常召回，只是不再享有"新鲜"这层额外优势。
+// 刻意不用指数/双曲衰减惩罚旧内容：那样会把几个月/几年前的正常记忆分数压到接近 0，
+// 与"角色应该记得很久以前的事"的产品定位冲突。这两个常数是本次实现沿用的默认假设，
+// 不是 TDD 强制规定的值。
+const RECENCY_BOOST_WINDOW_DAYS = 14
+const RECENCY_BOOST_MAX = 0.5
+
+function computeRecencyBoost(createdAt: number): number {
+  const ageDays = (Date.now() - createdAt) / (1000 * 60 * 60 * 24)
+  if (ageDays >= RECENCY_BOOST_WINDOW_DAYS || ageDays < 0) return 0
+  return RECENCY_BOOST_MAX * (1 - ageDays / RECENCY_BOOST_WINDOW_DAYS)
+}
 
 // 触发召回的启发式规则（没有唯一正确答案，做一个说得通的最小实现）：
 // - 消息长度 > 50：长输入通常携带更多上下文，值得回忆历史
@@ -76,7 +92,22 @@ export async function retrieveMemories(
     console.error('[Retrieval] entity match failed, skipping:', err)
   }
 
+  // 新鲜度加成：查候选消息的 createdAt，对最近 RECENCY_BOOST_WINDOW_DAYS 天内的候选做有上限的
+  // 加成后再排序。查询失败（数据库错误）时降级为跳过加成、维持原始 RRF 分数，不让整个召回失败——
+  // 与上面三路一致的容错风格
+  let createdAtById = new Map<number, number>()
+  try {
+    createdAtById = getMessageCreatedAtByIds([...scores.keys()])
+  } catch (err) {
+    console.error('[Retrieval] fetching createdAt for recency boost failed, skipping boost:', err)
+  }
+
   const rankedIds = [...scores.entries()]
+    .map(([messageId, score]): [number, number] => {
+      const createdAt = createdAtById.get(messageId)
+      const boostedScore = createdAt === undefined ? score : score * (1 + computeRecencyBoost(createdAt))
+      return [messageId, boostedScore]
+    })
     .sort((a, b) => b[1] - a[1])
     .slice(0, k)
     .map(([messageId]) => messageId)
