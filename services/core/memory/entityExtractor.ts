@@ -13,6 +13,14 @@ import type { Message, MessageEntity, BuiltContext, CompletionOptions } from '..
 // 三层各自独立失败：规则层本地同步执行，无外部依赖，不设失败兜底；NER 层和主模型层
 // 分别包一层 try/catch，任一层抛出 / 超时 / 返回畸形数据时记录日志并跳过该层，
 // 不影响其余层已收集的结果写入。
+//
+// Layer 3 明确只做"实体变更检测"这一件事，不再抽取技术词汇（编程语言/框架/工具）——
+// 这是经过讨论确认的产品决定，不是遗漏：技术词一旦抽取成 type:'other' 实体就永远不会
+// 被 closeEntity() 关闭失效，会无限期累积，还会混进 buildContext.ts 的"已知的用户信息"
+// 人格化注入里，把"用户提到过某个技术词"当成类似"用户喜欢猫"这样的个人事实注入，
+// 可能让角色表现出不必要的技术偏好，对陪伴对话的目的不利。不迁移到别的表维护——
+// message_fts 已经对每条消息全文做关键词索引，之后如果用户问起某个技术词，FTS 召回
+// 路径本来就能命中当年提到过这个词的原话，不需要额外维护一份技术词表。
 
 // NER 结果 label → MessageEntity.type 映射（本模块负责，NerEntity.label 原始语义见
 // shared/types/index.ts 的注释）：
@@ -56,11 +64,6 @@ interface EntityCandidate {
   type: MessageEntity['type']
   value: string
   validFrom: number
-}
-
-interface Layer3TechTerm {
-  messageId: number
-  value: string
 }
 
 interface Layer3Change {
@@ -140,9 +143,43 @@ function extractRuleEntities(msg: Message): EntityCandidate[] {
 
 // ─── Layer 3: 主模型批量异步 ─────────────────────────────────
 
+// Layer 3 判断"实体变更"时，不把全量当前有效实体塞进 prompt（长期使用下会无限增长），
+// 按 type 分组各自只保留最近 N 条。
+//
+// 不能按"这批新消息原文是否提到了候选实体的值"做子串匹配预筛——那样筛的是错误方向：
+// 实体变更场景下用户说的是新事实本身（"我现在在新公司上班了"），新消息里天然不会出现
+// 旧实体的值（"旧公司"），子串匹配会把恰恰需要拿来对比的旧值过滤掉，导致 Layer 3
+// 最核心的"检测变更"能力几乎失效。因此只按 type + 最近 N 条兜底，不做额外的相关性过滤——
+// 唯一的已知残留风险是：如果某个 type 在这次待更新的旧实体之后又新增了超过 N 条同 type
+// 记录，旧实体会被挤出候选列表而漏检。这是一个可接受的、范围更小的边界情况（需要同一
+// type 短期内堆积很多条记录），不是"几乎总是漏检"这种量级的问题
+//
+// 显式按 validFrom 降序排序后再分组截断，不依赖"调用方传入的数组已经整体按时间排好"这个
+// 假设——orchestrator.ts 的 getPendingEmbeddingMessages 是不分 session 的全局查询，一次
+// extractEntities 调用经常会处理横跨多个角色/session 的消息批次，而 loadCurrentEntityMaps
+// 是逐个 session 各自查一遍 getCurrentEntities 再拼接进同一个数组的——数组只在"每个 session
+// 自己的那一段"内部有序，整体不是全局按时间排序。如果不重新排序就直接按 type 分组 slice，
+// 排在数组前面的 session（不一定更新）会挤掉后面 session 里真正更新的同类型实体
+const LAYER3_MAX_CANDIDATES_PER_TYPE = 20
+
+function selectLayer3Candidates(currentEntities: MessageEntity[]): MessageEntity[] {
+  const byType = new Map<MessageEntity['type'], MessageEntity[]>()
+  for (const e of currentEntities) {
+    const list = byType.get(e.type) ?? []
+    list.push(e)
+    byType.set(e.type, list)
+  }
+
+  const capped: MessageEntity[] = []
+  for (const list of byType.values()) {
+    list.sort((a, b) => b.validFrom - a.validFrom)
+    capped.push(...list.slice(0, LAYER3_MAX_CANDIDATES_PER_TYPE))
+  }
+  return capped
+}
+
 // 输出 JSON 结构：
 // {
-//   "techTerms": [{ "messageId": number, "value": string }],
 //   "changes": [{ "messageId": number, "type": "person"|"event"|"preference"|"place"|"other",
 //                  "oldValue": string, "newValue": string }]
 // }
@@ -154,31 +191,20 @@ function buildLayer3Context(userMessages: Message[], currentEntities: MessageEnt
   const messagesText = userMessages.map(m => `[messageId=${m.id}] ${m.content}`).join('\n')
 
   const system = [
-    '你是一个信息抽取助手，负责从用户消息中完成两项任务：',
-    '1. 提取消息中出现的技术相关词汇（编程语言、框架、工具、专业术语等）。',
-    '2. 判断消息中是否包含"实体变更"：用户提到的新事实是否取代了下方列出的某条已知当前有效实体',
+    '你是一个信息抽取助手，负责从用户消息中判断是否包含"实体变更"：用户提到的新事实是否取代了下方列出的某条已知当前有效实体',
     '（例如换工作、搬家、关系变化）。只有确信是同一实体的更新时才报告为变更，不确定时不要报告。',
     '',
     '已知当前有效实体：',
     currentEntitiesText,
     '',
     '严格只输出如下 JSON，不要包含任何其它文字或 markdown 代码块标记：',
-    '{"techTerms":[{"messageId":number,"value":string}],"changes":[{"messageId":number,"type":"person"|"event"|"preference"|"place"|"other","oldValue":string,"newValue":string}]}',
+    '{"changes":[{"messageId":number,"type":"person"|"event"|"preference"|"place"|"other","oldValue":string,"newValue":string}]}',
   ].join('\n')
 
   return {
     system,
     messages: [{ role: 'user', content: messagesText }],
   }
-}
-
-function isValidTechTerm(t: unknown): t is Layer3TechTerm {
-  return (
-    typeof t === 'object' && t !== null &&
-    typeof (t as any).messageId === 'number' &&
-    typeof (t as any).value === 'string' &&
-    normalize((t as any).value).length > 0
-  )
 }
 
 function isValidChange(c: unknown): c is Layer3Change {
@@ -195,7 +221,7 @@ function isValidChange(c: unknown): c is Layer3Change {
 
 // 防御性解析：模型可能返回带 markdown 代码块包裹的 JSON，也可能返回完全畸形的内容。
 // 任何解析失败都会向上抛出，由调用方捕获后跳过整个 Layer 3。
-function parseLayer3Response(raw: string): { techTerms: Layer3TechTerm[]; changes: Layer3Change[] } {
+function parseLayer3Response(raw: string): { changes: Layer3Change[] } {
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
@@ -209,13 +235,10 @@ function parseLayer3Response(raw: string): { techTerms: Layer3TechTerm[]; change
     throw new Error('[EntityExtractor] layer3 response is not a JSON object')
   }
 
-  const rawTechTerms = (parsed as any).techTerms
   const rawChanges = (parsed as any).changes
-
-  const techTerms = Array.isArray(rawTechTerms) ? rawTechTerms.filter(isValidTechTerm) : []
   const changes = Array.isArray(rawChanges) ? rawChanges.filter(isValidChange) : []
 
-  return { techTerms, changes }
+  return { changes }
 }
 
 // ─── 落库：去重 + 双时态 ─────────────────────────────────────
@@ -292,19 +315,12 @@ export async function extractEntities(
     console.error('[EntityExtractor] NER layer failed, skipping:', err)
   }
 
-  // Layer 3: 主模型批量异步（技术词 + 实体变更）
+  // Layer 3: 主模型批量异步（实体变更判断）
   let changes: Layer3Change[] = []
   try {
-    const context = buildLayer3Context(userMessages, currentEntitiesForPrompt)
+    const context = buildLayer3Context(userMessages, selectLayer3Candidates(currentEntitiesForPrompt))
     const raw = await deps.model.completeSync(context, { maxTokens: 1000 })
     const parsed = parseLayer3Response(raw)
-
-    const msgById = new Map(userMessages.map(m => [m.id, m]))
-    for (const term of parsed.techTerms) {
-      const msg = msgById.get(term.messageId)
-      if (!msg) continue
-      additiveCandidates.push({ messageId: msg.id, sessionId: msg.sessionId, type: 'other', value: normalize(term.value), validFrom: msg.createdAt })
-    }
     changes = parsed.changes
   } catch (err) {
     console.error('[EntityExtractor] main-model layer failed, skipping:', err)

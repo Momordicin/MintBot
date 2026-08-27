@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { initDb } from '../db/index.js'
 import { db } from '../db/index.js'
 import { upsertPreset, appendMessage, insertEntity, closeEntity, upsertEmotionState, insertSummary } from '../session/queries.js'
+import * as queries from '../session/queries.js'
 import { loadSession, getCurrentState } from '../session/index.js'
 import { buildContext } from './buildContext.js'
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
@@ -422,5 +423,61 @@ describe('buildContext — token（字符数近似）预算裁剪', () => {
     const ctx = await buildContext('你还记得日本的事吗', { embedding: fakeEmbeddingProvider() })
 
     expect(ctx.system).toContain('我们聊过日本旅行的事')
+  })
+})
+
+describe('buildContext — RAG 片段"可能已过时"标注', () => {
+  it('召回消息关联的实体已被 closeEntity 关闭时，片段带有"（可能已过时）"前缀', async () => {
+    const sessionId = getCurrentState()!.session.sessionId
+    const msgId = appendMessage({
+      sessionId, role: 'user', content: '我们聊过日本旅行的事', createdAt: Date.now() - 60 * 60 * 1000,
+      embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null,
+    })
+    // 保留一条未关闭的实体保证消息仍能被实体路命中召回（不然消息完全召回不到，无从验证标注），
+    // 另插入并关闭一条同一消息关联的实体，模拟"消息里提到的某个信息后来被更新过"
+    insertEntity({ messageId: msgId, sessionId, type: 'place', value: '日本', validFrom: Date.now() })
+    const closedEntityId = insertEntity({ messageId: msgId, sessionId, type: 'other', value: '旧信息', validFrom: Date.now() - 1000 })
+    closeEntity(closedEntityId)
+
+    const ctx = await buildContext('你还记得日本的事吗', { embedding: fakeEmbeddingProvider() })
+
+    expect(ctx.system).toContain('（可能已过时）我们聊过日本旅行的事')
+  })
+
+  it('召回消息关联的实体未被关闭时，片段不带"（可能已过时）"前缀', async () => {
+    const sessionId = getCurrentState()!.session.sessionId
+    const msgId = appendMessage({
+      sessionId, role: 'user', content: '我们聊过日本旅行的事', createdAt: Date.now() - 60 * 60 * 1000,
+      embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null,
+    })
+    insertEntity({ messageId: msgId, sessionId, type: 'place', value: '日本', validFrom: Date.now() })
+
+    const ctx = await buildContext('你还记得日本的事吗', { embedding: fakeEmbeddingProvider() })
+
+    expect(ctx.system).toContain('- 我们聊过日本旅行的事')
+    expect(ctx.system).not.toContain('可能已过时')
+  })
+
+  it('getSupersededMessageIds 查询失败时降级为不标注，不影响 RAG 片段正常注入', async () => {
+    const sessionId = getCurrentState()!.session.sessionId
+    const msgId = appendMessage({
+      sessionId, role: 'user', content: '我们聊过日本旅行的事', createdAt: Date.now() - 60 * 60 * 1000,
+      embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null,
+    })
+    insertEntity({ messageId: msgId, sessionId, type: 'place', value: '日本', validFrom: Date.now() })
+    const closedEntityId = insertEntity({ messageId: msgId, sessionId, type: 'other', value: '旧信息', validFrom: Date.now() - 1000 })
+    closeEntity(closedEntityId)
+
+    const spy = vi.spyOn(queries, 'getSupersededMessageIds').mockImplementation(() => {
+      throw new Error('db boom')
+    })
+
+    try {
+      const ctx = await buildContext('你还记得日本的事吗', { embedding: fakeEmbeddingProvider() })
+      expect(ctx.system).toContain('- 我们聊过日本旅行的事')
+      expect(ctx.system).not.toContain('可能已过时')
+    } finally {
+      spy.mockRestore()
+    }
   })
 })

@@ -134,6 +134,7 @@ export interface AppState {
   emotion: EmotionState | null        // Phase 2 预留，从最近 Message 解析
   embeddingQueue: EmbeddingQueueStatus | null  // Phase 2 预留
   embeddingReady: boolean
+  ollamaReady: boolean | null   // 仅当前 preset 用 ollama 时为 boolean，否则为 null（见 state.ts buildStatePayload）
 }
 
 export type SSEEventType =

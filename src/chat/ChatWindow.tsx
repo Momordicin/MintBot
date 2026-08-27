@@ -3,33 +3,38 @@ import { MessageList } from './MessageList'
 import { InputBar } from './InputBar'
 import { MessageData } from './MessageBubble'
 import { parseSSE } from './sse'
+import type { AppState, PresetSnapshot } from '../../shared/types/index.js'
 import './chat.css'
 
 const CORE_URL = 'http://127.0.0.1:3000'
 const DEFAULT_WALLPAPER_URL = `${CORE_URL}/wallpapers/bg.jpg`
-
-interface PresetSnapshot {
-  presetId: string
-  name: string
-  characterId: string
-  modelType: string
-  modelName: string
-  wallpaperPath?: string
-  systemPrompt: string
-}
-
-interface AppState {
-  sessionId: string | null
-  presetSnapshot: PresetSnapshot | null
-  ollamaReady: boolean | null
-  embeddingReady: boolean
-  emotion: null
-  embeddingQueue: null
-}
+// 打开窗口时只展示最近几条，上滑加载更多时每次拉一整页——具体数字是实现默认值，
+// 不是 TDD 强制的具体规定
+const INITIAL_HISTORY_LIMIT = 3
+const LOAD_MORE_HISTORY_LIMIT = 20
 
 interface PresetOption {
   presetId: string
   name: string
+}
+
+// GET /messages 返回的历史消息 shape（对应 shared/types 里的 Message，渲染层不消费
+// sessionId/embedded/summarized/trigger 等系统字段，只取展示需要的部分，与本文件其它
+// DTO 一样按渲染层自己的约定本地重复定义，不引入 shared/types 依赖，见 DIV-009）
+interface HistoryMessage {
+  id: number
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  createdAt: number
+}
+
+interface MessagesPageResponse {
+  messages: HistoryMessage[]
+  hasMore: boolean
+}
+
+function toMessageData(m: HistoryMessage): MessageData {
+  return { id: String(m.id), role: m.role, content: m.content, createdAt: m.createdAt }
 }
 
 function wallpaperUrlFor(snapshot: PresetSnapshot | null): string {
@@ -74,6 +79,14 @@ export function ChatWindow() {
   const [avatarUrl, setAvatarUrl] = useState<string | undefined>(undefined)
   const [presets, setPresets] = useState<PresetOption[]>([])
   const [isUploadingWallpaper, setIsUploadingWallpaper] = useState(false)
+  // 是否还有更多历史消息可加载，决定 MessageList 要不要在滑到顶部时触发 onLoadMore
+  const [hasMoreHistory, setHasMoreHistory] = useState(false)
+  // 每次初始历史加载完成后递增，触发 MessageList 一次性滚动到底部
+  const [initialLoadSignal, setInitialLoadSignal] = useState(0)
+  // 下一次"加载更多"的游标（当前已加载消息里最早一条的 id），不需要触发重渲染，用 ref 即可
+  const oldestMessageIdRef = useRef<number | null>(null)
+  // 防止同一时刻并发触发多次"加载更多"请求
+  const isLoadingMoreRef = useRef(false)
   // 回复进行中用户仍可继续发送新消息，同一时间可能有多个 /chat 请求在途，
   // 用 Set 而不是单一 ref，保证切换 preset 时能把所有仍在进行中的请求都中断掉
   const activeControllersRef = useRef<Set<AbortController>>(new Set())
@@ -117,6 +130,9 @@ export function ChatWindow() {
             if (controller.signal.aborted) return
             setAvatarUrl(url)
           })
+        }
+        if (state.sessionId) {
+          loadInitialMessages(state.sessionId, controller.signal)
         }
       })
       .catch(() => {
@@ -190,6 +206,15 @@ export function ChatWindow() {
       setAppState(state)
       setWallpaperUrl(wallpaperUrlFor(state.presetSnapshot))
       setMessages([])
+      setHasMoreHistory(false)
+      oldestMessageIdRef.current = null
+      // 若上一个 session 的"加载更多"请求恰好还没来得及跑到 finally 就被这次切换 abort，
+      // 这里显式复位，避免新 session 的第一次 loadMoreMessages 调用被这个残留标记误判为
+      // "仍在加载中"而被跳过
+      isLoadingMoreRef.current = false
+      if (state.sessionId) {
+        loadInitialMessages(state.sessionId, controller.signal)
+      }
 
       const nextAvatarUrl = state.presetSnapshot?.characterId
         ? await fetchAvatarUrl(state.presetSnapshot.characterId, controller.signal)
@@ -207,6 +232,71 @@ export function ChatWindow() {
       }
     }
   }, [])
+
+  // 加载最近一页历史消息（挂载时的初始 /state 请求成功后、以及每次 switchPreset 成功后
+  // 各调用一次），接入调用方传入的 controller signal，与 fetchAvatarUrl 同款竞态保护
+  async function loadInitialMessages(sessionId: string, signal: AbortSignal) {
+    try {
+      const response = await fetch(
+        `${CORE_URL}/messages?sessionId=${encodeURIComponent(sessionId)}&limit=${INITIAL_HISTORY_LIMIT}`,
+        { signal }
+      )
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+
+      const page: MessagesPageResponse = await response.json()
+      if (signal.aborted) return
+
+      // 不能无条件整体覆盖：这次请求在途期间，用户可能已经发送了一条新消息（sendMessage
+      // 用的是函数式 append），整体覆盖会把这条刚发送、尚未写入这次历史页快照的消息从
+      // 界面上冲掉（消息本身已经发到后端，只是本地气泡消失）。空列表时才是纯粹的初始填充，
+      // 非空说明加载期间已经有新内容追加，把历史拼在它前面而不是替换掉它
+      setMessages(prev => prev.length === 0 ? page.messages.map(toMessageData) : [...page.messages.map(toMessageData), ...prev])
+      setHasMoreHistory(page.hasMore)
+      oldestMessageIdRef.current = page.messages[0]?.id ?? null
+      // 触发 MessageList 一次性滚动到底部
+      setInitialLoadSignal(n => n + 1)
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return
+      addSystemMessage('加载历史消息失败', true)
+    }
+  }
+
+  // 上滑到顶部时加载更早一页历史消息，prepend 到当前消息列表前面
+  async function loadMoreMessages() {
+    const sessionId = appState?.sessionId
+    const beforeId = oldestMessageIdRef.current
+    if (!sessionId || !hasMoreHistory || isLoadingMoreRef.current || beforeId === null) return
+
+    isLoadingMoreRef.current = true
+    // 接入当前这次 preset 切换的 controller：切换 preset 时应中断掉仍在途的"加载更多"请求，
+    // 否则它可能在新 session 的历史加载完之后才返回，把旧 session 的消息错误地 prepend 进去
+    const signal = switchPresetControllerRef.current?.signal
+    try {
+      const response = await fetch(
+        `${CORE_URL}/messages?sessionId=${encodeURIComponent(sessionId)}&limit=${LOAD_MORE_HISTORY_LIMIT}&beforeId=${beforeId}`,
+        signal ? { signal } : undefined
+      )
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+
+      const page: MessagesPageResponse = await response.json()
+      if (signal?.aborted) return
+
+      setMessages(prev => [...page.messages.map(toMessageData), ...prev])
+      setHasMoreHistory(page.hasMore)
+      if (page.messages.length > 0) {
+        oldestMessageIdRef.current = page.messages[0].id
+      }
+    } catch (err) {
+      // AbortError 是 preset 切换主动中断导致的，不算失败，不展示错误气泡；
+      // 其它失败（网络错误、后端 4xx/5xx）与 loadInitialMessages 保持一致，
+      // 展示错误气泡而不是静默吞掉——否则用户会在毫无提示的情况下反复上滑却永远加载不出更多
+      if (!(err instanceof DOMException && err.name === 'AbortError')) {
+        addSystemMessage('加载历史消息失败', true)
+      }
+    } finally {
+      isLoadingMoreRef.current = false
+    }
+  }
 
   const handleWallpaperPick = useCallback(async () => {
     const presetId = appState?.presetSnapshot?.presetId
@@ -378,10 +468,17 @@ export function ChatWindow() {
 
       <div className="chat-area">
         <MessageList
+          // session 切换时强制重挂载，重置内部的 pendingScrollAdjustRef/prevFirstIdRef——
+          // 否则上一个 session 遗留的滚动补偿标记可能在新 session 的消息列表上误触发一次
+          // 无意义的 scrollTop 调整
+          key={appState?.sessionId ?? 'no-session'}
           messages={messages}
           isReplying={isReplying}
           avatarUrl={avatarUrl}
           displayName={displayName}
+          hasMoreHistory={hasMoreHistory}
+          onLoadMore={loadMoreMessages}
+          scrollToBottomSignal={initialLoadSignal}
         />
       </div>
 

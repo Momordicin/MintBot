@@ -175,7 +175,7 @@ export function startOrganizeModeScheduler(fastify: FastifyInstance): ScheduledT
     runOrganizeModeTick({
       embedding: fastify.embeddingProvider,
       ner: fastify.nerProvider,
-      model: fastify.modelProvider,
+      model: fastify.backgroundModelProvider,
     }).catch(err => {
       console.error('[OrganizeMode] tick failed:', err)
     })

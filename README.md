@@ -21,8 +21,7 @@
 
 **对话**
 - 与自定义 AI 角色实时对话，"对方输入中"动效 + 完整消息一次性显示，类即时通讯体验
-- 支持多段回复，模拟真实对话节奏
-- 消息历史完整留存
+- 消息历史完整留存，支持向上滑动分页加载更早的对话
 
 **桌面悬浮窗**（Phase 3，规划中，尚未实现）
 - 聊天窗口最小化后自动切换至桌面悬浮窗，后台常驻
@@ -32,6 +31,7 @@
 **语音**（Phase 4，规划中，尚未实现）
 - 语音输入（faster-whisper ASR）
 - 语音回复（GPT-SoVITS v2，流式合成，首句即播）
+- 多段回复：模型输出按句子边界切分推送，模拟真实对话节奏，与流式 TTS 管线配合实现
 - 情绪标签指导语音语调
 
 **记忆系统**
@@ -104,19 +104,34 @@ pnpm install
 cp .env.example .env
 cp config.example.json config.json
 # 编辑 config.json，填入 API Key 或配置本地 Ollama
+# 注意：config.json 里的 security 字段（encryptSensitiveFields / encryptionAlgorithm /
+# keyStorage）目前还没有真正接入——是否加密敏感字段实际由 .env 里的 ENCRYPT_SENSITIVE_FIELDS
+# 和 DB_ENCRYPTION_KEY 决定，config.json 的这几个字段只是 TDD 里记录的目标设计，尚未生效
+# 另外可选加一个 backgroundModelProvider 字段（结构同 modelProvider）：不配置时整理模式
+# （摘要生成、实体抽取）沿用 modelProvider 的模型；配置了则用独立模型，方便前台用便宜快的
+# 模型、后台摘要/实体抽取用更强的模型
 
 # 初始化数据库（幂等写入测试 preset，首次运行必须执行）
 pnpm seed
 
+# 初始化 Python AI 服务的虚拟环境（services/ai，ASR/TTS/Embedding 等本地模型服务）
+# 假设本机 PATH 上已有 python 命令（Python 3.10+）；首次 clone 后需要跑一次，
+# 之后 requirements.txt 有更新时重新跑一次即可同步依赖
+pnpm setup:ai
+
 # 启动核心服务（Fastify，独立进程）
-# 开发阶段：pnpm --filter services/core dev
-# 生产环境：pm2 start ecosystem.config.cjs
+# 开发阶段：pnpm dev:core
+# 生产环境：先编译再用 pm2 常驻（pnpm start:core 就是 pm2 start ecosystem.config.cjs，
+# 依赖 out/core/index.js，跳过 build:core 会直接报错找不到文件）
 # 生产环境：Windows 用户首次运行需要管理员权限，之后 pm2 stop mintbot-core; pm2 kill; 最后就可以在普通终端运行了
+pnpm build:core
 pnpm start:core
 
 # 启动桌面应用（Electron + React）
 pnpm dev
 ```
+
+Python AI 服务（services/ai，ASR / TTS / Embedding 等本地模型服务）由核心服务自动启停：`pnpm start:core` / `pnpm dev:core` 启动核心服务时，如果检测到 AI 服务还没在运行会自动拉起对应的 `.venv` 中的进程，退出核心服务时一并停掉本次由它自己启动的实例，不需要再手动跑 `pnpm dev:ai`。`pnpm dev:ai` 仍然保留，供需要热重载调试 Python 代码时手动启动使用——核心服务检测到它已经在跑就不会重复启动，但也不会在退出时帮你停掉这个手动启动的实例（需要自己 Ctrl+C）。这个"检测到已在运行"的判断依赖两边用同一个端口：`pnpm dev:ai` 目前硬编码 `--port 8765`，不读 `.env` 里的 `AI_PORT`，如果你改了 `AI_PORT` 又想用 `dev:ai` 热重载调试，需要手动把端口对齐，否则核心服务会以为没人在跑而额外启动第二个实例。
 
 ---
 

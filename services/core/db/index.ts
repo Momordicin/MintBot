@@ -124,6 +124,15 @@ function runMigrations(): { needsFtsBackfill: boolean } {
     console.log('[DB] Migration v5: switched message_fts tokenizer to simple (Chinese substring search), needs FTS backfill')
   }
 
+  if (current < 6) {
+    // getSupersededMessageIds（RAG 召回失效标注，见 memory/retrieval.ts）新增了按 messageId
+    // 查 MessageEntities 的路径，之前只有 sessionId / (sessionId, type) 两个索引，messageId
+    // 上是全表扫描；每次触发 RAG 召回都会跑一次，加个索引避免长期运行后表变大时的扫描成本
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_entities_messageId ON MessageEntities(messageId)`)
+    db.pragma('user_version = 6')
+    console.log('[DB] Migration v6: added messageId index to MessageEntities')
+  }
+
   return { needsFtsBackfill }
 }
 

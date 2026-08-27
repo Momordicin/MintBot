@@ -153,3 +153,41 @@ describe('retrieveMemories — RRF 融合', () => {
     }
   })
 })
+
+describe('retrieveMemories — 新鲜度加成', () => {
+  it('RRF 融合基础分数相同时，最近窗口内（14 天）的消息排名更靠前，超出窗口的消息不受影响', async () => {
+    const sessionId = 's1'
+    const now = Date.now()
+    // msgOld：向量路 rank1 命中，createdAt 30 天前，超出 14 天加成窗口
+    const msgOld = addMessage(sessionId, 'hello world', now - 30 * 24 * 60 * 60 * 1000)
+    // msgNew：FTS 路 rank1 命中（唯一包含 "kiwi" 的消息），createdAt 2 小时前，在加成窗口内。
+    // 两路各自独立命中 rank1，融合前基础 RRF 分数相同，唯一差异是新鲜度
+    const msgNew = addMessage(sessionId, 'kiwi fruit is tasty', now - 2 * 60 * 60 * 1000)
+
+    upsertMessageEmbedding(msgOld, sessionId, oneHotVector(0))
+    indexMessageFts(msgNew, sessionId, 'kiwi fruit is tasty')
+
+    const results = await retrieveMemories(sessionId, 'kiwi', { embedding: fakeEmbeddingProvider(0) }, 2)
+
+    expect(results.map(m => m.id)).toEqual([msgNew, msgOld])
+  })
+
+  it('getMessageCreatedAtByIds 查询失败时降级为跳过加成，维持原始 RRF 分数排序而不抛出', async () => {
+    const sessionId = 's1'
+    const msgX = addMessage(sessionId, 'hello world', 1000)
+    const msgY = addMessage(sessionId, 'kiwi fruit is tasty', 2000)
+    upsertMessageEmbedding(msgX, sessionId, oneHotVector(0))
+    indexMessageFts(msgY, sessionId, 'kiwi fruit is tasty')
+
+    const spy = vi.spyOn(queries, 'getMessageCreatedAtByIds').mockImplementation(() => {
+      throw new Error('db boom')
+    })
+
+    try {
+      const results = await retrieveMemories(sessionId, 'kiwi', { embedding: fakeEmbeddingProvider(0) }, 2)
+      expect(results.map(m => m.id)).toEqual(expect.arrayContaining([msgX, msgY]))
+    } finally {
+      spy.mockRestore()
+    }
+  })
+})
