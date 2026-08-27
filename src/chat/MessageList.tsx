@@ -79,6 +79,20 @@ export function MessageList({
     bottomRef.current?.scrollIntoView()
   }, [scrollToBottomSignal])
 
+  // 容器内容不够多时（比如初始只加载 3 条短消息）没有溢出，也就没有可滚动区域——
+  // 用户物理上"滑不出空间"来触发 handleScroll，即使 hasMoreHistory 为 true 也永远够不到。
+  // 这里主动补一次：内容还没撑满容器、且确实还有更多历史时，直接触发 onLoadMore，不等用户
+  // 先滑出空间。onLoadMore 本身在 ChatWindow 里有 isLoadingMoreRef 去重，这里重复调用是安全的；
+  // 每次 messages 变化后重新判断，直到内容撑满容器（可以滚动了）或历史加载完（hasMoreHistory 为
+  // false）为止，自然终止，不会死循环
+  useLayoutEffect(() => {
+    const el = containerRef.current
+    if (!el || !hasMoreHistory || !onLoadMore) return
+    if (el.scrollHeight <= el.clientHeight) {
+      onLoadMore()
+    }
+  }, [messages, hasMoreHistory, onLoadMore])
+
   return (
     <div className="msg-list" ref={containerRef} onScroll={handleScroll}>
       <div className="msg-list__inner">
