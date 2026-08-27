@@ -33,6 +33,10 @@ import {
   insertSummary,
   getMessageCreatedAtByIds,
   getSupersededMessageIds,
+  getMessagesByIds,
+  getMessageIdsInTimeRange,
+  getSummariesOverlappingRange,
+  forgetMessages,
 } from './queries.js'
 
 initDb()
@@ -689,5 +693,163 @@ describe('getSummaries', () => {
     } finally {
       process.env.ENCRYPT_SENSITIVE_FIELDS = prevFlag
     }
+  })
+})
+
+// ─── Forget（按时间段硬删除，隐私/后悔场景）─────────────────
+
+describe('getMessageIdsInTimeRange', () => {
+  it('闭区间边界：createdAt 恰好等于 fromTime/toTime 时包含在内', () => {
+    const id1 = appendMessage({ sessionId: 's1', role: 'user', content: 'a', createdAt: 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    const id2 = appendMessage({ sessionId: 's1', role: 'user', content: 'b', createdAt: 2000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's1', role: 'user', content: 'c', createdAt: 2001, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+
+    expect(getMessageIdsInTimeRange('s1', 1000, 2000)).toEqual([id1, id2])
+  })
+
+  it('范围外的消息不返回', () => {
+    appendMessage({ sessionId: 's1', role: 'user', content: 'a', createdAt: 500, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's1', role: 'user', content: 'b', createdAt: 3000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+
+    expect(getMessageIdsInTimeRange('s1', 1000, 2000)).toEqual([])
+  })
+
+  it('跨 session 隔离', () => {
+    const id1 = appendMessage({ sessionId: 's1', role: 'user', content: 'a', createdAt: 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's2', role: 'user', content: 'b', createdAt: 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+
+    expect(getMessageIdsInTimeRange('s1', 0, 5000)).toEqual([id1])
+  })
+
+  it('无消息时返回空数组', () => {
+    expect(getMessageIdsInTimeRange('s1', 0, 5000)).toEqual([])
+  })
+})
+
+describe('getSummariesOverlappingRange', () => {
+  it('摘要完全在范围内：返回该摘要', () => {
+    const id = insertSummary({ sessionId: 's1', content: '摘要', fromMessageId: 3, toMessageId: 5 })
+    const results = getSummariesOverlappingRange('s1', 1, 10)
+    expect(results.map(s => s.id)).toEqual([id])
+  })
+
+  it('左边界部分重叠（摘要跨入范围左侧）：返回该摘要', () => {
+    const id = insertSummary({ sessionId: 's1', content: '摘要', fromMessageId: 1, toMessageId: 5 })
+    const results = getSummariesOverlappingRange('s1', 5, 10)
+    expect(results.map(s => s.id)).toEqual([id])
+  })
+
+  it('右边界部分重叠（摘要跨出范围右侧）：返回该摘要', () => {
+    const id = insertSummary({ sessionId: 's1', content: '摘要', fromMessageId: 8, toMessageId: 15 })
+    const results = getSummariesOverlappingRange('s1', 5, 10)
+    expect(results.map(s => s.id)).toEqual([id])
+  })
+
+  it('完全在范围外：不返回', () => {
+    insertSummary({ sessionId: 's1', content: '摘要', fromMessageId: 20, toMessageId: 30 })
+    expect(getSummariesOverlappingRange('s1', 1, 10)).toEqual([])
+  })
+
+  it('恰好相邻但不重叠：不返回', () => {
+    insertSummary({ sessionId: 's1', content: '摘要', fromMessageId: 11, toMessageId: 20 })
+    expect(getSummariesOverlappingRange('s1', 1, 10)).toEqual([])
+  })
+
+  it('跨 session 隔离', () => {
+    insertSummary({ sessionId: 's2', content: '别的会话摘要', fromMessageId: 3, toMessageId: 5 })
+    expect(getSummariesOverlappingRange('s1', 1, 10)).toEqual([])
+  })
+
+  it('content 解密正确', () => {
+    insertSummary({ sessionId: 's1', content: '真实摘要正文', fromMessageId: 3, toMessageId: 5 })
+    const results = getSummariesOverlappingRange('s1', 1, 10)
+    expect(results[0].content).toBe('真实摘要正文')
+  })
+})
+
+describe('forgetMessages', () => {
+  it('级联删除 message_embeddings/message_fts/MessageEntities/Messages', () => {
+    delete process.env.ENCRYPT_SENSITIVE_FIELDS
+    const id1 = appendMessage({ sessionId: 's1', role: 'user', content: '待删1', createdAt: 1000, embedded: true, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    const id2 = appendMessage({ sessionId: 's1', role: 'user', content: '待删2', createdAt: 2000, embedded: true, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    upsertMessageEmbedding(id1, 's1', vec(0, 1))
+    upsertMessageEmbedding(id2, 's1', vec(0, 0.5))
+    indexMessageFts(id1, 's1', '待删1')
+    indexMessageFts(id2, 's1', '待删2')
+    insertEntity({ messageId: id1, sessionId: 's1', type: 'preference', value: '喜欢猫', validFrom: 1000 })
+    insertEntity({ messageId: id2, sessionId: 's1', type: 'preference', value: '喜欢狗', validFrom: 2000 })
+
+    const result = forgetMessages({ sessionId: 's1', messageIds: [id1, id2], summaryIdsToDelete: [] })
+
+    expect(result.deletedMessages).toBe(2)
+    expect(result.deletedEntities).toBe(2)
+    expect(result.deletedEmbeddings).toBe(2)
+    expect(result.deletedFts).toBe(2)
+    expect(result.deletedSummaries).toBe(0)
+
+    expect(getMessagesByIds([id1, id2])).toEqual([])
+    expect(searchSimilarMessages(vec(0, 1), 5, 's1')).toEqual([])
+    expect(searchMessagesFts('待删')).toEqual([])
+    expect(getCurrentEntities('s1')).toEqual([])
+  })
+
+  it('不在 summaryIdsToDelete 里的摘要不受影响', () => {
+    const id1 = appendMessage({ sessionId: 's1', role: 'user', content: '待删', createdAt: 1000, embedded: false, summarized: true, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    const summaryId = insertSummary({ sessionId: 's1', content: '摘要', fromMessageId: id1, toMessageId: id1 })
+
+    const result = forgetMessages({ sessionId: 's1', messageIds: [id1], summaryIdsToDelete: [] })
+
+    expect(result.deletedSummaries).toBe(0)
+    expect(getSummaries('s1').map(s => s.id)).toEqual([summaryId])
+  })
+
+  it('指定的 summaryIdsToDelete 会被删除', () => {
+    const id1 = appendMessage({ sessionId: 's1', role: 'user', content: '待删', createdAt: 1000, embedded: false, summarized: true, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    const summaryId = insertSummary({ sessionId: 's1', content: '摘要', fromMessageId: id1, toMessageId: id1 })
+
+    const result = forgetMessages({ sessionId: 's1', messageIds: [id1], summaryIdsToDelete: [summaryId] })
+
+    expect(result.deletedSummaries).toBe(1)
+    expect(getSummaries('s1')).toEqual([])
+  })
+
+  it('未被指定删除的其它消息/其它 session 数据不受影响', () => {
+    const targetId = appendMessage({ sessionId: 's1', role: 'user', content: '待删', createdAt: 1000, embedded: true, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    const keepId = appendMessage({ sessionId: 's1', role: 'user', content: '保留', createdAt: 2000, embedded: true, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    const otherSessionId = appendMessage({ sessionId: 's2', role: 'user', content: '别的会话', createdAt: 1000, embedded: true, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    upsertMessageEmbedding(targetId, 's1', vec(0, 1))
+    upsertMessageEmbedding(keepId, 's1', vec(0, 0.5))
+    upsertMessageEmbedding(otherSessionId, 's2', vec(0, 0.2))
+    insertEntity({ messageId: keepId, sessionId: 's1', type: 'preference', value: '保留实体', validFrom: 2000 })
+
+    forgetMessages({ sessionId: 's1', messageIds: [targetId], summaryIdsToDelete: [] })
+
+    expect(getMessagesByIds([keepId, otherSessionId])).toHaveLength(2)
+    expect(searchSimilarMessages(vec(0, 0.5), 5, 's1').map(r => r.messageId)).toEqual([keepId])
+    expect(searchSimilarMessages(vec(0, 0.2), 5, 's2').map(r => r.messageId)).toEqual([otherSessionId])
+    expect(getCurrentEntities('s1')).toHaveLength(1)
+  })
+
+  it('传入的 messageId 实际属于另一个 sessionId 时，纵深防御过滤会拦住，不跨 session 删除', () => {
+    const otherSessionMsgId = appendMessage({ sessionId: 's2', role: 'user', content: '别的会话', createdAt: 1000, embedded: true, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    upsertMessageEmbedding(otherSessionMsgId, 's2', vec(0, 1))
+    indexMessageFts(otherSessionMsgId, 's2', '别的会话')
+    insertEntity({ messageId: otherSessionMsgId, sessionId: 's2', type: 'preference', value: '别的实体', validFrom: 1000 })
+
+    const result = forgetMessages({ sessionId: 's1', messageIds: [otherSessionMsgId], summaryIdsToDelete: [] })
+
+    expect(result).toEqual({ deletedMessages: 0, deletedEntities: 0, deletedSummaries: 0, deletedEmbeddings: 0, deletedFts: 0 })
+    expect(getMessagesByIds([otherSessionMsgId])).toHaveLength(1)
+    expect(searchSimilarMessages(vec(0, 1), 5, 's2').map(r => r.messageId)).toEqual([otherSessionMsgId])
+    expect(getCurrentEntities('s2')).toHaveLength(1)
+  })
+
+  it('空 messageIds 数组时不抛错、返回全 0、不产生任何数据库改动', () => {
+    const id1 = appendMessage({ sessionId: 's1', role: 'user', content: '保留', createdAt: 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+
+    const result = forgetMessages({ sessionId: 's1', messageIds: [], summaryIdsToDelete: [999] })
+
+    expect(result).toEqual({ deletedMessages: 0, deletedEntities: 0, deletedSummaries: 0, deletedEmbeddings: 0, deletedFts: 0 })
+    expect(getMessagesByIds([id1])).toHaveLength(1)
   })
 })

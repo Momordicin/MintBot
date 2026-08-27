@@ -460,6 +460,81 @@ export function getSummaries(sessionId: string): Summary[] {
   return rows.map(row => ({ ...row, content: decrypt(row.content) }))
 }
 
+// ─── Forget（按时间段硬删除，隐私/后悔场景）─────────────────
+// 与 insertSummaryAndMarkMessages 同样的"事务化组合"考量：forgetMessages 把级联删除的多个
+// DELETE 语句包进一个事务，避免进程在中途崩溃留下"embedding/fts/实体已删但 Messages 还在"
+// 或反过来的孤儿数据/半删除中间态
+
+// 按时间范围查该 session 的消息 id（升序），边界 [fromTime, toTime] 为闭区间，供
+// checkForgetImpact / forgetTimeRange（forget.ts）判断"删掉这段时间会影响到哪些消息"使用
+export function getMessageIdsInTimeRange(sessionId: string, fromTime: number, toTime: number): number[] {
+  const rows = db.prepare(`
+    SELECT id FROM Messages WHERE sessionId = ? AND createdAt >= ? AND createdAt <= ? ORDER BY id ASC
+  `).all(sessionId, fromTime, toTime) as { id: number }[]
+  return rows.map(row => row.id)
+}
+
+// 查找与 [minMessageId, maxMessageId] 区间有重叠的摘要（区间重叠判断：
+// NOT (toMessageId < minMessageId OR fromMessageId > maxMessageId)），content 解密返回，
+// 供 checkForgetImpact 判断待删消息是否已被某条摘要覆盖使用
+export function getSummariesOverlappingRange(sessionId: string, minMessageId: number, maxMessageId: number): Summary[] {
+  const rows = db.prepare(`
+    SELECT * FROM Summaries
+    WHERE sessionId = ? AND NOT (toMessageId < ? OR fromMessageId > ?)
+  `).all(sessionId, minMessageId, maxMessageId) as any[]
+  return rows.map(row => ({ ...row, content: decrypt(row.content) }))
+}
+
+// 级联硬删除：message_embeddings + message_fts + MessageEntities（按 messageId）+ 指定的
+// summaryIdsToDelete（可选）+ Messages 本身，全部在一个事务里完成。messageIds 为空数组时
+// 直接返回全 0，不碰数据库（同 getMessagesByIds/getSupersededMessageIds 对空数组输入的处理方式）。
+// 强制要求 sessionId 并在每条 DELETE 上都加 session 过滤，作为纵深防御——目前唯一调用方
+// （forgetTimeRange）传入的 id 本来就是从同一个 sessionId 查出来的，不会跨 session，
+// 但这里是直接导出的底层函数，以后任何脚本/路由如果不小心传了别的 session 的 id 进来，
+// 这一层过滤能兜底，不会把安全假设全部压在调用方身上
+export function forgetMessages(params: {
+  sessionId: string
+  messageIds: number[]
+  summaryIdsToDelete: number[]
+}): { deletedMessages: number; deletedEntities: number; deletedSummaries: number; deletedEmbeddings: number; deletedFts: number } {
+  const { sessionId, messageIds, summaryIdsToDelete } = params
+  if (messageIds.length === 0) {
+    return { deletedMessages: 0, deletedEntities: 0, deletedSummaries: 0, deletedEmbeddings: 0, deletedFts: 0 }
+  }
+
+  const run = db.transaction(() => {
+    const messagePlaceholders = messageIds.map(() => '?').join(',')
+
+    const deletedEmbeddings = db.prepare(
+      `DELETE FROM message_embeddings WHERE message_id IN (${messagePlaceholders}) AND session_id = ?`
+    ).run(...messageIds, sessionId).changes as number
+
+    const deletedFts = db.prepare(
+      `DELETE FROM message_fts WHERE message_id IN (${messagePlaceholders}) AND session_id = ?`
+    ).run(...messageIds, sessionId).changes as number
+
+    const deletedEntities = db.prepare(
+      `DELETE FROM MessageEntities WHERE messageId IN (${messagePlaceholders}) AND sessionId = ?`
+    ).run(...messageIds, sessionId).changes as number
+
+    let deletedSummaries = 0
+    if (summaryIdsToDelete.length > 0) {
+      const summaryPlaceholders = summaryIdsToDelete.map(() => '?').join(',')
+      deletedSummaries = db.prepare(
+        `DELETE FROM Summaries WHERE id IN (${summaryPlaceholders}) AND sessionId = ?`
+      ).run(...summaryIdsToDelete, sessionId).changes as number
+    }
+
+    const deletedMessages = db.prepare(
+      `DELETE FROM Messages WHERE id IN (${messagePlaceholders}) AND sessionId = ?`
+    ).run(...messageIds, sessionId).changes as number
+
+    return { deletedMessages, deletedEntities, deletedSummaries, deletedEmbeddings, deletedFts }
+  })
+
+  return run()
+}
+
 // ─── EmotionState（session 当前情绪状态，可覆盖，非历史时间线）───
 // 情绪标签/强度不属于 TDD §3.6 加密字段范围（消息内容、角色设定、API Key、摘要、实体聚合结果），
 // 因此不过 encrypt()/decrypt()
