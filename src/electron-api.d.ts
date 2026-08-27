@@ -1,8 +1,9 @@
 // electron/preload/index.ts 通过 contextBridge 暴露的 window.electronAPI 类型声明。
-// 目前唯一消费方是 src/chat/ChatWindow.tsx 的壁纸选择功能。
+// 消费方：src/chat/ChatWindow.tsx（壁纸选择）、src/chat/InputBar.tsx（打开设置窗口）。
 export interface ElectronAPI {
   platform: string
   selectWallpaperFile: () => Promise<{ data: Uint8Array<ArrayBuffer>; filename: string } | null>
+  openSettingsWindow: () => Promise<void>
 }
 
 declare global {

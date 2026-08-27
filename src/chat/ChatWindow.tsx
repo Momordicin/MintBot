@@ -13,11 +13,6 @@ const DEFAULT_WALLPAPER_URL = `${CORE_URL}/wallpapers/bg.jpg`
 const INITIAL_HISTORY_LIMIT = 3
 const LOAD_MORE_HISTORY_LIMIT = 20
 
-interface PresetOption {
-  presetId: string
-  name: string
-}
-
 // GET /messages 返回的历史消息 shape（对应 shared/types 里的 Message，渲染层不消费
 // sessionId/embedded/summarized/trigger 等系统字段，只取展示需要的部分，与本文件其它
 // DTO 一样按渲染层自己的约定本地重复定义，不引入 shared/types 依赖，见 DIV-009）
@@ -44,8 +39,8 @@ function wallpaperUrlFor(snapshot: PresetSnapshot | null): string {
 }
 
 // 三处独立刷新触发（轮询 / 窗口聚焦 / 发消息时机）共用的简单只读 fetch，不接入
-// switchPresetControllerRef / wallpaperControllerRef 的 abort 机制——embeddingReady 是全局状态，
-// 不绑定某次 preset 切换的上下文，见任务范围说明
+// sessionSyncControllerRef 的 abort 机制——embeddingReady 是全局状态，不绑定某次
+// session 同步的上下文，见任务范围说明
 function fetchEmbeddingReady(): Promise<boolean | undefined> {
   return fetch(`${CORE_URL}/embedding-ready`)
     .then(r => r.json())
@@ -77,8 +72,6 @@ export function ChatWindow() {
   const [embeddingReady, setEmbeddingReady] = useState<boolean>(false)
   const [wallpaperUrl, setWallpaperUrl] = useState<string | null>(null)
   const [avatarUrl, setAvatarUrl] = useState<string | undefined>(undefined)
-  const [presets, setPresets] = useState<PresetOption[]>([])
-  const [isUploadingWallpaper, setIsUploadingWallpaper] = useState(false)
   // 是否还有更多历史消息可加载，决定 MessageList 要不要在滑到顶部时触发 onLoadMore
   const [hasMoreHistory, setHasMoreHistory] = useState(false)
   // 每次初始历史加载完成后递增，触发 MessageList 一次性滚动到底部
@@ -87,19 +80,24 @@ export function ChatWindow() {
   const oldestMessageIdRef = useRef<number | null>(null)
   // 防止同一时刻并发触发多次"加载更多"请求
   const isLoadingMoreRef = useRef(false)
-  // 回复进行中用户仍可继续发送新消息，同一时间可能有多个 /chat 请求在途，
-  // 用 Set 而不是单一 ref，保证切换 preset 时能把所有仍在进行中的请求都中断掉
+  // 回复进行中用户仍可继续发送新消息，同一时间可能有多个 /chat 请求在途，用 Set 记录它们。
+  // 注意：preset 切换搬到设置窗口后，这个 Set 已经没有任何代码会在切换时遍历它逐个 abort——
+  // 那是从前 switchPreset 在本文件内时才有的能力，跨窗口切换现在无法触发。已知接受的缺口
+  // （见记忆 settings-window-cross-window-abort-gap）：只影响本窗口渲染状态的短暂串味
+  // （旧 session 的 SSE 回复在切换之后才到达、被追加到已经切到新 session 的界面上），
+  // 后端 /chat 按 dispatch 时刻捕获的 sessionId 落库，消息归属不受影响，不是数据一致性问题
   const activeControllersRef = useRef<Set<AbortController>>(new Set())
-  // 快速连续切换 preset 时，上一次切换还在途中的请求必须被中断，否则哪个请求先返回不确定，
-  // 可能出现"其它信息已经是新 preset，但头像还是旧 preset"这种局部状态不一致
-  const switchPresetControllerRef = useRef<AbortController | null>(null)
-  // 壁纸上传自己独立的 controller，不与 switchPresetControllerRef 共用：两者取消方向不对称——
-  // 切换 preset 应该能中断一次仍在进行中的壁纸上传（上传结果绑定的是旧 preset 上下文，
-  // 切换后已不再适用），但反过来一次壁纸上传不应该去中断"正在进行中的 preset 切换"本身
-  const wallpaperControllerRef = useRef<AbortController | null>(null)
-  // 让 handleWallpaperPick 在系统文件选择框（非模态，用户可在此期间继续切换 preset）关闭后，
-  // 能读到"点击选图按钮那一刻之后是否发生过 preset 切换"的最新值，而不是闭包捕获的旧 appState
+  // preset 切换已搬到设置窗口发起，这里改为承接"窗口重新聚焦时发现 session 已变"的同步请求——
+  // 快速连续聚焦（或聚焦期间又发生一次切换）时，上一次同步还在途中的请求必须被中断，否则哪个
+  // 请求先返回不确定，可能出现"其它信息已经是新 session，但头像还是旧的"这种局部状态不一致
+  const sessionSyncControllerRef = useRef<AbortController | null>(null)
+  // 让窗口聚焦时的 session 同步检查能读到"当前显示的 appState"的最新值，而不是聚焦监听器
+  // 挂载时（[] 依赖、只创建一次）闭包捕获的旧值
   const appStateRef = useRef<AppState | null>(null)
+  // 是否已经完成过一次"应用生命周期内的首次冷启动预热"——后续如果因为空闲卸载机制导致
+  // embeddingReady 又变回 false，不应该重新触发下面这套高频轮询（那是为首次冷启动设计的），
+  // 交给窗口聚焦 / 发消息两个已有的检查时机去捕捉"是否又恢复了"就够了
+  const hasCompletedInitialWarmupRef = useRef(false)
 
   useEffect(() => {
     appStateRef.current = appState
@@ -112,15 +110,15 @@ export function ChatWindow() {
     fetch(`${CORE_URL}/state`)
       .then(r => r.json())
       .then((state: AppState) => {
-        // 视为"第 0 次切换"接入 switchPresetControllerRef：如果这次初始请求还没返回、
-        // 用户就已经手动切换了 preset，switchPreset 开头会把这个 controller 一并 abort 掉，
-        // 避免晚到的初始结果把已经切换好的新状态（appState/wallpaper/头像）悄悄覆盖回去。
-        // 如果 switchPreset 在这次初始请求返回之前就已经开始（甚至已经跑完），
-        // switchPresetControllerRef.current 会已经非 null（switchPreset 自己的 abort 此时扑空，
+        // 视为"第 0 次同步"接入 sessionSyncControllerRef：如果这次初始请求还没返回、
+        // 窗口就已经聚焦触发过一次 session 同步，聚焦处理函数开头会把这个 controller 一并
+        // abort 掉，避免晚到的初始结果把已经同步好的新状态（appState/wallpaper/头像）悄悄
+        // 覆盖回去。如果聚焦同步在这次初始请求返回之前就已经开始（甚至已经跑完），
+        // sessionSyncControllerRef.current 会已经非 null（聚焦同步自己的 abort 此时扑空，
         // 因为它开始时这个 ref 还是 null）——这种情况下这次初始 /state 结果已经过期，直接放弃
-        if (switchPresetControllerRef.current) return
+        if (sessionSyncControllerRef.current) return
         const controller = new AbortController()
-        switchPresetControllerRef.current = controller
+        sessionSyncControllerRef.current = controller
 
         setAppState(state)
         setEmbeddingReady(state.embeddingReady)
@@ -138,18 +136,18 @@ export function ChatWindow() {
       .catch(() => {
         addSystemMessage('无法连接核心服务，请确认服务已启动', true)
       })
-
-    fetch(`${CORE_URL}/presets`)
-      .then(r => r.json())
-      .then((list: PresetOption[]) => setPresets(list))
-      .catch(() => {
-        // preset 列表拉取失败不影响主聊天流程，静默忽略即可
-      })
   }, [])
 
-  // 预热期间轮询：embeddingReady 为 false 时每 3 秒查一次轻量端点，一旦变为 true 就停止轮询
+  // 预热期间轮询：仅覆盖应用生命周期内第一次冷启动预热——embeddingReady 为 false 且尚未完成过
+  // 首次预热时，每 3 秒查一次轻量端点，一旦变为 true 就停止轮询并标记首次预热已完成。之后如果
+  // embeddingReady 因整理模式的空闲卸载机制又变回 false，不再重新触发这套高频轮询，交给窗口
+  // 聚焦 / 发消息两处已有的检查时机去捕捉"是否又恢复了"
   useEffect(() => {
-    if (embeddingReady) return
+    if (embeddingReady) {
+      hasCompletedInitialWarmupRef.current = true
+      return
+    }
+    if (hasCompletedInitialWarmupRef.current) return
 
     const interval = setInterval(() => {
       fetchEmbeddingReady().then(ready => {
@@ -161,80 +159,57 @@ export function ChatWindow() {
   }, [embeddingReady])
 
   // 窗口重新聚焦时刷新：独立于轮询，即使当前 embeddingReady 已经是 true 也要检查——
-  // 用于捕捉"窗口失焦期间因空闲被整理模式释放"这种情况
+  // 用于捕捉"窗口失焦期间因空闲被整理模式释放"这种情况；同时借这个时机检查 session 是否
+  // 已在设置窗口被切换（preset 切换的发起方已经搬到设置窗口，聊天窗口自己不再知道），
+  // 已知局限：如果切换后一直不切回聊天窗口，这里不会主动刷新，要等真正聚焦才补上——
+  // 接受的缺口，等 GET /events 落地再替换
   useEffect(() => {
+    const syncSessionOnFocus = async () => {
+      try {
+        const response = await fetch(`${CORE_URL}/state`)
+        const state: AppState = await response.json()
+        if (state.sessionId === appStateRef.current?.sessionId) return
+
+        sessionSyncControllerRef.current?.abort()
+        const controller = new AbortController()
+        sessionSyncControllerRef.current = controller
+
+        setAppState(state)
+        setWallpaperUrl(wallpaperUrlFor(state.presetSnapshot))
+        // 立即清空，避免新角色的名字/壁纸/消息列表已经更新、但头像还残留旧角色那张图
+        // 的短暂不一致状态——和之前 switchPreset 成功分支的处理保持一致
+        setAvatarUrl(undefined)
+        setMessages([])
+        setHasMoreHistory(false)
+        oldestMessageIdRef.current = null
+        isLoadingMoreRef.current = false
+        if (state.sessionId) {
+          loadInitialMessages(state.sessionId, controller.signal)
+        }
+
+        const nextAvatarUrl = state.presetSnapshot?.characterId
+          ? await fetchAvatarUrl(state.presetSnapshot.characterId, controller.signal)
+          : undefined
+        if (controller.signal.aborted) return
+        setAvatarUrl(nextAvatarUrl)
+      } catch {
+        // 聚焦时的被动同步检查失败不展示错误提示——不是用户主动触发的操作，
+        // 静默忽略即可，下次聚焦或轮询会再试
+      }
+    }
+
     const handler = () => {
       fetchEmbeddingReady().then(ready => {
         if (ready !== undefined) setEmbeddingReady(ready)
       })
+      syncSessionOnFocus()
     }
     window.addEventListener('focus', handler)
     return () => window.removeEventListener('focus', handler)
   }, [])
 
-  const switchPreset = useCallback(async (presetId: string) => {
-    // 切换时中断所有仍在进行中的 /chat 请求（不止"最新一次"——回复进行中用户仍可继续发送
-    // 新消息，可能同时有多个在途请求），避免任意一个旧请求的 SSE 流继续把 message_done
-    // 推回来，追加到已经切换过去的新 preset 对话框里
-    for (const controller of activeControllersRef.current) {
-      controller.abort()
-    }
-    setIsReplying(false)
-
-    switchPresetControllerRef.current?.abort()
-    // 切换 preset 使任何仍绑定在旧 preset 上下文里的壁纸上传失效——见 wallpaperControllerRef 声明处注释
-    wallpaperControllerRef.current?.abort()
-    const controller = new AbortController()
-    switchPresetControllerRef.current = controller
-    setAvatarUrl(undefined)
-
-    try {
-      const response = await fetch(`${CORE_URL}/switch-preset`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ presetId }),
-        signal: controller.signal,
-      })
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`)
-      }
-
-      const state: AppState = await response.json()
-      if (controller.signal.aborted) return
-
-      setAppState(state)
-      setWallpaperUrl(wallpaperUrlFor(state.presetSnapshot))
-      setMessages([])
-      setHasMoreHistory(false)
-      oldestMessageIdRef.current = null
-      // 若上一个 session 的"加载更多"请求恰好还没来得及跑到 finally 就被这次切换 abort，
-      // 这里显式复位，避免新 session 的第一次 loadMoreMessages 调用被这个残留标记误判为
-      // "仍在加载中"而被跳过
-      isLoadingMoreRef.current = false
-      if (state.sessionId) {
-        loadInitialMessages(state.sessionId, controller.signal)
-      }
-
-      const nextAvatarUrl = state.presetSnapshot?.characterId
-        ? await fetchAvatarUrl(state.presetSnapshot.characterId, controller.signal)
-        : undefined
-      if (controller.signal.aborted) return
-      setAvatarUrl(nextAvatarUrl)
-    } catch (err) {
-      // AbortError 是被更新的一次切换取消掉的，不算切换失败，不展示错误气泡
-      if (!(err instanceof DOMException && err.name === 'AbortError')) {
-        addSystemMessage('切换角色失败，请稍后重试', true)
-        // TODO(known limitation, 待做): 若这次失败恰好发生在挂载时初始 /state 请求还未返回、
-        // 且已被本次切换判定为"过期"放弃的窗口期内，appState/wallpaperUrl/avatarUrl 会停留在
-        // 初始空值——只有这条错误提示，没有 fallback 重新拉取 /state 补上状态。用户手动重新
-        // 选择一次 preset 即可恢复，暂不处理。
-      }
-    }
-  }, [])
-
-  // 加载最近一页历史消息（挂载时的初始 /state 请求成功后、以及每次 switchPreset 成功后
-  // 各调用一次），接入调用方传入的 controller signal，与 fetchAvatarUrl 同款竞态保护
+  // 加载最近一页历史消息（挂载时的初始 /state 请求成功后、以及每次聚焦触发的 session 同步
+  // 成功后各调用一次），接入调用方传入的 controller signal，与 fetchAvatarUrl 同款竞态保护
   async function loadInitialMessages(sessionId: string, signal: AbortSignal) {
     try {
       const response = await fetch(
@@ -268,9 +243,9 @@ export function ChatWindow() {
     if (!sessionId || !hasMoreHistory || isLoadingMoreRef.current || beforeId === null) return
 
     isLoadingMoreRef.current = true
-    // 接入当前这次 preset 切换的 controller：切换 preset 时应中断掉仍在途的"加载更多"请求，
+    // 接入当前这次 session 同步的 controller：session 切换时应中断掉仍在途的"加载更多"请求，
     // 否则它可能在新 session 的历史加载完之后才返回，把旧 session 的消息错误地 prepend 进去
-    const signal = switchPresetControllerRef.current?.signal
+    const signal = sessionSyncControllerRef.current?.signal
     try {
       const response = await fetch(
         `${CORE_URL}/messages?sessionId=${encodeURIComponent(sessionId)}&limit=${LOAD_MORE_HISTORY_LIMIT}&beforeId=${beforeId}`,
@@ -287,7 +262,7 @@ export function ChatWindow() {
         oldestMessageIdRef.current = page.messages[0].id
       }
     } catch (err) {
-      // AbortError 是 preset 切换主动中断导致的，不算失败，不展示错误气泡；
+      // AbortError 是 session 同步主动中断导致的，不算失败，不展示错误气泡；
       // 其它失败（网络错误、后端 4xx/5xx）与 loadInitialMessages 保持一致，
       // 展示错误气泡而不是静默吞掉——否则用户会在毫无提示的情况下反复上滑却永远加载不出更多
       if (!(err instanceof DOMException && err.name === 'AbortError')) {
@@ -297,62 +272,6 @@ export function ChatWindow() {
       isLoadingMoreRef.current = false
     }
   }
-
-  const handleWallpaperPick = useCallback(async () => {
-    const presetId = appState?.presetSnapshot?.presetId
-    if (!presetId) return
-    // 系统文件选择框非模态，按钮本身又没有 disabled 态，连点会并发打开多个 dialog；
-    // 用这个标记防止重入，配合下面按钮的 disabled 属性一起生效
-    if (isUploadingWallpaper) return
-
-    setIsUploadingWallpaper(true)
-    try {
-      // 这里捕获的 presetId 只代表点击那一刻的当前 preset，dialog resolve 之后必须
-      // 重新核对（见下方 appStateRef 检查）
-      const result = await window.electronAPI.selectWallpaperFile()
-      if (!result) return
-
-      // dialog 打开期间用户已经切换到了别的 preset：这次上传的上下文已经过期，
-      // 静默放弃即可——用户当前实际所在的 preset 完全没受影响，不算失败
-      if (appStateRef.current?.presetSnapshot?.presetId !== presetId) return
-
-      wallpaperControllerRef.current?.abort()
-      const controller = new AbortController()
-      wallpaperControllerRef.current = controller
-
-      const response = await fetch(`${CORE_URL}/presets/${encodeURIComponent(presetId)}/wallpaper`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/octet-stream',
-          'X-Filename': encodeURIComponent(result.filename),
-        },
-        body: result.data,
-        signal: controller.signal,
-      })
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`)
-      }
-
-      const state: AppState = await response.json()
-      if (controller.signal.aborted) return
-
-      setAppState(state)
-      setWallpaperUrl(wallpaperUrlFor(state.presetSnapshot))
-    } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') return
-      // Electron 的 ipcMain.handle 抛错经 IPC 传回渲染层时，message 可能被包一层前缀
-      // （如 "Error invoking remote method ...: Error: file-too-large"），用 includes
-      // 而非严格相等匹配，避免因包装格式而漏判
-      if (err instanceof Error && err.message.includes('file-too-large')) {
-        addSystemMessage('图片文件过大，请选择小于 10MB 的图片', true)
-        return
-      }
-      addSystemMessage('更换壁纸失败，请稍后重试', true)
-    } finally {
-      setIsUploadingWallpaper(false)
-    }
-  }, [appState, isUploadingWallpaper])
 
   function addSystemMessage(content: string, isError = false) {
     setMessages(prev => [...prev, {
@@ -442,27 +361,6 @@ export function ChatWindow() {
       {appState?.ollamaReady === false && (
         <div className="banner banner--warn">
           Ollama 未运行，请先启动 Ollama
-        </div>
-      )}
-
-      {presets.length > 0 && (
-        <div className="preset-switcher">
-          <select
-            value={appState?.presetSnapshot?.presetId ?? ''}
-            onChange={e => switchPreset(e.target.value)}
-          >
-            {presets.map(p => (
-              <option key={p.presetId} value={p.presetId}>{p.name}</option>
-            ))}
-          </select>
-          <button
-            className="wallpaper-btn"
-            onClick={handleWallpaperPick}
-            disabled={isUploadingWallpaper}
-            title="更换壁纸"
-          >
-            {isUploadingWallpaper ? '更换中…' : '更换壁纸'}
-          </button>
         </div>
       )}
 
