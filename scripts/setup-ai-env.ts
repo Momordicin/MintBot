@@ -41,8 +41,12 @@ function main(): void {
   // 下载完成后本地会有缓存（~/.cache/huggingface/），下次 setup:ai 重新跑这一步会很快跳过下载
   console.log('[setup-ai-env] 预下载模型权重（bge-m3 + bert4ner，仅首次需要下载，之后走本地缓存）...')
   const PRELOAD_SCRIPT = [
+    "import torch",
     "from FlagEmbedding import BGEM3FlagModel",
-    "BGEM3FlagModel('BAAI/bge-m3', use_fp16=True)",
+    // fp16 只在有 CUDA 时才开，和 services/ai/embedding/model.py 的 load_model() 保持一致——
+    // 否则这台机器如果还没装上 CUDA 版 torch（或者本来就没有 NVIDIA 显卡），这一步会直接
+    // 报错崩掉，而不是像正常运行时那样优雅降级到 CPU
+    "BGEM3FlagModel('BAAI/bge-m3', use_fp16=torch.cuda.is_available())",
     "print('[setup-ai-env] bge-m3 weights ready')",
     "from transformers import AutoTokenizer, AutoModelForTokenClassification",
     "AutoTokenizer.from_pretrained('shibing624/bert4ner-base-chinese')",

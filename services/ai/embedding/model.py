@@ -28,9 +28,11 @@ def load_model() -> BGEM3FlagModel:
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f'[Embedding] Loading BGE-M3 on {device}...')
 
+    # fp16（半精度）大量算子在 CPU 上不支持，只在有 GPU 时才应该开，否则加载/推理会直接报错
+    # （典型报错：RuntimeError: "addmm_impl_cpu_" not implemented for 'Half'）
     _model = BGEM3FlagModel(
         'BAAI/bge-m3',
-        use_fp16=True,
+        use_fp16=(device == 'cuda'),
         device=device,
     )
     print('[Embedding] BGE-M3 ready ✓')

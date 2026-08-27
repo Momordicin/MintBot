@@ -49,18 +49,19 @@ export async function ensureAiService(baseUrl: string): Promise<void> {
   const port = new URL(baseUrl).port || '80'
   console.log('[AiService] Not running, starting...')
 
-  let stderrOutput = ''
   try {
-    // stderr/stdout 都走 pipe 而不是 ignore：
-    // - stderr：Python 侧的启动失败模式（依赖缺失、端口占用、import 报错）比 Ollama 多得多，
-    //   全部丢弃会导致下面的超时日志除了"超时"什么都看不出
-    // - stdout：load_model() 之类的加载进度 print（比如 bge-m3/bert4ner 懒加载触发时）之前
-    //   完全被丢弃，用户看不到任何进度，只能盯着一个不会变化的 embedding_loaded=false。
-    //   转发到 Node 控制台，且不像 stderr 那样只在启动等待窗口内累积——加载可能发生在
-    //   启动之后很久（RAG 召回/整理模式触发的懒加载），要一直转发，不能提前摘掉监听
+    // stderr/stdout 都走 pipe 而不是 ignore：Python 侧启动失败模式（依赖缺失、端口占用、
+    // import 报错）以及运行期间懒加载模型时的异常，都要能在 Node 控制台看到，不能丢弃。
+    //
+    // PYTHONIOENCODING=utf-8：Python 在 Windows 上，标准输出如果不是直接接在真实终端上、
+    // 而是被管道（pipe）捕获（现在这个 stdio 配置就是这种情况），会退回用系统 ANSI 代码页
+    // （中文 Windows 下是 GBK）编码输出——一旦 print 里有 GBK 编不出来的字符（比如 "✓"，
+    // 或 tqdm 进度条用的 "█"），就会直接抛 UnicodeEncodeError 把整个请求（乃至进程）炸掉。
+    // 显式强制 UTF-8，不依赖系统代码页
     aiProcess = spawn(pythonPath, ['-m', 'uvicorn', 'main:app', '--port', port], {
       cwd: path.resolve(process.cwd(), 'services/ai'),
       stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
     })
   } catch (err) {
     // spawn 同步抛出的场景（如 EMFILE），不能让它冒泡到 ensureAiService 的调用方——
@@ -69,12 +70,13 @@ export async function ensureAiService(baseUrl: string): Promise<void> {
     return
   }
 
+  // 持续转发，不只在启动等待窗口内——加载可能发生在启动之后很久（RAG 召回/整理模式触发
+  // 的懒加载），运行期间任何时候的输出/报错都要能看到，不能提前摘掉监听
   aiProcess.stdout?.on('data', chunk => {
     console.log(`[AiService] ${chunk.toString().trimEnd()}`)
   })
-
   aiProcess.stderr?.on('data', chunk => {
-    stderrOutput += chunk.toString()
+    console.error(`[AiService] ${chunk.toString().trimEnd()}`)
   })
 
   aiProcess.on('error', (err) => {
@@ -83,14 +85,8 @@ export async function ensureAiService(baseUrl: string): Promise<void> {
 
   aiManagedByUs = true
   const ready = await waitForAiService(baseUrl)
-  // 只在启动等待窗口内累积 stderr，用于诊断这次启动是否失败；进程后续正常运行期间的
-  // 输出不再需要（也不应该）无限累积在内存里，等到判断出 ready 与否就立刻停止监听
-  aiProcess.stderr?.removeAllListeners('data')
   if (!ready) {
-    console.error(
-      '[AiService] Timed out waiting for AI service to start' +
-      (stderrOutput ? `\n--- stderr ---\n${stderrOutput}` : '')
-    )
+    console.error('[AiService] Timed out waiting for AI service to start')
     return
   }
   console.log('[AiService] Started and ready ✓')
