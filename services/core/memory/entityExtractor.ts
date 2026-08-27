@@ -79,7 +79,7 @@ export interface EntityModelProvider {
   completeSync(context: BuiltContext, options?: CompletionOptions): Promise<string>
 }
 
-const VALID_TYPES = new Set<MessageEntity['type']>(['person', 'event', 'preference', 'place', 'other'])
+export const VALID_TYPES = new Set<MessageEntity['type']>(['person', 'event', 'preference', 'place', 'other'])
 
 function normalize(value: string): string {
   return value.trim()

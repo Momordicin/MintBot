@@ -30,7 +30,10 @@ export async function processEmbedQueue(
 
   let embeddings: number[][]
   try {
-    embeddings = await provider.embedBatch(pending.map(m => m.content))
+    // 后台批处理，没有用户在等，不需要 embedBatch 默认的 5 秒（为实时对话延迟设计的）
+    // 那么紧——给更宽松的超时，和 core 启动预热用的 30 秒一致，避免计算其实没超时、
+    // 只是比平时慢一点，就被误判成失败进入重试循环
+    embeddings = await provider.embedBatch(pending.map(m => m.content), undefined, 30000)
   } catch (err) {
     // 失败补偿（TDD §3.1）：不标记 embedded，留待下次整理模式运行时重试
     console.error('[EmbedQueue] batch failed, will retry:', err)
