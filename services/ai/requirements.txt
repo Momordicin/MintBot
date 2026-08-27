@@ -1,3 +1,4 @@
+--extra-index-url https://download.pytorch.org/whl/cu128
 fastapi
 uvicorn[standard]
 faster-whisper

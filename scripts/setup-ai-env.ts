@@ -33,6 +33,28 @@ function main(): void {
   console.log(`[setup-ai-env] 安装依赖 ${REQUIREMENTS_PATH}...`)
   execFileSync(VENV_PIP, ['install', '-r', REQUIREMENTS_PATH], { stdio: 'inherit' })
 
+  // 预下载模型权重（bge-m3 + bert4ner），不只是装 Python 包——BGEM3FlagModel /
+  // AutoModelForTokenClassification 首次实例化时会从 HuggingFace 下载权重（bge-m3 完整仓库
+  // ~4.59GB），如果这个下载留到 core 服务启动后的 embedding 预热才第一次触发，会在一个
+  // 用户看不到进度、且客户端只等 30 秒就放弃的请求里发生，表现成一次"预热失败"的误导性日志，
+  // 而模型本身其实还在后台继续下载。挪到这里作为一次显式、前台可见、预期本来就要等的步骤，
+  // 下载完成后本地会有缓存（~/.cache/huggingface/），下次 setup:ai 重新跑这一步会很快跳过下载
+  console.log('[setup-ai-env] 预下载模型权重（bge-m3 + bert4ner，仅首次需要下载，之后走本地缓存）...')
+  const PRELOAD_SCRIPT = [
+    "import torch",
+    "from FlagEmbedding import BGEM3FlagModel",
+    // fp16 只在有 CUDA 时才开，和 services/ai/embedding/model.py 的 load_model() 保持一致——
+    // 否则这台机器如果还没装上 CUDA 版 torch（或者本来就没有 NVIDIA 显卡），这一步会直接
+    // 报错崩掉，而不是像正常运行时那样优雅降级到 CPU
+    "BGEM3FlagModel('BAAI/bge-m3', use_fp16=torch.cuda.is_available())",
+    "print('[setup-ai-env] bge-m3 weights ready')",
+    "from transformers import AutoTokenizer, AutoModelForTokenClassification",
+    "AutoTokenizer.from_pretrained('shibing624/bert4ner-base-chinese')",
+    "AutoModelForTokenClassification.from_pretrained('shibing624/bert4ner-base-chinese')",
+    "print('[setup-ai-env] bert4ner-base-chinese weights ready')",
+  ].join('\n')
+  execFileSync(VENV_PYTHON, ['-c', PRELOAD_SCRIPT], { stdio: 'inherit' })
+
   console.log('[setup-ai-env] 完成')
 }
 

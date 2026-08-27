@@ -116,7 +116,9 @@ pnpm seed
 
 # 初始化 Python AI 服务的虚拟环境（services/ai，ASR/TTS/Embedding 等本地模型服务）
 # 假设本机 PATH 上已有 python 命令（Python 3.10+）；首次 clone 后需要跑一次，
-# 之后 requirements.txt 有更新时重新跑一次即可同步依赖
+# 之后 requirements.txt 有更新时重新跑一次即可同步依赖。这一步除了装 Python 依赖，
+# 还会预先下载 bge-m3 + bert4ner 模型权重（bge-m3 完整仓库约 4.59GB），首次运行视网络
+# 情况可能要等一段时间，权重会缓存在本地（~/.cache/huggingface/），之后重跑这一步会很快
 pnpm setup:ai
 
 # 启动核心服务（Fastify，独立进程）
