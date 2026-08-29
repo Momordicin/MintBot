@@ -10,13 +10,18 @@ export async function buildStatePayload() {
   const state = getCurrentState()
   const frozenSnapshot = state?.session.presetSnapshot ?? null
 
-  // presetSnapshot 里除 wallpaperPath 外的字段都是"创建时写入、只读"（TDD Sessions 表定义），
-  // 但 wallpaperPath 需要反映壁纸上传后的最新值，因此单独读一次 Presets 表覆盖它；
-  // 其余字段仍然使用冻结快照，不受这次改动影响
+  // presetSnapshot 里除 wallpaperPath / name / displayConfig 外的字段都是"创建时写入、只读"
+  // （TDD Sessions 表定义），但这三个字段需要分别反映壁纸上传、改名、显示设置调整后的最新值，
+  // 因此单独读一次 Presets 表覆盖它们；其余字段仍然使用冻结快照，不受这次改动影响
   let snapshot = frozenSnapshot
   if (frozenSnapshot) {
     const preset = getPresetById(frozenSnapshot.presetId)
-    snapshot = { ...frozenSnapshot, wallpaperPath: preset?.wallpaperPath ?? frozenSnapshot.wallpaperPath }
+    snapshot = {
+      ...frozenSnapshot,
+      wallpaperPath: preset?.wallpaperPath ?? frozenSnapshot.wallpaperPath,
+      name: preset?.name ?? frozenSnapshot.name,
+      displayConfig: preset?.displayConfig ?? frozenSnapshot.displayConfig,
+    }
   }
 
   let ollamaReady: boolean | null = null

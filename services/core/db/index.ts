@@ -133,6 +133,14 @@ function runMigrations(): { needsFtsBackfill: boolean } {
     console.log('[DB] Migration v6: added messageId index to MessageEntities')
   }
 
+  if (current < 7) {
+    // 每角色显示设置（聊天窗口背景叠色）JSON blob，读时按 session/displayConfig.ts 的
+    // parseDisplayConfig 合并默认值，见 TDD §3.2.2「Presets.displayConfig」
+    db.exec(`ALTER TABLE Presets ADD COLUMN displayConfig TEXT`)
+    db.pragma('user_version = 7')
+    console.log('[DB] Migration v7: added displayConfig to Presets')
+  }
+
   return { needsFtsBackfill }
 }
 

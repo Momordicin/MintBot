@@ -11,6 +11,7 @@ import { internalRoutes } from './routes/internal.js'
 import { statusRoutes } from './routes/status.js'
 import { messageRoutes } from './routes/messages.js'
 import { forgetRoutes } from './routes/forget.js'
+import { memoryRoutes } from './routes/memory.js'
 import { createModelProvider, ModelProvider } from './providers/ModelProvider.js'
 import { BGEProvider, getAiBaseUrl, type EmbeddingProvider } from './providers/EmbeddingProvider.js'
 import { Bert4NerProvider, type NERProvider } from './providers/NERProvider.js'
@@ -127,8 +128,13 @@ async function start() {
     loadSession(defaultPresetId)
   }
 
+  // @fastify/cors 在不传 methods 时的默认值是 'GET,HEAD,POST'（见其 node_modules 源码），
+  // 不包含 PATCH：新增会用到某方法的路由（如本文件里唯一的 PATCH /presets/:presetId）时，
+  // 必须同步把该方法加进这个数组，否则浏览器端的 CORS 预检会静默拦截请求，
+  // 现象是请求根本到不了下面的路由处理函数、服务端日志里也看不到任何东西
   await fastify.register(fastifyCors, {
   origin: ['http://localhost:5173', 'http://127.0.0.1:5173'],
+  methods: ['GET', 'HEAD', 'POST', 'PATCH'],
   })
 
   await fastify.register(fastifyStatic, {
@@ -148,6 +154,7 @@ async function start() {
   await fastify.register(statusRoutes)
   await fastify.register(messageRoutes)
   await fastify.register(forgetRoutes)
+  await fastify.register(memoryRoutes)
   await fastify.listen({ port: PORT, host: '127.0.0.1' })
   console.log(`[Core] Running on port ${PORT}`)
 

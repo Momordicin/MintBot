@@ -36,6 +36,7 @@ export function loadSession(presetId: string): SessionState {
       modelType: preset.modelType,
       modelName: preset.modelName,
       wallpaperPath: preset.wallpaperPath,
+      displayConfig: preset.displayConfig,
       systemPrompt: preset.systemPrompt,
     }
     session = {

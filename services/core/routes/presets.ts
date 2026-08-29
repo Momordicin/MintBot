@@ -1,9 +1,12 @@
 import type { FastifyInstance } from 'fastify'
 import path from 'path'
 import fs from 'fs'
-import { getAllPresets, getPresetById, updatePresetWallpaper } from '../session/queries.js'
+import crypto from 'crypto'
+import { getAllPresets, getPresetById, updatePresetWallpaper, updatePresetName, updatePresetDisplayConfig } from '../session/queries.js'
 import { switchPreset } from '../session/index.js'
 import { buildStatePayload } from '../state.js'
+import { isValidChatBgRgb, isValidChatBgOpacity } from '../session/displayConfig.js'
+import type { PresetDisplayConfig } from '../../../shared/types/index.js'
 
 // 与 services/core/index.ts 里 @fastify/static 的 data/wallpapers 注册使用同一路径约定
 const WALLPAPER_DIR = path.resolve(process.cwd(), 'data/wallpapers')
@@ -69,13 +72,75 @@ export async function presetRoutes(fastify: FastifyInstance) {
     // 按 presetId 生成确定性文件名，不用原始文件名（路径穿越风险）：同一 preset 用同一
     // 扩展名重新上传时自然覆盖旧文件；换了扩展名会留下一个孤儿旧文件，属已知的可接受缺口
     const savedFilename = `${presetId}-wallpaper.${ext}`
-    fs.mkdirSync(WALLPAPER_DIR, { recursive: true })
-    fs.writeFileSync(path.join(WALLPAPER_DIR, savedFilename), request.body)
+    const finalPath = path.join(WALLPAPER_DIR, savedFilename)
+    // 覆盖场景下 finalPath 可能正被聊天窗口的壁纸 <img> 或其它已打开的 @fastify/static
+    // 响应读取，直接 writeFileSync 到 finalPath 在 Windows 上可能因文件被占用而失败；
+    // 先写临时文件，再用同目录 rename（同一文件系统内原子操作，不要求对目标独占访问）覆盖过去
+    const tempPath = `${finalPath}.tmp-${crypto.randomUUID()}`
 
-    updatePresetWallpaper(presetId, savedFilename)
+    try {
+      fs.mkdirSync(WALLPAPER_DIR, { recursive: true })
+      fs.writeFileSync(tempPath, request.body)
+      fs.renameSync(tempPath, finalPath)
+      updatePresetWallpaper(presetId, savedFilename)
+    } catch (err) {
+      try {
+        fs.rmSync(tempPath, { force: true })
+      } catch {
+        // 清理失败不应掩盖上面的原始错误
+      }
+      request.log.error(err, 'Failed to save wallpaper')
+      return reply.status(500).send({ error: 'Failed to save wallpaper' })
+    }
 
     // buildStatePayload 内部会重新读取 Presets.wallpaperPath 覆盖冻结快照里的值，
     // 因此这里直接返回即可反映刚写入的新壁纸
+    return await buildStatePayload()
+  })
+
+  fastify.patch<{
+    Params: { presetId: string }
+    Body: { name?: string; displayConfig?: Partial<PresetDisplayConfig> }
+  }>('/presets/:presetId', async (request, reply) => {
+    const { presetId } = request.params
+    const preset = getPresetById(presetId)
+    if (!preset) {
+      return reply.status(404).send({ error: 'Preset not found' })
+    }
+
+    const { name, displayConfig } = request.body
+    if (name === undefined && displayConfig === undefined) {
+      return reply.status(400).send({ error: 'name or displayConfig is required' })
+    }
+
+    if (name !== undefined) {
+      const trimmedName = name.trim()
+      if (!trimmedName) {
+        return reply.status(400).send({ error: 'name is required' })
+      }
+      updatePresetName(presetId, trimmedName)
+    }
+
+    if (displayConfig !== undefined) {
+      // 路由严格校验（与 parseDisplayConfig 的宽松合并分工不同：这里是唯一的 API 入参防线，
+      // parseDisplayConfig 只服务于 schema 演进/历史脏数据兜底）
+      if (displayConfig.chatBgRgb !== undefined && !isValidChatBgRgb(displayConfig.chatBgRgb)) {
+        return reply.status(400).send({ error: 'chatBgRgb must be an array of three integers in [0, 255]' })
+      }
+      if (displayConfig.chatBgOpacity !== undefined && !isValidChatBgOpacity(displayConfig.chatBgOpacity)) {
+        return reply.status(400).send({ error: 'chatBgOpacity must be a number in [0, 1]' })
+      }
+
+      // 服务端合并：只改一个字段的调用方不必回传自己不拥有的字段，两个面板改不同字段也不会互相覆盖。
+      // 逐字段挑选而不是整体展开 displayConfig——请求体里混进的未知字段不应该被原样存进
+      // 这个本该只有两个已知字段的 JSON blob
+      updatePresetDisplayConfig(presetId, {
+        chatBgRgb: displayConfig.chatBgRgb ?? preset.displayConfig.chatBgRgb,
+        chatBgOpacity: displayConfig.chatBgOpacity ?? preset.displayConfig.chatBgOpacity,
+      })
+    }
+
+    // 与壁纸上传路由同样的返回约定：buildStatePayload 内部现读 Presets 表覆盖冻结快照
     return await buildStatePayload()
   })
 }

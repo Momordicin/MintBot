@@ -1,7 +1,8 @@
 import { db } from '../db/index.js'
 import { encrypt, decrypt } from '../db/crypto.js'
 import { getEncryptSensitiveFields } from '../config/security.js'
-import type { Message, Session, Preset, PresetSnapshot, MessageEntity, Summary, EmotionState } from '../../../shared/types/index.js'
+import { DEFAULT_DISPLAY_CONFIG, parseDisplayConfig } from './displayConfig.js'
+import type { Message, Session, Preset, PresetSnapshot, MessageEntity, Summary, EmotionState, PresetDisplayConfig } from '../../../shared/types/index.js'
 
 // ─── Preset ───────────────────────────────────────────────
 
@@ -11,31 +12,39 @@ export function getPresetById(presetId: string): Preset | null {
   return {
     ...row,
     wallpaperPath: row.wallpaperPath ?? undefined,
+    displayConfig: parseDisplayConfig(row.displayConfig),
     systemPrompt: decrypt(row.systemPrompt),
   }
 }
 
 export function getAllPresets(): Preset[] {
   const rows = db.prepare(`SELECT * FROM Presets ORDER BY updatedAt DESC`).all() as any[]
-  return rows.map(row => ({ ...row, wallpaperPath: row.wallpaperPath ?? undefined, systemPrompt: decrypt(row.systemPrompt) }))
+  return rows.map(row => ({
+    ...row,
+    wallpaperPath: row.wallpaperPath ?? undefined,
+    displayConfig: parseDisplayConfig(row.displayConfig),
+    systemPrompt: decrypt(row.systemPrompt),
+  }))
 }
 
-export function upsertPreset(preset: Omit<Preset, 'createdAt' | 'updatedAt'>): void {
+export function upsertPreset(preset: Omit<Preset, 'createdAt' | 'updatedAt' | 'displayConfig'> & { displayConfig?: PresetDisplayConfig }): void {
   const now = Date.now()
   db.prepare(`
-    INSERT INTO Presets (presetId, name, characterId, modelType, modelName, wallpaperPath, systemPrompt, createdAt, updatedAt)
-    VALUES (@presetId, @name, @characterId, @modelType, @modelName, @wallpaperPath, @systemPrompt, @createdAt, @updatedAt)
+    INSERT INTO Presets (presetId, name, characterId, modelType, modelName, wallpaperPath, displayConfig, systemPrompt, createdAt, updatedAt)
+    VALUES (@presetId, @name, @characterId, @modelType, @modelName, @wallpaperPath, @displayConfig, @systemPrompt, @createdAt, @updatedAt)
     ON CONFLICT(presetId) DO UPDATE SET
       name = excluded.name,
       characterId = excluded.characterId,
       modelType = excluded.modelType,
       modelName = excluded.modelName,
       wallpaperPath = excluded.wallpaperPath,
+      displayConfig = excluded.displayConfig,
       systemPrompt = excluded.systemPrompt,
       updatedAt = excluded.updatedAt
   `).run({
     ...preset,
     wallpaperPath: preset.wallpaperPath ?? null,
+    displayConfig: JSON.stringify(preset.displayConfig ?? DEFAULT_DISPLAY_CONFIG),
     systemPrompt: encrypt(preset.systemPrompt),
     createdAt: now,
     updatedAt: now,
@@ -47,6 +56,19 @@ export function upsertPreset(preset: Omit<Preset, 'createdAt' | 'updatedAt'>): v
 export function updatePresetWallpaper(presetId: string, wallpaperPath: string): void {
   db.prepare(`UPDATE Presets SET wallpaperPath = ?, updatedAt = ? WHERE presetId = ?`)
     .run(wallpaperPath, Date.now(), presetId)
+}
+
+// 改名同理，单独更新 name，不走 upsertPreset 整体替换
+export function updatePresetName(presetId: string, name: string): void {
+  db.prepare(`UPDATE Presets SET name = ?, updatedAt = ? WHERE presetId = ?`)
+    .run(name, Date.now(), presetId)
+}
+
+// displayConfig 同理，单独更新（PATCH /presets/:presetId 已在路由层把部分字段合并到当前
+// 已存值之上，这里直接整体写回合并后的完整对象）
+export function updatePresetDisplayConfig(presetId: string, displayConfig: PresetDisplayConfig): void {
+  db.prepare(`UPDATE Presets SET displayConfig = ?, updatedAt = ? WHERE presetId = ?`)
+    .run(JSON.stringify(displayConfig), Date.now(), presetId)
 }
 
 // ─── Session ──────────────────────────────────────────────
@@ -333,6 +355,48 @@ export function getCurrentEntities(sessionId: string, type?: MessageEntity['type
   ) as any[]
 
   return rows.map(row => ({ ...row, value: decrypt(row.value) }))
+}
+
+// 分页查询：与 getCurrentEntities 同样过滤"当前仍有效"（validUntil IS NULL），但按 id
+// （单调递增，等价于插入顺序）而非 validFrom 排序——validFrom 取自消息 createdAt，同一批次
+// 抽取的多个实体可能共享同一个 validFrom，无法作为分页游标唯一定位，id 才能保证游标稳定。
+// 供 GET /entities（routes/memory.ts，设置窗口实体浏览）使用，不影响 getCurrentEntities
+// （buildContext.ts/entityExtractor.ts/retrieval.ts 消费路径）的排序行为
+export function getCurrentEntitiesPage(
+  sessionId: string,
+  limit: number,
+  beforeId?: number,
+  type?: MessageEntity['type']
+): { entities: MessageEntity[]; hasMore: boolean } {
+  const conditions = ['sessionId = ?', 'validUntil IS NULL']
+  const params: (string | number)[] = [sessionId]
+
+  if (type !== undefined) {
+    conditions.push('type = ?')
+    params.push(type)
+  }
+  if (beforeId !== undefined) {
+    conditions.push('id < ?')
+    params.push(beforeId)
+  }
+  params.push(limit + 1)
+
+  const rows = db.prepare(`
+    SELECT * FROM MessageEntities
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY id DESC
+    LIMIT ?
+  `).all(...params) as any[]
+
+  const hasMore = rows.length > limit
+
+  return {
+    hasMore,
+    entities: rows
+      .slice(0, limit)
+      .reverse()  // 返回正序，与 getMessagesPage 的翻页约定一致
+      .map(row => ({ ...row, value: decrypt(row.value) })),
+  }
 }
 
 // 双时态 as-of 查询：某时间点当时仍有效的实体

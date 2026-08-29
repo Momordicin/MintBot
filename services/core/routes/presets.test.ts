@@ -3,7 +3,8 @@ import Fastify from 'fastify'
 import fs from 'fs'
 import path from 'path'
 import { initDb, db } from '../db/index.js'
-import { upsertPreset, getPresetById } from '../session/queries.js'
+import { upsertPreset, getPresetById, updatePresetDisplayConfig } from '../session/queries.js'
+import { DEFAULT_DISPLAY_CONFIG } from '../session/displayConfig.js'
 import { loadSession } from '../session/index.js'
 import { presetRoutes } from './presets.js'
 import { buildStatePayload } from '../state.js'
@@ -234,5 +235,254 @@ describe('POST /presets/:presetId/wallpaper', () => {
     })
 
     expect(response.statusCode).toBe(413)
+  })
+
+  // 注意：这里只验证重复上传两次都成功、落盘内容是最新一次写入的——不模拟 Windows 下
+  // 目标文件被其它句柄占用导致直接覆写失败的场景（Vitest 里难以真实构造文件锁），
+  // 那部分的"为什么用 rename 而不是直接覆写"由下面的失败路径用例验证 rename 本身的失败处理
+  it('对同一 preset+扩展名重复上传（覆盖场景），第二次上传仍然成功，落盘内容为最新写入', async () => {
+    loadSession('p1')
+    const fastify = await buildTestApp()
+    const savedFilename = 'p1-wallpaper.png'
+    writtenFiles.push(savedFilename)
+
+    const upload = (payload: Buffer) => fastify.inject({
+      method: 'POST',
+      url: '/presets/p1/wallpaper',
+      headers: {
+        'content-type': 'application/octet-stream',
+        'x-filename': encodeURIComponent('photo.png'),
+      },
+      payload,
+    })
+
+    const first = await upload(Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+    expect(first.statusCode).toBe(200)
+
+    const second = await upload(Buffer.from([0x01, 0x02, 0x03, 0x04]))
+    expect(second.statusCode).toBe(200)
+
+    const filePath = path.resolve(process.cwd(), 'data/wallpapers', savedFilename)
+    expect(fs.readFileSync(filePath)).toEqual(Buffer.from([0x01, 0x02, 0x03, 0x04]))
+  })
+
+  it('rename 覆盖失败时返回 500 而不是让异常冒泡成默认 500，且清理掉临时文件', async () => {
+    loadSession('p1')
+    const fastify = await buildTestApp()
+    // 故意只 mock renameSync（真正的失败点——覆盖 finalPath 这一步），不 mock writeFileSync：
+    // 让临时文件先真实写入磁盘，这样才能真正验证 catch 块里 fs.rmSync(tempPath) 清理逻辑本身
+    // 生效了，而不是像"mock writeFileSync 直接失败"那样、临时文件根本没被创建过，
+    // "没有残留 tmp 文件"这个断言无论清理代码在不在都会通过
+    const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation(() => {
+      throw new Error('rename failed')
+    })
+
+    const response = await fastify.inject({
+      method: 'POST',
+      url: '/presets/p1/wallpaper',
+      headers: {
+        'content-type': 'application/octet-stream',
+        'x-filename': encodeURIComponent('a.png'),
+      },
+      payload: Buffer.from([1, 2, 3]),
+    })
+    renameSpy.mockRestore()
+
+    expect(response.statusCode).toBe(500)
+    expect(JSON.parse(response.payload)).toEqual({ error: 'Failed to save wallpaper' })
+
+    const leftoverTmp = fs.readdirSync(path.resolve(process.cwd(), 'data/wallpapers'))
+      .filter(f => f.startsWith('p1-wallpaper.png.tmp-'))
+    expect(leftoverTmp).toHaveLength(0)
+  })
+})
+
+describe('PATCH /presets/:presetId', () => {
+  it('成功重命名后响应里的 presetSnapshot.name 与 DB 均更新', async () => {
+    loadSession('p1')
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { name: '新名字' },
+    })
+    const body = JSON.parse(response.payload)
+
+    expect(response.statusCode).toBe(200)
+    expect(body.presetSnapshot.name).toBe('新名字')
+    expect(getPresetById('p1')!.name).toBe('新名字')
+  })
+
+  it('name 缺失时返回 400', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: {},
+    })
+
+    expect(response.statusCode).toBe(400)
+  })
+
+  it('name 全是空白字符（trim 后为空）时返回 400', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { name: '   ' },
+    })
+
+    expect(response.statusCode).toBe(400)
+  })
+
+  it('presetId 不存在时返回 404', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/does-not-exist',
+      payload: { name: '新名字' },
+    })
+
+    expect(response.statusCode).toBe(404)
+  })
+
+  it('name 和 displayConfig 都缺失时返回 400', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: {},
+    })
+
+    expect(response.statusCode).toBe(400)
+  })
+
+  it('仅 displayConfig 的合法更新成功，响应与 DB 均反映新值', async () => {
+    loadSession('p1')
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { displayConfig: { chatBgRgb: [10, 20, 30], chatBgOpacity: 0.4 } },
+    })
+    const body = JSON.parse(response.payload)
+
+    expect(response.statusCode).toBe(200)
+    expect(body.presetSnapshot.displayConfig).toEqual({ chatBgRgb: [10, 20, 30], chatBgOpacity: 0.4 })
+    expect(getPresetById('p1')!.displayConfig).toEqual({ chatBgRgb: [10, 20, 30], chatBgOpacity: 0.4 })
+  })
+
+  it('name 和 displayConfig 同时传入时两者都生效', async () => {
+    loadSession('p1')
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { name: '新名字', displayConfig: { chatBgRgb: [5, 5, 5], chatBgOpacity: 0.9 } },
+    })
+    const body = JSON.parse(response.payload)
+
+    expect(response.statusCode).toBe(200)
+    expect(body.presetSnapshot.name).toBe('新名字')
+    expect(body.presetSnapshot.displayConfig).toEqual({ chatBgRgb: [5, 5, 5], chatBgOpacity: 0.9 })
+  })
+
+  it('只更新 chatBgOpacity 时，服务端合并不会清空已存的 chatBgRgb', async () => {
+    updatePresetDisplayConfig('p1', { chatBgRgb: [7, 8, 9], chatBgOpacity: 0.5 })
+    loadSession('p1')
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { displayConfig: { chatBgOpacity: 0.8 } },
+    })
+    const body = JSON.parse(response.payload)
+
+    expect(response.statusCode).toBe(200)
+    expect(body.presetSnapshot.displayConfig).toEqual({ chatBgRgb: [7, 8, 9], chatBgOpacity: 0.8 })
+    expect(getPresetById('p1')!.displayConfig).toEqual({ chatBgRgb: [7, 8, 9], chatBgOpacity: 0.8 })
+  })
+
+  it('chatBgRgb 长度不是 3 时返回 400', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { displayConfig: { chatBgRgb: [1, 2] } },
+    })
+
+    expect(response.statusCode).toBe(400)
+  })
+
+  it('chatBgRgb 元素超出 [0, 255] 范围时返回 400', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { displayConfig: { chatBgRgb: [0, 0, 300] } },
+    })
+
+    expect(response.statusCode).toBe(400)
+  })
+
+  it('chatBgRgb 元素非整数时返回 400', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { displayConfig: { chatBgRgb: [1, 2, 3.5] } },
+    })
+
+    expect(response.statusCode).toBe(400)
+  })
+
+  it('chatBgOpacity 超出 [0, 1] 范围时返回 400', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { displayConfig: { chatBgOpacity: 1.5 } },
+    })
+
+    expect(response.statusCode).toBe(400)
+  })
+
+  it('chatBgOpacity 类型错误（非数字）时返回 400', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { displayConfig: { chatBgOpacity: '0.5' } },
+    })
+
+    expect(response.statusCode).toBe(400)
+  })
+})
+
+// ─── buildStatePayload — displayConfig 现查覆盖（与 wallpaperPath/name 同款行为）────
+describe('buildStatePayload — displayConfig 现查覆盖', () => {
+  it('updatePresetDisplayConfig 直接更新 DB 后，buildStatePayload 返回新值而非冻结快照里的默认值', async () => {
+    loadSession('p1')
+    // 会话创建时冻结快照里的 displayConfig 是 p1 当时的默认值
+    const before = await buildStatePayload()
+    expect(before.presetSnapshot?.displayConfig).toEqual(DEFAULT_DISPLAY_CONFIG)
+
+    updatePresetDisplayConfig('p1', { chatBgRgb: [200, 0, 0], chatBgOpacity: 0.9 })
+
+    const after = await buildStatePayload()
+    expect(after.presetSnapshot?.displayConfig).toEqual({ chatBgRgb: [200, 0, 0], chatBgOpacity: 0.9 })
   })
 })
