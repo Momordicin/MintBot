@@ -71,6 +71,12 @@ export interface Summary {
   createdAt: number
 }
 
+// 每角色显示设置（聊天窗口背景叠色），见 docs/MintBot_TDD.md §3.2.2「Presets.displayConfig」
+export interface PresetDisplayConfig {
+  chatBgRgb: [number, number, number]   // 0-255 整数，对应 CSS 变量 --chat-bg-rgb
+  chatBgOpacity: number                 // 0-1，对应 CSS 变量 --chat-bg-opacity
+}
+
 // Preset（可复用的配置模板，用户管理）
 export interface Preset {
   presetId: string
@@ -79,6 +85,7 @@ export interface Preset {
   modelType: 'anthropic' | 'openai' | 'ollama'
   modelName: string
   wallpaperPath?: string
+  displayConfig: PresetDisplayConfig  // 读时永远补齐默认值，下游无需处理 null（见 session/displayConfig.ts）
   systemPrompt: string
   createdAt: number
   updatedAt: number
@@ -97,6 +104,7 @@ export interface PresetSnapshot {
   modelType: 'anthropic' | 'openai' | 'ollama'
   modelName: string
   wallpaperPath?: string
+  displayConfig?: PresetDisplayConfig  // 可选：已存在的冻结快照 blob 确实没有这个字段（v7 之前创建的 session）
   systemPrompt: string
   // 后期扩展：hooks、角色包配置等
 }

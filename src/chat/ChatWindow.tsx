@@ -88,6 +88,7 @@ export function ChatWindow() {
   // 后端 /chat 按 dispatch 时刻捕获的 sessionId 落库，消息归属不受影响，不是数据一致性问题
   const activeControllersRef = useRef<Set<AbortController>>(new Set())
   // preset 切换已搬到设置窗口发起，这里改为承接"窗口重新聚焦时发现 session 已变"的同步请求——
+  // 只在 sessionId 确实变化、需要做重置动作（清空消息、重拉历史、重取头像）时才用到；
   // 快速连续聚焦（或聚焦期间又发生一次切换）时，上一次同步还在途中的请求必须被中断，否则哪个
   // 请求先返回不确定，可能出现"其它信息已经是新 session，但头像还是旧的"这种局部状态不一致
   const sessionSyncControllerRef = useRef<AbortController | null>(null)
@@ -160,22 +161,29 @@ export function ChatWindow() {
 
   // 窗口重新聚焦时刷新：独立于轮询，即使当前 embeddingReady 已经是 true 也要检查——
   // 用于捕捉"窗口失焦期间因空闲被整理模式释放"这种情况；同时借这个时机检查 session 是否
-  // 已在设置窗口被切换（preset 切换的发起方已经搬到设置窗口，聊天窗口自己不再知道），
-  // 已知局限：如果切换后一直不切回聊天窗口，这里不会主动刷新，要等真正聚焦才补上——
-  // 接受的缺口，等 GET /events 落地再替换
+  // 已在设置窗口被切换（preset 切换的发起方已经搬到设置窗口，聊天窗口自己不再知道）。
+  // 按两级处理：每次聚焦都把最新的 presetSnapshot 应用到界面（名字、壁纸、背景叠色变量），
+  // 只有 sessionId 确实变化时才做重置动作（清空消息列表、重新加载历史、重取头像、重置分页
+  // 游标）——轻量字段无条件刷新、重操作按 sessionId 把关，否则从设置窗口改完当前角色的
+  // 显示设置，聊天窗口要等重开窗口才生效。已知局限：如果切换后一直不切回聊天窗口，这里不会
+  // 主动刷新，要等真正聚焦才补上——接受的缺口，等 GET /events 落地再替换
   useEffect(() => {
     const syncSessionOnFocus = async () => {
       try {
         const response = await fetch(`${CORE_URL}/state`)
         const state: AppState = await response.json()
+
+        // 轻量字段：无论 sessionId 是否变化都要应用，让设置窗口改的名字/壁纸/背景叠色
+        // 立即在聊天窗口生效，不必等一次真正的 session 切换
+        setAppState(state)
+        setWallpaperUrl(wallpaperUrlFor(state.presetSnapshot))
+
         if (state.sessionId === appStateRef.current?.sessionId) return
 
         sessionSyncControllerRef.current?.abort()
         const controller = new AbortController()
         sessionSyncControllerRef.current = controller
 
-        setAppState(state)
-        setWallpaperUrl(wallpaperUrlFor(state.presetSnapshot))
         // 立即清空，避免新角色的名字/壁纸/消息列表已经更新、但头像还残留旧角色那张图
         // 的短暂不一致状态——和之前 switchPreset 成功分支的处理保持一致
         setAvatarUrl(undefined)
@@ -356,7 +364,15 @@ export function ChatWindow() {
   return (
     <div
       className={`chat-window${embeddingReady ? '' : ' chat-window--embedding-not-ready'}`}
-      style={wallpaperUrl ? { backgroundImage: `url(${wallpaperUrl})` } : undefined}
+      style={{
+        ...(wallpaperUrl ? { backgroundImage: `url(${wallpaperUrl})` } : {}),
+        // displayConfig 缺失时（v7 之前创建的历史冻结快照）不写这两个变量，
+        // 让 global.css 里 :root 的默认值继续兜底，外观与现在完全一致
+        ...(appState?.presetSnapshot?.displayConfig && {
+          '--chat-bg-rgb': appState.presetSnapshot.displayConfig.chatBgRgb.join(', '),
+          '--chat-bg-opacity': String(appState.presetSnapshot.displayConfig.chatBgOpacity),
+        }),
+      } as React.CSSProperties}
     >
       {appState?.ollamaReady === false && (
         <div className="banner banner--warn">
