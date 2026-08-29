@@ -81,6 +81,8 @@ describe('ensureAiService', () => {
     // 否则改回"只查一次就判定别人管的"这个旧实现，这个用例照样能通过，测不出回归
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(spawnMock).not.toHaveBeenCalled()
+    // 已确认在跑，调用方（index.ts）据此决定要不要跟着发一次 embedding 预热请求
+    await expect(promise).resolves.toBe(true)
   })
 
   it('初次检查已在跑，500ms 后二次确认已不在跑：判定为误判，走 spawn 路径并等到就绪', async () => {
@@ -103,6 +105,22 @@ describe('ensureAiService', () => {
     expect(args).toEqual(expect.arrayContaining(['-m', 'uvicorn']))
     // 防止日后误删/打错这两个环境变量——它们是本地模型加载不该发起联网请求的唯一保障
     expect(options.env).toMatchObject({ HF_HUB_OFFLINE: '1', TRANSFORMERS_OFFLINE: '1' })
+    await expect(promise).resolves.toBe(true)
+  })
+
+  it('spawn 后一直等不到 /health 就绪，超时后返回 false（供调用方跳过预热请求）', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false })
+    vi.stubGlobal('fetch', fetchMock)
+    existsSyncMock.mockReturnValue(true)
+    spawnMock.mockReturnValue(makeFakeChild())
+    const { ensureAiService } = await import('./aiService.js')
+
+    const promise = ensureAiService(baseUrl)
+    // 初次检查已在跑分支：一次 /health 检查即判定不在跑，直接进入 spawn 路径，
+    // 无需先推进 500ms 二次确认窗口
+    await vi.advanceTimersByTimeAsync(90000)
+
+    await expect(promise).resolves.toBe(false)
   })
 })
 

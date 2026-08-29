@@ -19,7 +19,13 @@ export async function isAiServiceRunning(baseUrl: string): Promise<boolean> {
   }
 }
 
-async function waitForAiService(baseUrl: string, timeoutMs = 30000): Promise<boolean> {
+// 30s 曾经是默认值，实测在冷缓存/系统负载较高时不够用——torch/transformers/FlagEmbedding
+// 这几个 import 本身（不是模型权重加载，是模块导入）在这种情况下就可能超过 30s，导致
+// Node 侧判定"启动超时"时，Python 进程其实还在正常导入，只是比平时慢，并非卡死或联网失败。
+// 90s 留出更宽松的余量；真的卡死的情况这个时间也足够暴露问题，不算无限等待
+const AI_SERVICE_STARTUP_TIMEOUT_MS = 90000
+
+async function waitForAiService(baseUrl: string, timeoutMs = AI_SERVICE_STARTUP_TIMEOUT_MS): Promise<boolean> {
   const start = Date.now()
   while (Date.now() - start < timeoutMs) {
     if (await isAiServiceRunning(baseUrl)) return true
@@ -28,7 +34,9 @@ async function waitForAiService(baseUrl: string, timeoutMs = 30000): Promise<boo
   return false
 }
 
-export async function ensureAiService(baseUrl: string): Promise<void> {
+// 返回值供调用方（index.ts）判断要不要跟着发一次 embedding 预热请求——超时/生成失败时
+// 已经确定服务没就绪，再去发一次必然失败的请求只会多一条误导性的报错日志，没有意义
+export async function ensureAiService(baseUrl: string): Promise<boolean> {
   if (await isAiServiceRunning(baseUrl)) {
     // 开发模式下 tsx watch 热重载：旧 core 实例退出时会杀掉它管理的 Python 子进程，但
     // uvicorn 收到 SIGTERM 到真正关闭监听端口之间有短暂窗口——上面这次检查可能刚好落在
@@ -39,14 +47,14 @@ export async function ensureAiService(baseUrl: string): Promise<void> {
     if (await isAiServiceRunning(baseUrl)) {
       console.log('[AiService] Already running, not managed by MintBot')
       aiManagedByUs = false
-      return
+      return true
     }
   }
 
   const pythonPath = path.resolve(process.cwd(), '.venv', 'Scripts', 'python.exe')
   if (!fs.existsSync(pythonPath)) {
     console.error(`[AiService] ${pythonPath} not found — run "pnpm setup:ai" first. AI 相关功能（embedding/NER）将不可用，走既有降级路径`)
-    return
+    return false
   }
 
   // 端口从调用方传入的 baseUrl 里解析，不独立再读一次 process.env.AI_PORT——
@@ -84,7 +92,7 @@ export async function ensureAiService(baseUrl: string): Promise<void> {
     // spawn 同步抛出的场景（如 EMFILE），不能让它冒泡到 ensureAiService 的调用方——
     // 那样会导致核心服务启动整体失败退出，正是本次改动要避免的
     console.error('[AiService] Failed to spawn:', err instanceof Error ? err.message : err)
-    return
+    return false
   }
 
   // 持续转发，不只在启动等待窗口内——加载可能发生在启动之后很久（RAG 召回/整理模式触发
@@ -104,9 +112,10 @@ export async function ensureAiService(baseUrl: string): Promise<void> {
   const ready = await waitForAiService(baseUrl)
   if (!ready) {
     console.error('[AiService] Timed out waiting for AI service to start')
-    return
+    return false
   }
   console.log('[AiService] Started and ready ✓')
+  return true
 }
 
 // 强制杀死前的等待上限：正常情况下 uvicorn 收到 SIGTERM 会很快退出，这里只是兜底，

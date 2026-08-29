@@ -93,12 +93,17 @@ async function start() {
   fastify.decorate('embeddingProvider', new BGEProvider(aiBaseUrl))
   fastify.decorate('nerProvider', new Bert4NerProvider(aiBaseUrl))
   // 非阻塞：不 await，不能延迟 fastify.listen()。ensureAiService 内部的健康检查轮询可能
-  // 耗时数秒到 30 秒（Python 侧 torch/模型库 import 比 Ollama 更重，且 tsx watch 热重载时
+  // 耗时数秒到最多 90 秒（Python 侧 torch/模型库 import 比 Ollama 更重，且 tsx watch 热重载时
   // 几乎每次都会触发一次冷启动），等它 resolve 后再发预热请求，保证预热发出时服务大概率
   // 已经监听；两者失败都只记录日志，不影响功能（下一次真实 /embed 调用时 load_model()
-  // 会照常懒加载，只是错过了提前加载的时机）
+  // 会照常懒加载，只是错过了提前加载的时机）。
+  // ensureAiService 返回 false（生成失败/等待超时）时直接跳过预热请求——此时已经确定服务
+  // 没就绪，再发一次必然失败的 /embed 只会多打一条误导性的报错日志，不提供任何新信息
   ensureAiService(aiBaseUrl)
-    .then(() => fastify.embeddingProvider.embed('ping', undefined, 30000))
+    .then(ready => {
+      if (!ready) return
+      return fastify.embeddingProvider.embed('ping', undefined, 30000)
+    })
     .catch(err => console.error('[Startup] AI service startup / embedding warm-up failed:', err))
 
   startConfigWatcher(() => {
