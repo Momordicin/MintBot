@@ -6,6 +6,7 @@ import {
   upsertPreset,
   updatePresetName,
   updatePresetDisplayConfig,
+  updatePresetSystemPrompt,
   getLatestSessionByPreset,
   createSession,
   touchSession,
@@ -141,6 +142,31 @@ describe('Preset', () => {
     expect(preset.displayConfig).toEqual(displayConfig)
     expect(preset.name).toBe('A')
     expect(preset.systemPrompt).toBe('a')
+  })
+
+  it('updatePresetSystemPrompt 更新后能通过 getPresetById 读回，其余字段不受影响', () => {
+    upsertPreset({ presetId: 'p1', name: 'A', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: '原始人设', wallpaperPath: undefined })
+    updatePresetSystemPrompt('p1', '新的人设正文')
+
+    const preset = getPresetById('p1')!
+    expect(preset.systemPrompt).toBe('新的人设正文')
+    expect(preset.name).toBe('A')
+  })
+
+  it('encryptSensitiveFields=true 时 updatePresetSystemPrompt 加密落盘，getPresetById 解密后仍与原文一致', () => {
+    const prevFlag = process.env.ENCRYPT_SENSITIVE_FIELDS
+    process.env.ENCRYPT_SENSITIVE_FIELDS = 'true'
+    try {
+      upsertPreset({ presetId: 'p1', name: 'A', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: '原始人设', wallpaperPath: undefined })
+      updatePresetSystemPrompt('p1', '加密后的人设正文')
+
+      const raw = db.prepare(`SELECT systemPrompt FROM Presets WHERE presetId = ?`).get('p1') as any
+      expect(raw.systemPrompt).not.toBe('加密后的人设正文')
+
+      expect(getPresetById('p1')!.systemPrompt).toBe('加密后的人设正文')
+    } finally {
+      process.env.ENCRYPT_SENSITIVE_FIELDS = prevFlag
+    }
   })
 })
 

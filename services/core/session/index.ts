@@ -69,6 +69,20 @@ export function switchPreset(presetId: string): SessionState {
   return state
 }
 
+// 设置页编辑 systemPrompt 后"立即生效"用：只替换内存缓存的 preset 对象本身，不碰 session、
+// 不调用 resetEmotionState——与 switchPreset 刻意区分开的窄范围原语（情绪清零耦合的分歧
+// 记入 backlog: emotion-reset-on-switch-disagreement，本次不动 switchPreset 现有行为）。
+// 编辑的 preset 若当前不是激活状态则是 no-op，等它真正被切换到时自然读到新值。
+// 竞态安全：buildContext.ts 的 requireCurrentState() 是同步执行、之前没有 await，
+// 在途 /chat 请求早已把 preset 复制进局部变量，这里换掉 current.preset 不影响它
+// （与 chat.ts 里 sessionId "dispatch 时刻捕获" 同一安全模式）。
+export function refreshCurrentPresetIfActive(presetId: string): void {
+  if (current?.session.presetId !== presetId) return
+  const preset = getPresetById(presetId)
+  if (!preset) return
+  current = { ...current, preset }
+}
+
 // ─── 读取当前状态 ──────────────────────────────────────────
 
 export function getCurrentState(): SessionState | null {

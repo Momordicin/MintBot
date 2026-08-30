@@ -2,8 +2,8 @@ import type { FastifyInstance } from 'fastify'
 import path from 'path'
 import fs from 'fs'
 import crypto from 'crypto'
-import { getAllPresets, getPresetById, updatePresetWallpaper, updatePresetName, updatePresetDisplayConfig } from '../session/queries.js'
-import { switchPreset } from '../session/index.js'
+import { getAllPresets, getPresetById, updatePresetWallpaper, updatePresetName, updatePresetDisplayConfig, updatePresetSystemPrompt } from '../session/queries.js'
+import { switchPreset, refreshCurrentPresetIfActive } from '../session/index.js'
 import { buildStatePayload } from '../state.js'
 import { isValidChatBgRgb, isValidChatBgOpacity } from '../session/displayConfig.js'
 import type { PresetDisplayConfig } from '../../../shared/types/index.js'
@@ -100,7 +100,7 @@ export async function presetRoutes(fastify: FastifyInstance) {
 
   fastify.patch<{
     Params: { presetId: string }
-    Body: { name?: string; displayConfig?: Partial<PresetDisplayConfig> }
+    Body: { name?: string; displayConfig?: Partial<PresetDisplayConfig>; systemPrompt?: string; applyNow?: boolean }
   }>('/presets/:presetId', async (request, reply) => {
     const { presetId } = request.params
     const preset = getPresetById(presetId)
@@ -108,9 +108,9 @@ export async function presetRoutes(fastify: FastifyInstance) {
       return reply.status(404).send({ error: 'Preset not found' })
     }
 
-    const { name, displayConfig } = request.body
-    if (name === undefined && displayConfig === undefined) {
-      return reply.status(400).send({ error: 'name or displayConfig is required' })
+    const { name, displayConfig, systemPrompt, applyNow } = request.body
+    if (name === undefined && displayConfig === undefined && systemPrompt === undefined) {
+      return reply.status(400).send({ error: 'name, displayConfig or systemPrompt is required' })
     }
 
     if (name !== undefined) {
@@ -138,6 +138,20 @@ export async function presetRoutes(fastify: FastifyInstance) {
         chatBgRgb: displayConfig.chatBgRgb ?? preset.displayConfig.chatBgRgb,
         chatBgOpacity: displayConfig.chatBgOpacity ?? preset.displayConfig.chatBgOpacity,
       })
+    }
+
+    if (systemPrompt !== undefined) {
+      const trimmedSystemPrompt = systemPrompt.trim()
+      if (!trimmedSystemPrompt) {
+        return reply.status(400).send({ error: 'systemPrompt is required' })
+      }
+      updatePresetSystemPrompt(presetId, trimmedSystemPrompt)
+    }
+
+    // applyNow 刷新的是整个内存缓存的 preset 对象，不局限于 systemPrompt 这一个字段，
+    // 因此放在上面三个字段更新之后统一判断一次，而不是绑在 systemPrompt 分支内部
+    if (applyNow === true) {
+      refreshCurrentPresetIfActive(presetId)
     }
 
     // 与壁纸上传路由同样的返回约定：buildStatePayload 内部现读 Presets 表覆盖冻结快照

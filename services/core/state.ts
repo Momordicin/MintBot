@@ -10,9 +10,13 @@ export async function buildStatePayload() {
   const state = getCurrentState()
   const frozenSnapshot = state?.session.presetSnapshot ?? null
 
-  // presetSnapshot 里除 wallpaperPath / name / displayConfig 外的字段都是"创建时写入、只读"
-  // （TDD Sessions 表定义），但这三个字段需要分别反映壁纸上传、改名、显示设置调整后的最新值，
-  // 因此单独读一次 Presets 表覆盖它们；其余字段仍然使用冻结快照，不受这次改动影响
+  // presetSnapshot 里除 wallpaperPath / name / displayConfig / systemPrompt 外的字段都是
+  // "创建时写入、只读"（TDD Sessions 表定义），但这四个字段需要分别反映壁纸上传、改名、
+  // 显示设置调整、人设编辑后的最新值，因此单独读一次 Presets 表覆盖它们；其余字段仍然使用
+  // 冻结快照，不受这次改动影响。
+  // 注意：这里只影响设置页/状态接口"展示"出来的 systemPrompt 是不是最新——不影响
+  // buildContext.ts 实际发给模型的 system prompt（那个来自 session/index.ts 的 current.preset，
+  // 只在 loadSession/switchPreset 或显式 applyNow 时才会刷新），两件事互相独立
   let snapshot = frozenSnapshot
   if (frozenSnapshot) {
     const preset = getPresetById(frozenSnapshot.presetId)
@@ -21,6 +25,7 @@ export async function buildStatePayload() {
       wallpaperPath: preset?.wallpaperPath ?? frozenSnapshot.wallpaperPath,
       name: preset?.name ?? frozenSnapshot.name,
       displayConfig: preset?.displayConfig ?? frozenSnapshot.displayConfig,
+      systemPrompt: preset?.systemPrompt ?? frozenSnapshot.systemPrompt,
     }
   }
 

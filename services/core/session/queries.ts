@@ -71,6 +71,13 @@ export function updatePresetDisplayConfig(presetId: string, displayConfig: Prese
     .run(JSON.stringify(displayConfig), Date.now(), presetId)
 }
 
+// systemPrompt 同理单独更新，但多一步 encrypt()——该字段属于 TDD §3.6 加密字段范围
+// （角色设定），与 upsertPreset/getPresetById 已有的加解密处理保持一致
+export function updatePresetSystemPrompt(presetId: string, systemPrompt: string): void {
+  db.prepare(`UPDATE Presets SET systemPrompt = ?, updatedAt = ? WHERE presetId = ?`)
+    .run(encrypt(systemPrompt), Date.now(), presetId)
+}
+
 // ─── Session ──────────────────────────────────────────────
 
 export function getLatestSessionByPreset(presetId: string): Session | null {

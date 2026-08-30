@@ -167,6 +167,55 @@
   font-size: 12px;
 }
 
+.character-panel__notice {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* 人设编辑区：textarea 需要的垂直空间比其它行内控件大，单独用纵向 flex 布局，
+   不套用 .character-panel__row 的横向 flex */
+
+.character-panel__persona {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.character-panel__persona-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.character-panel__persona-text {
+  color: var(--input-text);
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.character-panel__persona-textarea {
+  background: rgba(0, 0, 0, 0.4);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-family: var(--font);
+  min-height: 100px;
+  resize: vertical;
+}
+
+.character-panel__persona-confirm {
+  border: 1px solid rgba(120, 90, 180, 0.6);
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--input-text);
+}
+
 /* ─── 记忆管理面板 ─────────────────────────────────────── */
 
 .memory-panel {

@@ -13,6 +13,10 @@ interface PresetOption {
   name: string
 }
 
+// 人设编辑的完整流程有且只有一个当前所在的步骤，用一个判别式联合表达，避免用一组独立
+// 布尔值时出现"同时为 true"的不可能状态
+type SystemPromptStep = 'idle' | 'editing' | 'confirmingSave' | 'confirmingApply' | 'saving'
+
 function rgbToHex([r, g, b]: [number, number, number]): string {
   return `#${[r, g, b].map(n => n.toString(16).padStart(2, '0')).join('')}`
 }
@@ -36,6 +40,11 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
   const [isRenaming, setIsRenaming] = useState(false)
   const [renameValue, setRenameValue] = useState('')
   const [isSavingRename, setIsSavingRename] = useState(false)
+  // 人设编辑：五个互斥步骤中始终只有一个在生效，见上方 SystemPromptStep 类型注释
+  const [systemPromptStep, setSystemPromptStep] = useState<SystemPromptStep>('idle')
+  const [systemPromptValue, setSystemPromptValue] = useState('')
+  // "下次生效"保存成功后的一次性提示，跟 errorMessage 共用同一块内联展示位置（渲染处见下方）
+  const [systemPromptNotice, setSystemPromptNotice] = useState<string | null>(null)
   // 快速连续切换 preset 时，上一次切换还在途中的请求必须被中断，否则哪个请求先返回不确定
   const switchPresetControllerRef = useRef<AbortController | null>(null)
   // 壁纸上传自己独立的 controller，不与 switchPresetControllerRef 共用：两者取消方向不对称——
@@ -45,6 +54,9 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
   // 改名是独立于切换/上传的动作，不需要与它们互相中断（不像 wallpaper↔switch 那组不对称关系）——
   // 仅在组件卸载时随其它两个 controller 一起被 abort
   const renameControllerRef = useRef<AbortController | null>(null)
+  // 人设编辑没有防抖/自动保存概念（每次发送都是用户显式点过两段确认之后的结果），
+  // 因此只需要 abort-then-reissue + 卸载时 abort，不需要 displayConfig 那套"卸载时补发"逻辑
+  const systemPromptControllerRef = useRef<AbortController | null>(null)
   // 让 handleWallpaperPick 在系统文件选择框（非模态，用户可在此期间继续切换 preset）关闭后，
   // 能读到"点击选图按钮那一刻之后是否发生过 preset 切换"的最新值，而不是闭包捕获的旧 prop
   const presetSnapshotRef = useRef<PresetSnapshot | null>(presetSnapshot)
@@ -75,6 +87,17 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [presetSnapshot?.presetId])
 
+  // 同上一个 effect 的理由：按 presetId（而非整个对象引用）判断，因为这个功能自己的保存
+  // 成功后也会用新对象引用回调 onSwitched，但那不是真的切换了 preset，不应该打断确认流程；
+  // 真的切换 preset 时则无条件放弃当前所在的任何步骤，回到 idle 并用新 preset 的
+  // systemPrompt 重新填充只读展示
+  useEffect(() => {
+    setSystemPromptStep('idle')
+    setSystemPromptValue(presetSnapshot?.systemPrompt ?? '')
+    setSystemPromptNotice(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [presetSnapshot?.presetId])
+
   // 这个面板会随设置窗口的 tab 切换被卸载/重新挂载（不像原来常驻的聊天窗口）——卸载时若
   // 有仍在进行中的切换/上传，必须主动 abort，否则重新挂载后的新实例拿到的是全新的、值为
   // null 的 ref，无法感知/中断旧实例遗留的在途请求，导致"哪个响应生效"重新变得不确定
@@ -84,6 +107,7 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
       wallpaperControllerRef.current?.abort()
       renameControllerRef.current?.abort()
       displayConfigControllerRef.current?.abort()
+      systemPromptControllerRef.current?.abort()
 
       // 防抖定时器还没到、组件就被卸载：待发的最后一次颜色/透明度编辑不能被静默丢弃，
       // 在这里同步补发一次。组件已经卸载，不需要等待响应也不需要 onSwitched
@@ -268,6 +292,93 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
     }
   }, [renameValue, onSwitched])
 
+  const handleSystemPromptEditStart = useCallback(() => {
+    setSystemPromptValue(presetSnapshotRef.current?.systemPrompt ?? '')
+    setErrorMessage(null)
+    setSystemPromptNotice(null)
+    setSystemPromptStep('editing')
+  }, [])
+
+  const handleSystemPromptEditCancel = useCallback(() => {
+    // 丢弃这次输入，回 idle——下次点"编辑"会重新从 presetSnapshotRef 填充
+    setSystemPromptStep('idle')
+    setErrorMessage(null)
+  }, [])
+
+  const handleSystemPromptSaveClick = useCallback(() => {
+    if (!systemPromptValue.trim()) {
+      // 客户端校验，不进入确认流程，不发请求
+      setErrorMessage('人设内容不能为空')
+      return
+    }
+    setErrorMessage(null)
+    setSystemPromptStep('confirmingSave')
+  }, [systemPromptValue])
+
+  const handleSystemPromptConfirmSaveCancel = useCallback(() => {
+    setSystemPromptStep('editing')
+  }, [])
+
+  const handleSystemPromptConfirmSaveConfirm = useCallback(() => {
+    setSystemPromptStep('confirmingApply')
+  }, [])
+
+  const handleSystemPromptConfirmApplyCancel = useCallback(() => {
+    setSystemPromptStep('editing')
+  }, [])
+
+  const handleSystemPromptSend = useCallback(async (applyNow: boolean) => {
+    const presetId = presetSnapshotRef.current?.presetId
+    if (!presetId) return
+
+    const trimmedValue = systemPromptValue.trim()
+    if (!trimmedValue) return // 已经在 handleSystemPromptSaveClick 校验过，这里不应该发生
+
+    systemPromptControllerRef.current?.abort()
+    const controller = new AbortController()
+    systemPromptControllerRef.current = controller
+    setSystemPromptStep('saving')
+    setErrorMessage(null)
+
+    try {
+      const response = await fetch(`${CORE_URL}/presets/${encodeURIComponent(presetId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ systemPrompt: trimmedValue, applyNow }),
+        signal: controller.signal,
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
+      }
+
+      const state: AppState = await response.json()
+      if (controller.signal.aborted) return
+
+      // 同 handleRenameSave 的一致性检查：响应姗姗来迟、期间用户已经切换到别的 preset 时，
+      // 不应用这次响应，也不展示属于旧 preset 的一次性提示（切换本身已经由上面的 reseed
+      // effect 把这个面板重置回 idle 了）
+      if (state.presetSnapshot?.presetId === presetSnapshotRef.current?.presetId) {
+        onSwitched(state)
+        if (!applyNow) {
+          setSystemPromptNotice(`此次修改将在下次重新启用『${presetSnapshotRef.current?.name ?? ''}』时生效。`)
+        }
+        setSystemPromptStep('idle')
+      }
+    } catch (err) {
+      // AbortError 由更晚一次的保存请求触发，不算失败，不展示错误提示
+      if (err instanceof DOMException && err.name === 'AbortError') return
+      // 同上面成功分支一致的一致性检查：请求失败姗姗来迟、期间用户已经切换到别的 preset 时，
+      // 这个错误跟当前显示的 preset 无关（reseed effect 早已把面板重置到新 preset 的状态），
+      // 不应该把面板从新 preset 的状态里拽回 editing
+      if (presetId !== presetSnapshotRef.current?.presetId) return
+      // 保留输入内容、回到 editing（不是 confirmingSave/confirmingApply）——不记住之前
+      // 选过哪个确认，重试要重新走一遍两段确认，同 handleRenameSave 的失败处理
+      setErrorMessage('保存人设失败，请稍后重试')
+      setSystemPromptStep('editing')
+    }
+  }, [systemPromptValue, onSwitched])
+
   const sendDisplayConfigPatch = useCallback((presetId: string, partial: Partial<PresetDisplayConfig>) => {
     displayConfigControllerRef.current?.abort()
     const controller = new AbortController()
@@ -405,7 +516,56 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
           </label>
         </div>
       )}
+      {presets.length > 0 && (
+        <div className="character-panel__persona">
+          <div className="character-panel__persona-label">人设</div>
+          {systemPromptStep === 'idle' && (
+            <>
+              <div className="character-panel__persona-text">{presetSnapshot?.systemPrompt}</div>
+              <button className="rename-btn" onClick={handleSystemPromptEditStart} title="编辑当前角色的人设">
+                编辑
+              </button>
+            </>
+          )}
+          {systemPromptStep === 'editing' && (
+            <>
+              <textarea
+                className="character-panel__persona-textarea"
+                value={systemPromptValue}
+                onChange={e => setSystemPromptValue(e.target.value)}
+              />
+              <div className="character-panel__row">
+                <button className="rename-btn" onClick={handleSystemPromptEditCancel}>取消</button>
+                <button className="rename-btn" onClick={handleSystemPromptSaveClick}>保存</button>
+              </div>
+            </>
+          )}
+          {systemPromptStep === 'confirmingSave' && (
+            <div className="character-panel__persona-confirm">
+              <div>确认要保存这次修改吗？这会覆写『{presetSnapshot?.name}』的人格设定。</div>
+              <div className="character-panel__row">
+                <button className="rename-btn" onClick={handleSystemPromptConfirmSaveCancel}>取消</button>
+                <button className="rename-btn" onClick={handleSystemPromptConfirmSaveConfirm}>确认</button>
+              </div>
+            </div>
+          )}
+          {systemPromptStep === 'confirmingApply' && (
+            <div className="character-panel__persona-confirm">
+              <div>现在就应用，还是下次生效？</div>
+              <div className="character-panel__row">
+                <button className="rename-btn" onClick={handleSystemPromptConfirmApplyCancel}>取消</button>
+                <button className="rename-btn" onClick={() => handleSystemPromptSend(false)}>下次生效</button>
+                <button className="rename-btn" onClick={() => handleSystemPromptSend(true)}>立即应用</button>
+              </div>
+            </div>
+          )}
+          {systemPromptStep === 'saving' && (
+            <div className="character-panel__persona-confirm">保存中…</div>
+          )}
+        </div>
+      )}
       {errorMessage && <div className="character-panel__error">{errorMessage}</div>}
+      {systemPromptNotice && <div className="character-panel__notice">{systemPromptNotice}</div>}
     </div>
   )
 }

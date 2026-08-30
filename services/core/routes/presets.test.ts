@@ -3,9 +3,9 @@ import Fastify from 'fastify'
 import fs from 'fs'
 import path from 'path'
 import { initDb, db } from '../db/index.js'
-import { upsertPreset, getPresetById, updatePresetDisplayConfig } from '../session/queries.js'
+import { upsertPreset, getPresetById, updatePresetDisplayConfig, updatePresetSystemPrompt, getEmotionState, upsertEmotionState } from '../session/queries.js'
 import { DEFAULT_DISPLAY_CONFIG } from '../session/displayConfig.js'
-import { loadSession } from '../session/index.js'
+import { loadSession, getCurrentState } from '../session/index.js'
 import { presetRoutes } from './presets.js'
 import { buildStatePayload } from '../state.js'
 
@@ -470,6 +470,94 @@ describe('PATCH /presets/:presetId', () => {
 
     expect(response.statusCode).toBe(400)
   })
+
+  it('仅 systemPrompt 的合法更新成功，DB 反映新值', async () => {
+    loadSession('p1')
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { systemPrompt: '新的人设正文' },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(getPresetById('p1')!.systemPrompt).toBe('新的人设正文')
+  })
+
+  it('systemPrompt 全是空白字符（trim 后为空）时返回 400', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { systemPrompt: '   ' },
+    })
+
+    expect(response.statusCode).toBe(400)
+  })
+
+  it('name、displayConfig、systemPrompt 全部缺失时返回 400（即使带了 applyNow）', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { applyNow: true },
+    })
+
+    expect(response.statusCode).toBe(400)
+  })
+
+  it('systemPrompt + applyNow: true，当该 preset 是当前激活 session 时，内存中的 current.preset 立即反映新值', async () => {
+    loadSession('p1')
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { systemPrompt: '立即生效的人设', applyNow: true },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(getPresetById('p1')!.systemPrompt).toBe('立即生效的人设')
+    // 证明生效的不只是 DB：内存缓存（buildContext.ts 实际消费的 current.preset）也已刷新
+    expect(getCurrentState()!.preset.systemPrompt).toBe('立即生效的人设')
+  })
+
+  it('systemPrompt + applyNow: false（或缺省），DB 已更新但内存中的 current.preset 不刷新', async () => {
+    loadSession('p1')
+    const beforePreset = getCurrentState()!.preset
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { systemPrompt: '下次生效的人设' },
+    })
+
+    expect(response.statusCode).toBe(200)
+    // DB 已经写入新值——applyNow 只影响内存缓存是否刷新，不影响落库本身
+    expect(getPresetById('p1')!.systemPrompt).toBe('下次生效的人设')
+    // 但内存中当前对话仍在用旧的 preset 对象，直到下次真正切换到这个 preset 才会读到新值
+    expect(getCurrentState()!.preset).toEqual(beforePreset)
+    expect(getCurrentState()!.preset.systemPrompt).toBe('你是角色一')
+  })
+
+  it('systemPrompt 更新（含 applyNow）不会调用 resetEmotionState，情绪状态不受影响', async () => {
+    const { session } = loadSession('p1')
+    upsertEmotionState(session.sessionId, { self: { label: 'happy', intensity: 0.7 }, perceived_user: null })
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { systemPrompt: '不应该清空情绪', applyNow: true },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(getEmotionState(session.sessionId)).toEqual({ self: { label: 'happy', intensity: 0.7 }, perceived_user: null })
+  })
 })
 
 // ─── buildStatePayload — displayConfig 现查覆盖（与 wallpaperPath/name 同款行为）────
@@ -484,5 +572,24 @@ describe('buildStatePayload — displayConfig 现查覆盖', () => {
 
     const after = await buildStatePayload()
     expect(after.presetSnapshot?.displayConfig).toEqual({ chatBgRgb: [200, 0, 0], chatBgOpacity: 0.9 })
+  })
+})
+
+// ─── buildStatePayload — systemPrompt 现查覆盖（第四个字段，与前三个同款行为）────
+describe('buildStatePayload — systemPrompt 现查覆盖', () => {
+  it('updatePresetSystemPrompt 直接更新 DB 后，buildStatePayload 返回新值而非冻结快照里的旧人设——但这只影响展示，不影响 current.preset', async () => {
+    loadSession('p1')
+    // 会话创建时冻结快照里的 systemPrompt 是 p1 当时 seed 的值
+    const before = await buildStatePayload()
+    expect(before.presetSnapshot?.systemPrompt).toBe('你是角色一')
+
+    updatePresetSystemPrompt('p1', '你是全新的角色一')
+
+    // 只是"展示层"现读覆盖：applyNow 没有被调用，模型实际会用到的 current.preset.systemPrompt
+    // 必须仍然是旧值，不能因为扩展了 buildStatePayload 就意外提前生效
+    expect(getCurrentState()!.preset.systemPrompt).toBe('你是角色一')
+
+    const after = await buildStatePayload()
+    expect(after.presetSnapshot?.systemPrompt).toBe('你是全新的角色一')
   })
 })
