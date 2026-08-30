@@ -279,8 +279,14 @@ export function createModelProvider(config: ModelConfig): ModelProvider {
 
 // 按 preset 构建 provider：completeAnthropic/completeOpenAI 读 config.modelName，
 // 但 completeOllama 读的是另一个字段 config.ollamaModel，不看 config.modelName——
-// 因此不能简单 spread 覆盖 modelName，必须按 modelType 分支写入对应字段
+// 因此不能简单 spread 覆盖 modelName，必须按 modelType 分支写入对应字段。
+// preset.modelType/modelName 为 null 表示该 preset 未自定义对话模型，完全使用全局配置
+// （含 credentials）——credentials（API key / baseUrl）永远来自全局配置，这点不变，
+// 只有"用哪个模型"这一层是可覆盖的
 export function createModelProviderForPreset(preset: Preset, globalConfig: ModelConfig): ModelProvider {
+  if (preset.modelType === null || preset.modelName === null) {
+    return createModelProvider(globalConfig)
+  }
   const config: ModelConfig = { ...globalConfig, type: preset.modelType }
   if (preset.modelType === 'ollama') {
     config.ollamaModel = preset.modelName

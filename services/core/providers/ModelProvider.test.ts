@@ -97,6 +97,25 @@ describe('createModelProviderForPreset', () => {
     expect(body.model).toBe('gpt-4o-mini')
     expect(body.model).not.toBe('should-not-be-used')
   })
+
+  // preset.modelType/modelName 为 null 表示该 preset 未自定义对话模型，完全使用
+  // globalConfig（不做任何字段覆盖），验证不会被误当成 ollama 分支覆盖 ollamaModel
+  it('preset.modelType/modelName 为 null 时，完全使用 globalConfig，不做任何覆盖', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(fakeStreamResponse())
+    vi.stubGlobal('fetch', fetchSpy)
+
+    const globalConfig: ModelConfig = { type: 'openai', modelName: 'global-model', openaiApiKey: 'global-key' }
+    const preset = fakePreset({ modelType: null, modelName: null })
+
+    const provider = createModelProviderForPreset(preset, globalConfig)
+    await drain(provider)
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    const [, options] = fetchSpy.mock.calls[0]
+    expect(options.headers.Authorization).toBe('Bearer global-key')
+    const body = JSON.parse(options.body)
+    expect(body.model).toBe('global-model')
+  })
 })
 
 describe('completeSync', () => {

@@ -4,11 +4,21 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 // mock 掉这两个依赖，测试结果不受本机真实 config.json 内容影响，也不需要真实写文件。
 // mock 函数本身用 vi.hoisted 声明，保证 vi.resetModules() 重新导入被测模块时，mock 引用
 // 不会跟着失效（模块注册表被清空重建，但 hoisted 的这几个 vi.fn() 实例本身还是同一个）。
-const { readFileSyncMock, watchMock } = vi.hoisted(() => ({
+const { readFileSyncMock, writeFileSyncMock, renameSyncMock, rmSyncMock, watchMock } = vi.hoisted(() => ({
   readFileSyncMock: vi.fn(),
+  writeFileSyncMock: vi.fn(),
+  renameSyncMock: vi.fn(),
+  rmSyncMock: vi.fn(),
   watchMock: vi.fn(),
 }))
-vi.mock('fs', () => ({ default: { readFileSync: readFileSyncMock } }))
+vi.mock('fs', () => ({
+  default: {
+    readFileSync: readFileSyncMock,
+    writeFileSync: writeFileSyncMock,
+    renameSync: renameSyncMock,
+    rmSync: rmSyncMock,
+  },
+}))
 vi.mock('chokidar', () => ({ default: { watch: watchMock } }))
 
 const DEFAULT_MEMORY_CONFIG = {
@@ -64,6 +74,9 @@ function fullValidConfig(memoryOverrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.resetModules()
   readFileSyncMock.mockReset()
+  writeFileSyncMock.mockReset()
+  renameSyncMock.mockReset()
+  rmSyncMock.mockReset()
   watchMock.mockReset()
   watchMock.mockReturnValue({ on: vi.fn() })
 })
@@ -297,6 +310,123 @@ describe('config/index — getBackgroundModelProviderConfig', () => {
     }))
     changeCallback()
 
+    expect(getBackgroundModelProviderConfig()).toEqual(getModelProviderConfig())
+  })
+})
+
+// ─── config.json 写入通道（设置页：全局模型配置）────────────────────────
+describe('config/index — updateModelProviderConfig', () => {
+  it('合并 partial 到磁盘上已存的 modelProvider，不 clobber 未提及字段，也不 clobber 其它顶层 key（如 memory）', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      modelProvider: { type: 'ollama', ollamaBaseUrl: 'http://localhost:11434', ollamaModel: 'qwen3' },
+      memory: { recentTrackMaxMessages: 200 },
+    }))
+    const { updateModelProviderConfig, CONFIG_PATH } = await import('./index.js')
+
+    const result = updateModelProviderConfig({ ollamaModel: 'llama3' })
+
+    // 返回值直接是合并后的结果，未提及的 ollamaBaseUrl 保留
+    expect(result).toEqual({ type: 'ollama', ollamaBaseUrl: 'http://localhost:11434', ollamaModel: 'llama3' })
+
+    // 用临时文件 + 同目录 rename 的原子写模式，不直接写 CONFIG_PATH
+    expect(writeFileSyncMock).toHaveBeenCalledTimes(1)
+    const [tempPath, written] = writeFileSyncMock.mock.calls[0]
+    expect(tempPath).not.toBe(CONFIG_PATH)
+    expect(renameSyncMock).toHaveBeenCalledWith(tempPath, CONFIG_PATH)
+
+    const writtenJson = JSON.parse(written as string)
+    expect(writtenJson.modelProvider).toEqual({ type: 'ollama', ollamaBaseUrl: 'http://localhost:11434', ollamaModel: 'llama3' })
+    // memory 这个本模块不管的顶层字段必须原样保留
+    expect(writtenJson.memory).toEqual({ recentTrackMaxMessages: 200 })
+  })
+
+  it('写入后 getModelProviderConfig 立即反映新值，不依赖 chokidar 的异步 reload', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      modelProvider: { type: 'ollama', ollamaBaseUrl: 'http://localhost:11434', ollamaModel: 'qwen3' },
+    }))
+    const onMock = vi.fn()
+    watchMock.mockReturnValue({ on: onMock })
+    const { startConfigWatcher, updateModelProviderConfig, getModelProviderConfig } = await import('./index.js')
+
+    startConfigWatcher()
+    expect(getModelProviderConfig().ollamaModel).toBe('qwen3')
+
+    updateModelProviderConfig({ ollamaModel: 'llama3' })
+
+    // 故意不触发 chokidar 的 'change' 回调——同步更新内存态不能依赖它
+    expect(getModelProviderConfig().ollamaModel).toBe('llama3')
+  })
+})
+
+describe('config/index — updateBackgroundModelProviderConfig', () => {
+  it('传 null 时，写出的 JSON 里 backgroundModelProvider 这个 key 被整个删掉（而非写入 JSON null）', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      modelProvider: { type: 'ollama', ollamaBaseUrl: 'http://localhost:11434' },
+      backgroundModelProvider: { type: 'anthropic', anthropicApiKey: 'sk-bg', modelName: 'claude-strong' },
+    }))
+    const { updateBackgroundModelProviderConfig } = await import('./index.js')
+
+    const result = updateBackgroundModelProviderConfig(null)
+    expect(result).toBeNull()
+
+    const [, written] = writeFileSyncMock.mock.calls[0]
+    const writtenJson = JSON.parse(written as string)
+    expect('backgroundModelProvider' in writtenJson).toBe(false)
+    // modelProvider 不受影响
+    expect(writtenJson.modelProvider).toEqual({ type: 'ollama', ollamaBaseUrl: 'http://localhost:11434' })
+  })
+
+  it('传 null 并重新加载（模拟 chokidar 写入后触发的 reload）后，getBackgroundModelProviderConfig 真正 fallback 到 modelProvider，而不是保留旧覆盖', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      modelProvider: { type: 'ollama', ollamaBaseUrl: 'http://localhost:11434' },
+      backgroundModelProvider: { type: 'anthropic', anthropicApiKey: 'sk-bg', modelName: 'claude-strong' },
+    }))
+    const onMock = vi.fn()
+    watchMock.mockReturnValue({ on: onMock })
+    const { startConfigWatcher, updateBackgroundModelProviderConfig, getBackgroundModelProviderConfig, getModelProviderConfig } = await import('./index.js')
+
+    startConfigWatcher()
+    expect(getBackgroundModelProviderConfig()).toEqual({ type: 'anthropic', anthropicApiKey: 'sk-bg', modelName: 'claude-strong' })
+
+    updateBackgroundModelProviderConfig(null)
+    const [, written] = writeFileSyncMock.mock.calls[0]
+
+    // 模拟磁盘上的文件现在确实是刚写入的内容，chokidar 的 change 事件触发重新加载
+    readFileSyncMock.mockReturnValue(written)
+    const changeCallback = onMock.mock.calls.find(call => call[0] === 'change')?.[1]
+    changeCallback()
+
+    expect(getBackgroundModelProviderConfig()).toEqual(getModelProviderConfig())
+  })
+
+  it('传非 null partial 时合并磁盘上已存的 backgroundModelProvider，不 clobber 未提及字段', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      modelProvider: { type: 'ollama', ollamaBaseUrl: 'http://localhost:11434' },
+      backgroundModelProvider: { type: 'anthropic', anthropicApiKey: 'sk-bg', modelName: 'claude-strong' },
+    }))
+    const { updateBackgroundModelProviderConfig } = await import('./index.js')
+
+    const result = updateBackgroundModelProviderConfig({ modelName: 'claude-stronger' })
+
+    expect(result).toEqual({ type: 'anthropic', anthropicApiKey: 'sk-bg', modelName: 'claude-stronger' })
+  })
+
+  it('传 null 清除覆盖后，getBackgroundModelProviderConfig 立即 fallback 到 modelProvider，不依赖 chokidar 的异步 reload', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      modelProvider: { type: 'ollama', ollamaBaseUrl: 'http://localhost:11434' },
+      backgroundModelProvider: { type: 'anthropic', anthropicApiKey: 'sk-bg', modelName: 'claude-strong' },
+    }))
+    const onMock = vi.fn()
+    watchMock.mockReturnValue({ on: onMock })
+    const { startConfigWatcher, updateBackgroundModelProviderConfig, getBackgroundModelProviderConfig, getRawBackgroundModelProviderConfig, getModelProviderConfig } = await import('./index.js')
+
+    startConfigWatcher()
+    expect(getRawBackgroundModelProviderConfig()).not.toBeNull()
+
+    updateBackgroundModelProviderConfig(null)
+
+    // 故意不触发 chokidar 的 'change' 回调——清除覆盖必须立即生效，不能有滞后窗口
+    expect(getRawBackgroundModelProviderConfig()).toBeNull()
     expect(getBackgroundModelProviderConfig()).toEqual(getModelProviderConfig())
   })
 })

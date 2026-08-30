@@ -3,7 +3,7 @@ import Fastify from 'fastify'
 import fs from 'fs'
 import path from 'path'
 import { initDb, db } from '../db/index.js'
-import { upsertPreset, getPresetById, updatePresetDisplayConfig, updatePresetSystemPrompt, getEmotionState, upsertEmotionState } from '../session/queries.js'
+import { upsertPreset, getPresetById, updatePresetDisplayConfig, updatePresetSystemPrompt, updatePresetModelConfig, getEmotionState, upsertEmotionState } from '../session/queries.js'
 import { DEFAULT_DISPLAY_CONFIG } from '../session/displayConfig.js'
 import { loadSession, getCurrentState } from '../session/index.js'
 import { presetRoutes } from './presets.js'
@@ -497,6 +497,111 @@ describe('PATCH /presets/:presetId', () => {
     expect(response.statusCode).toBe(400)
   })
 
+  it('只传 modelType 不传 modelName 时返回 400（必须成对出现）', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { modelType: 'openai' },
+    })
+
+    expect(response.statusCode).toBe(400)
+  })
+
+  it('只传 modelName 不传 modelType 时返回 400（必须成对出现）', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { modelName: 'gpt-4o-mini' },
+    })
+
+    expect(response.statusCode).toBe(400)
+  })
+
+  it('modelType 为非法枚举值时返回 400', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { modelType: 'not-a-real-type', modelName: 'x' },
+    })
+
+    expect(response.statusCode).toBe(400)
+  })
+
+  it('modelName 全是空白字符（trim 后为空）时返回 400', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { modelType: 'openai', modelName: '   ' },
+    })
+
+    expect(response.statusCode).toBe(400)
+  })
+
+  it('modelType 为 null 但 modelName 非 null 时返回 400（混合状态不合法）', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { modelType: null, modelName: 'gpt-4o-mini' },
+    })
+
+    expect(response.statusCode).toBe(400)
+  })
+
+  it('modelType/modelName 都设为合法值时，覆盖生效并写入 DB', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { modelType: 'openai', modelName: 'gpt-4o-mini' },
+    })
+
+    expect(response.statusCode).toBe(200)
+    const preset = getPresetById('p1')!
+    expect(preset.modelType).toBe('openai')
+    expect(preset.modelName).toBe('gpt-4o-mini')
+  })
+
+  it('modelType/modelName 都设为 null 时，清除覆盖（跟随全局配置）', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { modelType: null, modelName: null },
+    })
+
+    expect(response.statusCode).toBe(200)
+    const preset = getPresetById('p1')!
+    expect(preset.modelType).toBeNull()
+    expect(preset.modelName).toBeNull()
+  })
+
+  it('modelType/modelName + applyNow: true，当该 preset 是当前激活 session 时，内存中的 current.preset 立即反映新的模型覆盖', async () => {
+    loadSession('p1')
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { modelType: 'openai', modelName: 'gpt-4o-mini', applyNow: true },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(getCurrentState()!.preset.modelType).toBe('openai')
+    expect(getCurrentState()!.preset.modelName).toBe('gpt-4o-mini')
+  })
+
   it('name、displayConfig、systemPrompt 全部缺失时返回 400（即使带了 applyNow）', async () => {
     const fastify = await buildTestApp()
 
@@ -591,5 +696,36 @@ describe('buildStatePayload — systemPrompt 现查覆盖', () => {
 
     const after = await buildStatePayload()
     expect(after.presetSnapshot?.systemPrompt).toBe('你是全新的角色一')
+  })
+})
+
+// ─── buildStatePayload — modelType/modelName 现查覆盖（第五/六个字段）────
+describe('buildStatePayload — modelType/modelName 现查覆盖', () => {
+  it('updatePresetModelConfig 直接更新 DB 后，buildStatePayload 返回新值而非冻结快照里的旧模型覆盖', async () => {
+    loadSession('p1')
+    // 会话创建时冻结快照里的 modelType/modelName 是 p1 当时 seed 的值
+    const before = await buildStatePayload()
+    expect(before.presetSnapshot?.modelType).toBe('ollama')
+    expect(before.presetSnapshot?.modelName).toBe('qwen3')
+
+    updatePresetModelConfig('p1', 'openai', 'gpt-4o-mini')
+
+    const afterSet = await buildStatePayload()
+    expect(afterSet.presetSnapshot?.modelType).toBe('openai')
+    expect(afterSet.presetSnapshot?.modelName).toBe('gpt-4o-mini')
+
+    // 清除覆盖（都设为 null）也要能正确反映为 null，而不是误回退到冻结快照里的旧值
+    // （preset.modelType 本身合法为 null，不能用 `preset?.modelType ?? frozenSnapshot.modelType`
+    // 这种写法，否则 null 会被误当成"取不到值"）
+    updatePresetModelConfig('p1', null, null)
+
+    const afterClear = await buildStatePayload()
+    expect(afterClear.presetSnapshot?.modelType).toBeNull()
+    expect(afterClear.presetSnapshot?.modelName).toBeNull()
+    // 清除覆盖后这个 preset 跟随全局对话模型（mock 里 type 为 'ollama'），buildStatePayload
+    // 判断是否需要检测 Ollama 运行状态时必须看这个"实际生效"的 type，不能因为 snapshot 自己
+    // 的 modelType 字段是 null 就跳过检测——ollamaReady 应为一个真正检测过的 boolean（false
+    // 也算检测过，代表本机没有 Ollama 在跑），而不是代表"不适用"的 null
+    expect(afterClear.ollamaReady).not.toBeNull()
   })
 })

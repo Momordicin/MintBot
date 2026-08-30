@@ -78,6 +78,18 @@ export function updatePresetSystemPrompt(presetId: string, systemPrompt: string)
     .run(encrypt(systemPrompt), Date.now(), presetId)
 }
 
+// 每 preset 对话模型覆盖：modelType/modelName 两个字段永远一起写（要么都非空代表自定义，
+// 要么都为 null 代表清除覆盖、跟随全局 modelProvider 配置），不允许出现"有 modelType
+// 没 modelName"的半吊子状态，因此不像 name/displayConfig/systemPrompt 那样拆成单字段更新
+export function updatePresetModelConfig(
+  presetId: string,
+  modelType: 'anthropic' | 'openai' | 'ollama' | null,
+  modelName: string | null
+): void {
+  db.prepare(`UPDATE Presets SET modelType = ?, modelName = ?, updatedAt = ? WHERE presetId = ?`)
+    .run(modelType, modelName, Date.now(), presetId)
+}
+
 // ─── Session ──────────────────────────────────────────────
 
 export function getLatestSessionByPreset(presetId: string): Session | null {

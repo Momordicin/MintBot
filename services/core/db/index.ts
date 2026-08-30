@@ -141,6 +141,38 @@ function runMigrations(): { needsFtsBackfill: boolean } {
     console.log('[DB] Migration v7: added displayConfig to Presets')
   }
 
+  if (current < 8) {
+    // modelType/modelName 是建表语句里的 NOT NULL（modelType 还带 CHECK），SQLite 不支持
+    // ALTER TABLE 摘除约束，只能走标准的"建新表 + 搬数据 + 删旧表 + 改名"重建流程（比
+    // v1/v7 的 ALTER TABLE ADD COLUMN 重得多），整个迁移块包在 db.transaction() 里保证
+    // 原子性，避免中途崩溃丢数据。目的：支持"每 preset 可选自定义对话模型，未自定义则
+    // 跟随全局 modelProvider 配置"（设置页模型配置功能）。已有 5 个种子 preset 的
+    // modelType/modelName 保持原值不变（视为"已经自定义"），不重置为 null——不引入任何
+    // 隐式行为变化
+    const migrateV8 = db.transaction(() => {
+      db.exec(`
+        CREATE TABLE Presets_new (
+          presetId     TEXT    PRIMARY KEY,
+          name         TEXT    NOT NULL,
+          characterId  TEXT    NOT NULL,
+          modelType    TEXT    CHECK(modelType IS NULL OR modelType IN ('anthropic', 'openai', 'ollama')),
+          modelName    TEXT,
+          wallpaperPath TEXT,
+          displayConfig TEXT,
+          systemPrompt TEXT    NOT NULL,
+          createdAt    INTEGER NOT NULL,
+          updatedAt    INTEGER NOT NULL
+        );
+        INSERT INTO Presets_new SELECT presetId, name, characterId, modelType, modelName, wallpaperPath, displayConfig, systemPrompt, createdAt, updatedAt FROM Presets;
+        DROP TABLE Presets;
+        ALTER TABLE Presets_new RENAME TO Presets;
+      `)
+      db.pragma('user_version = 8')
+    })
+    migrateV8()
+    console.log('[DB] Migration v8: Presets.modelType/modelName now nullable (no override falls back to global modelProvider config)')
+  }
+
   return { needsFtsBackfill }
 }
 

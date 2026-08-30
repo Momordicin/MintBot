@@ -2,11 +2,12 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { AppState } from '../../shared/types/index.js'
 import { CharacterPanel } from './CharacterPanel'
 import { MemoryPanel } from './memory/MemoryPanel'
+import { ModelConfigPanel } from './ModelConfigPanel'
 import './settings.css'
 
 const CORE_URL = 'http://127.0.0.1:3000'
 
-type Tab = 'character' | 'memory'
+type Tab = 'character' | 'memory' | 'model'
 
 export function SettingsApp() {
   const hasFetched = useRef(false)
@@ -63,6 +64,12 @@ export function SettingsApp() {
         >
           记忆管理
         </button>
+        <button
+          className={`settings-tab${activeTab === 'model' ? ' settings-tab--active' : ''}`}
+          onClick={() => setActiveTab('model')}
+        >
+          模型配置
+        </button>
       </div>
 
       <div className="settings-panel">
@@ -70,6 +77,7 @@ export function SettingsApp() {
           <CharacterPanel presetSnapshot={appState?.presetSnapshot ?? null} onSwitched={setAppState} />
         )}
         {activeTab === 'memory' && <MemoryPanel sessionId={appState?.sessionId ?? null} />}
+        {activeTab === 'model' && <ModelConfigPanel />}
       </div>
     </div>
   )
