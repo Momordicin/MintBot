@@ -22,6 +22,7 @@ function fakePreset(overrides: Partial<Preset> = {}): Preset {
     characterId: 'c1',
     modelType: 'ollama',
     modelName: 'llama3',
+    displayConfig: { chatBgRgb: [15, 15, 20], chatBgOpacity: 0.65 },
     systemPrompt: 'sys',
     createdAt: 0,
     updatedAt: 0,

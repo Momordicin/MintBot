@@ -37,41 +37,6 @@
   color: #fff;
 }
 
-/* ─── Preset 切换下拉框 ────────────────────────────────── */
-
-.preset-switcher {
-  position: absolute;
-  top: 40px;
-  right: 12px;
-  z-index: 11;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.preset-switcher select {
-  background: rgba(0, 0, 0, 0.4);
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 6px;
-  padding: 4px 8px;
-  font-size: 12px;
-}
-
-.wallpaper-btn {
-  background: rgba(0, 0, 0, 0.4);
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 6px;
-  padding: 4px 8px;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.wallpaper-btn:hover {
-  background: rgba(0, 0, 0, 0.55);
-}
-
 /* ─── 聊天区域 ─────────────────────────────────────────── */
 
 .chat-area {
@@ -411,11 +376,16 @@
   border: none;
   border-radius: 6px;
   background: transparent;
-  color: rgba(255, 255, 255, 0.25);
-  cursor: not-allowed;
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  opacity: 0.4;
   flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.settings-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
 }

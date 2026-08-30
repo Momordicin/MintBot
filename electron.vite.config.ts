@@ -21,7 +21,10 @@ export default defineConfig({
     root: resolve(__dirname, 'src'),
     build: {
       rollupOptions: {
-        input: resolve(__dirname, 'src/index.html')
+        input: {
+          main: resolve(__dirname, 'src/index.html'),
+          settings: resolve(__dirname, 'src/settings/index.html'),
+        }
       }
     },
     plugins: [react()]

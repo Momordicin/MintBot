@@ -22,6 +22,10 @@ function notifySystemEvent(type: 'lock-screen' | 'unlock-screen'): void {
 // 服务端拒绝，在读入内存、经 IPC 结构化克隆之前就提前拦掉，省掉一次必然失败的传输
 const WALLPAPER_MAX_BYTES = 10 * 1024 * 1024
 
+// 两个窗口共用同一份 preload（设置窗口不单独写一份），提成常量避免两处字面量各自维护、
+// 未来其中一处改动时悄悄失去同步
+const PRELOAD_PATH = join(__dirname, '../preload/index.mjs')
+
 // 壁纸本地选图：主进程只负责调起系统文件选择框、读取文件字节并转发给渲染层，
 // 不做扩展名校验/存储路径决策（那些是核心服务的业务逻辑，见 docs/MintBot_TDD.md 壁纸存储约定）
 ipcMain.handle('select-wallpaper-file', async () => {
@@ -44,13 +48,52 @@ ipcMain.handle('select-wallpaper-file', async () => {
   return { data: new Uint8Array(buffer), filename: basename(filePath) }
 })
 
+let settingsWindow: BrowserWindow | null = null
+
+function createSettingsWindow(): BrowserWindow {
+  const win = new BrowserWindow({
+    width: 760,
+    height: 560,
+    show: false,
+    webPreferences: {
+      preload: PRELOAD_PATH,
+      sandbox: false
+    }
+  })
+
+  win.on('ready-to-show', () => {
+    win.show()
+  })
+
+  win.on('closed', () => {
+    settingsWindow = null
+  })
+
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/settings/index.html`)
+  } else {
+    win.loadFile(join(__dirname, '../renderer/settings/index.html'))
+  }
+
+  return win
+}
+
+// 记忆管理数据随时间变化，重开窗口应该拉新数据，不做隐藏保留——已存在且未销毁时只 focus
+ipcMain.handle('open-settings-window', () => {
+  if (settingsWindow && !settingsWindow.isDestroyed()) {
+    settingsWindow.focus()
+    return
+  }
+  settingsWindow = createSettingsWindow()
+})
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 900,
     height: 670,
     show: false,
     webPreferences: {
-      preload: join(__dirname, '../preload/index.mjs'),
+      preload: PRELOAD_PATH,
       sandbox: false
     }
   })

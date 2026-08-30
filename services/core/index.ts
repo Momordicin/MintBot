@@ -11,6 +11,7 @@ import { internalRoutes } from './routes/internal.js'
 import { statusRoutes } from './routes/status.js'
 import { messageRoutes } from './routes/messages.js'
 import { forgetRoutes } from './routes/forget.js'
+import { memoryRoutes } from './routes/memory.js'
 import { createModelProvider, ModelProvider } from './providers/ModelProvider.js'
 import { BGEProvider, getAiBaseUrl, type EmbeddingProvider } from './providers/EmbeddingProvider.js'
 import { Bert4NerProvider, type NERProvider } from './providers/NERProvider.js'
@@ -92,12 +93,17 @@ async function start() {
   fastify.decorate('embeddingProvider', new BGEProvider(aiBaseUrl))
   fastify.decorate('nerProvider', new Bert4NerProvider(aiBaseUrl))
   // 非阻塞：不 await，不能延迟 fastify.listen()。ensureAiService 内部的健康检查轮询可能
-  // 耗时数秒到 30 秒（Python 侧 torch/模型库 import 比 Ollama 更重，且 tsx watch 热重载时
+  // 耗时数秒到最多 90 秒（Python 侧 torch/模型库 import 比 Ollama 更重，且 tsx watch 热重载时
   // 几乎每次都会触发一次冷启动），等它 resolve 后再发预热请求，保证预热发出时服务大概率
   // 已经监听；两者失败都只记录日志，不影响功能（下一次真实 /embed 调用时 load_model()
-  // 会照常懒加载，只是错过了提前加载的时机）
+  // 会照常懒加载，只是错过了提前加载的时机）。
+  // ensureAiService 返回 false（生成失败/等待超时）时直接跳过预热请求——此时已经确定服务
+  // 没就绪，再发一次必然失败的 /embed 只会多打一条误导性的报错日志，不提供任何新信息
   ensureAiService(aiBaseUrl)
-    .then(() => fastify.embeddingProvider.embed('ping', undefined, 30000))
+    .then(ready => {
+      if (!ready) return
+      return fastify.embeddingProvider.embed('ping', undefined, 30000)
+    })
     .catch(err => console.error('[Startup] AI service startup / embedding warm-up failed:', err))
 
   startConfigWatcher(() => {
@@ -127,8 +133,13 @@ async function start() {
     loadSession(defaultPresetId)
   }
 
+  // @fastify/cors 在不传 methods 时的默认值是 'GET,HEAD,POST'（见其 node_modules 源码），
+  // 不包含 PATCH：新增会用到某方法的路由（如本文件里唯一的 PATCH /presets/:presetId）时，
+  // 必须同步把该方法加进这个数组，否则浏览器端的 CORS 预检会静默拦截请求，
+  // 现象是请求根本到不了下面的路由处理函数、服务端日志里也看不到任何东西
   await fastify.register(fastifyCors, {
   origin: ['http://localhost:5173', 'http://127.0.0.1:5173'],
+  methods: ['GET', 'HEAD', 'POST', 'PATCH'],
   })
 
   await fastify.register(fastifyStatic, {
@@ -148,6 +159,7 @@ async function start() {
   await fastify.register(statusRoutes)
   await fastify.register(messageRoutes)
   await fastify.register(forgetRoutes)
+  await fastify.register(memoryRoutes)
   await fastify.listen({ port: PORT, host: '127.0.0.1' })
   console.log(`[Core] Running on port ${PORT}`)
 

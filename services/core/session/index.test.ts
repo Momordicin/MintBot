@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { initDb, db } from '../db/index.js'
-import { upsertPreset, upsertEmotionState, getEmotionState } from './queries.js'
-import { loadSession, switchPreset } from './index.js'
+import { upsertPreset, upsertEmotionState, getEmotionState, updatePresetSystemPrompt } from './queries.js'
+import { loadSession, switchPreset, getCurrentState, refreshCurrentPresetIfActive } from './index.js'
 
 initDb()
 
@@ -48,5 +48,34 @@ describe('switchPreset', () => {
 
     expect(resumedState.session.sessionId).toBe(session.sessionId)
     expect(getEmotionState(resumedState.session.sessionId)).toBeNull()
+  })
+})
+
+describe('refreshCurrentPresetIfActive', () => {
+  it('给定的 presetId 是当前激活 session 的 preset 时，内存缓存的 preset 刷新为最新值', () => {
+    const { session } = loadSession('p1')
+    upsertEmotionState(session.sessionId, { self: { label: 'happy', intensity: 0.6 }, perceived_user: null })
+
+    updatePresetSystemPrompt('p1', '更新后的人设')
+    refreshCurrentPresetIfActive('p1')
+
+    expect(getCurrentState()!.preset.systemPrompt).toBe('更新后的人设')
+    // session 本身、情绪状态均不受影响——与 switchPreset 刻意区分的窄范围原语
+    expect(getCurrentState()!.session.sessionId).toBe(session.sessionId)
+    expect(getEmotionState(session.sessionId)).not.toBeNull()
+  })
+
+  it('给定的 presetId 不是当前激活 session 的 preset 时，是真正的 no-op', () => {
+    const { session } = loadSession('p1')
+    upsertEmotionState(session.sessionId, { self: { label: 'calm', intensity: 0.3 }, perceived_user: null })
+    const before = getCurrentState()!.preset
+
+    // 编辑的是一个当前没在用的 preset（p2）
+    updatePresetSystemPrompt('p2', '不应该生效的人设')
+    refreshCurrentPresetIfActive('p2')
+
+    expect(getCurrentState()!.preset).toEqual(before)
+    expect(getCurrentState()!.preset.systemPrompt).toBe('你是角色一')
+    expect(getEmotionState(session.sessionId)).not.toBeNull()
   })
 })

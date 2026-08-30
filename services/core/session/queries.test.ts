@@ -4,6 +4,9 @@ import {
   getPresetById,
   getAllPresets,
   upsertPreset,
+  updatePresetName,
+  updatePresetDisplayConfig,
+  updatePresetSystemPrompt,
   getLatestSessionByPreset,
   createSession,
   touchSession,
@@ -19,6 +22,7 @@ import {
   getOldestUnsummarizedMessageTime,
   insertEntity,
   getCurrentEntities,
+  getCurrentEntitiesPage,
   getEntitiesAsOf,
   closeEntity,
   indexMessageFts,
@@ -38,6 +42,7 @@ import {
   getSummariesOverlappingRange,
   forgetMessages,
 } from './queries.js'
+import { DEFAULT_DISPLAY_CONFIG } from './displayConfig.js'
 
 initDb()
 beforeEach(() => {
@@ -98,6 +103,70 @@ describe('Preset', () => {
  
     upsertPreset({ presetId: 'p1', name: 'A', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: 'a', wallpaperPath: 'data/wallpapers/bg.png' })
     expect(getPresetById('p1')!.wallpaperPath).toBe('data/wallpapers/bg.png')
+  })
+
+  it('updatePresetName 更新 name 字段，其余字段不受影响', () => {
+    upsertPreset({ presetId: 'p1', name: 'A', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: 'a', wallpaperPath: undefined })
+    updatePresetName('p1', 'B')
+    const preset = getPresetById('p1')!
+    expect(preset.name).toBe('B')
+    expect(preset.systemPrompt).toBe('a')
+  })
+
+  it('upsertPreset 不传 displayConfig 时默认写入 DEFAULT_DISPLAY_CONFIG', () => {
+    upsertPreset({ presetId: 'p1', name: 'A', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: 'a', wallpaperPath: undefined })
+    expect(getPresetById('p1')!.displayConfig).toEqual(DEFAULT_DISPLAY_CONFIG)
+  })
+
+  it('upsertPreset 传入 displayConfig 时按传入值写入', () => {
+    const displayConfig = { chatBgRgb: [1, 2, 3] as [number, number, number], chatBgOpacity: 0.2 }
+    upsertPreset({ presetId: 'p1', name: 'A', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: 'a', wallpaperPath: undefined, displayConfig })
+    expect(getPresetById('p1')!.displayConfig).toEqual(displayConfig)
+  })
+
+  it('getPresetById/getAllPresets 对迁移前的旧行（displayConfig 列为 NULL）返回默认值', () => {
+    upsertPreset({ presetId: 'p1', name: 'A', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: 'a', wallpaperPath: undefined })
+    // 模拟迁移前从未写过 displayConfig 的历史行
+    db.prepare(`UPDATE Presets SET displayConfig = NULL WHERE presetId = ?`).run('p1')
+
+    expect(getPresetById('p1')!.displayConfig).toEqual(DEFAULT_DISPLAY_CONFIG)
+    expect(getAllPresets()[0].displayConfig).toEqual(DEFAULT_DISPLAY_CONFIG)
+  })
+
+  it('updatePresetDisplayConfig 更新后能通过 getPresetById 读回，其余字段不受影响', () => {
+    upsertPreset({ presetId: 'p1', name: 'A', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: 'a', wallpaperPath: undefined })
+    const displayConfig = { chatBgRgb: [100, 100, 100] as [number, number, number], chatBgOpacity: 0.1 }
+    updatePresetDisplayConfig('p1', displayConfig)
+
+    const preset = getPresetById('p1')!
+    expect(preset.displayConfig).toEqual(displayConfig)
+    expect(preset.name).toBe('A')
+    expect(preset.systemPrompt).toBe('a')
+  })
+
+  it('updatePresetSystemPrompt 更新后能通过 getPresetById 读回，其余字段不受影响', () => {
+    upsertPreset({ presetId: 'p1', name: 'A', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: '原始人设', wallpaperPath: undefined })
+    updatePresetSystemPrompt('p1', '新的人设正文')
+
+    const preset = getPresetById('p1')!
+    expect(preset.systemPrompt).toBe('新的人设正文')
+    expect(preset.name).toBe('A')
+  })
+
+  it('encryptSensitiveFields=true 时 updatePresetSystemPrompt 加密落盘，getPresetById 解密后仍与原文一致', () => {
+    const prevFlag = process.env.ENCRYPT_SENSITIVE_FIELDS
+    process.env.ENCRYPT_SENSITIVE_FIELDS = 'true'
+    try {
+      upsertPreset({ presetId: 'p1', name: 'A', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: '原始人设', wallpaperPath: undefined })
+      updatePresetSystemPrompt('p1', '加密后的人设正文')
+
+      const raw = db.prepare(`SELECT systemPrompt FROM Presets WHERE presetId = ?`).get('p1') as any
+      expect(raw.systemPrompt).not.toBe('加密后的人设正文')
+
+      expect(getPresetById('p1')!.systemPrompt).toBe('加密后的人设正文')
+    } finally {
+      process.env.ENCRYPT_SENSITIVE_FIELDS = prevFlag
+    }
   })
 })
 
@@ -400,6 +469,55 @@ describe('Entities', () => {
 
     expect(getEntitiesAsOf('s1', 3000)).toHaveLength(1)
     expect(getEntitiesAsOf('s1', 6000)).toHaveLength(0)
+  })
+})
+
+describe('getCurrentEntitiesPage', () => {
+  it('limit 生效，返回最近 limit 条，按 id 正序排列，hasMore 为 true', () => {
+    for (let i = 0; i < 5; i++) {
+      insertEntity({ messageId: i, sessionId: 's1', type: 'preference', value: `偏好${i}`, validFrom: 1000 })
+    }
+    const { entities, hasMore } = getCurrentEntitiesPage('s1', 3)
+    expect(entities.map(e => e.value)).toEqual(['偏好2', '偏好3', '偏好4'])
+    expect(hasMore).toBe(true)
+  })
+
+  it('没有更多数据时 hasMore 为 false', () => {
+    for (let i = 0; i < 3; i++) {
+      insertEntity({ messageId: i, sessionId: 's1', type: 'preference', value: `偏好${i}`, validFrom: 1000 })
+    }
+    const { entities, hasMore } = getCurrentEntitiesPage('s1', 3)
+    expect(entities).toHaveLength(3)
+    expect(hasMore).toBe(false)
+  })
+
+  it('beforeId 正确排除新记录，只取更旧的一页', () => {
+    const ids: number[] = []
+    for (let i = 0; i < 5; i++) {
+      ids.push(insertEntity({ messageId: i, sessionId: 's1', type: 'preference', value: `偏好${i}`, validFrom: 1000 }))
+    }
+    const { entities, hasMore } = getCurrentEntitiesPage('s1', 3, ids[3])
+    expect(entities.map(e => e.value)).toEqual(['偏好0', '偏好1', '偏好2'])
+    expect(hasMore).toBe(false)
+  })
+
+  it('type 过滤与分页组合使用', () => {
+    for (let i = 0; i < 3; i++) {
+      insertEntity({ messageId: i, sessionId: 's1', type: 'preference', value: `偏好${i}`, validFrom: 1000 })
+    }
+    for (let i = 0; i < 3; i++) {
+      insertEntity({ messageId: i, sessionId: 's1', type: 'person', value: `人物${i}`, validFrom: 1000 })
+    }
+    const { entities, hasMore } = getCurrentEntitiesPage('s1', 2, undefined, 'preference')
+    expect(entities.map(e => e.value)).toEqual(['偏好1', '偏好2'])
+    expect(hasMore).toBe(true)
+  })
+
+  it('已关闭（validUntil 已设置）的实体不返回，与 getCurrentEntities 行为一致', () => {
+    const id = insertEntity({ messageId: 1, sessionId: 's1', type: 'preference', value: '喜欢猫', validFrom: 1000 })
+    closeEntity(id, 5000)
+    const { entities } = getCurrentEntitiesPage('s1', 10)
+    expect(entities).toHaveLength(0)
   })
 })
 
