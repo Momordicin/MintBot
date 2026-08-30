@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import path from 'path'
 import fs from 'fs'
 import crypto from 'crypto'
-import { getAllPresets, getPresetById, updatePresetWallpaper, updatePresetName, updatePresetDisplayConfig, updatePresetSystemPrompt } from '../session/queries.js'
+import { getAllPresets, getPresetById, updatePresetWallpaper, updatePresetName, updatePresetDisplayConfig, updatePresetSystemPrompt, updatePresetModelConfig } from '../session/queries.js'
 import { switchPreset, refreshCurrentPresetIfActive } from '../session/index.js'
 import { buildStatePayload } from '../state.js'
 import { isValidChatBgRgb, isValidChatBgOpacity } from '../session/displayConfig.js'
@@ -11,6 +11,7 @@ import type { PresetDisplayConfig } from '../../../shared/types/index.js'
 // 与 services/core/index.ts 里 @fastify/static 的 data/wallpapers 注册使用同一路径约定
 const WALLPAPER_DIR = path.resolve(process.cwd(), 'data/wallpapers')
 const ALLOWED_WALLPAPER_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif'])
+const VALID_MODEL_TYPES: readonly string[] = ['anthropic', 'openai', 'ollama']
 
 export async function presetRoutes(fastify: FastifyInstance) {
   fastify.get('/presets', async () => {
@@ -100,7 +101,14 @@ export async function presetRoutes(fastify: FastifyInstance) {
 
   fastify.patch<{
     Params: { presetId: string }
-    Body: { name?: string; displayConfig?: Partial<PresetDisplayConfig>; systemPrompt?: string; applyNow?: boolean }
+    Body: {
+      name?: string
+      displayConfig?: Partial<PresetDisplayConfig>
+      systemPrompt?: string
+      modelType?: 'anthropic' | 'openai' | 'ollama' | null
+      modelName?: string | null
+      applyNow?: boolean
+    }
   }>('/presets/:presetId', async (request, reply) => {
     const { presetId } = request.params
     const preset = getPresetById(presetId)
@@ -108,9 +116,15 @@ export async function presetRoutes(fastify: FastifyInstance) {
       return reply.status(404).send({ error: 'Preset not found' })
     }
 
-    const { name, displayConfig, systemPrompt, applyNow } = request.body
-    if (name === undefined && displayConfig === undefined && systemPrompt === undefined) {
-      return reply.status(400).send({ error: 'name, displayConfig or systemPrompt is required' })
+    const { name, displayConfig, systemPrompt, modelType, modelName, applyNow } = request.body
+    if (
+      name === undefined &&
+      displayConfig === undefined &&
+      systemPrompt === undefined &&
+      modelType === undefined &&
+      modelName === undefined
+    ) {
+      return reply.status(400).send({ error: 'name, displayConfig, systemPrompt, modelType or modelName is required' })
     }
 
     if (name !== undefined) {
@@ -148,8 +162,33 @@ export async function presetRoutes(fastify: FastifyInstance) {
       updatePresetSystemPrompt(presetId, trimmedSystemPrompt)
     }
 
-    // applyNow 刷新的是整个内存缓存的 preset 对象，不局限于 systemPrompt 这一个字段，
-    // 因此放在上面三个字段更新之后统一判断一次，而不是绑在 systemPrompt 分支内部
+    // modelType/modelName 必须成对出现（都传或都不传），只传一个是半吊子状态，拒绝
+    if ((modelType !== undefined) !== (modelName !== undefined)) {
+      return reply.status(400).send({ error: 'modelType and modelName must be provided together' })
+    }
+
+    if (modelType !== undefined) {
+      if (modelType === null) {
+        // 都为 null：清除覆盖，跟随全局对话模型配置
+        if (modelName !== null) {
+          return reply.status(400).send({ error: 'modelName must be null when modelType is null' })
+        }
+        updatePresetModelConfig(presetId, null, null)
+      } else {
+        // 都非 null：自定义覆盖，modelType 必须是合法枚举值，modelName trim 后非空
+        if (!VALID_MODEL_TYPES.includes(modelType)) {
+          return reply.status(400).send({ error: 'modelType must be one of anthropic, openai, ollama, or null' })
+        }
+        const trimmedModelName = (modelName ?? '').trim()
+        if (!trimmedModelName) {
+          return reply.status(400).send({ error: 'modelName is required when modelType is set' })
+        }
+        updatePresetModelConfig(presetId, modelType, trimmedModelName)
+      }
+    }
+
+    // applyNow 刷新的是整个内存缓存的 preset 对象，不局限于某一个字段，因此放在上面
+    // 几个字段更新之后统一判断一次，而不是绑在其中某个分支内部
     if (applyNow === true) {
       refreshCurrentPresetIfActive(presetId)
     }

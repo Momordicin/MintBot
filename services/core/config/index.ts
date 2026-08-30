@@ -1,5 +1,6 @@
 import fs from 'fs'
 import path from 'path'
+import crypto from 'crypto'
 import chokidar from 'chokidar'
 import type { ModelConfig } from '../../../shared/types/index.js'
 
@@ -34,7 +35,7 @@ export interface MemoryConfig {
   contextBudget: ContextBudgetConfig
 }
 
-const CONFIG_PATH = path.resolve(process.cwd(), 'config.json')
+export const CONFIG_PATH = path.resolve(process.cwd(), 'config.json')
 
 // 默认值必须与迁移前各文件硬编码的常量完全一致，保证没有 config.json（或字段缺失）的用户
 // 行为不发生变化
@@ -175,4 +176,88 @@ export function getModelProviderConfig(): ModelConfig {
 export function getBackgroundModelProviderConfig(): ModelConfig {
   ensureLoaded()
   return currentBackgroundModelProviderConfig ?? getModelProviderConfig()
+}
+
+// backgroundModelProvider 的原始覆盖状态（fallback 之前）：GET /config/model 需要区分
+// "没有配置覆盖"与"配置了覆盖且恰好等于全局配置"，getBackgroundModelProviderConfig()
+// 的 fallback 语义满足不了这个需求
+export function getRawBackgroundModelProviderConfig(): ModelConfig | null {
+  ensureLoaded()
+  return currentBackgroundModelProviderConfig ?? null
+}
+
+// ─── config.json 写入通道（设置页：全局模型配置）────────────────────────
+// 读写职责放在这里，不在路由文件里直接碰文件系统，跟 queries.ts 承载 Preset 字段更新是
+// 同一个分工
+
+// 读整份 config.json 的原始内容（不经过任何字段级合并/默认值填充），供写入通道复用磁盘上
+// 其它模块管的字段（memory/security 等）。文件不存在或解析失败时视为空对象——允许在
+// config.json 尚不存在时通过 PATCH /config/model 首次写入
+function readRawConfig(): Record<string, unknown> {
+  try {
+    return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'))
+  } catch {
+    return {}
+  }
+}
+
+function readRawSection(section: 'modelProvider' | 'backgroundModelProvider'): Partial<ModelConfig> {
+  const value = readRawConfig()[section]
+  return value && typeof value === 'object' ? (value as Partial<ModelConfig>) : {}
+}
+
+// 只替换目标 section，其余顶层字段（memory 等）原样保留；用与壁纸上传路由
+// （services/core/routes/presets.ts）相同的"临时文件 + 同目录 rename"原子写模式，
+// 不直接 writeFileSync 到 CONFIG_PATH。value 为 null 时把该 key 从写出的 JSON 里整个删掉
+// （而不是写入 JSON null），与 load() 里"该字段类型不是 object 就视为未配置"的判断逻辑
+// 保持一致，保证下次 reload 时被当成"未配置"
+function writeConfigSection(section: 'modelProvider' | 'backgroundModelProvider', value: ModelConfig | null): void {
+  const raw = readRawConfig()
+  if (value === null) {
+    delete raw[section]
+  } else {
+    raw[section] = value
+  }
+
+  const tempPath = `${CONFIG_PATH}.tmp-${crypto.randomUUID()}`
+  try {
+    fs.writeFileSync(tempPath, JSON.stringify(raw, null, 2))
+    fs.renameSync(tempPath, CONFIG_PATH)
+  } catch (err) {
+    try {
+      fs.rmSync(tempPath, { force: true })
+    } catch {
+      // 清理失败不应掩盖上面的原始错误
+    }
+    throw err
+  }
+}
+
+// 全局对话模型配置写入：只合并 partial 到当前磁盘上的 modelProvider 之上。直接返回合并
+// 后的结果给调用方（路由用这个返回值构造响应），不是等 chokidar 触发的异步 reload 后
+// 再读一次 getModelProviderConfig()——避免响应内容与磁盘刚写入的内容之间出现时序竞态。
+// 写入后不需要手动触发 reload：已有的 startConfigWatcher 监听同一个文件，写入本身就会
+// 触发它现有的 onReload 回调
+export function updateModelProviderConfig(partial: Partial<ModelConfig>): ModelConfig {
+  const merged = { ...readRawSection('modelProvider'), ...partial } as ModelConfig
+  writeConfigSection('modelProvider', merged)
+  // 写入后立即同步更新内存态，不能只依赖 chokidar 的异步 reload：chokidar 的 'change' 事件
+  // 对临时文件 rename 产生的 unlink+add 有一段去抖延迟，写入后到这段延迟结束之间，
+  // getModelProviderConfig()（包括 /chat 请求实际选用哪个模型）会读到写入前的旧值。
+  // chokidar 之后触发的 onReload 只是重新做一次同样的赋值，是幂等的，不会冲突——
+  // chokidar 仍然是外部手改 config.json 这种被动场景唯一的感知渠道，这里只是补上
+  // "通过这条写入通道自己触发的变化"不应该有的滞后
+  currentModelProviderConfig = merged
+  loaded = true
+  return merged
+}
+
+// 摘要模型配置写入：partial 为 null 表示清除覆盖（回落到 modelProvider）
+export function updateBackgroundModelProviderConfig(partial: Partial<ModelConfig> | null): ModelConfig | null {
+  const merged = partial === null ? null : ({ ...readRawSection('backgroundModelProvider'), ...partial } as ModelConfig)
+  writeConfigSection('backgroundModelProvider', merged)
+  // 同上，立即同步更新内存态，不等 chokidar 的异步 reload
+  currentBackgroundModelProviderConfig = merged ?? undefined
+  loaded = true
+  return merged
 }

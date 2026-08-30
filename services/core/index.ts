@@ -12,6 +12,7 @@ import { statusRoutes } from './routes/status.js'
 import { messageRoutes } from './routes/messages.js'
 import { forgetRoutes } from './routes/forget.js'
 import { memoryRoutes } from './routes/memory.js'
+import { configRoutes } from './routes/config.js'
 import { createModelProvider, ModelProvider } from './providers/ModelProvider.js'
 import { BGEProvider, getAiBaseUrl, type EmbeddingProvider } from './providers/EmbeddingProvider.js'
 import { Bert4NerProvider, type NERProvider } from './providers/NERProvider.js'
@@ -160,6 +161,7 @@ async function start() {
   await fastify.register(messageRoutes)
   await fastify.register(forgetRoutes)
   await fastify.register(memoryRoutes)
+  await fastify.register(configRoutes)
   await fastify.listen({ port: PORT, host: '127.0.0.1' })
   console.log(`[Core] Running on port ${PORT}`)
 
