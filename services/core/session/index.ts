@@ -7,7 +7,6 @@ import {
   touchSession,
   getRecentMessages,
   appendMessage,
-  resetEmotionState,
 } from './queries.js'
 
 interface SessionState {
@@ -63,16 +62,12 @@ export function switchPreset(presetId: string): SessionState {
   console.log(`[Session] Switching to preset ${presetId}`)
   current = null
   const state = loadSession(presetId)
-  // 角色切换时自动清零情绪状态（TDD §3.9），无论是新建 session 还是恢复的旧 session
-  // （旧 session 之前可能已有情绪记录，也要清掉）
-  resetEmotionState(state.session.sessionId)
   return state
 }
 
-// 设置页编辑 systemPrompt 后"立即生效"用：只替换内存缓存的 preset 对象本身，不碰 session、
-// 不调用 resetEmotionState——与 switchPreset 刻意区分开的窄范围原语（情绪清零耦合的分歧
-// 记入 backlog: emotion-reset-on-switch-disagreement，本次不动 switchPreset 现有行为）。
-// 编辑的 preset 若当前不是激活状态则是 no-op，等它真正被切换到时自然读到新值。
+// 设置页编辑 systemPrompt 后"立即生效"用：只替换内存缓存的 preset 对象本身，不碰 session
+// （这是与 switchPreset 真正的区别所在——switchPreset 会通过 loadSession 换一个新的
+// session）。编辑的 preset 若当前不是激活状态则是 no-op，等它真正被切换到时自然读到新值。
 // 竞态安全：buildContext.ts 的 requireCurrentState() 是同步执行、之前没有 await，
 // 在途 /chat 请求早已把 preset 复制进局部变量，这里换掉 current.preset 不影响它
 // （与 chat.ts 里 sessionId "dispatch 时刻捕获" 同一安全模式）。

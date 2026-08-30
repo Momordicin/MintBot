@@ -39,7 +39,7 @@ describe('switchPreset', () => {
     expect(getEmotionState(newState.session.sessionId)).toBeNull()
   })
 
-  it('切回同一 preset 恢复旧 session 时，情绪状态也被清零', () => {
+  it('切回同一 preset 恢复旧 session 时，情绪状态被完整保留，不被清零', () => {
     const { session } = loadSession('p1')
     upsertEmotionState(session.sessionId, { self: { label: 'sad', intensity: 0.4 }, perceived_user: null })
 
@@ -47,7 +47,10 @@ describe('switchPreset', () => {
     const resumedState = switchPreset('p1')
 
     expect(resumedState.session.sessionId).toBe(session.sessionId)
-    expect(getEmotionState(resumedState.session.sessionId)).toBeNull()
+    expect(getEmotionState(resumedState.session.sessionId)).toEqual({
+      self: { label: 'sad', intensity: 0.4 },
+      perceived_user: null,
+    })
   })
 })
 
