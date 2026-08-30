@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import type { AppState, PresetDisplayConfig, PresetSnapshot } from '../../shared/types/index.js'
+import type { AppState, ModelConfig, PresetDisplayConfig, PresetSnapshot } from '../../shared/types/index.js'
 import './settings.css'
 
 const CORE_URL = 'http://127.0.0.1:3000'
@@ -16,6 +16,10 @@ interface PresetOption {
 // 人设编辑的完整流程有且只有一个当前所在的步骤，用一个判别式联合表达，避免用一组独立
 // 布尔值时出现"同时为 true"的不可能状态
 type SystemPromptStep = 'idle' | 'editing' | 'confirmingSave' | 'confirmingApply' | 'saving'
+
+// 模型覆盖是"用哪个模型回答"的技术设置，不是"覆写人格"，因此比 SystemPromptStep 少一步：
+// 没有 systemPrompt 那种带文案的 confirmingSave 步骤，点"保存"直接进入立即应用/下次生效的选择
+type ModelOverrideStep = 'idle' | 'editing' | 'chooseApply' | 'saving'
 
 function rgbToHex([r, g, b]: [number, number, number]): string {
   return `#${[r, g, b].map(n => n.toString(16).padStart(2, '0')).join('')}`
@@ -45,6 +49,14 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
   const [systemPromptValue, setSystemPromptValue] = useState('')
   // "下次生效"保存成功后的一次性提示，跟 errorMessage 共用同一块内联展示位置（渲染处见下方）
   const [systemPromptNotice, setSystemPromptNotice] = useState<string | null>(null)
+  // 模型覆盖：四个互斥步骤中始终只有一个在生效，见上方 ModelOverrideStep 类型注释
+  const [modelOverrideStep, setModelOverrideStep] = useState<ModelOverrideStep>('idle')
+  const [useGlobalModel, setUseGlobalModel] = useState(true)
+  const [overrideModelType, setOverrideModelType] = useState<ModelConfig['type']>('anthropic')
+  const [overrideModelName, setOverrideModelName] = useState('')
+  // 同 systemPromptNotice 的"下次生效"一次性提示，各自独立不共用，避免两个不相关的动作
+  // 互相覆盖对方的提示文案
+  const [modelOverrideNotice, setModelOverrideNotice] = useState<string | null>(null)
   // 快速连续切换 preset 时，上一次切换还在途中的请求必须被中断，否则哪个请求先返回不确定
   const switchPresetControllerRef = useRef<AbortController | null>(null)
   // 壁纸上传自己独立的 controller，不与 switchPresetControllerRef 共用：两者取消方向不对称——
@@ -57,6 +69,8 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
   // 人设编辑没有防抖/自动保存概念（每次发送都是用户显式点过两段确认之后的结果），
   // 因此只需要 abort-then-reissue + 卸载时 abort，不需要 displayConfig 那套"卸载时补发"逻辑
   const systemPromptControllerRef = useRef<AbortController | null>(null)
+  // 模型覆盖同样没有防抖概念，独立于 systemPromptControllerRef——两个编辑区块互不中断对方
+  const modelOverrideControllerRef = useRef<AbortController | null>(null)
   // 让 handleWallpaperPick 在系统文件选择框（非模态，用户可在此期间继续切换 preset）关闭后，
   // 能读到"点击选图按钮那一刻之后是否发生过 preset 切换"的最新值，而不是闭包捕获的旧 prop
   const presetSnapshotRef = useRef<PresetSnapshot | null>(presetSnapshot)
@@ -95,6 +109,13 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
     setSystemPromptStep('idle')
     setSystemPromptValue(presetSnapshot?.systemPrompt ?? '')
     setSystemPromptNotice(null)
+    // 模型覆盖区块跟人设区块同款理由：真的切换 preset 时无条件放弃当前步骤，回到 idle
+    // 并用新 preset 的 modelType/modelName 重新填充只读展示/编辑态初始值
+    setModelOverrideStep('idle')
+    setUseGlobalModel(presetSnapshot?.modelType === null)
+    setOverrideModelType(presetSnapshot?.modelType ?? 'anthropic')
+    setOverrideModelName(presetSnapshot?.modelName ?? '')
+    setModelOverrideNotice(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [presetSnapshot?.presetId])
 
@@ -108,6 +129,7 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
       renameControllerRef.current?.abort()
       displayConfigControllerRef.current?.abort()
       systemPromptControllerRef.current?.abort()
+      modelOverrideControllerRef.current?.abort()
 
       // 防抖定时器还没到、组件就被卸载：待发的最后一次颜色/透明度编辑不能被静默丢弃，
       // 在这里同步补发一次。组件已经卸载，不需要等待响应也不需要 onSwitched
@@ -379,6 +401,85 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
     }
   }, [systemPromptValue, onSwitched])
 
+  const handleModelOverrideEditStart = useCallback(() => {
+    setUseGlobalModel(presetSnapshotRef.current?.modelType === null)
+    setOverrideModelType(presetSnapshotRef.current?.modelType ?? 'anthropic')
+    setOverrideModelName(presetSnapshotRef.current?.modelName ?? '')
+    setErrorMessage(null)
+    setModelOverrideNotice(null)
+    setModelOverrideStep('editing')
+  }, [])
+
+  const handleModelOverrideEditCancel = useCallback(() => {
+    // 丢弃这次输入，回 idle——下次点"编辑"会重新从 presetSnapshotRef 填充
+    setModelOverrideStep('idle')
+    setErrorMessage(null)
+  }, [])
+
+  const handleModelOverrideSaveClick = useCallback(() => {
+    if (!useGlobalModel && !overrideModelName.trim()) {
+      // 客户端校验，不进入立即应用/下次生效的选择，不发请求
+      setErrorMessage('模型名称不能为空')
+      return
+    }
+    setErrorMessage(null)
+    setModelOverrideStep('chooseApply')
+  }, [useGlobalModel, overrideModelName])
+
+  const handleModelOverrideChooseApplyCancel = useCallback(() => {
+    setModelOverrideStep('editing')
+  }, [])
+
+  const handleModelOverrideSend = useCallback(async (applyNow: boolean) => {
+    const presetId = presetSnapshotRef.current?.presetId
+    if (!presetId) return
+
+    const modelType = useGlobalModel ? null : overrideModelType
+    const trimmedModelName = useGlobalModel ? null : overrideModelName.trim()
+    if (!useGlobalModel && !trimmedModelName) return // 已经在 handleModelOverrideSaveClick 校验过，这里不应该发生
+
+    modelOverrideControllerRef.current?.abort()
+    const controller = new AbortController()
+    modelOverrideControllerRef.current = controller
+    setModelOverrideStep('saving')
+    setErrorMessage(null)
+
+    try {
+      const response = await fetch(`${CORE_URL}/presets/${encodeURIComponent(presetId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ modelType, modelName: trimmedModelName, applyNow }),
+        signal: controller.signal,
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
+      }
+
+      const state: AppState = await response.json()
+      if (controller.signal.aborted) return
+
+      // 同 handleRenameSave/handleSystemPromptSend 的一致性检查：响应姗姗来迟、期间用户
+      // 已经切换到别的 preset 时，不应用这次响应
+      if (state.presetSnapshot?.presetId === presetSnapshotRef.current?.presetId) {
+        onSwitched(state)
+        if (!applyNow) {
+          setModelOverrideNotice(`此次修改将在下次重新启用『${presetSnapshotRef.current?.name ?? ''}』时生效。`)
+        }
+        setModelOverrideStep('idle')
+      }
+    } catch (err) {
+      // AbortError 由更晚一次的保存请求触发，不算失败，不展示错误提示
+      if (err instanceof DOMException && err.name === 'AbortError') return
+      // 同上面成功分支一致的一致性检查：请求失败姗姗来迟、期间用户已经切换到别的 preset 时，
+      // 这个错误跟当前显示的 preset 无关，不应该把面板从新 preset 的状态里拽回 editing
+      if (presetId !== presetSnapshotRef.current?.presetId) return
+      // 保留输入内容、回到 editing（不是 chooseApply）——重试要重新选一次立即应用/下次生效
+      setErrorMessage('保存模型设置失败，请稍后重试')
+      setModelOverrideStep('editing')
+    }
+  }, [useGlobalModel, overrideModelType, overrideModelName, onSwitched])
+
   const sendDisplayConfigPatch = useCallback((presetId: string, partial: Partial<PresetDisplayConfig>) => {
     displayConfigControllerRef.current?.abort()
     const controller = new AbortController()
@@ -564,8 +665,73 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
           )}
         </div>
       )}
+      {presets.length > 0 && (
+        <div className="character-panel__model">
+          <div className="character-panel__model-label">模型</div>
+          {modelOverrideStep === 'idle' && (
+            <>
+              <div className="character-panel__model-text">
+                {presetSnapshot?.modelType === null
+                  ? '使用全局默认模型'
+                  : `${presetSnapshot?.modelType} / ${presetSnapshot?.modelName}`}
+              </div>
+              <button className="rename-btn" onClick={handleModelOverrideEditStart} title="编辑当前角色使用的模型">
+                编辑
+              </button>
+            </>
+          )}
+          {modelOverrideStep === 'editing' && (
+            <>
+              <label className="character-panel__model-checkbox">
+                <input
+                  type="checkbox"
+                  checked={useGlobalModel}
+                  onChange={e => setUseGlobalModel(e.target.checked)}
+                />
+                使用全局默认模型
+              </label>
+              {!useGlobalModel && (
+                <div className="character-panel__row">
+                  <select
+                    value={overrideModelType}
+                    onChange={e => setOverrideModelType(e.target.value as ModelConfig['type'])}
+                  >
+                    <option value="anthropic">Anthropic</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="ollama">Ollama</option>
+                  </select>
+                  <input
+                    className="character-panel__rename-input"
+                    value={overrideModelName}
+                    onChange={e => setOverrideModelName(e.target.value)}
+                    placeholder="模型名称"
+                  />
+                </div>
+              )}
+              <div className="character-panel__row">
+                <button className="rename-btn" onClick={handleModelOverrideEditCancel}>取消</button>
+                <button className="rename-btn" onClick={handleModelOverrideSaveClick}>保存</button>
+              </div>
+            </>
+          )}
+          {modelOverrideStep === 'chooseApply' && (
+            <div className="character-panel__persona-confirm">
+              <div>现在就应用，还是下次生效？</div>
+              <div className="character-panel__row">
+                <button className="rename-btn" onClick={handleModelOverrideChooseApplyCancel}>取消</button>
+                <button className="rename-btn" onClick={() => handleModelOverrideSend(false)}>下次生效</button>
+                <button className="rename-btn" onClick={() => handleModelOverrideSend(true)}>立即应用</button>
+              </div>
+            </div>
+          )}
+          {modelOverrideStep === 'saving' && (
+            <div className="character-panel__persona-confirm">保存中…</div>
+          )}
+        </div>
+      )}
       {errorMessage && <div className="character-panel__error">{errorMessage}</div>}
       {systemPromptNotice && <div className="character-panel__notice">{systemPromptNotice}</div>}
+      {modelOverrideNotice && <div className="character-panel__notice">{modelOverrideNotice}</div>}
     </div>
   )
 }
