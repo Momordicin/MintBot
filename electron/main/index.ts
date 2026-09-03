@@ -1,8 +1,9 @@
-import { app, BrowserWindow, Menu, globalShortcut, powerMonitor, ipcMain, dialog, screen, nativeImage } from 'electron'
+import { app, BrowserWindow, Menu, Tray, globalShortcut, powerMonitor, ipcMain, dialog, screen, nativeImage } from 'electron'
 import { join, basename } from 'path'
 import { readFile, stat } from 'fs/promises'
 import { is } from '@electron-toolkit/utils'
 import { startActiveWindowMonitor } from './activeWindowMonitor'
+import { initWindowBehaviorConfig, updateCachedWindowBehaviorConfig, handleActiveWindowChange } from './windowBehavior'
 
 // startActiveWindowMonitor 返回的清理函数（clearInterval）——挂到 will-quit，避免这个
 // 500ms 轮询器的生命周期问题被"反正 app.quit() 会强杀进程"这个事实悄悄掩盖
@@ -11,6 +12,24 @@ let stopActiveWindowMonitor: (() => void) | null = null
 // 核心服务地址：与渲染层 ChatWindow.tsx 的 CORE_URL 各自独立定义（两边本来就是独立代码，
 // 不共享 shared/types，这里沿用既有约定）
 const CORE_URL = 'http://127.0.0.1:3000'
+
+// 悬浮窗行为策略配置的主进程本地类型：跟 CORE_URL 同样的独立定义约定，不反向导入
+// services/core/config/index.ts（主进程只通过 HTTP 与核心服务交互，见 notifySystemEvent）。
+// 这里的类型只服务于托盘菜单骨架本身（知道当前 pinMode 用于勾选态）；真正的置顶/躲避逻辑
+// 在 electron/main/windowBehavior.ts 里（该文件按同样的独立定义约定维护自己的一份副本，
+// 两者不互相 import）
+type PinMode = 'off' | 'dodge-fullscreen' | 'always-on-top'
+
+interface WindowBehaviorConfig {
+  pinMode: PinMode
+  fullscreenWhitelist: string[]
+  blacklist: string[]
+}
+
+let tray: Tray | null = null
+// 区分"用户点了托盘退出"与"用户点了聊天窗口的关闭按钮"——后者现在只隐藏窗口、触发悬浮窗，
+// 不应该真的销毁窗口/退出应用
+let isQuitting = false
 
 // 主进程只转发原始系统信号，不做任何判断/计时逻辑（那些都在核心服务侧，TDD §3.2
 // "主进程检测到系统事件后通过本地 HTTP 调用核心服务内部管理接口"）。核心服务尚未启动/
@@ -66,6 +85,7 @@ async function applyIconFromCurrentPreset(): Promise<void> {
     if (generation !== iconGeneration) return
     mainWindow?.setIcon(image)
     overlayWindow?.setIcon(image)
+    tray?.setImage(image)
   } catch (err) {
     console.error('[Icon] Failed to apply icon from current preset:', err)
   }
@@ -73,8 +93,11 @@ async function applyIconFromCurrentPreset(): Promise<void> {
 
 // 主进程第一次反过来订阅核心服务的 SSE 广播（GET /events，TDD §3.3）——此前主进程只会
 // 单向调用核心服务（见上方 notifySystemEvent）。收到 preset-switched 帧后重新解析头像并
-// 换图标。断线不做自动重连：这是锦上添花的功能，恢复只需重启应用，不值得为它引入重试逻辑
-async function subscribeToPresetSwitchEvents(): Promise<void> {
+// 换图标；收到 window-behavior-changed 帧（子任务③新增）后更新 windowBehavior.ts 的内存
+// 缓存并刷新托盘菜单勾选态。两个事件类型共用同一个 frame reader（buffer/'\n\n' 拆帧循环
+// 只写一份），不为 window-behavior-changed 再单独开一个 /events 连接。断线不做自动重连：
+// 这是锦上添花的功能，恢复只需重启应用，不值得为它引入重试逻辑
+async function subscribeToCoreEvents(): Promise<void> {
   try {
     const response = await fetch(`${CORE_URL}/events`)
     const reader = response.body?.getReader()
@@ -93,15 +116,113 @@ async function subscribeToPresetSwitchEvents(): Promise<void> {
         buffer = buffer.slice(frameEnd + 2)
         // 按行精确匹配 event 字段，不用整帧 substring 搜索——避免未来事件名共享前缀
         // （如假设的 preset-switched-ack）或 data 载荷文本恰好包含这段字符串时误判
-        if (frame.split('\n').some(line => line === 'event: preset-switched')) {
+        const lines = frame.split('\n')
+        if (lines.some(line => line === 'event: preset-switched')) {
           applyIconFromCurrentPreset()
+        }
+        if (lines.some(line => line === 'event: window-behavior-changed')) {
+          const dataLine = lines.find(line => line.startsWith('data: '))
+          if (dataLine) {
+            try {
+              updateCachedWindowBehaviorConfig(JSON.parse(dataLine.slice('data: '.length)), mainWindow)
+              rebuildTrayMenu()
+            } catch (err) {
+              console.error('[WindowBehavior] Failed to parse window-behavior-changed event:', err)
+            }
+          }
         }
         frameEnd = buffer.indexOf('\n\n')
       }
     }
   } catch (err) {
-    console.error('[Icon] preset-switched subscription ended:', err)
+    console.error('[Events] core event subscription ended:', err)
   }
+}
+
+// 读当前悬浮窗行为策略配置，只用于构建托盘菜单的勾选态——失败时按 pinMode: 'off' 兜底，
+// 跟 notifySystemEvent/applyIconFromCurrentPreset 一样的降级风格，不影响主进程本身
+async function fetchWindowBehaviorConfig(): Promise<WindowBehaviorConfig | null> {
+  try {
+    const response = await fetch(`${CORE_URL}/config/window-behavior`)
+    if (!response.ok) return null
+    return await response.json()
+  } catch {
+    return null
+  }
+}
+
+async function patchPinMode(pinMode: PinMode): Promise<void> {
+  try {
+    await fetch(`${CORE_URL}/config/window-behavior`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinMode }),
+    })
+  } catch (err) {
+    console.error('[Tray] Failed to patch pinMode:', err)
+  }
+}
+
+// 重建托盘右键菜单：点击菜单项时改配置、菜单勾选态跟着变；外部配置变化（设置页 PATCH
+// 或另一次托盘点击广播的 SSE window-behavior-changed）也会重新调这个函数刷新勾选态，
+// 见 subscribeToCoreEvents 里的 window-behavior-changed 分支
+async function rebuildTrayMenu(): Promise<void> {
+  if (!tray) return
+  const config = await fetchWindowBehaviorConfig()
+  const currentPinMode: PinMode = config?.pinMode ?? 'off'
+
+  const menu = Menu.buildFromTemplate([
+    {
+      label: '置顶',
+      submenu: [
+        {
+          label: '关闭',
+          type: 'radio',
+          checked: currentPinMode === 'off',
+          click: () => handlePinModeClick('off'),
+        },
+        {
+          label: '全屏时跳非全屏屏幕置顶',
+          type: 'radio',
+          checked: currentPinMode === 'dodge-fullscreen',
+          click: () => handlePinModeClick('dodge-fullscreen'),
+        },
+        {
+          label: '绝对置顶',
+          type: 'radio',
+          checked: currentPinMode === 'always-on-top',
+          click: () => handlePinModeClick('always-on-top'),
+        },
+      ],
+    },
+    {
+      label: '打开聊天窗口',
+      click: () => {
+        mainWindow?.show()
+        mainWindow?.focus()
+      },
+    },
+    {
+      label: '退出',
+      click: () => {
+        isQuitting = true
+        app.quit()
+      },
+    },
+  ])
+  tray.setContextMenu(menu)
+}
+
+async function handlePinModeClick(pinMode: PinMode): Promise<void> {
+  await patchPinMode(pinMode)
+  await rebuildTrayMenu()
+}
+
+// 图标先用空图占位，实际图标在 applyIconFromCurrentPreset() 里跟聊天窗口/悬浮窗一起
+// setImage（见上方该函数末尾），这里不重复计算一份
+function createTray(): void {
+  tray = new Tray(nativeImage.createEmpty())
+  rebuildTrayMenu()
 }
 
 // 与 services/core/routes/presets.ts 的 bodyLimit 保持一致：超过这个大小的文件注定会被
@@ -155,6 +276,19 @@ ipcMain.handle('select-character-card-file', async () => {
 
   const buffer = await readFile(filePath)
   return { data: new Uint8Array(buffer), filename: basename(filePath) }
+})
+
+// 悬浮窗行为策略的白名单/黑名单选 exe 文件：同上两个 select-*-file 的分工，主进程只负责
+// 系统文件选择框；但这里只需要文件名做匹配（不像壁纸/角色卡要把文件内容传回渲染层），
+// 不读文件字节，跳过 stat 大小校验/readFile
+ipcMain.handle('select-exe-file', async () => {
+  const result = await dialog.showOpenDialog({
+    properties: ['openFile'],
+    filters: [{ name: 'Executable', extensions: ['exe'] }]
+  })
+  if (result.canceled || result.filePaths.length === 0) return null
+
+  return { filename: basename(result.filePaths[0]) }
 })
 
 let settingsWindow: BrowserWindow | null = null
@@ -283,6 +417,17 @@ function createWindow() {
     overlayWindow?.hide()
   })
 
+  // 关闭按钮不再销毁窗口：跟托盘"退出"区分开（isQuitting），聊天窗口关闭跟最小化一样
+  // 只是隐藏 + 触发悬浮窗显示，应用继续在托盘常驻。用 close（可 preventDefault）而非
+  // closed（已销毁后触发，拦不住）
+  win.on('close', event => {
+    if (!isQuitting) {
+      event.preventDefault()
+      win.hide()
+      overlayWindow?.showInactive()
+    }
+  })
+
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
@@ -300,14 +445,19 @@ ipcMain.on('overlay:activate', () => {
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null)
   createWindow()
-  // 悬浮窗跟随聊天窗口的最小化/焦点状态显隐（见上方 createWindow 内的 minimize/focus
-  // 监听）；关闭时启动悬浮窗留到系统托盘做完之后再接，见 buzzing-frolicking-eich.md 计划
+  // 悬浮窗跟随聊天窗口的最小化/焦点/关闭状态显隐（见上方 createWindow 内的
+  // minimize/focus/close 监听）
   overlayWindow = createOverlayWindow()
+  // 托盘骨架先于 applyIconFromCurrentPreset 创建，保证该函数末尾的 tray?.setImage 生效时
+  // tray 已存在（createTray 内部第一行同步执行 new Tray(...)，之后才有异步的菜单构建）
+  createTray()
 
-  // 两个窗口都创建完之后设置启动时的初始图标，并订阅之后的 preset 切换事件（fire-and-forget，
-  // 不阻塞启动；两者内部都已 try/catch，失败只 console.error）
+  // 两个窗口都创建完之后设置启动时的初始图标，拉取一次悬浮窗行为策略配置，并订阅之后的
+  // preset 切换 / window-behavior-changed 事件（fire-and-forget，不阻塞启动；三者内部都已
+  // try/catch，失败只 console.error）
   applyIconFromCurrentPreset()
-  subscribeToPresetSwitchEvents()
+  initWindowBehaviorConfig()
+  subscribeToCoreEvents()
 
   globalShortcut.register('CommandOrControl+Shift+I', () => {
     BrowserWindow.getFocusedWindow()?.webContents.openDevTools()
@@ -316,9 +466,10 @@ app.whenReady().then(() => {
   powerMonitor.on('lock-screen', () => notifySystemEvent('lock-screen'))
   powerMonitor.on('unlock-screen', () => notifySystemEvent('unlock-screen'))
 
-  // 这一轮只检测 + 打日志，不接悬浮窗行为（跳屏/隐藏/置顶/白名单黑名单是下一个独立
-  // checklist 项"悬浮窗行为策略"，这次故意不糊在一起）
-  stopActiveWindowMonitor = startActiveWindowMonitor(info => console.log('[ActiveWindow]', info))
+  // 真正的跳屏/隐藏/置顶/白名单黑名单逻辑见 electron/main/windowBehavior.ts
+  // （buzzing-frolicking-eich.md 计划子任务③）。mainWindow/overlayWindow 在闭包里按引用
+  // 读取，每次 tick 拿到的都是调用时刻的当前值，不会因为窗口重建/置空而脱节
+  stopActiveWindowMonitor = startActiveWindowMonitor(info => handleActiveWindowChange(info, mainWindow, overlayWindow))
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

@@ -36,6 +36,14 @@ export interface MemoryConfig {
   contextBudget: ContextBudgetConfig
 }
 
+// 悬浮窗行为策略（置顶模式 + 全屏白名单/黑名单），见 buzzing-frolicking-eich.md 计划子任务①。
+// fullscreenWhitelist/blacklist 存 exe 文件名（如 "chrome.exe"），不含路径
+export interface WindowBehaviorConfig {
+  pinMode: 'off' | 'dodge-fullscreen' | 'always-on-top'
+  fullscreenWhitelist: string[]
+  blacklist: string[]
+}
+
 export const CONFIG_PATH = path.resolve(process.cwd(), 'config.json')
 
 // 默认值必须与迁移前各文件硬编码的常量完全一致，保证没有 config.json（或字段缺失）的用户
@@ -62,9 +70,18 @@ const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
   },
 }
 
+const DEFAULT_WINDOW_BEHAVIOR_CONFIG: WindowBehaviorConfig = {
+  pinMode: 'off',
+  fullscreenWhitelist: [],
+  blacklist: [],
+}
+
+const VALID_PIN_MODES: readonly string[] = ['off', 'dodge-fullscreen', 'always-on-top']
+
 let currentMemoryConfig: MemoryConfig = DEFAULT_MEMORY_CONFIG
 let currentModelProviderConfig: ModelConfig | undefined
 let currentBackgroundModelProviderConfig: ModelConfig | undefined
+let currentWindowBehaviorConfig: WindowBehaviorConfig = DEFAULT_WINDOW_BEHAVIOR_CONFIG
 let loaded = false
 
 // 单个数字字段的按字段合并：存在且类型正确则使用，否则告警 + 回退到该字段自己的默认值
@@ -104,6 +121,37 @@ function mergeMemoryConfig(raw: unknown): MemoryConfig {
   }
 }
 
+// 字符串数组字段的合并：非数组直接回退到空数组；数组内非字符串元素被过滤掉，不让一个
+// 写错类型的元素连累其它元素——跟 mergeNumberField"按字段回退，不是整体回退"同一个口径
+function mergeStringArrayField(source: unknown, field: string, label: string): string[] {
+  const value = (source as Record<string, unknown> | undefined)?.[field]
+  if (!Array.isArray(value)) return []
+  const filtered = value.filter((item): item is string => typeof item === 'string')
+  if (filtered.length !== value.length) {
+    console.warn(`[Config] ${label} 存在非字符串元素，已过滤`)
+  }
+  return filtered
+}
+
+function mergeWindowBehaviorConfig(raw: unknown): WindowBehaviorConfig {
+  const windowBehavior = (raw as Record<string, unknown> | undefined)?.windowBehavior
+  const pinModeValue = (windowBehavior as Record<string, unknown> | undefined)?.pinMode
+
+  let pinMode: WindowBehaviorConfig['pinMode']
+  if (typeof pinModeValue === 'string' && VALID_PIN_MODES.includes(pinModeValue)) {
+    pinMode = pinModeValue as WindowBehaviorConfig['pinMode']
+  } else {
+    console.warn(`[Config] windowBehavior.pinMode 缺失或不合法，使用默认值 'off'`)
+    pinMode = 'off'
+  }
+
+  return {
+    pinMode,
+    fullscreenWhitelist: mergeStringArrayField(windowBehavior, 'fullscreenWhitelist', 'windowBehavior.fullscreenWhitelist'),
+    blacklist: mergeStringArrayField(windowBehavior, 'blacklist', 'windowBehavior.blacklist'),
+  }
+}
+
 // 加载 + 校验 + 合并一次，返回这次加载本身是否成功读到并解析了 config.json（不代表每个
 // 字段都合法——字段级别的缺失/类型错误走 mergeNumberField 的按字段回退，不算加载失败）。
 // config.json 整体缺失/解析失败时：首次加载回退到全部默认值；热更新期间（loaded 已为 true）
@@ -119,6 +167,7 @@ function load(): boolean {
       currentMemoryConfig = mergeMemoryConfig(undefined)
       currentModelProviderConfig = undefined
       currentBackgroundModelProviderConfig = undefined
+      currentWindowBehaviorConfig = mergeWindowBehaviorConfig(undefined)
       loaded = true
     } else {
       console.warn('[Config] config.json 重新加载失败，保留上一次的有效配置:', err)
@@ -144,6 +193,8 @@ function load(): boolean {
       ? (backgroundModelProviderRaw as ModelConfig)
       : undefined
 
+  currentWindowBehaviorConfig = mergeWindowBehaviorConfig(raw)
+
   loaded = true
   return true
 }
@@ -166,6 +217,11 @@ export function startConfigWatcher(onReload?: () => void): void {
 export function getMemoryConfig(): MemoryConfig {
   ensureLoaded()
   return currentMemoryConfig
+}
+
+export function getWindowBehaviorConfig(): WindowBehaviorConfig {
+  ensureLoaded()
+  return currentWindowBehaviorConfig
 }
 
 export function getModelProviderConfig(): ModelConfig {
@@ -204,9 +260,11 @@ function readRawConfig(): Record<string, unknown> {
   }
 }
 
-function readRawSection(section: 'modelProvider' | 'backgroundModelProvider'): Partial<ModelConfig> {
+// windowBehavior 不是可选字段（不像 backgroundModelProvider 那样支持整体清除），
+// value 的 null 分支只在 writeConfigSection 里为 modelProvider/backgroundModelProvider 服务
+function readRawSection(section: 'modelProvider' | 'backgroundModelProvider' | 'windowBehavior'): Record<string, unknown> {
   const value = readRawConfig()[section]
-  return value && typeof value === 'object' ? (value as Partial<ModelConfig>) : {}
+  return value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
 }
 
 // 只替换目标 section，其余顶层字段（memory 等）原样保留；用与壁纸上传路由
@@ -214,7 +272,7 @@ function readRawSection(section: 'modelProvider' | 'backgroundModelProvider'): P
 // 不直接 writeFileSync 到 CONFIG_PATH。value 为 null 时把该 key 从写出的 JSON 里整个删掉
 // （而不是写入 JSON null），与 load() 里"该字段类型不是 object 就视为未配置"的判断逻辑
 // 保持一致，保证下次 reload 时被当成"未配置"
-function writeConfigSection(section: 'modelProvider' | 'backgroundModelProvider', value: ModelConfig | null): void {
+function writeConfigSection(section: 'modelProvider' | 'backgroundModelProvider' | 'windowBehavior', value: ModelConfig | WindowBehaviorConfig | null): void {
   const raw = readRawConfig()
   if (value === null) {
     delete raw[section]
@@ -261,6 +319,21 @@ export function updateBackgroundModelProviderConfig(partial: Partial<ModelConfig
   writeConfigSection('backgroundModelProvider', merged)
   // 同上，立即同步更新内存态，不等 chokidar 的异步 reload
   currentBackgroundModelProviderConfig = merged ?? undefined
+  loaded = true
+  return merged
+}
+
+// 悬浮窗行为策略写入：partial 已经在路由层校验过（pinMode 合法值、数组元素为字符串），
+// 这里只负责合并 + 落盘，同上两个 update* 函数一样立即同步内存态，不等 chokidar 的异步 reload
+export function updateWindowBehaviorConfig(partial: Partial<WindowBehaviorConfig>): WindowBehaviorConfig {
+  const merged = { ...readRawSection('windowBehavior'), ...partial } as WindowBehaviorConfig
+  // 后端兜底去重：渲染层的"添加"流程虽然已经检查过 includes()，但这是并发写入下唯一
+  // 真正权威的一道关卡——写入的数组里如果混进重复文件名，React 列表按值当 key 会撞车，
+  // 删除操作也会一次性把重复项全部删掉而不是删单条，在这里去重从根源上杜绝这种情况
+  if (merged.fullscreenWhitelist) merged.fullscreenWhitelist = [...new Set(merged.fullscreenWhitelist)]
+  if (merged.blacklist) merged.blacklist = [...new Set(merged.blacklist)]
+  writeConfigSection('windowBehavior', merged)
+  currentWindowBehaviorConfig = merged
   loaded = true
   return merged
 }

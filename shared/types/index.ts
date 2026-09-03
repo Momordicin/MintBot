@@ -161,6 +161,7 @@ export type SSEEventType =
   | 'audio_done'
   | 'proactive'
   | 'system'
+  | 'window-behavior-changed'
 
 export interface PendingTool {
   toolId: string

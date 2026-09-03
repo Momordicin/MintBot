@@ -3,11 +3,12 @@ import type { AppState } from '../../shared/types/index.js'
 import { CharacterPanel } from './CharacterPanel'
 import { MemoryPanel } from './memory/MemoryPanel'
 import { ModelConfigPanel } from './ModelConfigPanel'
+import { WindowBehaviorPanel } from './WindowBehaviorPanel'
 import './settings.css'
 
 const CORE_URL = 'http://127.0.0.1:3000'
 
-type Tab = 'character' | 'memory' | 'model'
+type Tab = 'character' | 'memory' | 'model' | 'window'
 
 export function SettingsApp() {
   const hasFetched = useRef(false)
@@ -70,6 +71,12 @@ export function SettingsApp() {
         >
           模型配置
         </button>
+        <button
+          className={`settings-tab${activeTab === 'window' ? ' settings-tab--active' : ''}`}
+          onClick={() => setActiveTab('window')}
+        >
+          窗口行为
+        </button>
       </div>
 
       <div className="settings-panel">
@@ -78,6 +85,7 @@ export function SettingsApp() {
         )}
         {activeTab === 'memory' && <MemoryPanel sessionId={appState?.sessionId ?? null} />}
         {activeTab === 'model' && <ModelConfigPanel />}
+        {activeTab === 'window' && <WindowBehaviorPanel />}
       </div>
     </div>
   )
