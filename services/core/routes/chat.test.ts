@@ -9,8 +9,17 @@ import { loadSession } from '../session/index.js'
 import { chatRoutes } from './chat.js'
 import * as ModelProviderModule from '../providers/ModelProvider.js'
 import * as BuildContextModule from '../context/buildContext.js'
+import * as BroadcastModule from '../events/broadcast.js'
 import type { ModelProvider } from '../providers/ModelProvider.js'
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
+
+// emotion 双发（TDD §3.3）：私有流照常发送，broadcastEvent 只是额外调用，本文件不关心
+// broadcast.ts 自己的注册表/写入机制（那是 broadcast.test.ts 的职责），这里只验证 chat.ts
+// 确实调用了它、且 payload 与私有流一致
+vi.mock('../events/broadcast.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../events/broadcast.js')>()
+  return { ...actual, broadcastEvent: vi.fn() }
+})
 
 // chat.ts 内部读取 getModelProviderConfig()（原来的 fastify.config.modelProvider）；
 // buildContext.ts（chat.ts 内部调用）也依赖同一个 config 模块的 getMemoryConfig()——
@@ -152,6 +161,21 @@ describe('POST /chat', () => {
     const stored = getEmotionState(session.sessionId)
     expect(stored?.self).toEqual({ label: 'happy', intensity: 0.8 })
     expect(stored?.perceived_user).toBeNull()
+  })
+
+  it('self 情绪合法时，广播流也收到与私有流一致的 emotion payload', async () => {
+    loadSession('p1')
+    const { fastify } = await buildTestApp(JSON.stringify({
+      reply: '你好呀',
+      emotion: { self: { label: 'happy', intensity: 0.8 }, perceived_user: null },
+    }))
+
+    await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+
+    expect(BroadcastModule.broadcastEvent).toHaveBeenCalledWith('emotion', {
+      self: { label: 'happy', intensity: 0.8 },
+      perceived_user: null,
+    })
   })
 
   it('emotion 字段缺失/不合法时，不落库，也不报错，SSE 正常返回', async () => {

@@ -6,6 +6,7 @@ import { initDb } from './db/index.js'
 import { loadSession } from './session/index.js'
 import { getAllPresets, backfillMessageFts } from './session/queries.js'
 import { chatRoutes } from './routes/chat.js'
+import { eventsRoutes } from './routes/events.js'
 import { presetRoutes } from './routes/presets.js'
 import { characterImportRoutes } from './routes/characterImport.js'
 import { internalRoutes } from './routes/internal.js'
@@ -157,6 +158,7 @@ async function start() {
   })
 
   await fastify.register(chatRoutes)
+  await fastify.register(eventsRoutes)
   await fastify.register(presetRoutes)
   await fastify.register(characterImportRoutes)
   await fastify.register(internalRoutes)

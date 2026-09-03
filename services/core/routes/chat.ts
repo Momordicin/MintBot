@@ -4,6 +4,7 @@ import { buildContext } from '../context/buildContext.js'
 import { parseSelfEmotion, parseEmoteTag } from '../session/emotion.js'
 import { selectEmoteFile } from '../characters/emotePool.js'
 import { upsertEmotionState } from '../session/queries.js'
+import { broadcastEvent } from '../events/broadcast.js'
 import { createModelProviderForPreset } from '../providers/ModelProvider.js'
 import { getModelProviderConfig } from '../config/index.js'
 
@@ -158,6 +159,13 @@ export async function chatRoutes(fastify: FastifyInstance) {
         send('emotion', {
           self: selfEmotion,
           perceived_user: null,  // Phase 2 基础版故意留空占位，不透传模型的尝试性输出，不是遗漏
+        })
+
+        // 双发，不是迁移（TDD §3.3「SSE 事件类型规范」）：私有流零延迟给请求方本身，
+        // 这里额外广播同一份数据给其它窗口（如 Phase 3 悬浮窗按情绪标签联动立绘）
+        broadcastEvent('emotion', {
+          self: selfEmotion,
+          perceived_user: null,
         })
 
       } catch (err) {
