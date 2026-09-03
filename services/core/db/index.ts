@@ -185,15 +185,35 @@ function runMigrations(): { needsFtsBackfill: boolean } {
   return { needsFtsBackfill }
 }
 
+// simple 分词器扩展（libsimple，wangfenjin/simple v0.7.1 预编译版，见 vendor/ 下按平台命名的
+// 目录）按平台选择动态库文件名，跟 scripts/setup-vendor.ts 里 getPlatformTarget() 的映射表
+// 一一对应，两处各自独立维护（映射表足够小，不值得为了避免重复引入跨文件依赖），改动时两处
+// 都要看一眼。不支持的平台在这里直接抛清楚的错误，而不是让 db.loadExtension() 抛一个难以
+// 理解的原生错误。
+function getLibsimplePath(): string {
+  let dirName: string
+  let libFileName: string
+  if (process.platform === 'win32') {
+    dirName = 'libsimple-windows-x64'
+    libFileName = 'simple.dll'
+  } else if (process.platform === 'darwin') {
+    const arch = process.arch === 'arm64' ? 'arm64' : 'x64'
+    dirName = `libsimple-osx-${arch}`
+    libFileName = 'libsimple.dylib'
+  } else {
+    throw new Error(`libsimple 目前只支持 Windows / macOS，当前平台是 ${process.platform}，暂不支持`)
+  }
+  return path.resolve(process.cwd(), 'services/core/db/vendor', dirName, libFileName)
+}
+
 export function initDb(): { needsFtsBackfill: boolean } {
   sqliteVec.load(db)
-  // simple 分词器扩展（libsimple，wangfenjin/simple v0.7.1 Windows x64 预编译版，见 vendor/
-  // libsimple-windows-x64/），message_fts 建表用到 tokenize='simple'，必须在任何 FTS5 相关的
-  // 建表语句之前加载。用相对于 process.cwd() 的项目根目录路径而非 __dirname：tsc 编译不会把
-  // vendor/ 下的非 .ts 资源复制到 out/ 目录，用项目根目录相对路径可以保证 tsx 直接跑源码
-  // （tsx watch services/core/index.ts）和编译后跑 out/（pm2 start ecosystem.config.cjs）
-  // 都能找到同一份 vendor 文件，两种启动方式的工作目录都是项目根目录。
-  db.loadExtension(path.resolve(process.cwd(), 'services/core/db/vendor/libsimple-windows-x64/simple.dll'))
+  // message_fts 建表用到 tokenize='simple'，必须在任何 FTS5 相关的建表语句之前加载。用相对于
+  // process.cwd() 的项目根目录路径而非 __dirname：tsc 编译不会把 vendor/ 下的非 .ts 资源复制到
+  // out/ 目录，用项目根目录相对路径可以保证 tsx 直接跑源码（tsx watch services/core/index.ts）
+  // 和编译后跑 out/（pm2 start ecosystem.config.cjs）都能找到同一份 vendor 文件，两种启动方式
+  // 的工作目录都是项目根目录。
+  db.loadExtension(getLibsimplePath())
   db.exec(`
     CREATE TABLE IF NOT EXISTS Presets (
       presetId     TEXT    PRIMARY KEY,
