@@ -7,6 +7,11 @@ import { loadSession, getCurrentState } from '../session/index.js'
 import { buildContext } from './buildContext.js'
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
 
+// 输出契约块（Part C，TDD §3.9）末尾的 JSON 格式说明始终被追加到 system，与词表/称呼
+// 是否存在无关——本文件里大量既有用例断言"system 不受某个因素影响"，这些断言现在必须
+// 承认这条恒定追加的尾巴，而不是继续断言 system 与 preset.systemPrompt 完全相等
+const JSON_CONTRACT_MARKER = '请严格用以下 JSON 格式回复'
+
 // 与迁移前硬编码常量/config.example.json 默认值保持一致，其余测试用例依赖这些默认值
 // （足够大的预算）不触发裁剪，行为与迁移前一致
 const DEFAULT_TEST_MEMORY_CONFIG = {
@@ -64,9 +69,10 @@ afterEach(() => {
 })
 
 describe('buildContext', () => {
-  it('system 等于 preset.systemPrompt（未触发召回时）', async () => {
+  it('system 以 preset.systemPrompt 开头，末尾追加输出契约块（未触发召回时）', async () => {
     const ctx = await buildContext('你好', { embedding: fakeEmbeddingProvider() })
-    expect(ctx.system).toBe('你是一个AI助手')
+    expect(ctx.system.startsWith('你是一个AI助手')).toBe(true)
+    expect(ctx.system).toContain(JSON_CONTRACT_MARKER)
   })
 
   it('messages 最后一条是用户输入', async () => {
@@ -127,9 +133,10 @@ describe('buildContext', () => {
     expect(ctx.system).toContain('我们聊过日本旅行的事')
   })
 
-  it('不触发召回时 system 保持原样', async () => {
+  it('不触发召回时 system 不含 RAG 片段（除输出契约块外不受影响）', async () => {
     const ctx = await buildContext('好的', { embedding: fakeEmbeddingProvider() })
-    expect(ctx.system).toBe('你是一个AI助手')
+    expect(ctx.system.startsWith('你是一个AI助手')).toBe(true)
+    expect(ctx.system).not.toContain('以下是相关的历史对话片段')
   })
 
   it('有情绪状态时 system 包含情绪标签与强度', async () => {
@@ -142,9 +149,10 @@ describe('buildContext', () => {
     expect(ctx.system).toContain('0.7')
   })
 
-  it('没有情绪状态时（新 session）system 就是 preset.systemPrompt，不多不少', async () => {
+  it('没有情绪状态时（新 session）system 不含情绪状态那一句（除输出契约块外不受影响）', async () => {
     const ctx = await buildContext('好的', { embedding: fakeEmbeddingProvider() })
-    expect(ctx.system).toBe('你是一个AI助手')
+    expect(ctx.system.startsWith('你是一个AI助手')).toBe(true)
+    expect(ctx.system).not.toContain('你当前的情绪状态是')
   })
 
   it('同时触发情绪注入和 RAG 召回时，两段内容都出现在 system 中且互不干扰', async () => {
@@ -175,9 +183,10 @@ describe('buildContext', () => {
     expect(ctx.system).toContain('用户之前提到喜欢猫，在阿里巴巴工作')
   })
 
-  it('没有摘要时 system 不受影响', async () => {
+  it('没有摘要时 system 不含摘要段落（除输出契约块外不受影响）', async () => {
     const ctx = await buildContext('好的', { embedding: fakeEmbeddingProvider() })
-    expect(ctx.system).toBe('你是一个AI助手')
+    expect(ctx.system.startsWith('你是一个AI助手')).toBe(true)
+    expect(ctx.system).not.toContain('以下是之前对话的历史摘要')
   })
 
   it('摘要 + 情绪 + RAG 三者同时存在时都正确出现在 system 中', async () => {
@@ -209,9 +218,10 @@ describe('buildContext', () => {
     expect(ctx.system).toContain('人物：老板:王总')
   })
 
-  it('没有任何实体时 system 不受影响', async () => {
+  it('没有任何实体时 system 不含实体段落（除输出契约块外不受影响）', async () => {
     const ctx = await buildContext('好的', { embedding: fakeEmbeddingProvider() })
-    expect(ctx.system).toBe('你是一个AI助手')
+    expect(ctx.system.startsWith('你是一个AI助手')).toBe(true)
+    expect(ctx.system).not.toContain('以下是已知的用户信息')
   })
 
   it('多种类型的实体混在一起时，分组格式化正确', async () => {
@@ -304,6 +314,61 @@ describe('buildContext', () => {
 
     expect(ctx.system).not.toContain('过去的事')
     expect(ctx.system).not.toContain('以下是已知的用户信息')
+  })
+})
+
+describe('buildContext — 输出契约块（Part C，TDD §3.9/§3.7）', () => {
+  it('JSON 输出格式说明始终存在，即使角色包 manifest 缺失、addressForms 为空', async () => {
+    const ctx = await buildContext('你好', { embedding: fakeEmbeddingProvider() })
+    expect(ctx.system).toContain(JSON_CONTRACT_MARKER)
+  })
+
+  it('角色包无 manifest（char-001 无对应目录）时，不注入情绪标签/表情 tag 枚举行', async () => {
+    const ctx = await buildContext('你好', { embedding: fakeEmbeddingProvider() })
+    expect(ctx.system).not.toContain('可用的情绪标签')
+    expect(ctx.system).not.toContain('可用的表情 tag')
+  })
+
+  it('preset.addressForms 为空时不注入称呼候选行', async () => {
+    const ctx = await buildContext('你好', { embedding: fakeEmbeddingProvider() })
+    expect(ctx.system).not.toContain('你可以这样称呼用户')
+  })
+
+  it('角色包声明 emotionVocabulary/emoteTagVocabulary 时，system 包含对应枚举行', async () => {
+    upsertPreset({
+      presetId: 'p-aemeath',
+      name: 'Aemeath 测试',
+      characterId: 'Aemeath',
+      modelType: 'ollama',
+      modelName: 'qwen3',
+      systemPrompt: '你是 Aemeath',
+    })
+    loadSession('p-aemeath')
+
+    const ctx = await buildContext('你好', { embedding: fakeEmbeddingProvider() })
+
+    expect(ctx.system).toContain('可用的情绪标签')
+    expect(ctx.system).toContain('idle、happy、shy、playful、sleep、confused')
+    expect(ctx.system).toContain('可用的表情 tag')
+    expect(ctx.system).toContain('excited、performing、comforting')
+  })
+
+  it('preset.addressForms 非空时，system 包含称呼候选行', async () => {
+    upsertPreset({
+      presetId: 'p-address',
+      name: '称呼测试',
+      characterId: 'char-001',
+      modelType: 'ollama',
+      modelName: 'qwen3',
+      systemPrompt: '你是角色',
+      addressForms: ['小明', '笨蛋'],
+    })
+    loadSession('p-address')
+
+    const ctx = await buildContext('你好', { embedding: fakeEmbeddingProvider() })
+
+    expect(ctx.system).toContain('你可以这样称呼用户')
+    expect(ctx.system).toContain('小明、笨蛋')
   })
 })
 

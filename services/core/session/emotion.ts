@@ -26,3 +26,20 @@ export function parseSelfEmotion(rawModelReply: string): EmotionLabel | null {
   const self = (parsed as any).emotion?.self
   return isValidSelfLabel(self) ? { label: self.label, intensity: self.intensity } : null
 }
+
+// 从模型原始回复文本中解析 emote 字段：与 parseSelfEmotion 同款的纯结构校验（这是否是一个
+// 非空字符串），不做词表校验——emote 是否在角色包 emoteTagVocabulary 内、以及过滤 emotePool
+// 选文件，都是调用方（chat.ts）按 TDD §3.9「表情包挑选机制」要做的下一步，本函数只负责给出
+// 干净的结构化信号。模型没有输出该字段（本轮不附表情）与字段类型不合法，都返回 null，不区分。
+export function parseEmoteTag(rawModelReply: string): string | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(rawModelReply)
+  } catch {
+    return null
+  }
+
+  if (typeof parsed !== 'object' || parsed === null) return null
+  const emote = (parsed as any).emote
+  return typeof emote === 'string' && emote.trim().length > 0 ? emote : null
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseSelfEmotion } from './emotion.js'
+import { parseSelfEmotion, parseEmoteTag } from './emotion.js'
 
 describe('parseSelfEmotion', () => {
   it('合法输入：解析出 self 情绪', () => {
@@ -38,5 +38,28 @@ describe('parseSelfEmotion', () => {
   it('intensity 非 number：返回 null', () => {
     const raw = JSON.stringify({ reply: '你好', emotion: { self: { label: 'happy', intensity: '0.7' } } })
     expect(parseSelfEmotion(raw)).toBeNull()
+  })
+})
+
+describe('parseEmoteTag', () => {
+  it('合法输入：解析出 emote tag 字符串', () => {
+    const raw = JSON.stringify({ reply: '好呀', emotion: { self: { label: 'happy', intensity: 0.7 } }, emote: 'playful' })
+    expect(parseEmoteTag(raw)).toBe('playful')
+  })
+
+  it('emote 字段缺失：返回 null（模型本轮不附表情，是预期中的常见情况）', () => {
+    expect(parseEmoteTag(JSON.stringify({ reply: '你好' }))).toBeNull()
+  })
+
+  it('emote 为非字符串类型：返回 null', () => {
+    expect(parseEmoteTag(JSON.stringify({ reply: '你好', emote: 123 }))).toBeNull()
+  })
+
+  it('emote 为空字符串：返回 null', () => {
+    expect(parseEmoteTag(JSON.stringify({ reply: '你好', emote: '' }))).toBeNull()
+  })
+
+  it('非 JSON：返回 null', () => {
+    expect(parseEmoteTag('不是 JSON 的普通回复')).toBeNull()
   })
 })

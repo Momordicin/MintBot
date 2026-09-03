@@ -87,6 +87,7 @@ export interface Preset {
   wallpaperPath?: string
   displayConfig: PresetDisplayConfig  // 读时永远补齐默认值，下游无需处理 null（见 session/displayConfig.ts）
   systemPrompt: string
+  addressForms: string[]  // 角色对用户的称呼候选集，读时永远补齐为数组，见 docs/MintBot_TDD.md §3.2.2「Presets.addressForms」
   createdAt: number
   updatedAt: number
 }

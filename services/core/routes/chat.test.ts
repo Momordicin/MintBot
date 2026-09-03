@@ -27,6 +27,39 @@ vi.mock('../config/index.js', () => ({
   })),
 }))
 
+// 表情包挑选（Part E）端到端测试需要不依赖真实磁盘 fixture 的、词表/资源池形状可控的角色包
+// manifest——两个虚构 characterId 分别覆盖"唯一匹配"与"多个匹配（验证随机分支落在候选集合内）"
+// 两种候选数量；其余 characterId（如 char-001）透传给真实的 loadCharacterManifest，
+// 保持"无 manifest 目录 → null" 这条既有降级路径不变
+vi.mock('../characters/manifest.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../characters/manifest.js')>()
+  const fakeManifest = (overrides: Partial<import('../characters/manifest.js').CharacterManifest>): import('../characters/manifest.js').CharacterManifest => ({
+    schemaVersion: 2, name: '', displayName: '', description: '', tags: [], creator: '', version: '', creatorNotes: '', avatar: '',
+    emotionVocabulary: [], emoteTagVocabulary: [],
+    portraits: { pixel: { fallback: '', emotions: {} }, illustration: { fallback: '', emotions: {} } },
+    interactionStates: {}, reservedStates: {}, emotePool: [],
+    ...overrides,
+  })
+  return {
+    ...actual,
+    loadCharacterManifest: (characterId: string) => {
+      if (characterId === 'char-single-emote') {
+        return fakeManifest({
+          emoteTagVocabulary: ['comforting'],
+          emotePool: [{ file: 'emotes/hug.jpg', tags: ['comforting'] }],
+        })
+      }
+      if (characterId === 'char-multi-emote') {
+        return fakeManifest({
+          emoteTagVocabulary: ['playful'],
+          emotePool: [{ file: 'emotes/a.jpg', tags: ['playful'] }, { file: 'emotes/b.jpg', tags: ['playful'] }],
+        })
+      }
+      return actual.loadCharacterManifest(characterId)
+    },
+  }
+})
+
 initDb()
 
 beforeEach(() => {
@@ -535,5 +568,117 @@ describe('POST /chat', () => {
       { role: 'user', content: '第一条' },
       { role: 'assistant', content: '第一条回复' },
     ])
+  })
+})
+
+describe('POST /chat — 表情包挑选（emote 字段，TDD §3.9「表情包挑选机制」）', () => {
+  it('tag 命中角色包词表，emotePool 中唯一匹配：message_done 带上对应 file', async () => {
+    upsertPreset({
+      presetId: 'p-single-emote',
+      name: '单候选表情测试',
+      characterId: 'char-single-emote',
+      modelType: 'ollama',
+      modelName: 'qwen3',
+      systemPrompt: '你是角色',
+    })
+    loadSession('p-single-emote')
+
+    const { fastify } = await buildTestApp(JSON.stringify({
+      reply: '好呀',
+      emotion: { self: { label: 'happy', intensity: 0.5 } },
+      emote: 'comforting',
+    }))
+
+    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+    const messageDone = parseSSE(response.payload).find(e => e.event === 'message_done')
+
+    expect(messageDone?.data.emote).toBe('emotes/hug.jpg')
+  })
+
+  it('tag 不在角色包 emoteTagVocabulary 词表内：message_done 不带 emote key', async () => {
+    upsertPreset({
+      presetId: 'p-single-emote',
+      name: '单候选表情测试',
+      characterId: 'char-single-emote',
+      modelType: 'ollama',
+      modelName: 'qwen3',
+      systemPrompt: '你是角色',
+    })
+    loadSession('p-single-emote')
+
+    const { fastify } = await buildTestApp(JSON.stringify({
+      reply: '好呀',
+      emotion: { self: { label: 'happy', intensity: 0.5 } },
+      emote: 'not-a-real-tag',
+    }))
+
+    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+    const messageDone = parseSSE(response.payload).find(e => e.event === 'message_done')
+
+    expect(messageDone?.data).not.toHaveProperty('emote')
+  })
+
+  it('模型本轮没有输出 emote 字段（常见情况）：message_done 不带 emote key，不报错', async () => {
+    upsertPreset({
+      presetId: 'p-single-emote',
+      name: '单候选表情测试',
+      characterId: 'char-single-emote',
+      modelType: 'ollama',
+      modelName: 'qwen3',
+      systemPrompt: '你是角色',
+    })
+    loadSession('p-single-emote')
+
+    const { fastify } = await buildTestApp(JSON.stringify({
+      reply: '好呀',
+      emotion: { self: { label: 'happy', intensity: 0.5 } },
+    }))
+
+    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+    const messageDone = parseSSE(response.payload).find(e => e.event === 'message_done')
+
+    expect(messageDone?.data).not.toHaveProperty('emote')
+  })
+
+  it('角色包缺失 manifest（如 char-001）时，即使模型输出了 emote 字段，也不附带表情', async () => {
+    const { fastify } = await buildTestApp(JSON.stringify({
+      reply: '好呀',
+      emotion: { self: { label: 'happy', intensity: 0.5 } },
+      emote: 'playful',
+    }))
+
+    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+    const messageDone = parseSSE(response.payload).find(e => e.event === 'message_done')
+
+    expect(messageDone?.data).not.toHaveProperty('emote')
+  })
+
+  it('tag 命中且 emotePool 有多个匹配条目：随机分支落在过滤后的候选集合内（Math.random 打桩验证具体挑中哪一个，避免测试本身不确定）', async () => {
+    upsertPreset({
+      presetId: 'p-multi-emote',
+      name: '多候选表情测试',
+      characterId: 'char-multi-emote',
+      modelType: 'ollama',
+      modelName: 'qwen3',
+      systemPrompt: '你是角色',
+    })
+    loadSession('p-multi-emote')
+
+    // 2 个候选（emotes/a.jpg、emotes/b.jpg），Math.floor(0.99 * 2) = 1 → 取到第二个
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.99)
+    try {
+      const { fastify } = await buildTestApp(JSON.stringify({
+        reply: '好呀',
+        emotion: { self: { label: 'happy', intensity: 0.5 } },
+        emote: 'playful',
+      }))
+
+      const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+      const messageDone = parseSSE(response.payload).find(e => e.event === 'message_done')
+
+      expect(messageDone?.data.emote).toBe('emotes/b.jpg')
+    } finally {
+      randomSpy.mockRestore()
+    }
   })
 })

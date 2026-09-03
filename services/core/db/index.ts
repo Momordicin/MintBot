@@ -173,6 +173,15 @@ function runMigrations(): { needsFtsBackfill: boolean } {
     console.log('[DB] Migration v8: Presets.modelType/modelName now nullable (no override falls back to global modelProvider config)')
   }
 
+  if (current < 9) {
+    // 角色对用户的称呼候选集（加密 JSON 数组），与 wallpaperPath/displayConfig 同样的
+    // 简单 ALTER TABLE ADD COLUMN（可空、无约束，不需要 v8 那种整表重建），见
+    // docs/MintBot_TDD.md §3.2.2「Presets.addressForms」
+    db.exec(`ALTER TABLE Presets ADD COLUMN addressForms TEXT`)
+    db.pragma('user_version = 9')
+    console.log('[DB] Migration v9: added addressForms to Presets')
+  }
+
   return { needsFtsBackfill }
 }
 

@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify'
 import { requireCurrentState, addMessage } from '../session/index.js'
 import { buildContext } from '../context/buildContext.js'
-import { parseSelfEmotion } from '../session/emotion.js'
+import { parseSelfEmotion, parseEmoteTag } from '../session/emotion.js'
+import { selectEmoteFile } from '../characters/emotePool.js'
 import { upsertEmotionState } from '../session/queries.js'
 import { createModelProviderForPreset } from '../providers/ModelProvider.js'
 import { getModelProviderConfig } from '../config/index.js'
@@ -127,9 +128,21 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
         const messageId = addMessage(sessionId, 'assistant', replyText, 'user')
 
+        // 表情包挑选（TDD §3.9「表情包挑选机制：模型选 tag，应用选文件」）：parseEmoteTag 只做
+        // 结构校验，词表校验 + 随机选文件交给 selectEmoteFile，用请求捕获的 state.manifest
+        // （Part A 缓存，零磁盘 I/O）。tag 缺失/不在词表内/过滤后无候选，都降级为不附表情，不报错。
+        const emoteTag = parseEmoteTag(fullReply)
+        const emoteFile = selectEmoteFile(emoteTag, state.manifest)
+
         // message_done 带完整文本，前端直接显示，无需累积 chunk
         // Phase 4：句子切割完成后，改为逐句推 message_chunk，前端追加气泡
-        send('message_done', { messageId: String(messageId), text: replyText })
+        // emote 为可选字段：没有选中表情时不带这个 key（不显式发 null/undefined），
+        // 前端按"key 是否存在"判断本轮是否附带表情
+        send('message_done', {
+          messageId: String(messageId),
+          text: replyText,
+          ...(emoteFile ? { emote: emoteFile } : {}),
+        })
 
         // self 情绪校验通过才落库；模型没按格式回复（校验失败/字段缺失）时不落库也不报错，
         // 保持现有降级风格。持久化异常不应影响本轮对话的正常返回

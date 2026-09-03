@@ -1,12 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { db, initDb } from '../db/index.js'
 import {
   getPresetById,
   getAllPresets,
   upsertPreset,
+  createPreset,
   updatePresetName,
   updatePresetDisplayConfig,
   updatePresetSystemPrompt,
+  updatePresetAddressForms,
   getLatestSessionByPreset,
   createSession,
   touchSession,
@@ -167,6 +169,118 @@ describe('Preset', () => {
     } finally {
       process.env.ENCRYPT_SENSITIVE_FIELDS = prevFlag
     }
+  })
+
+  it('upsertPreset 不传 addressForms 时默认写入空数组', () => {
+    upsertPreset({ presetId: 'p1', name: 'A', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: 'a', wallpaperPath: undefined })
+    expect(getPresetById('p1')!.addressForms).toEqual([])
+  })
+
+  it('upsertPreset 传入 addressForms 时按传入值写入', () => {
+    upsertPreset({ presetId: 'p1', name: 'A', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: 'a', wallpaperPath: undefined, addressForms: ['小明', '亲爱的'] })
+    expect(getPresetById('p1')!.addressForms).toEqual(['小明', '亲爱的'])
+  })
+
+  it('getPresetById/getAllPresets 对迁移前的旧行（addressForms 列为 NULL）返回空数组，不告警', () => {
+    upsertPreset({ presetId: 'p1', name: 'A', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: 'a', wallpaperPath: undefined })
+    // 模拟迁移前从未写过 addressForms 的历史行
+    db.prepare(`UPDATE Presets SET addressForms = NULL WHERE presetId = ?`).run('p1')
+
+    expect(getPresetById('p1')!.addressForms).toEqual([])
+    expect(getAllPresets()[0].addressForms).toEqual([])
+  })
+
+  it('addressForms 列内容不是合法 JSON（数据损坏场景）时返回空数组并告警', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    upsertPreset({ presetId: 'p1', name: 'A', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: 'a', wallpaperPath: undefined })
+    db.prepare(`UPDATE Presets SET addressForms = ? WHERE presetId = ?`).run('{not valid json', 'p1')
+
+    expect(getPresetById('p1')!.addressForms).toEqual([])
+    expect(warnSpy).toHaveBeenCalled()
+    warnSpy.mockRestore()
+  })
+
+  it('updatePresetAddressForms 更新后能通过 getPresetById 读回，其余字段不受影响', () => {
+    upsertPreset({ presetId: 'p1', name: 'A', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: 'a', wallpaperPath: undefined })
+    updatePresetAddressForms('p1', ['小明', '笨蛋'])
+
+    const preset = getPresetById('p1')!
+    expect(preset.addressForms).toEqual(['小明', '笨蛋'])
+    expect(preset.name).toBe('A')
+    expect(preset.systemPrompt).toBe('a')
+  })
+
+  it('encryptSensitiveFields=true 时 updatePresetAddressForms 加密落盘，getPresetById 解密后仍与原文一致', () => {
+    const prevFlag = process.env.ENCRYPT_SENSITIVE_FIELDS
+    process.env.ENCRYPT_SENSITIVE_FIELDS = 'true'
+    try {
+      upsertPreset({ presetId: 'p1', name: 'A', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: 'a', wallpaperPath: undefined })
+      updatePresetAddressForms('p1', ['小明', '笨蛋'])
+
+      const raw = db.prepare(`SELECT addressForms FROM Presets WHERE presetId = ?`).get('p1') as any
+      expect(raw.addressForms).not.toBe(JSON.stringify(['小明', '笨蛋']))
+
+      expect(getPresetById('p1')!.addressForms).toEqual(['小明', '笨蛋'])
+    } finally {
+      process.env.ENCRYPT_SENSITIVE_FIELDS = prevFlag
+    }
+  })
+
+  // createPreset：手动创建入口专用，故意与 upsertPreset 分开测试——
+  // 见 docs/MintBot_TDD.md「角色创建：固定种子角色集 → 手动创建 UI + 角色卡导入」
+  it('createPreset 插入后能用 getPresetById 读回，各字段（含 systemPrompt 解密）正确', () => {
+    createPreset({
+      presetId: 'p1',
+      name: '新角色',
+      characterId: 'char-001',
+      modelType: null,
+      modelName: null,
+      wallpaperPath: undefined,
+      displayConfig: DEFAULT_DISPLAY_CONFIG,
+      systemPrompt: '你是新角色',
+      addressForms: [],
+    })
+
+    const preset = getPresetById('p1')
+    expect(preset).not.toBeNull()
+    expect(preset!.name).toBe('新角色')
+    expect(preset!.characterId).toBe('char-001')
+    expect(preset!.modelType).toBeNull()
+    expect(preset!.modelName).toBeNull()
+    expect(preset!.wallpaperPath).toBeUndefined()
+    expect(preset!.displayConfig).toEqual(DEFAULT_DISPLAY_CONFIG)
+    expect(preset!.systemPrompt).toBe('你是新角色')
+    expect(preset!.addressForms).toEqual([])
+  })
+
+  it('createPreset 撞上已存在的 presetId 时抛错，而不是静默覆盖（与 upsertPreset 的行为差异）', () => {
+    createPreset({
+      presetId: 'p1',
+      name: '原角色',
+      characterId: 'char-001',
+      modelType: null,
+      modelName: null,
+      wallpaperPath: undefined,
+      displayConfig: DEFAULT_DISPLAY_CONFIG,
+      systemPrompt: '原始人设',
+      addressForms: [],
+    })
+
+    expect(() => createPreset({
+      presetId: 'p1',
+      name: '撞车角色',
+      characterId: 'char-002',
+      modelType: null,
+      modelName: null,
+      wallpaperPath: undefined,
+      displayConfig: DEFAULT_DISPLAY_CONFIG,
+      systemPrompt: '撞车人设',
+      addressForms: [],
+    })).toThrow()
+
+    // 原有行未被顶掉
+    expect(getPresetById('p1')!.name).toBe('原角色')
+    expect(getPresetById('p1')!.systemPrompt).toBe('原始人设')
   })
 })
 

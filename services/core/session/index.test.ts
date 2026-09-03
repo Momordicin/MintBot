@@ -54,6 +54,50 @@ describe('switchPreset', () => {
   })
 })
 
+describe('manifest 缓存（Part A：loadSession/switchPreset 填充 SessionState.manifest）', () => {
+  it('preset 的 characterId 对应存在的角色包时，loadSession 返回缓存的 manifest', () => {
+    upsertPreset({
+      presetId: 'p3',
+      name: '角色三',
+      characterId: 'Mint',
+      modelType: 'ollama',
+      modelName: 'qwen3',
+      systemPrompt: '你是 Mint',
+    })
+
+    const { manifest } = loadSession('p3')
+
+    expect(manifest).not.toBeNull()
+    expect(manifest!.avatar).toBe('avatar.png')
+  })
+
+  it('preset 的 characterId 没有对应角色包目录时，manifest 为 null，loadSession 不抛错', () => {
+    // p2 的 characterId 是 char-002，assets/characters/ 下没有这个目录（已知的、
+    // 本阶段之外的种子数据缺口，见 TDD/seed.ts），是本用例要验证的降级路径
+    expect(() => loadSession('p2')).not.toThrow()
+    const { manifest } = loadSession('p2')
+
+    expect(manifest).toBeNull()
+  })
+
+  it('switchPreset 切到新 preset 时同样填充 manifest 字段', () => {
+    upsertPreset({
+      presetId: 'p3',
+      name: '角色三',
+      characterId: 'Mint',
+      modelType: 'ollama',
+      modelName: 'qwen3',
+      systemPrompt: '你是 Mint',
+    })
+    loadSession('p1')
+
+    const { manifest } = switchPreset('p3')
+
+    expect(manifest).not.toBeNull()
+    expect(manifest!.avatar).toBe('avatar.png')
+  })
+})
+
 describe('refreshCurrentPresetIfActive', () => {
   it('给定的 presetId 是当前激活 session 的 preset 时，内存缓存的 preset 刷新为最新值', () => {
     const { session } = loadSession('p1')

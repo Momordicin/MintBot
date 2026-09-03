@@ -42,7 +42,7 @@ export async function buildContext(
   userInput: string,
   deps: { embedding: EmbeddingProvider; signal?: AbortSignal }
 ): Promise<BuiltContext> {
-  const { session, preset } = requireCurrentState()
+  const { session, preset, manifest } = requireCurrentState()
   const memoryConfig = getMemoryConfig()
 
   // getHistory 已按时间升序返回最近 N 条，30 分钟窗口过滤掉的必然是数组前缀，
@@ -123,6 +123,27 @@ export async function buildContext(
       system = `${system}\n\n以下是相关的历史对话片段：\n${snippets}`
     }
   }
+
+  // 输出契约块注入（TDD §3.9「情绪标签词表的归属：角色包 manifest，注入上下文」）：情绪标签/
+  // 表情 tag 全集从会话缓存的角色包 manifest 读取（Part A，零磁盘 I/O），称呼候选从
+  // preset.addressForms 读取，连同 JSON 输出格式要求一并追加到 system 末尾，取代此前硬写在
+  // 各 preset systemPrompt 里的同一段文字（见 services/core/db/seed.ts）。
+  // JSON 格式说明本身与词表是否存在无关，因此始终注入；情绪标签/表情 tag/称呼候选三行则只在
+  // 对应词表非空时才出现——角色包缺失或未声明词表（Part A 的 null manifest 降级路径）时，
+  // 跳过对应行，不注入"可用标签：（无）"这类空列表提示。这是一条软指令，不是模型输出的硬性
+  // 前置条件：chat.ts 现有的 JSON-parse-or-fallback-to-raw-text 降级逻辑不受影响。
+  const contractLines: string[] = []
+  if (manifest && manifest.emotionVocabulary.length > 0) {
+    contractLines.push(`可用的情绪标签（emotion.self.label 只能从中选择一个）：${manifest.emotionVocabulary.join('、')}`)
+  }
+  if (manifest && manifest.emoteTagVocabulary.length > 0) {
+    contractLines.push(`可用的表情 tag（emote 字段可选，只能从中选择一个 tag 本身，不能选文件名）：${manifest.emoteTagVocabulary.join('、')}`)
+  }
+  if (preset.addressForms.length > 0) {
+    contractLines.push(`你可以这样称呼用户（自行挑选，不必每轮都用同一个）：${preset.addressForms.join('、')}`)
+  }
+  contractLines.push('请严格用以下 JSON 格式回复，不要输出任何其他内容：\n{"reply": "你的回复内容", "emotion": {"self": {"label": "情绪标签", "intensity": 0.7}, "perceived_user": null}, "emote": "表情 tag（可选，不附表情时省略该字段）"}')
+  system = `${system}\n\n${contractLines.join('\n')}`
 
   return { system, messages }
 }

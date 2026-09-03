@@ -6,6 +6,40 @@ import type { Message, Session, Preset, PresetSnapshot, MessageEntity, Summary, 
 
 // ─── Preset ───────────────────────────────────────────────
 
+// addressForms 读时解析：与 systemPrompt 同级加密（TDD §3.2.2「Presets.addressForms」），
+// 因此先 decrypt() 再 JSON.parse()。NULL（迁移前的旧行、或从未设置过的行）等价于空数组，
+// 不告警——这是正常情况；解密失败、JSON 解析失败、或解析出来的值不是字符串数组，都回退
+// 空数组但告警，因为这才是真正的数据异常，不是"该角色没有特定称呼"这种合法状态。
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(item => typeof item === 'string')
+}
+
+function parseAddressForms(raw: string | null): string[] {
+  if (raw === null) return []
+
+  let decrypted: string
+  try {
+    decrypted = decrypt(raw)
+  } catch (err) {
+    console.warn('[Preset] addressForms 解密失败，使用默认值 []:', err)
+    return []
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(decrypted)
+  } catch (err) {
+    console.warn('[Preset] addressForms JSON 解析失败，使用默认值 []:', err)
+    return []
+  }
+
+  if (!isStringArray(parsed)) {
+    console.warn('[Preset] addressForms 类型错误，应为字符串数组，使用默认值 []')
+    return []
+  }
+  return parsed
+}
+
 export function getPresetById(presetId: string): Preset | null {
   const row = db.prepare(`SELECT * FROM Presets WHERE presetId = ?`).get(presetId) as any
   if (!row) return null
@@ -14,6 +48,7 @@ export function getPresetById(presetId: string): Preset | null {
     wallpaperPath: row.wallpaperPath ?? undefined,
     displayConfig: parseDisplayConfig(row.displayConfig),
     systemPrompt: decrypt(row.systemPrompt),
+    addressForms: parseAddressForms(row.addressForms),
   }
 }
 
@@ -24,14 +59,15 @@ export function getAllPresets(): Preset[] {
     wallpaperPath: row.wallpaperPath ?? undefined,
     displayConfig: parseDisplayConfig(row.displayConfig),
     systemPrompt: decrypt(row.systemPrompt),
+    addressForms: parseAddressForms(row.addressForms),
   }))
 }
 
-export function upsertPreset(preset: Omit<Preset, 'createdAt' | 'updatedAt' | 'displayConfig'> & { displayConfig?: PresetDisplayConfig }): void {
+export function upsertPreset(preset: Omit<Preset, 'createdAt' | 'updatedAt' | 'displayConfig' | 'addressForms'> & { displayConfig?: PresetDisplayConfig; addressForms?: string[] }): void {
   const now = Date.now()
   db.prepare(`
-    INSERT INTO Presets (presetId, name, characterId, modelType, modelName, wallpaperPath, displayConfig, systemPrompt, createdAt, updatedAt)
-    VALUES (@presetId, @name, @characterId, @modelType, @modelName, @wallpaperPath, @displayConfig, @systemPrompt, @createdAt, @updatedAt)
+    INSERT INTO Presets (presetId, name, characterId, modelType, modelName, wallpaperPath, displayConfig, systemPrompt, addressForms, createdAt, updatedAt)
+    VALUES (@presetId, @name, @characterId, @modelType, @modelName, @wallpaperPath, @displayConfig, @systemPrompt, @addressForms, @createdAt, @updatedAt)
     ON CONFLICT(presetId) DO UPDATE SET
       name = excluded.name,
       characterId = excluded.characterId,
@@ -40,12 +76,34 @@ export function upsertPreset(preset: Omit<Preset, 'createdAt' | 'updatedAt' | 'd
       wallpaperPath = excluded.wallpaperPath,
       displayConfig = excluded.displayConfig,
       systemPrompt = excluded.systemPrompt,
+      addressForms = excluded.addressForms,
       updatedAt = excluded.updatedAt
   `).run({
     ...preset,
     wallpaperPath: preset.wallpaperPath ?? null,
     displayConfig: JSON.stringify(preset.displayConfig ?? DEFAULT_DISPLAY_CONFIG),
     systemPrompt: encrypt(preset.systemPrompt),
+    addressForms: encrypt(JSON.stringify(preset.addressForms ?? [])),
+    createdAt: now,
+    updatedAt: now,
+  })
+}
+
+// 手动创建新 preset 专用：与 upsertPreset 故意分开，不复用——upsertPreset 是
+// INSERT ... ON CONFLICT(presetId) DO UPDATE，presetId 撞车时会静默覆盖已有行；
+// "创建"语义要求撞车即报错（DB 唯一约束抛出的原始错误），而不是把已有角色悄悄顶掉。
+// 供 POST /presets（routes/presets.ts）使用，presetId 由路由层调用方生成（crypto.randomUUID()）
+export function createPreset(preset: Omit<Preset, 'createdAt' | 'updatedAt'>): void {
+  const now = Date.now()
+  db.prepare(`
+    INSERT INTO Presets (presetId, name, characterId, modelType, modelName, wallpaperPath, displayConfig, systemPrompt, addressForms, createdAt, updatedAt)
+    VALUES (@presetId, @name, @characterId, @modelType, @modelName, @wallpaperPath, @displayConfig, @systemPrompt, @addressForms, @createdAt, @updatedAt)
+  `).run({
+    ...preset,
+    wallpaperPath: preset.wallpaperPath ?? null,
+    displayConfig: JSON.stringify(preset.displayConfig),
+    systemPrompt: encrypt(preset.systemPrompt),
+    addressForms: encrypt(JSON.stringify(preset.addressForms)),
     createdAt: now,
     updatedAt: now,
   })
@@ -76,6 +134,14 @@ export function updatePresetDisplayConfig(presetId: string, displayConfig: Prese
 export function updatePresetSystemPrompt(presetId: string, systemPrompt: string): void {
   db.prepare(`UPDATE Presets SET systemPrompt = ?, updatedAt = ? WHERE presetId = ?`)
     .run(encrypt(systemPrompt), Date.now(), presetId)
+}
+
+// addressForms 同理单独更新，同样过 encrypt()——该字段属于 TDD §3.2.2/§3.6 加密范围
+// （角色对用户的称呼，隐私敏感度与角色设定相当）。本阶段无 PATCH 路由调用它，供后续
+// 角色卡导入/设置页编辑功能落地时使用
+export function updatePresetAddressForms(presetId: string, addressForms: string[]): void {
+  db.prepare(`UPDATE Presets SET addressForms = ?, updatedAt = ? WHERE presetId = ?`)
+    .run(encrypt(JSON.stringify(addressForms)), Date.now(), presetId)
 }
 
 // 每 preset 对话模型覆盖：modelType/modelName 两个字段永远一起写（要么都非空代表自定义，
