@@ -2,6 +2,11 @@ import { app, BrowserWindow, Menu, globalShortcut, powerMonitor, ipcMain, dialog
 import { join, basename } from 'path'
 import { readFile, stat } from 'fs/promises'
 import { is } from '@electron-toolkit/utils'
+import { startActiveWindowMonitor } from './activeWindowMonitor'
+
+// startActiveWindowMonitor 返回的清理函数（clearInterval）——挂到 will-quit，避免这个
+// 500ms 轮询器的生命周期问题被"反正 app.quit() 会强杀进程"这个事实悄悄掩盖
+let stopActiveWindowMonitor: (() => void) | null = null
 
 // 核心服务地址：与渲染层 ChatWindow.tsx 的 CORE_URL 各自独立定义（两边本来就是独立代码，
 // 不共享 shared/types，这里沿用既有约定）
@@ -311,6 +316,10 @@ app.whenReady().then(() => {
   powerMonitor.on('lock-screen', () => notifySystemEvent('lock-screen'))
   powerMonitor.on('unlock-screen', () => notifySystemEvent('unlock-screen'))
 
+  // 这一轮只检测 + 打日志，不接悬浮窗行为（跳屏/隐藏/置顶/白名单黑名单是下一个独立
+  // checklist 项"悬浮窗行为策略"，这次故意不糊在一起）
+  stopActiveWindowMonitor = startActiveWindowMonitor(info => console.log('[ActiveWindow]', info))
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow()
@@ -320,6 +329,7 @@ app.whenReady().then(() => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll()
+  stopActiveWindowMonitor?.()
 })
 
 app.on('window-all-closed', () => {
