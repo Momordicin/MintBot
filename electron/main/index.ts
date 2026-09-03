@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, globalShortcut, powerMonitor, ipcMain, dialog } from 'electron'
+import { app, BrowserWindow, Menu, globalShortcut, powerMonitor, ipcMain, dialog, screen } from 'electron'
 import { join, basename } from 'path'
 import { readFile, stat } from 'fs/promises'
 import { is } from '@electron-toolkit/utils'
@@ -110,6 +110,56 @@ ipcMain.handle('open-settings-window', () => {
   settingsWindow = createSettingsWindow()
 })
 
+let overlayWindow: BrowserWindow | null = null
+
+// 悬浮窗尺寸/位置是这轮实现默认值，不是 TDD 已经写死的架构决定（写死的只有下面
+// alwaysOnTop/transparent/frame 三项，见 docs/MintBot_TDD.md §3.7「悬浮窗技术要点」）
+const OVERLAY_WIDTH = 220
+const OVERLAY_HEIGHT = 220
+
+function createOverlayWindow(): BrowserWindow {
+  // 用 workArea（带 x/y 偏移）而不是 workAreaSize（只有宽高）：任务栏停靠在上边/左边时
+  // workArea.x/y 不为 0，只用宽高算出来的坐标会跟任务栏厚度错位，没有真正贴住右下角
+  const { x: workAreaX, y: workAreaY, width: workAreaWidth, height: workAreaHeight } = screen.getPrimaryDisplay().workArea
+
+  const win = new BrowserWindow({
+    width: OVERLAY_WIDTH,
+    height: OVERLAY_HEIGHT,
+    x: workAreaX + workAreaWidth - OVERLAY_WIDTH,
+    y: workAreaY + workAreaHeight - OVERLAY_HEIGHT,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    resizable: false,
+    skipTaskbar: true,
+    // 悬浮窗这轮纯展示（不接收键盘输入，也没有可交互内容），不该在启动时抢主聊天窗口的焦点。
+    // 两个窗口的加载都是异步的，谁先 ready-to-show 没有先后保证——如果跟聊天窗口一样用
+    // show()，悬浮窗有真实概率在聊天窗口拿到焦点之后才显示完成，从而把焦点偷走
+    focusable: false,
+    show: false,
+    webPreferences: {
+      preload: PRELOAD_PATH,
+      sandbox: false
+    }
+  })
+
+  win.on('ready-to-show', () => {
+    win.showInactive()
+  })
+
+  win.on('closed', () => {
+    overlayWindow = null
+  })
+
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/overlay/index.html`)
+  } else {
+    win.loadFile(join(__dirname, '../renderer/overlay/index.html'))
+  }
+
+  return win
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 900,
@@ -135,6 +185,9 @@ function createWindow() {
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null)
   createWindow()
+  // 这轮悬浮窗跟聊天窗口一起在应用启动时显示，不接聊天窗口最小化/焦点/关闭的生命周期
+  // 联动（那是明确延后的后续工作，见 buzzing-frolicking-eich.md 计划）
+  overlayWindow = createOverlayWindow()
 
   globalShortcut.register('CommandOrControl+Shift+I', () => {
     BrowserWindow.getFocusedWindow()?.webContents.openDevTools()
