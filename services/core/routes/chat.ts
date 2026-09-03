@@ -1,8 +1,10 @@
 import type { FastifyInstance } from 'fastify'
 import { requireCurrentState, addMessage } from '../session/index.js'
 import { buildContext } from '../context/buildContext.js'
-import { parseSelfEmotion } from '../session/emotion.js'
+import { parseSelfEmotion, parseEmoteTag } from '../session/emotion.js'
+import { selectEmoteFile } from '../characters/emotePool.js'
 import { upsertEmotionState } from '../session/queries.js'
+import { broadcastEvent } from '../events/broadcast.js'
 import { createModelProviderForPreset } from '../providers/ModelProvider.js'
 import { getModelProviderConfig } from '../config/index.js'
 
@@ -127,9 +129,29 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
         const messageId = addMessage(sessionId, 'assistant', replyText, 'user')
 
+        // 表情包挑选（TDD §3.9「表情包挑选机制：模型选 tag，应用选文件」）：parseEmoteTag 只做
+        // 结构校验，词表校验 + 随机选文件交给 selectEmoteFile，用请求捕获的 state.manifest
+        // （Part A 缓存，零磁盘 I/O）。tag 缺失/不在词表内/过滤后无候选，都降级为不附表情，不报错。
+        const emoteTag = parseEmoteTag(fullReply)
+        const emoteFile = selectEmoteFile(emoteTag, state.manifest)
+
         // message_done 带完整文本，前端直接显示，无需累积 chunk
         // Phase 4：句子切割完成后，改为逐句推 message_chunk，前端追加气泡
-        send('message_done', { messageId: String(messageId), text: replyText })
+        // emote 为可选字段：没有选中表情时不带这个 key（不显式发 null/undefined），
+        // 前端按"key 是否存在"判断本轮是否附带表情
+        // sessionId 为请求 dispatch 时刻捕获的值（见上方常量），不是重新读取的全局当前
+        // session——前端据此判断"这条回复是否还属于我现在展示的会话"，是 preset-switched
+        // 广播 + syncSessionOnFocus 那套跨窗口切换同步机制的最后一道防线：切换检测本身要经过
+        // 两次异步往返（SSE 广播送达 + 再 fetch 一次 /state）才能真正 abort 掉本地的
+        // AbortController，这段时间差内旧 session 的模型调用仍可能先一步跑完——纯靠客户端
+        // abort 拦不住这种情况，必须由后端把回复真正所属的 session 显式带回去，前端才能在
+        // "已经切换完成之后才姗姗来迟"的场景下正确识别并丢弃
+        send('message_done', {
+          messageId: String(messageId),
+          text: replyText,
+          sessionId,
+          ...(emoteFile ? { emote: emoteFile } : {}),
+        })
 
         // self 情绪校验通过才落库；模型没按格式回复（校验失败/字段缺失）时不落库也不报错，
         // 保持现有降级风格。持久化异常不应影响本轮对话的正常返回
@@ -147,10 +169,18 @@ export async function chatRoutes(fastify: FastifyInstance) {
           perceived_user: null,  // Phase 2 基础版故意留空占位，不透传模型的尝试性输出，不是遗漏
         })
 
+        // 双发，不是迁移（TDD §3.3「SSE 事件类型规范」）：私有流零延迟给请求方本身，
+        // 这里额外广播同一份数据给其它窗口（如 Phase 3 悬浮窗按情绪标签联动立绘）
+        broadcastEvent('emotion', {
+          self: selfEmotion,
+          perceived_user: null,
+        })
+
       } catch (err) {
         // ─── 连接建立后的错误，走 SSE system 事件 ───────────────
         console.error('[Chat] Error:', err)
-        send('system', { type: 'error', payload: { message: 'Model call failed' } })
+        // sessionId 同 message_done，供前端识别这条错误是否还属于当前展示的会话
+        send('system', { type: 'error', payload: { message: 'Model call failed' }, sessionId })
       } finally {
         if (!reply.raw.writableEnded && !reply.raw.destroyed) {
           reply.raw.end()

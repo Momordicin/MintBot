@@ -66,6 +66,120 @@ describe('GET /presets', () => {
   })
 })
 
+describe('POST /presets', () => {
+  it('成功创建后返回精简 DTO，DB 里写入正确的默认字段', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'POST',
+      url: '/presets',
+      payload: { name: '新角色', characterId: 'char-003', systemPrompt: '你是新角色' },
+    })
+    const body = JSON.parse(response.payload)
+
+    expect(response.statusCode).toBe(200)
+    expect(body).toHaveProperty('presetId')
+    expect(body.name).toBe('新角色')
+    // DTO 精简回归防护：不广播 systemPrompt 等完整 Preset 字段（与 GET /presets 同款约定）
+    expect(body).not.toHaveProperty('systemPrompt')
+    expect(body).not.toHaveProperty('characterId')
+    expect(body).not.toHaveProperty('modelType')
+    expect(body).not.toHaveProperty('modelName')
+
+    // 创建的 preset 确实可读回，且各默认字段符合手动创建入口的约定
+    const preset = getPresetById(body.presetId)
+    expect(preset).not.toBeNull()
+    expect(preset!.name).toBe('新角色')
+    expect(preset!.characterId).toBe('char-003')
+    expect(preset!.modelType).toBeNull()
+    expect(preset!.modelName).toBeNull()
+    expect(preset!.wallpaperPath).toBeUndefined()
+    expect(preset!.displayConfig).toEqual(DEFAULT_DISPLAY_CONFIG)
+    expect(preset!.systemPrompt).toBe('你是新角色')
+    expect(preset!.addressForms).toEqual([])
+  })
+
+  it('name 缺失/全空白时返回 400', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'POST',
+      url: '/presets',
+      payload: { name: '   ', characterId: 'char-003', systemPrompt: '你是新角色' },
+    })
+
+    expect(response.statusCode).toBe(400)
+  })
+
+  it('characterId 缺失/全空白时返回 400', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'POST',
+      url: '/presets',
+      payload: { name: '新角色', characterId: '   ', systemPrompt: '你是新角色' },
+    })
+
+    expect(response.statusCode).toBe(400)
+  })
+
+  it('systemPrompt 缺失/全空白时返回 400', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'POST',
+      url: '/presets',
+      payload: { name: '新角色', characterId: 'char-003', systemPrompt: '   ' },
+    })
+
+    expect(response.statusCode).toBe(400)
+  })
+
+  it('presetId 由服务端生成，两次创建得到不同的 presetId', async () => {
+    const fastify = await buildTestApp()
+
+    const first = await fastify.inject({
+      method: 'POST',
+      url: '/presets',
+      payload: { name: '角色A', characterId: 'char-a', systemPrompt: '人设A' },
+    })
+    const second = await fastify.inject({
+      method: 'POST',
+      url: '/presets',
+      payload: { name: '角色B', characterId: 'char-b', systemPrompt: '人设B' },
+    })
+
+    const firstBody = JSON.parse(first.payload)
+    const secondBody = JSON.parse(second.payload)
+    expect(firstBody.presetId).not.toBe(secondBody.presetId)
+  })
+
+  it('创建后立即切换到这个新 preset：走的是新建 session 分支，不是恢复旧 session', async () => {
+    const fastify = await buildTestApp()
+
+    const createResponse = await fastify.inject({
+      method: 'POST',
+      url: '/presets',
+      payload: { name: '刚创建的角色', characterId: 'char-brand-new', systemPrompt: '你是刚创建的角色' },
+    })
+    const { presetId } = JSON.parse(createResponse.payload)
+
+    const switchResponse = await fastify.inject({
+      method: 'POST',
+      url: '/switch-preset',
+      payload: { presetId },
+    })
+    const switchBody = JSON.parse(switchResponse.payload)
+
+    expect(switchResponse.statusCode).toBe(200)
+    expect(switchBody.presetSnapshot.presetId).toBe(presetId)
+    expect(switchBody.presetSnapshot.name).toBe('刚创建的角色')
+    // 新建 preset 默认跟随全局模型配置、无自定义模型覆盖
+    expect(switchBody.presetSnapshot.modelType).toBeNull()
+    expect(switchBody.presetSnapshot.modelName).toBeNull()
+  })
+})
+
 describe('POST /switch-preset', () => {
   it('成功切换后返回与 GET /state 一致的 shape', async () => {
     loadSession('p1')
@@ -570,6 +684,21 @@ describe('PATCH /presets/:presetId', () => {
     const preset = getPresetById('p1')!
     expect(preset.modelType).toBe('openai')
     expect(preset.modelName).toBe('gpt-4o-mini')
+  })
+
+  it('modelType: deepseek 时覆盖生效并写入 DB（DeepSeek 是一等公民 provider 类型）', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { modelType: 'deepseek', modelName: 'deepseek-v4-flash' },
+    })
+
+    expect(response.statusCode).toBe(200)
+    const preset = getPresetById('p1')!
+    expect(preset.modelType).toBe('deepseek')
+    expect(preset.modelName).toBe('deepseek-v4-flash')
   })
 
   it('modelType/modelName 都设为 null 时，清除覆盖（跟随全局配置）', async () => {

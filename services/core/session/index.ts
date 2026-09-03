@@ -1,5 +1,7 @@
 import { randomUUID } from 'crypto'
 import type { Session, Preset, Message, PresetSnapshot } from '../../../shared/types/index.js'
+import { loadCharacterManifest, type CharacterManifest } from '../characters/manifest.js'
+import { broadcastEvent } from '../events/broadcast.js'
 import {
   getPresetById,
   getLatestSessionByPreset,
@@ -12,6 +14,7 @@ import {
 interface SessionState {
   session: Session
   preset: Preset
+  manifest: CharacterManifest | null
 }
 
 let current: SessionState | null = null
@@ -21,9 +24,12 @@ let current: SessionState | null = null
 export function loadSession(presetId: string): SessionState {
   const preset = getPresetById(presetId)
   if (!preset) throw new Error(`[Session] Preset not found: ${presetId}`)
-  // TODO Phase 3：加载 preset 后需验证 characterId 对应的角色包是否存在
-  // 检查 assets/characters/{characterId}/manifest.json 是否可读
-  // 不存在时给出明确错误或降级到默认角色，避免立绘加载失败静默报错
+
+  // 兑现原 TODO Phase 3「加载 preset 后需验证 characterId 对应的角色包是否存在」：
+  // manifest 在这里读一次并常驻内存（TDD §3.7「加载与缓存」），不在每轮对话时读盘。
+  // 角色包缺失/manifest.json 解析失败时 loadCharacterManifest 返回 null——这不阻塞
+  // session 加载，buildContext.ts 按空词表降级处理（TDD §3.9「情绪标签词表的归属」）
+  const manifest = loadCharacterManifest(preset.characterId)
 
   let session = getLatestSessionByPreset(presetId)
 
@@ -52,7 +58,7 @@ export function loadSession(presetId: string): SessionState {
     console.log(`[Session] Resumed session ${session.sessionId} for preset ${presetId}`)
   }
 
-  current = { session, preset }
+  current = { session, preset, manifest }
   return current
 }
 
@@ -62,6 +68,15 @@ export function switchPreset(presetId: string): SessionState {
   console.log(`[Session] Switching to preset ${presetId}`)
   current = null
   const state = loadSession(presetId)
+
+  // 广播真正的"切换"发生（GET /events，TDD §3.3「SSE 事件类型规范」）：其它窗口（聊天窗口、
+  // 悬浮窗）借此感知 session/preset 已变，自己去重新 fetch GET /state。只放最小 payload，
+  // 不带完整 state——与 chat.ts 里 emotion 广播同一约定。只从这里广播，不放进 loadSession
+  // 本身（loadSession 在核心服务启动时也会被调用一次，那时没有任何订阅方在听，广播毫无意义），
+  // 也不放进 refreshCurrentPresetIfActive（那是刻意窄范围的"设置立即生效"，不改变 session/
+  // characterId，不是真正的切换，广播会造成误判的 abort/refetch）
+  broadcastEvent('preset-switched', { sessionId: state.session.sessionId, presetId: state.session.presetId })
+
   return state
 }
 
@@ -71,6 +86,9 @@ export function switchPreset(presetId: string): SessionState {
 // 竞态安全：buildContext.ts 的 requireCurrentState() 是同步执行、之前没有 await，
 // 在途 /chat 请求早已把 preset 复制进局部变量，这里换掉 current.preset 不影响它
 // （与 chat.ts 里 sessionId "dispatch 时刻捕获" 同一安全模式）。
+// 不重新读取 manifest：这里能触发刷新的字段（systemPrompt/modelType/modelName 等，见
+// routes/presets.ts 的 PATCH /presets/:presetId）都不会改变 characterId，缓存的 manifest
+// 因此始终仍然有效——重新读盘不会得到不同结果，只是白白多一次文件 I/O。
 export function refreshCurrentPresetIfActive(presetId: string): void {
   if (current?.session.presetId !== presetId) return
   const preset = getPresetById(presetId)

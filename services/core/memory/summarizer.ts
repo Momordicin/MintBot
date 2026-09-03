@@ -25,8 +25,11 @@ export function shouldTriggerSummary(input: {
   isLowActivityWindow: boolean
 }): boolean {
   const { messageCountSinceLastSummary, lockScreenMinutes, isLowActivityWindow } = input
-  const { lockScreenMinutes: lockScreenMinutesThreshold, messageCountThreshold } = getMemoryConfig().summaryTrigger
-  const lowActivityAndLocked = isLowActivityWindow && lockScreenMinutes > lockScreenMinutesThreshold
+  const { lockScreenMinutes: lockScreenMinutesThreshold, messageCountThreshold, minMessagesForLockTrigger } = getMemoryConfig().summaryTrigger
+  const lowActivityAndLocked =
+    isLowActivityWindow &&
+    lockScreenMinutes > lockScreenMinutesThreshold &&
+    messageCountSinceLastSummary >= minMessagesForLockTrigger
   const tooManyMessages = messageCountSinceLastSummary > messageCountThreshold
   return lowActivityAndLocked || tooManyMessages
 }

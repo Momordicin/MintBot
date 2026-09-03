@@ -1,9 +1,21 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { initDb, db } from '../db/index.js'
 import { upsertPreset, upsertEmotionState, getEmotionState, updatePresetSystemPrompt } from './queries.js'
 import { loadSession, switchPreset, getCurrentState, refreshCurrentPresetIfActive } from './index.js'
+import * as BroadcastModule from '../events/broadcast.js'
+
+// switchPreset 广播 preset-switched（GET /events，TDD §3.3）：与 chat.test.ts 里 mock
+// broadcastEvent 的既有约定一致，只替换掉这一个函数，不影响 broadcast.ts 自身的注册表逻辑
+vi.mock('../events/broadcast.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../events/broadcast.js')>()
+  return { ...actual, broadcastEvent: vi.fn() }
+})
 
 initDb()
+
+afterEach(() => {
+  vi.clearAllMocks()
+})
 
 beforeEach(() => {
   db.exec(`
@@ -52,6 +64,62 @@ describe('switchPreset', () => {
       perceived_user: null,
     })
   })
+
+  it('切换触发 preset-switched 广播，payload 带上新 session 的 sessionId 和 presetId', () => {
+    loadSession('p1')
+    vi.clearAllMocks()
+
+    const newState = switchPreset('p2')
+
+    expect(BroadcastModule.broadcastEvent).toHaveBeenCalledWith('preset-switched', {
+      sessionId: newState.session.sessionId,
+      presetId: newState.session.presetId,
+    })
+  })
+})
+
+describe('manifest 缓存（Part A：loadSession/switchPreset 填充 SessionState.manifest）', () => {
+  it('preset 的 characterId 对应存在的角色包时，loadSession 返回缓存的 manifest', () => {
+    upsertPreset({
+      presetId: 'p3',
+      name: '角色三',
+      characterId: 'Mint',
+      modelType: 'ollama',
+      modelName: 'qwen3',
+      systemPrompt: '你是 Mint',
+    })
+
+    const { manifest } = loadSession('p3')
+
+    expect(manifest).not.toBeNull()
+    expect(manifest!.avatar).toBe('avatar.png')
+  })
+
+  it('preset 的 characterId 没有对应角色包目录时，manifest 为 null，loadSession 不抛错', () => {
+    // p2 的 characterId 是 char-002，assets/characters/ 下没有这个目录（已知的、
+    // 本阶段之外的种子数据缺口，见 TDD/seed.ts），是本用例要验证的降级路径
+    expect(() => loadSession('p2')).not.toThrow()
+    const { manifest } = loadSession('p2')
+
+    expect(manifest).toBeNull()
+  })
+
+  it('switchPreset 切到新 preset 时同样填充 manifest 字段', () => {
+    upsertPreset({
+      presetId: 'p3',
+      name: '角色三',
+      characterId: 'Mint',
+      modelType: 'ollama',
+      modelName: 'qwen3',
+      systemPrompt: '你是 Mint',
+    })
+    loadSession('p1')
+
+    const { manifest } = switchPreset('p3')
+
+    expect(manifest).not.toBeNull()
+    expect(manifest!.avatar).toBe('avatar.png')
+  })
 })
 
 describe('refreshCurrentPresetIfActive', () => {
@@ -80,5 +148,15 @@ describe('refreshCurrentPresetIfActive', () => {
     expect(getCurrentState()!.preset).toEqual(before)
     expect(getCurrentState()!.preset.systemPrompt).toBe('你是角色一')
     expect(getEmotionState(session.sessionId)).not.toBeNull()
+  })
+
+  it('不触发 preset-switched 广播——与 switchPreset 刻意区分的窄范围原语，不是真正的切换', () => {
+    loadSession('p1')
+    vi.clearAllMocks()
+
+    updatePresetSystemPrompt('p1', '更新后的人设')
+    refreshCurrentPresetIfActive('p1')
+
+    expect(BroadcastModule.broadcastEvent).not.toHaveBeenCalled()
   })
 })

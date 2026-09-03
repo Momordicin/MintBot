@@ -10,10 +10,7 @@ upsertPreset({
   modelType: 'ollama',
   modelName: 'huihui_ai/qwen3-abliterated:latest',
   wallpaperPath: undefined,
-  systemPrompt: `你是一个AI伴侣角色，名字叫Mint。请严格用以下JSON格式回复，不要输出任何其他内容：
-{"reply": "你的回复内容", "emotion": {"self": {"label": "情绪标签", "intensity": 0.7}, "perceived_user": null}}
-
-情绪标签可选值：idle、happy、sad、curious、angry、surprised、shy`,
+  systemPrompt: `你是一个AI伴侣角色，名字叫Mint。`,
 })
 
 console.log('[Seed] preset-001 inserted')
@@ -25,10 +22,7 @@ upsertPreset({
   modelType: 'ollama',
   modelName: 'llama3',
   wallpaperPath: 'preset-002-bg.jpg',
-  systemPrompt: `你是一个AI伴侣角色，名字叫阿墨。请严格用以下JSON格式回复，不要输出任何其他内容：
-{"reply": "你的回复内容", "emotion": {"self": {"label": "情绪标签", "intensity": 0.7}, "perceived_user": null}}
-
-情绪标签可选值：idle、happy、sad、curious、angry、surprised、shy`,
+  systemPrompt: `你是一个AI伴侣角色，名字叫阿墨。`,
 })
 
 console.log('[Seed] preset-002 inserted')

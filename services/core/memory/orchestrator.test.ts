@@ -16,10 +16,17 @@ vi.mock('../config/index.js', () => ({
     recentTrackMaxMinutes: 30,
     organizeWindowStartHour: 22,
     organizeWindowEndHour: 8,
-    summaryTrigger: { pendingCountThreshold: 100, oldestPendingAgeMinutes: 120, messageCountThreshold: 50, lockScreenMinutes: 60 },
+    summaryTrigger: { pendingCountThreshold: 100, oldestPendingAgeMinutes: 120, messageCountThreshold: 50, lockScreenMinutes: 60, minMessagesForLockTrigger: 4 },
     contextBudget: { total: 8000, systemPrompt: 1000, summary: 1500, rag: 2000, recentMessages: 3000, responseReserve: 500 },
   }),
 }))
+
+// getCurrentState 用于当前激活角色的摘要插队检查——mock 成受控的 vi.fn()，每个用例自己
+// 设置返回值（默认 null，代表"无激活 session"，与真实模块在没有任何 session 被加载时的
+// 行为一致）。用 vi.hoisted 声明保证 vi.mock 的 factory（会被提升到文件顶部先执行）
+// 能引用到同一个函数实例
+const { getCurrentStateMock } = vi.hoisted(() => ({ getCurrentStateMock: vi.fn(() => null as { session: { sessionId: string } } | null) }))
+vi.mock('../session/index.js', () => ({ getCurrentState: getCurrentStateMock }))
 
 initDb()
 beforeEach(() => {
@@ -27,6 +34,8 @@ beforeEach(() => {
   // lockState 是模块级内存状态，跨测试用例复用同一模块实例，每个用例开始前重置为未锁屏，
   // 避免前一个用例里 recordSystemEvent('lock-screen', ...) 的状态泄漏到后续用例
   recordSystemEvent('unlock-screen')
+  getCurrentStateMock.mockReset()
+  getCurrentStateMock.mockReturnValue(null)
 })
 
 // 确定性假 embedding provider（与 embedQueue.test.ts 同款风格）
@@ -348,6 +357,61 @@ describe('runOrganizeModeTick — 摘要阶段', () => {
     expect(result.summariesGenerated).toBe(2)
     expect(getPendingSummaryCount('s1')).toBe(0)
     expect(getPendingSummaryCount('s2')).toBe(0)
+  })
+})
+
+describe('runOrganizeModeTick — 当前激活角色的摘要插队', () => {
+  it('当前激活角色满足摘要条件时，在某一批 embedding 处理完后立刻被插队摘要（不经过摘要阶段的 fallback 循环）', async () => {
+    getCurrentStateMock.mockReturnValue({ session: { sessionId: 's1' } })
+
+    // 60 条很旧的消息（>120min，触发 embedding 条件；数量 60 也超过消息数阈值 50，
+    // 触发摘要条件），batchSize=200 足够一次性处理完，只产生 1 个 embedding 批次
+    const oldestCreatedAt = NOW_IN_WINDOW - 130 * MIN
+    for (let i = 0; i < 60; i++) {
+      addMessage(`消息${i}`, oldestCreatedAt + i)
+    }
+    const latestCreatedAt = oldestCreatedAt + 59
+
+    // getNow() 序列：前 5 次调用（第 1 次 while 条件判断 + 插队检查内部 3 次调用）固定在
+    // NOW_IN_WINDOW（远离消息时间，activeConversation=false，处于低活跃窗口内，触发 embedding
+    // 条件）；第 6 次调用起（embedding 循环结束后、摘要 fallback 阶段的活跃对话判断）跳到
+    // 紧贴最新消息时间之后 1 分钟（< 5 分钟活跃对话窗口），让 activeConversation=true，
+    // 从而整个摘要 fallback 循环被跳过——如果最终仍观察到摘要被生成，说明一定是插队路径
+    // 产生的，不是 fallback 路径
+    let calls = 0
+    const getNow = () => {
+      calls++
+      return calls <= 5 ? NOW_IN_WINDOW : latestCreatedAt + 1 * MIN
+    }
+
+    const result = await runOrganizeModeTick(
+      { embedding: fakeEmbedding(), ner: emptyNer(), model: emptyModel() },
+      200,
+      getNow
+    )
+
+    expect(result.batches).toBe(1)
+    expect(result.summariesGenerated).toBe(1)
+    expect(getPendingSummaryCount('s1')).toBe(0)
+    expect(getPendingEmbeddingCount()).toBe(0)
+  })
+
+  it('没有激活 session（getCurrentState() 返回 null）时插队逻辑整体跳过，不报错；待摘要消息仍会在摘要阶段被正常处理', async () => {
+    getCurrentStateMock.mockReturnValue(null)
+
+    for (let i = 0; i < 60; i++) {
+      addMessage(`消息${i}`, NOW_IN_WINDOW - 130 * MIN + i)
+    }
+
+    const result = await runOrganizeModeTick(
+      { embedding: fakeEmbedding(), ner: emptyNer(), model: emptyModel() },
+      200,
+      () => NOW_IN_WINDOW
+    )
+
+    expect(result.triggered).toBe(true)
+    expect(result.summariesGenerated).toBe(1)
+    expect(getPendingSummaryCount('s1')).toBe(0)
   })
 })
 

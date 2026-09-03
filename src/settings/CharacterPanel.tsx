@@ -39,11 +39,46 @@ interface CharacterPanelProps {
 
 export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelProps) {
   const [presets, setPresets] = useState<PresetOption[]>([])
+  // 角色文件夹下拉框（createCharacterId 的选项来源）：assets/characters/ 下已有的角色包
+  // 子目录名，挂载时拉取一次——同 presets 列表一样不需要之后自动刷新
+  const [characterIds, setCharacterIds] = useState<string[]>([])
   const [isUploadingWallpaper, setIsUploadingWallpaper] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [isRenaming, setIsRenaming] = useState(false)
   const [renameValue, setRenameValue] = useState('')
   const [isSavingRename, setIsSavingRename] = useState(false)
+  // 创建入口：低风险单步动作（同改名），不需要人设编辑那套两段确认——填表单/提交/完成
+  const [isCreating, setIsCreating] = useState(false)
+  const [createName, setCreateName] = useState('')
+  const [createCharacterId, setCreateCharacterId] = useState('')
+  const [createSystemPrompt, setCreateSystemPrompt] = useState('')
+  const [isSavingCreate, setIsSavingCreate] = useState(false)
+  // 角色卡导入：复用上面同一套创建表单/handleCreateSave，只是把"用户逐字段填"换成
+  // "从卡片解析结果预填"。这两块状态只在导入流程里被赋值，手动创建（handleCreateStart）
+  // 全程不碰它们，值恒为 null
+  const [isImportingCard, setIsImportingCard] = useState(false)
+  const [isGeneratingSystemPrompt, setIsGeneratingSystemPrompt] = useState(false)
+  const [importedCardFields, setImportedCardFields] = useState<{
+    description: string
+    personality: string
+    scenario: string
+    mesExample: string
+    systemPromptRaw: string
+  } | null>(null)
+  // 仅当解析出的卡片是 PNG 内嵌（hasEmbeddedAvatar）时才有值；创建成功后用它触发一次
+  // 尽力而为的头像上传（POST /characters/:characterId/avatar），失败不影响 preset 本身
+  const [importedAvatarFile, setImportedAvatarFile] = useState<{ data: Uint8Array<ArrayBuffer>; filename: string } | null>(null)
+  // tags/creator/creatorNotes/characterVersion 只写入角色包 manifest.json，不进 systemPrompt
+  // （TDD §3.7 附「角色卡导入」字段映射表），因此单独一份状态、不与 importedCardFields
+  // 合并——后者是要发给 /characters/import/generate 重新改写的结构化字段，这四个字段跟
+  // "改写" 无关。JSON 卡片与 PNG 卡片都可能带有这四个字段，因此不像 importedAvatarFile
+  // 那样只在 hasEmbeddedAvatar 时才有值
+  const [importedMetadataFields, setImportedMetadataFields] = useState<{
+    tags: string[]
+    creator: string
+    creatorNotes: string
+    characterVersion: string
+  } | null>(null)
   // 人设编辑：五个互斥步骤中始终只有一个在生效，见上方 SystemPromptStep 类型注释
   const [systemPromptStep, setSystemPromptStep] = useState<SystemPromptStep>('idle')
   const [systemPromptValue, setSystemPromptValue] = useState('')
@@ -54,6 +89,13 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
   const [useGlobalModel, setUseGlobalModel] = useState(true)
   const [overrideModelType, setOverrideModelType] = useState<ModelConfig['type']>('anthropic')
   const [overrideModelName, setOverrideModelName] = useState('')
+  // overrideModelName 下拉框的选项来源：随 overrideModelType 变化重新拉取（ollama 走真实
+  // 已拉取模型名，anthropic/openai 走后端静态列表），与 useGlobalModel/编辑态与否无关——
+  // 见下方对应的 useEffect
+  const [modelNameOptions, setModelNameOptions] = useState<string[]>([])
+  // 区分"还在拉取中"和"拉取完成但列表确实是空的"（如 Ollama 没运行）——空数组本身
+  // 无法区分这两种状态，缺了这个 flag 会导致加载中的一瞬间也显示"未运行"的错误提示
+  const [isLoadingModelNames, setIsLoadingModelNames] = useState(false)
   // 同 systemPromptNotice 的"下次生效"一次性提示，各自独立不共用，避免两个不相关的动作
   // 互相覆盖对方的提示文案
   const [modelOverrideNotice, setModelOverrideNotice] = useState<string | null>(null)
@@ -66,11 +108,26 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
   // 改名是独立于切换/上传的动作，不需要与它们互相中断（不像 wallpaper↔switch 那组不对称关系）——
   // 仅在组件卸载时随其它两个 controller 一起被 abort
   const renameControllerRef = useRef<AbortController | null>(null)
+  // 创建同样独立于其它动作，仅在组件卸载时随其余 controller 一起被 abort
+  const createControllerRef = useRef<AbortController | null>(null)
+  // 角色卡导入的解析请求与"模型辅助改写"请求各自独立，互不中断，仅在组件卸载时一起 abort
+  // （与 createControllerRef 同样的独立性考量：这两步都没有防抖/自动重发概念）
+  const importControllerRef = useRef<AbortController | null>(null)
+  const generateControllerRef = useRef<AbortController | null>(null)
+  // 头像上传与元数据合并都是创建成功后的尽力而为后续步骤（fire-and-forget，不 await、
+  // 不阻塞/回滚已经成功的创建），但同其它请求一样仍需要在卸载时被 abort，避免残留请求
+  // 在组件已卸载后继续跑——各自独立的 ref，不与上面几个互相中断，同 createControllerRef
+  // 等的独立性考量
+  const avatarUploadControllerRef = useRef<AbortController | null>(null)
+  const metadataMergeControllerRef = useRef<AbortController | null>(null)
   // 人设编辑没有防抖/自动保存概念（每次发送都是用户显式点过两段确认之后的结果），
   // 因此只需要 abort-then-reissue + 卸载时 abort，不需要 displayConfig 那套"卸载时补发"逻辑
   const systemPromptControllerRef = useRef<AbortController | null>(null)
   // 模型覆盖同样没有防抖概念，独立于 systemPromptControllerRef——两个编辑区块互不中断对方
   const modelOverrideControllerRef = useRef<AbortController | null>(null)
+  // 模型名下拉框选项的拉取请求：overrideModelType 快速切换时，旧请求的响应可能比新请求
+  // 更晚返回，abort-then-reissue 避免用旧 type 的结果覆盖新 type 已经拉到的列表
+  const modelNameOptionsControllerRef = useRef<AbortController | null>(null)
   // 让 handleWallpaperPick 在系统文件选择框（非模态，用户可在此期间继续切换 preset）关闭后，
   // 能读到"点击选图按钮那一刻之后是否发生过 preset 切换"的最新值，而不是闭包捕获的旧 prop
   const presetSnapshotRef = useRef<PresetSnapshot | null>(presetSnapshot)
@@ -127,9 +184,15 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
       switchPresetControllerRef.current?.abort()
       wallpaperControllerRef.current?.abort()
       renameControllerRef.current?.abort()
+      createControllerRef.current?.abort()
       displayConfigControllerRef.current?.abort()
       systemPromptControllerRef.current?.abort()
       modelOverrideControllerRef.current?.abort()
+      modelNameOptionsControllerRef.current?.abort()
+      importControllerRef.current?.abort()
+      generateControllerRef.current?.abort()
+      avatarUploadControllerRef.current?.abort()
+      metadataMergeControllerRef.current?.abort()
 
       // 防抖定时器还没到、组件就被卸载：待发的最后一次颜色/透明度编辑不能被静默丢弃，
       // 在这里同步补发一次。组件已经卸载，不需要等待响应也不需要 onSwitched
@@ -159,6 +222,46 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
         // preset 列表拉取失败不影响本面板其它功能，静默忽略即可
       })
   }, [])
+
+  useEffect(() => {
+    fetch(`${CORE_URL}/characters`)
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      .then((body: { characterIds: string[] }) => setCharacterIds(body.characterIds))
+      .catch(() => {
+        // 跟旧版自由输入框不同：下拉框选项完全来自这次拉取，拉取失败会让创建入口的
+        // 下拉框永久空着且不可选——必须显式提示，不能静默吞掉让用户以为自己操作有误
+        setErrorMessage('角色文件夹列表加载失败，无法创建新角色，请检查核心服务后重试')
+      })
+  }, [])
+
+  // overrideModelType 变化时重新拉取模型名下拉框的选项——不限定在 modelOverrideStep
+  // === 'editing' 时才拉取，保持逻辑简单：即使当前不在编辑态，下次进入编辑态时选项也已就位
+  useEffect(() => {
+    modelNameOptionsControllerRef.current?.abort()
+    const controller = new AbortController()
+    modelNameOptionsControllerRef.current = controller
+    setModelNameOptions([])
+    setIsLoadingModelNames(true)
+
+    fetch(`${CORE_URL}/models?type=${overrideModelType}`, { signal: controller.signal })
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      .then((body: { models: string[] }) => {
+        if (controller.signal.aborted) return
+        setModelNameOptions(body.models)
+        setIsLoadingModelNames(false)
+      })
+      .catch(err => {
+        if (err instanceof DOMException && err.name === 'AbortError') return
+        // 模型名列表拉取失败（如后端不可达）不阻塞其它功能，下拉框走"空列表占位"分支即可
+        setIsLoadingModelNames(false)
+      })
+  }, [overrideModelType])
 
   const switchPreset = useCallback(async (presetId: string) => {
     switchPresetControllerRef.current?.abort()
@@ -313,6 +416,228 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
       setIsSavingRename(false)
     }
   }, [renameValue, onSwitched])
+
+  const handleCreateStart = useCallback(() => {
+    setCreateName('')
+    // 手动创建只能从已有文件夹里选（不保留自由输入路径），默认选中第一个已有文件夹；
+    // characterIds 尚未拉取到时退化为空字符串，与之前的行为一致，不阻塞创建入口本身
+    setCreateCharacterId(characterIds[0] ?? '')
+    setCreateSystemPrompt('')
+    // 手动创建与导入流程共用同一张表单：显式清空上一次可能残留的导入态，
+    // 避免手动创建误触发"模型辅助改写"按钮或误上传上一次导入的头像
+    setImportedCardFields(null)
+    setImportedAvatarFile(null)
+    setImportedMetadataFields(null)
+    setErrorMessage(null)
+    setIsCreating(true)
+  }, [characterIds])
+
+  const handleCreateCancel = useCallback(() => {
+    setIsCreating(false)
+    setImportedCardFields(null)
+    setImportedAvatarFile(null)
+    setImportedMetadataFields(null)
+    setErrorMessage(null)
+  }, [])
+
+  const handleImportCardPick = useCallback(async () => {
+    // 系统文件选择框非模态，按钮本身又没有 disabled 态之外的重入防护，用这个标记防重入。
+    // 同一个标记也用来在此期间禁用"创建角色"入口（见渲染处 disabled={isImportingCard}），
+    // 防止用户在解析结果返回前开始手动创建、随后被这里姗姗来迟地覆盖已手打的表单内容
+    if (isImportingCard) return
+
+    setIsImportingCard(true)
+    setErrorMessage(null)
+    try {
+      const result = await window.electronAPI.selectCharacterCardFile()
+      if (!result) return // 用户取消选择，不算失败
+
+      importControllerRef.current?.abort()
+      const controller = new AbortController()
+      importControllerRef.current = controller
+
+      const response = await fetch(`${CORE_URL}/characters/import/parse`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-Filename': encodeURIComponent(result.filename),
+        },
+        body: result.data,
+        signal: controller.signal,
+      })
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => null)
+        throw new Error(typeof body?.error === 'string' ? body.error : `HTTP ${response.status}`)
+      }
+
+      const parsed = await response.json()
+      if (controller.signal.aborted) return
+
+      // 预填同一张创建表单，用户接下来的编辑/提交路径与手动创建完全一致（handleCreateSave）
+      setCreateName(parsed.name)
+      setCreateCharacterId(parsed.suggestedCharacterId)
+      setCreateSystemPrompt(parsed.systemPrompt)
+      setImportedCardFields({
+        description: parsed.description,
+        personality: parsed.personality,
+        scenario: parsed.scenario,
+        mesExample: parsed.mesExample,
+        systemPromptRaw: parsed.systemPromptRaw,
+      })
+      // 只有 PNG 内嵌卡片才带头像候选；非 PNG 来源（V1/V2 纯 JSON）没有可保存的图片
+      setImportedAvatarFile(parsed.hasEmbeddedAvatar ? result : null)
+      // tags/creator/creatorNotes/characterVersion：JSON 卡片与 PNG 卡片都可能带有，
+      // 不像头像候选那样只在 PNG 来源时才有值
+      setImportedMetadataFields({
+        tags: parsed.tags,
+        creator: parsed.creator,
+        creatorNotes: parsed.creatorNotes,
+        characterVersion: parsed.characterVersion,
+      })
+      setIsCreating(true)
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return
+      if (err instanceof Error && err.message.includes('file-too-large')) {
+        setErrorMessage('角色卡文件过大，请选择小于 5MB 的文件')
+        return
+      }
+      setErrorMessage(err instanceof Error && err.message ? err.message : '导入角色卡失败，请稍后重试')
+    } finally {
+      setIsImportingCard(false)
+    }
+  }, [isImportingCard])
+
+  const handleRegenerateSystemPrompt = useCallback(async () => {
+    if (!importedCardFields || isGeneratingSystemPrompt) return
+
+    generateControllerRef.current?.abort()
+    const controller = new AbortController()
+    generateControllerRef.current = controller
+    setIsGeneratingSystemPrompt(true)
+    setErrorMessage(null)
+
+    try {
+      const response = await fetch(`${CORE_URL}/characters/import/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(importedCardFields),
+        signal: controller.signal,
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
+      }
+
+      const { systemPrompt }: { systemPrompt: string } = await response.json()
+      if (controller.signal.aborted) return
+
+      // 简单的可撤销文本替换：直接覆盖文本框当前内容，不是新增一步确认
+      setCreateSystemPrompt(systemPrompt)
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return
+      // 失败时保留文本框里已有的内容（手工模板结果或上一次改写结果），不清空、不阻塞创建
+      setErrorMessage('模型辅助改写失败，请稍后重试')
+    } finally {
+      setIsGeneratingSystemPrompt(false)
+    }
+  }, [importedCardFields, isGeneratingSystemPrompt])
+
+  const handleCreateSave = useCallback(async () => {
+    const trimmedName = createName.trim()
+    const trimmedCharacterId = createCharacterId.trim()
+    const trimmedSystemPrompt = createSystemPrompt.trim()
+    // 客户端校验，不发请求——与后端 POST /presets 的校验顺序/规则一致，避免为客户端能
+    // 拦下的错误多绕一次网络往返
+    if (!trimmedName) {
+      setErrorMessage('名称不能为空')
+      return
+    }
+    if (!trimmedCharacterId) {
+      setErrorMessage('角色包 ID 不能为空')
+      return
+    }
+    if (!trimmedSystemPrompt) {
+      setErrorMessage('人设内容不能为空')
+      return
+    }
+
+    createControllerRef.current?.abort()
+    const controller = new AbortController()
+    createControllerRef.current = controller
+    setIsSavingCreate(true)
+    setErrorMessage(null)
+
+    try {
+      const response = await fetch(`${CORE_URL}/presets`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: trimmedName, characterId: trimmedCharacterId, systemPrompt: trimmedSystemPrompt }),
+        signal: controller.signal,
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
+      }
+
+      const { presetId, name }: { presetId: string; name: string } = await response.json()
+      if (controller.signal.aborted) return
+
+      // 与 handleRenameSave 同款本地 patch：下拉框选项立即出现新创建的角色，不必等一次
+      // 全量重新拉取 GET /presets
+      setPresets(prev => [...prev, { presetId, name }])
+      setIsCreating(false)
+
+      // 角色卡导入的可选后续步骤：仅当解析出的卡片带头像候选（PNG 内嵌）时才触发，
+      // 尽力而为、fire-and-forget——失败不影响已经创建成功的 preset 本身，不重试不提示，
+      // 因此故意不 await 这次 fetch
+      if (importedAvatarFile) {
+        avatarUploadControllerRef.current?.abort()
+        const avatarController = new AbortController()
+        avatarUploadControllerRef.current = avatarController
+        fetch(`${CORE_URL}/characters/${encodeURIComponent(trimmedCharacterId)}/avatar`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/octet-stream',
+            'X-Filename': encodeURIComponent(importedAvatarFile.filename),
+          },
+          body: importedAvatarFile.data,
+          signal: avatarController.signal,
+        }).catch(() => {
+          // 同上：preset 已创建成功，头像保存失败无处展示，也没有重试的必要
+        })
+      }
+      // 同上：角色卡导入的另一个可选后续步骤，每次导入创建都触发（不像头像候选那样只在
+      // PNG 来源时才有值）——tags/creator/creatorNotes/characterVersion 写入 manifest.json，
+      // 失败同样不影响已经创建成功的 preset 本身
+      if (importedMetadataFields) {
+        metadataMergeControllerRef.current?.abort()
+        const metadataController = new AbortController()
+        metadataMergeControllerRef.current = metadataController
+        fetch(`${CORE_URL}/characters/${encodeURIComponent(trimmedCharacterId)}/metadata`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(importedMetadataFields),
+          signal: metadataController.signal,
+        }).catch(() => {
+          // 同上：preset 已创建成功，元数据保存失败无处展示，也没有重试的必要
+        })
+      }
+      setImportedCardFields(null)
+      setImportedAvatarFile(null)
+      setImportedMetadataFields(null)
+
+      // 复用既有的完整切换流程（含 onSwitched 回调），不重复实现同一套逻辑
+      void switchPreset(presetId)
+    } catch (err) {
+      // AbortError 由更晚一次创建请求（理论上不会发生，创建没有防抖/自动重发）或组件卸载触发
+      if (err instanceof DOMException && err.name === 'AbortError') return
+      // 保留输入内容、停留在表单里，让用户可以直接重试而不用重新输入（同 handleRenameSave 的失败处理）
+      setErrorMessage('创建角色失败，请稍后重试')
+    } finally {
+      setIsSavingCreate(false)
+    }
+  }, [createName, createCharacterId, createSystemPrompt, importedAvatarFile, importedMetadataFields, switchPreset])
 
   const handleSystemPromptEditStart = useCallback(() => {
     setSystemPromptValue(presetSnapshotRef.current?.systemPrompt ?? '')
@@ -550,10 +875,35 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
     scheduleDisplayConfigChange({ chatBgOpacity: opacity })
   }, [scheduleDisplayConfigChange])
 
+  // "无色"色块：复用 handleOpacityChange 同一条防抖保存链路，只是把值固定为 0，
+  // 不新增任何 state——chatBgOpacity === 0 本身就是"无色正在生效"的完整信号
+  const handleNoColorClick = useCallback(() => {
+    setChatBgOpacity(0)
+    scheduleDisplayConfigChange({ chatBgOpacity: 0 })
+  }, [scheduleDisplayConfigChange])
+
+  // 角色文件夹下拉框的选项：默认是 assets/characters/ 下已有文件夹；仅当处于"导入角色卡"
+  // 流程（importedCardFields 非空，只在这条路径被赋值）且 suggestedCharacterId 不在已有
+  // 文件夹列表里时，额外在顶部插入一个预选中的合成选项——手动创建（importedCardFields 恒为
+  // null）没有这条合成选项，只能从已有文件夹里选
+  const characterIdOptions = importedCardFields && createCharacterId && !characterIds.includes(createCharacterId)
+    ? [{ value: createCharacterId, label: `（新导入）${createCharacterId}` }, ...characterIds.map(id => ({ value: id, label: id }))]
+    : characterIds.map(id => ({ value: id, label: id }))
+
+  // 模型名下拉框的选项：默认是 modelNameOptions（随 overrideModelType 拉取）；若当前值
+  // （如某个 preset 早先保存的自定义模型名）恰好不在这份列表里，补一项指向它自己，避免
+  // 打开编辑态时下拉框视觉上"看起来选中了别的模型"——与角色文件夹下拉框的合成选项同一顾虑
+  const overrideModelNameOptions = overrideModelName && !modelNameOptions.includes(overrideModelName)
+    ? [overrideModelName, ...modelNameOptions]
+    : modelNameOptions
+
   return (
     <div className="character-panel">
-      {presets.length > 0 && (
-        <div className="character-panel__row">
+      {/* 创建入口：不像下面几块一样套 presets.length > 0 的门——preset 列表为空（全新安装，
+          或本功能本身让这个状态首次可达）时，这一行连同下方的空态提示是本面板唯一渲染的内容，
+          用户必须能从这里创建出第一个 preset */}
+      <div className="character-panel__row">
+        {presets.length > 0 && (
           <select
             value={presetSnapshot?.presetId ?? ''}
             onChange={e => switchPreset(e.target.value)}
@@ -562,7 +912,9 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
               <option key={p.presetId} value={p.presetId}>{p.name}</option>
             ))}
           </select>
-          {isRenaming ? (
+        )}
+        {presets.length > 0 && (
+          isRenaming ? (
             <>
               <input
                 className="character-panel__rename-input"
@@ -581,7 +933,9 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
             <button className="rename-btn" onClick={handleRenameStart} title="重命名当前角色">
               编辑
             </button>
-          )}
+          )
+        )}
+        {presets.length > 0 && (
           <button
             className="wallpaper-btn"
             onClick={handleWallpaperPick}
@@ -590,6 +944,68 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
           >
             {isUploadingWallpaper ? '更换中…' : '更换壁纸'}
           </button>
+        )}
+        {!isCreating && (
+          // 文件选择框（导入角色卡）非模态，disabled 防止用户在解析结果尚未返回时开始手动
+          // 创建、随后被姗姗来迟的解析结果覆盖已经手打的表单内容——见 handleImportCardPick
+          // 顶部注释与 isImportingCard 声明处注释
+          <button className="rename-btn" onClick={handleCreateStart} disabled={isImportingCard} title="创建新角色">
+            创建角色
+          </button>
+        )}
+        {!isCreating && (
+          <button className="rename-btn" onClick={handleImportCardPick} disabled={isImportingCard} title="从 SillyTavern character card v2 导入">
+            {isImportingCard ? '导入中…' : '导入角色卡'}
+          </button>
+        )}
+      </div>
+      {presets.length === 0 && !isCreating && (
+        <div className="character-panel__hint">还没有角色，创建一个开始</div>
+      )}
+      {isCreating && (
+        <div className="character-panel__create-form">
+          <input
+            className="character-panel__rename-input"
+            value={createName}
+            onChange={e => setCreateName(e.target.value)}
+            placeholder="角色名称"
+            disabled={isSavingCreate}
+          />
+          <select
+            value={createCharacterId}
+            onChange={e => setCreateCharacterId(e.target.value)}
+            disabled={isSavingCreate}
+          >
+            {characterIdOptions.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+          <textarea
+            className="character-panel__persona-textarea"
+            value={createSystemPrompt}
+            onChange={e => setCreateSystemPrompt(e.target.value)}
+            placeholder="人设正文"
+            disabled={isSavingCreate}
+          />
+          {/* 仅导入流程可见：手动创建没有可供模型改写的结构化字段来源 */}
+          {importedCardFields && (
+            <button
+              className="rename-btn"
+              onClick={handleRegenerateSystemPrompt}
+              disabled={isSavingCreate || isGeneratingSystemPrompt}
+              title="用后台模型把角色卡字段改写成更连贯的人设正文"
+            >
+              {isGeneratingSystemPrompt ? '改写中…' : '使用模型辅助改写'}
+            </button>
+          )}
+          <div className="character-panel__row">
+            <button className="rename-btn" onClick={handleCreateCancel} disabled={isSavingCreate}>
+              取消
+            </button>
+            <button className="rename-btn" onClick={handleCreateSave} disabled={isSavingCreate}>
+              {isSavingCreate ? '创建中…' : '创建'}
+            </button>
+          </div>
         </div>
       )}
       {presets.length > 0 && (
@@ -603,6 +1019,14 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
               onChange={handleColorChange}
             />
           </label>
+          <button
+            type="button"
+            className={`character-panel__no-color-btn${chatBgOpacity === 0 ? ' character-panel__no-color-btn--active' : ''}`}
+            onClick={handleNoColorClick}
+            title="无色（不透明度设为 0）"
+            aria-label="无色"
+            aria-pressed={chatBgOpacity === 0}
+          />
           <label className="character-panel__display-label" title="聊天区域背景不透明度">
             不透明度
             <input
@@ -694,18 +1118,37 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
                 <div className="character-panel__row">
                   <select
                     value={overrideModelType}
-                    onChange={e => setOverrideModelType(e.target.value as ModelConfig['type'])}
+                    onChange={e => {
+                      // 切换 provider 类型时必须清空已选模型名，否则上一个 provider 的模型名
+                      // 会被 overrideModelNameOptions 的合成选项逻辑当作"新 provider 下的
+                      // 有效选项"重新展示出来，用户不点这个下拉框也不会注意到这个不匹配，
+                      // 结果保存下一个 provider/上一个模型名 的错配组合
+                      setOverrideModelType(e.target.value as ModelConfig['type'])
+                      setOverrideModelName('')
+                    }}
                   >
                     <option value="anthropic">Anthropic</option>
                     <option value="openai">OpenAI</option>
+                    <option value="deepseek">DeepSeek</option>
                     <option value="ollama">Ollama</option>
                   </select>
-                  <input
-                    className="character-panel__rename-input"
+                  <select
                     value={overrideModelName}
                     onChange={e => setOverrideModelName(e.target.value)}
-                    placeholder="模型名称"
-                  />
+                    disabled={overrideModelNameOptions.length === 0}
+                  >
+                    {overrideModelNameOptions.length === 0 ? (
+                      <option value="" disabled>
+                        {isLoadingModelNames
+                          ? '模型列表加载中…'
+                          : overrideModelType === 'ollama' ? 'Ollama 未运行或无可用模型' : '模型列表为空'}
+                      </option>
+                    ) : (
+                      overrideModelNameOptions.map(name => (
+                        <option key={name} value={name}>{name}</option>
+                      ))
+                    )}
+                  </select>
                 </div>
               )}
               <div className="character-panel__row">

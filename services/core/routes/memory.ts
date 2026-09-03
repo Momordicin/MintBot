@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { getCurrentEntitiesPage, getSummaries } from '../session/queries.js'
 import { computeEmbeddingQueueStatus } from '../memory/orchestrator.js'
 import { VALID_TYPES } from '../memory/entityExtractor.js'
+import { getCurrentState } from '../session/index.js'
 import type { MessageEntity } from '../../../shared/types/index.js'
 
 const DEFAULT_LIMIT = 20
@@ -57,9 +58,10 @@ export async function memoryRoutes(fastify: FastifyInstance) {
     return getSummaries(sessionId)
   })
 
-  // 全局统计，不接受 sessionId——computeEmbeddingQueueStatus 本身就是不分 session 的
-  // 全局查询（见 orchestrator.ts）
+  // 全局统计为主，不接受 sessionId 查询参数；额外附带当前激活角色自己的 activePreset* 字段
+  // （见 shared/types/index.ts EmbeddingQueueStatus），activeSessionId 直接读当前进程内的
+  // 激活 session，不是由调用方传入
   fastify.get('/embedding-queue-status', async () => {
-    return computeEmbeddingQueueStatus()
+    return computeEmbeddingQueueStatus(Date.now(), getCurrentState()?.session.sessionId ?? null)
   })
 }

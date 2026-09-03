@@ -81,11 +81,10 @@ export function ChatWindow() {
   // 防止同一时刻并发触发多次"加载更多"请求
   const isLoadingMoreRef = useRef(false)
   // 回复进行中用户仍可继续发送新消息，同一时间可能有多个 /chat 请求在途，用 Set 记录它们。
-  // 注意：preset 切换搬到设置窗口后，这个 Set 已经没有任何代码会在切换时遍历它逐个 abort——
-  // 那是从前 switchPreset 在本文件内时才有的能力，跨窗口切换现在无法触发。已知接受的缺口
-  // （见记忆 settings-window-cross-window-abort-gap）：只影响本窗口渲染状态的短暂串味
-  // （旧 session 的 SSE 回复在切换之后才到达、被追加到已经切到新 session 的界面上），
-  // 后端 /chat 按 dispatch 时刻捕获的 sessionId 落库，消息归属不受影响，不是数据一致性问题
+  // preset 切换搬到设置窗口后，本窗口通过 GET /events 的 preset-switched 广播感知到切换，
+  // 在 syncSessionOnFocus 检测到 sessionId 确实变化的分支里遍历这个 Set 逐个 abort（见下方
+  // 聚焦同步 effect），避免旧 session 的 SSE 回复在切换之后才到达、被追加到已经切到新 session
+  // 的界面上
   const activeControllersRef = useRef<Set<AbortController>>(new Set())
   // preset 切换已搬到设置窗口发起，这里改为承接"窗口重新聚焦时发现 session 已变"的同步请求——
   // 只在 sessionId 确实变化、需要做重置动作（清空消息、重拉历史、重取头像）时才用到；
@@ -164,9 +163,11 @@ export function ChatWindow() {
   // 已在设置窗口被切换（preset 切换的发起方已经搬到设置窗口，聊天窗口自己不再知道）。
   // 按两级处理：每次聚焦都把最新的 presetSnapshot 应用到界面（名字、壁纸、背景叠色变量），
   // 只有 sessionId 确实变化时才做重置动作（清空消息列表、重新加载历史、重取头像、重置分页
-  // 游标）——轻量字段无条件刷新、重操作按 sessionId 把关，否则从设置窗口改完当前角色的
-  // 显示设置，聊天窗口要等重开窗口才生效。已知局限：如果切换后一直不切回聊天窗口，这里不会
-  // 主动刷新，要等真正聚焦才补上——接受的缺口，等 GET /events 落地再替换
+  // 游标、abort 掉仍在途的旧 session /chat 请求）——轻量字段无条件刷新、重操作按 sessionId
+  // 把关，否则从设置窗口改完当前角色的显示设置，聊天窗口要等重开窗口才生效。
+  // 同时订阅 GET /events 的 preset-switched 广播（TDD §3.3），收到后立即调用同一个
+  // syncSessionOnFocus，不需要等窗口真正聚焦才补上这次同步——这就是"等 GET /events 落地
+  // 再替换"那个缺口的替换：现在切换后即使一直不切回聊天窗口，本窗口也能第一时间感知
   useEffect(() => {
     const syncSessionOnFocus = async () => {
       try {
@@ -179,6 +180,12 @@ export function ChatWindow() {
         setWallpaperUrl(wallpaperUrlFor(state.presetSnapshot))
 
         if (state.sessionId === appStateRef.current?.sessionId) return
+
+        // session 确实变化：abort 掉所有仍在途的旧 session /chat 请求，避免它们的
+        // message_done/system 事件在切换之后才到达、被追加到已经切到新 session 的界面上
+        // （见 activeControllersRef 声明处的说明）
+        activeControllersRef.current.forEach(controller => controller.abort())
+        activeControllersRef.current.clear()
 
         sessionSyncControllerRef.current?.abort()
         const controller = new AbortController()
@@ -213,7 +220,21 @@ export function ChatWindow() {
       syncSessionOnFocus()
     }
     window.addEventListener('focus', handler)
-    return () => window.removeEventListener('focus', handler)
+
+    // GET /events 共享广播流（与 src/overlay/OverlayApp.tsx 消费 emotion 事件同款写法：
+    // 原生 EventSource，按 event 名注册监听器）。preset-switched 走的是与聚焦处理函数完全
+    // 相同的代码路径，不重复实现一遍判断/重置逻辑
+    const eventSource = new EventSource(`${CORE_URL}/events`)
+    const onPresetSwitched = () => {
+      syncSessionOnFocus()
+    }
+    eventSource.addEventListener('preset-switched', onPresetSwitched)
+
+    return () => {
+      window.removeEventListener('focus', handler)
+      eventSource.removeEventListener('preset-switched', onPresetSwitched)
+      eventSource.close()
+    }
   }, [])
 
   // 加载最近一页历史消息（挂载时的初始 /state 请求成功后、以及每次聚焦触发的 session 同步
@@ -331,7 +352,12 @@ export function ChatWindow() {
         if (controller.signal.aborted) break
 
         if (event === 'message_done') {
-          const { text: replyText } = data as { messageId: string; text: string }
+          const { text: replyText, sessionId: replySessionId } = data as { messageId: string; text: string; sessionId: string }
+          // controller.signal.aborted 拦不住"切换检测本身还没跑完、旧 session 模型调用
+          // 却先一步完成"这种情况（见后端 chat.ts send('message_done', ...) 处的注释）——
+          // 这里改按后端回带的 sessionId 是否还等于当前实际展示的会话来判断，appStateRef
+          // 读到的是 syncSessionOnFocus 完成同步后的最新值，不是这次请求发起时的旧闭包值
+          if (replySessionId !== appStateRef.current?.sessionId) continue
           setMessages(prev => [...prev, {
             id: Date.now().toString(),
             role: 'assistant' as const,
@@ -341,7 +367,8 @@ export function ChatWindow() {
         }
 
         if (event === 'system') {
-          const { payload } = data as { type: string; payload: { message: string } }
+          const { payload, sessionId: replySessionId } = data as { type: string; payload: { message: string }; sessionId: string }
+          if (replySessionId !== appStateRef.current?.sessionId) continue
           addSystemMessage(payload.message, true)
         }
 

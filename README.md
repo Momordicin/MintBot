@@ -110,6 +110,9 @@ cp config.example.json config.json
 # 另外可选加一个 backgroundModelProvider 字段（结构同 modelProvider）：不配置时整理模式
 # （摘要生成、实体抽取）沿用 modelProvider 的模型；配置了则用独立模型，方便前台用便宜快的
 # 模型、后台摘要/实体抽取用更强的模型
+# 若使用 DeepSeek：type 填 "deepseek"，deepseekBaseUrl 留空默认使用 https://api.deepseek.com，
+# 模型名用 deepseek-v4-flash / deepseek-v4-pro（DeepSeek 是独立的一等公民 provider 类型，
+# 有自己的 deepseekApiKey/deepseekBaseUrl，与 openai 类型的凭据互不共享）
 
 # 初始化数据库（幂等写入测试 preset，首次运行必须执行）
 pnpm seed
