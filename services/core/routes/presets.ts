@@ -2,10 +2,10 @@ import type { FastifyInstance } from 'fastify'
 import path from 'path'
 import fs from 'fs'
 import crypto from 'crypto'
-import { getAllPresets, getPresetById, updatePresetWallpaper, updatePresetName, updatePresetDisplayConfig, updatePresetSystemPrompt, updatePresetModelConfig } from '../session/queries.js'
+import { getAllPresets, getPresetById, createPreset, updatePresetWallpaper, updatePresetName, updatePresetDisplayConfig, updatePresetSystemPrompt, updatePresetModelConfig } from '../session/queries.js'
 import { switchPreset, refreshCurrentPresetIfActive } from '../session/index.js'
 import { buildStatePayload } from '../state.js'
-import { isValidChatBgRgb, isValidChatBgOpacity } from '../session/displayConfig.js'
+import { isValidChatBgRgb, isValidChatBgOpacity, DEFAULT_DISPLAY_CONFIG } from '../session/displayConfig.js'
 import type { PresetDisplayConfig } from '../../../shared/types/index.js'
 
 // 与 services/core/index.ts 里 @fastify/static 的 data/wallpapers 注册使用同一路径约定
@@ -17,6 +17,49 @@ export async function presetRoutes(fastify: FastifyInstance) {
   fastify.get('/presets', async () => {
     // 只返回渲染层切换 UI 需要的字段，不广播 systemPrompt 等完整 Preset 数据
     return getAllPresets().map(p => ({ presetId: p.presetId, name: p.name }))
+  })
+
+  fastify.post<{
+    Body: { name: string; characterId: string; systemPrompt: string }
+  }>('/presets', async (request, reply) => {
+    const { name, characterId, systemPrompt } = request.body
+
+    const trimmedName = name?.trim()
+    if (!trimmedName) {
+      return reply.status(400).send({ error: 'name is required' })
+    }
+
+    // 只校验非空，不校验 assets/characters/ 下是否真的有这个文件夹——角色包缺失时
+    // loadCharacterManifest 已经能优雅降级（返回 null，空词表），不需要在这里提前拦截
+    const trimmedCharacterId = characterId?.trim()
+    if (!trimmedCharacterId) {
+      return reply.status(400).send({ error: 'characterId is required' })
+    }
+
+    const trimmedSystemPrompt = systemPrompt?.trim()
+    if (!trimmedSystemPrompt) {
+      return reply.status(400).send({ error: 'systemPrompt is required' })
+    }
+
+    // presetId 服务端生成（同 services/core/session/index.ts 生成 sessionId 的方式）——
+    // 内部标识符不该要求用户手打，也避免用户输入撞上已有 id
+    const presetId = crypto.randomUUID()
+    createPreset({
+      presetId,
+      name: trimmedName,
+      characterId: trimmedCharacterId,
+      // 新建 preset 默认跟随全局对话模型配置，不强制创建者一开始就选模型
+      // （与 PATCH /presets/:presetId 里 modelType/modelName 都为 null 的"清除覆盖"语义一致）
+      modelType: null,
+      modelName: null,
+      wallpaperPath: undefined,
+      displayConfig: DEFAULT_DISPLAY_CONFIG,
+      systemPrompt: trimmedSystemPrompt,
+      addressForms: [],
+    })
+
+    // 与 GET /presets 同一套精简 DTO，不广播 systemPrompt 等完整 Preset 字段
+    return { presetId, name: trimmedName }
   })
 
   fastify.post<{
