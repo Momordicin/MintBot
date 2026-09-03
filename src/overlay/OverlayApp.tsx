@@ -138,7 +138,18 @@ export function OverlayApp() {
 
   return (
     <div className="overlay-root">
-      {src && <img className="overlay-portrait" src={src} alt="" />}
+      {/* 点击恢复要挂在立绘本体上，不能挂在 overlay-root：root 整体是
+          -webkit-app-region: drag，Windows 下拖动区域在 DOM 收到事件之前就被
+          WM_NCHITTEST 拦成 HTCAPTION，普通 click 根本派发不到——立绘单独标记
+          no-drag 才能正常收到点击，同时 root 上没被立绘盖住的部分仍然可拖动 */}
+      {src && (
+        <img
+          className="overlay-portrait"
+          src={src}
+          alt=""
+          onClick={() => window.electronAPI.activateFromOverlay()}
+        />
+      )}
     </div>
   )
 }

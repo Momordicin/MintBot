@@ -144,7 +144,13 @@ function createOverlayWindow(): BrowserWindow {
   })
 
   win.on('ready-to-show', () => {
-    win.showInactive()
+    // 两个窗口的加载都是异步的，谁先 ready-to-show 没有先后保证——如果聊天窗口已经先一步
+    // 拿到焦点（它自己的 focus 监听已经把悬浮窗隐藏过一次，但那次悬浮窗还没显示，等于白隐藏），
+    // 这里再无条件 showInactive() 会让悬浮窗显示出来之后再也没有下一次 focus 事件去收起它，
+    // 一直卡在"启动后应该隐藏却显示着"的状态，直到用户手动切走再切回聊天窗口
+    if (!mainWindow?.isFocused()) {
+      win.showInactive()
+    }
   })
 
   win.on('closed', () => {
@@ -160,6 +166,8 @@ function createOverlayWindow(): BrowserWindow {
   return win
 }
 
+let mainWindow: BrowserWindow | null = null
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 900,
@@ -171,8 +179,22 @@ function createWindow() {
     }
   })
 
+  mainWindow = win
+
   win.on('ready-to-show', () => {
     win.show()
+  })
+
+  win.on('closed', () => {
+    mainWindow = null
+  })
+
+  win.on('minimize', () => {
+    overlayWindow?.showInactive()
+  })
+
+  win.on('focus', () => {
+    overlayWindow?.hide()
   })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
@@ -182,11 +204,18 @@ function createWindow() {
   }
 }
 
+// 悬浮窗侧点击恢复聊天窗口：单向通知，不需要返回值，用 ipcMain.on 而非 handle
+ipcMain.on('overlay:activate', () => {
+  mainWindow?.show()
+  mainWindow?.focus()
+  overlayWindow?.hide()
+})
+
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null)
   createWindow()
-  // 这轮悬浮窗跟聊天窗口一起在应用启动时显示，不接聊天窗口最小化/焦点/关闭的生命周期
-  // 联动（那是明确延后的后续工作，见 buzzing-frolicking-eich.md 计划）
+  // 悬浮窗跟随聊天窗口的最小化/焦点状态显隐（见上方 createWindow 内的 minimize/focus
+  // 监听）；关闭时启动悬浮窗留到系统托盘做完之后再接，见 buzzing-frolicking-eich.md 计划
   overlayWindow = createOverlayWindow()
 
   globalShortcut.register('CommandOrControl+Shift+I', () => {
