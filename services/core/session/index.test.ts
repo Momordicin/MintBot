@@ -1,9 +1,21 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { initDb, db } from '../db/index.js'
 import { upsertPreset, upsertEmotionState, getEmotionState, updatePresetSystemPrompt } from './queries.js'
 import { loadSession, switchPreset, getCurrentState, refreshCurrentPresetIfActive } from './index.js'
+import * as BroadcastModule from '../events/broadcast.js'
+
+// switchPreset 广播 preset-switched（GET /events，TDD §3.3）：与 chat.test.ts 里 mock
+// broadcastEvent 的既有约定一致，只替换掉这一个函数，不影响 broadcast.ts 自身的注册表逻辑
+vi.mock('../events/broadcast.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../events/broadcast.js')>()
+  return { ...actual, broadcastEvent: vi.fn() }
+})
 
 initDb()
+
+afterEach(() => {
+  vi.clearAllMocks()
+})
 
 beforeEach(() => {
   db.exec(`
@@ -50,6 +62,18 @@ describe('switchPreset', () => {
     expect(getEmotionState(resumedState.session.sessionId)).toEqual({
       self: { label: 'sad', intensity: 0.4 },
       perceived_user: null,
+    })
+  })
+
+  it('切换触发 preset-switched 广播，payload 带上新 session 的 sessionId 和 presetId', () => {
+    loadSession('p1')
+    vi.clearAllMocks()
+
+    const newState = switchPreset('p2')
+
+    expect(BroadcastModule.broadcastEvent).toHaveBeenCalledWith('preset-switched', {
+      sessionId: newState.session.sessionId,
+      presetId: newState.session.presetId,
     })
   })
 })
@@ -124,5 +148,15 @@ describe('refreshCurrentPresetIfActive', () => {
     expect(getCurrentState()!.preset).toEqual(before)
     expect(getCurrentState()!.preset.systemPrompt).toBe('你是角色一')
     expect(getEmotionState(session.sessionId)).not.toBeNull()
+  })
+
+  it('不触发 preset-switched 广播——与 switchPreset 刻意区分的窄范围原语，不是真正的切换', () => {
+    loadSession('p1')
+    vi.clearAllMocks()
+
+    updatePresetSystemPrompt('p1', '更新后的人设')
+    refreshCurrentPresetIfActive('p1')
+
+    expect(BroadcastModule.broadcastEvent).not.toHaveBeenCalled()
   })
 })

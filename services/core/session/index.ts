@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto'
 import type { Session, Preset, Message, PresetSnapshot } from '../../../shared/types/index.js'
 import { loadCharacterManifest, type CharacterManifest } from '../characters/manifest.js'
+import { broadcastEvent } from '../events/broadcast.js'
 import {
   getPresetById,
   getLatestSessionByPreset,
@@ -67,6 +68,15 @@ export function switchPreset(presetId: string): SessionState {
   console.log(`[Session] Switching to preset ${presetId}`)
   current = null
   const state = loadSession(presetId)
+
+  // 广播真正的"切换"发生（GET /events，TDD §3.3「SSE 事件类型规范」）：其它窗口（聊天窗口、
+  // 悬浮窗）借此感知 session/preset 已变，自己去重新 fetch GET /state。只放最小 payload，
+  // 不带完整 state——与 chat.ts 里 emotion 广播同一约定。只从这里广播，不放进 loadSession
+  // 本身（loadSession 在核心服务启动时也会被调用一次，那时没有任何订阅方在听，广播毫无意义），
+  // 也不放进 refreshCurrentPresetIfActive（那是刻意窄范围的"设置立即生效"，不改变 session/
+  // characterId，不是真正的切换，广播会造成误判的 abort/refetch）
+  broadcastEvent('preset-switched', { sessionId: state.session.sessionId, presetId: state.session.presetId })
+
   return state
 }
 

@@ -163,6 +163,43 @@ describe('POST /chat', () => {
     expect(stored?.perceived_user).toBeNull()
   })
 
+  it('message_done 和 system 私有流事件都带上请求 dispatch 时刻捕获的 sessionId', async () => {
+    // 供前端识别"这条回复是否还属于我现在展示的会话"（见 chat.ts send() 处的注释）——
+    // 纯靠 controller.signal.aborted 拦不住"切换检测本身还没跑完、旧 session 模型调用
+    // 却先一步完成"这种时序，必须由后端把回复真正所属的 session 显式带回去
+    const { session } = loadSession('p1')
+    const { fastify } = await buildTestApp(JSON.stringify({ reply: '你好呀' }))
+
+    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+    const events = parseSSE(response.payload)
+
+    const messageDone = events.find(e => e.event === 'message_done')
+    expect(messageDone?.data.sessionId).toBe(session.sessionId)
+  })
+
+  it('模型调用失败时，system 错误事件同样带上 sessionId', async () => {
+    const { session } = loadSession('p1')
+    const fastify = Fastify()
+    const throwingModelProvider = {
+      completeSync: async () => { throw new Error('model boom') },
+    }
+    const createSpy = vi.spyOn(ModelProviderModule, 'createModelProviderForPreset')
+      .mockReturnValue(throwingModelProvider as unknown as ModelProvider)
+    fastify.decorate('streamingEnabled', false)
+    fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
+    await fastify.register(chatRoutes)
+
+    try {
+      const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+      const events = parseSSE(response.payload)
+
+      const systemEvent = events.find(e => e.event === 'system')
+      expect(systemEvent?.data.sessionId).toBe(session.sessionId)
+    } finally {
+      createSpy.mockRestore()
+    }
+  })
+
   it('self 情绪合法时，广播流也收到与私有流一致的 emotion payload', async () => {
     loadSession('p1')
     const { fastify } = await buildTestApp(JSON.stringify({

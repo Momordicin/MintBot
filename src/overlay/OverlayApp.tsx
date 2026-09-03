@@ -56,20 +56,28 @@ function resolveAssetUrl(characterId: string, relativePath: string): string {
 export function OverlayApp() {
   const [characterId, setCharacterId] = useState<string | null>(null)
   const [file, setFile] = useState<string | null>(null)
-  // pixel 挂载后基本不变（本轮不跟随其它窗口的 preset 切换刷新，见下方已知缺口），
-  // 用 ref 存它是为了让 EventSource 的事件回调（只在挂载时注册一次，见下一个 effect）
-  // 每次都能读到最新值，而不是闭包捕获注册那一刻的旧值
+  // pixel 随 preset-switched 广播刷新（见下方 loadCharacterAndPortrait），用 ref 存它是为了
+  // 让 EventSource 的 emotion 事件回调（只在挂载时注册一次，见下一个 effect）每次都能读到
+  // 最新值，而不是闭包捕获注册那一刻的旧值
   const pixelRef = useRef<PortraitForm | undefined>(undefined)
+  // 用递增的"代次"而不是一次性的布尔值来识别过期回调：loadCharacterAndPortrait 可能被
+  // 多次调用（挂载一次 + 每次 preset-switched 广播各一次），任何一次调用的异步回调都必须
+  // 只在"仍然是发起时那一代"时才生效——否则布尔值一旦被卸载清理函数置为已失效，
+  // React.StrictMode（src/overlay/main.tsx）开发环境下的"挂载→卸载→再挂载"探测性双调用
+  // 会让它永远卡在失效状态，之后真正的那次挂载和所有 preset-switched 触发的重新加载都会
+  // 直接被当成过期请求丢弃；同理，两次 preset-switched 挨得很近时，后一次发起的调用也需要
+  // 能让前一次仍在途的回调作废，不能靠一个共享的布尔值区分"谁是最新的那次"
+  const loadGenRef = useRef(0)
 
-  // 挂载时读一次 characterId + 初始情绪标签 + manifest，之后不随其它窗口的 preset
-  // 切换刷新——这是本轮明确接受的已知缺口（见计划「已知缺口」），不在这里做多窗口同步
-  useEffect(() => {
-    let cancelled = false
+  // 读取 characterId + 当前情绪标签 + manifest 并应用展示——挂载时跑一次，收到 preset-switched
+  // 广播时也复用同一套逻辑重新跑一次（见下面的 effect），不在两处各写一遍
+  function loadCharacterAndPortrait() {
+    const gen = ++loadGenRef.current
 
     fetch(`${CORE_URL}/state`)
       .then(r => r.json())
       .then((state: AppState) => {
-        if (cancelled) return
+        if (gen !== loadGenRef.current) return
         const id = state.presetSnapshot?.characterId
         if (!id) return
         setCharacterId(id)
@@ -77,7 +85,7 @@ export function OverlayApp() {
         return fetch(`${CORE_URL}/characters/${encodeURIComponent(id)}/manifest.json`)
           .then(r => r.json())
           .then((manifest: CharacterManifestPixel) => {
-            if (cancelled) return
+            if (gen !== loadGenRef.current) return
             pixelRef.current = manifest.portraits?.pixel
             setFile(selectPortraitFile(pixelRef.current, state.emotion?.self?.label))
           })
@@ -85,14 +93,20 @@ export function OverlayApp() {
       .catch(() => {
         // 核心服务未就绪/不可达：悬浮窗保持透明空白，不重试、不报错
       })
+  }
 
+  useEffect(() => {
+    loadCharacterAndPortrait()
+    // 卸载时把代次再往前推一格，让挂载期间任何仍在途的回调都识别为过期——不需要额外的
+    // 布尔标记，判断逻辑与"被更新的一次调用取代"完全一样，天然覆盖卸载这一种情况
     return () => {
-      cancelled = true
+      loadGenRef.current++
     }
   }, [])
 
-  // 情绪变化实时更新：纯 GET 无 body，用浏览器原生 EventSource，不需要手写
-  // fetch+reader 解析（那是 /chat 私有流因为要发 POST 带 body 才需要的方案）
+  // 情绪变化实时更新 + preset 切换感知：纯 GET 无 body，用浏览器原生 EventSource，不需要
+  // 手写 fetch+reader 解析（那是 /chat 私有流因为要发 POST 带 body 才需要的方案）。两个事件
+  // 共用同一条连接（GET /events 是所有窗口共用的常驻连接，TDD §3.3）
   useEffect(() => {
     const source = new EventSource(`${CORE_URL}/events`)
     source.addEventListener('emotion', (event: MessageEvent) => {
@@ -107,6 +121,13 @@ export function OverlayApp() {
       } catch {
         // 忽略解析失败的事件，保留当前已展示的立绘
       }
+    })
+    source.addEventListener('preset-switched', () => {
+      // 新角色的 manifest/情绪标签到达前先清空展示，避免新角色的情绪标签下短暂闪出
+      // 旧角色的立绘（旧 file 对新角色的 emotions 词表大概率无意义，即使凑巧同名也是误导）
+      pixelRef.current = undefined
+      setFile(null)
+      loadCharacterAndPortrait()
     })
     return () => {
       source.close()
