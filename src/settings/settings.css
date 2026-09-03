@@ -139,6 +139,20 @@
   cursor: default;
 }
 
+.character-panel__hint {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* 创建表单：与人设编辑区（.character-panel__persona）同款纵向 flex 布局，
+   textarea 复用 .character-panel__persona-textarea 保持视觉一致 */
+
+.character-panel__create-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .character-panel__display-label {
   display: flex;
   align-items: center;

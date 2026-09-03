@@ -7,6 +7,7 @@ import { loadSession } from './session/index.js'
 import { getAllPresets, backfillMessageFts } from './session/queries.js'
 import { chatRoutes } from './routes/chat.js'
 import { presetRoutes } from './routes/presets.js'
+import { characterImportRoutes } from './routes/characterImport.js'
 import { internalRoutes } from './routes/internal.js'
 import { statusRoutes } from './routes/status.js'
 import { messageRoutes } from './routes/messages.js'
@@ -21,6 +22,7 @@ import { ensureOllama, stopOllamaIfManaged } from './providers/ollama.js'
 import { ensureAiService, stopAiServiceIfManaged } from './providers/aiService.js'
 import { startOrganizeModeScheduler } from './memory/orchestrator.js'
 import { buildStatePayload } from './state.js'
+import { CHARACTERS_ROOT } from './characters/manifest.js'
 import fastifyStatic from '@fastify/static'
 import fastifyCors from '@fastify/cors'
 
@@ -149,13 +151,14 @@ async function start() {
   })
 
   await fastify.register(fastifyStatic, {
-  root: path.resolve(process.cwd(), 'assets/characters'),
+  root: CHARACTERS_ROOT,
   prefix: '/characters/',
   decorateReply: false,
   })
 
   await fastify.register(chatRoutes)
   await fastify.register(presetRoutes)
+  await fastify.register(characterImportRoutes)
   await fastify.register(internalRoutes)
   await fastify.register(statusRoutes)
   await fastify.register(messageRoutes)
