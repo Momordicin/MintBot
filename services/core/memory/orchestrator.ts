@@ -10,8 +10,12 @@ import {
   getOldestUnsummarizedMessageTime,
   getSessionsWithPendingSummaries,
   getPendingSummaryCount,
+  getPendingEmbeddingCountForSession,
+  getOldestPendingEmbeddingTimeForSession,
+  getPendingEmbeddingCountBefore,
 } from '../session/queries.js'
 import { getLockScreenMinutes } from '../system/lockState.js'
+import { getCurrentState } from '../session/index.js'
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
 import type { NERProvider } from '../providers/NERProvider.js'
 import { getLastActivityAt } from '../providers/aiActivity.js'
@@ -45,8 +49,11 @@ function computeActiveConversation(now: number): boolean {
   return mostRecent !== null && now - mostRecent < ACTIVE_CONVERSATION_WINDOW_MS
 }
 
-// 供整理模式触发判断和 GET /state 共用，避免两处重复计算 EmbeddingQueueStatus
-export function computeEmbeddingQueueStatus(now: number = Date.now()): EmbeddingQueueStatus {
+// 供整理模式触发判断和 GET /state 共用，避免两处重复计算 EmbeddingQueueStatus。
+// activeSessionId 为 null（无激活 session）时，三个 activePreset* 字段整体为 null——
+// 这与"有激活 session 但它自己没有待处理消息"（用 0 表示，与全局 oldestPendingAge 在
+// 无 pending 时同样回退 0 的既有约定一致）是两种不同的语义，不能都用 0 表达
+export function computeEmbeddingQueueStatus(now: number = Date.now(), activeSessionId: string | null = null): EmbeddingQueueStatus {
   const pendingCount = getPendingEmbeddingCount()
   const [oldestPending] = getPendingEmbeddingMessages(1)
   const oldestPendingAge = oldestPending ? (now - oldestPending.createdAt) / 60_000 : 0
@@ -54,12 +61,26 @@ export function computeEmbeddingQueueStatus(now: number = Date.now()): Embedding
   const oldestUnsummarized = getOldestUnsummarizedMessageTime()
   const oldestUnsummarizedAge = oldestUnsummarized !== null ? (now - oldestUnsummarized) / (24 * 60 * 60 * 1000) : 0
 
+  let activePresetPendingCount: number | null = null
+  let activePresetOldestPendingAge: number | null = null
+  let pendingAheadOfActivePreset: number | null = null
+
+  if (activeSessionId) {
+    activePresetPendingCount = getPendingEmbeddingCountForSession(activeSessionId)
+    const oldestPendingForSession = getOldestPendingEmbeddingTimeForSession(activeSessionId)
+    activePresetOldestPendingAge = oldestPendingForSession !== null ? (now - oldestPendingForSession) / 60_000 : 0
+    pendingAheadOfActivePreset = oldestPendingForSession !== null ? getPendingEmbeddingCountBefore(oldestPendingForSession) : 0
+  }
+
   return {
     pendingCount,
     oldestPendingAge,
     oldestUnsummarizedAge,
     activeConversation: computeActiveConversation(now),
     lastEmbeddingRun,
+    activePresetPendingCount,
+    activePresetOldestPendingAge,
+    pendingAheadOfActivePreset,
   }
 }
 
@@ -105,6 +126,7 @@ export async function runOrganizeModeTick(
   let totalProcessed = 0
   let totalEntitiesInserted = 0
   let totalEntitiesClosed = 0
+  let summariesGenerated = 0
 
   while (shouldTriggerOrganizeMode(getNow())) {
     const batch = getPendingEmbeddingMessages(batchSize)
@@ -119,13 +141,32 @@ export async function runOrganizeModeTick(
     totalEntitiesClosed += closed
     lastEmbeddingRun = Date.now()
 
+    // 当前激活角色的摘要插队检查：这一批 embedding 处理完之后立刻判断当前正在跑的角色是否
+    // 满足摘要条件，满足则不等 embedding 队列或其它角色排完，立刻给它生成摘要。不需要额外的
+    // "是否已经处理过"标记——如果待摘要消息超过单批上限，下一次循环迭代会再次检测到条件
+    // 仍满足并继续插队，直到降到阈值以下，与摘要阶段本身"连续生成多次摘要直到不满足条件"
+    // 是同一个自然行为
+    const activeSessionId = getCurrentState()?.session.sessionId ?? null
+    if (activeSessionId && !computeActiveConversation(getNow())) {
+      const shouldSummarizeActive = shouldTriggerSummary({
+        messageCountSinceLastSummary: getPendingSummaryCount(activeSessionId),
+        lockScreenMinutes: getLockScreenMinutes(getNow()),
+        isLowActivityWindow: isInDefaultOrganizeWindow(getNow()),
+      })
+      if (shouldSummarizeActive) {
+        const result = await generateSummary(activeSessionId, { model: deps.model })
+        if (result !== null) summariesGenerated++
+      }
+    }
+
     if (processed === 0) break
   }
 
   // 摘要阶段（TDD §3.8 摘要触发逻辑）：与上面的 embedding+实体阶段各自独立触发（不要求
   // pendingCount>100 OR oldestPendingAge>120min 这条 embedding 专用规则），但同样遵守
-  // "不与活跃对话抢资源"这条整理模式通用原则——有活跃对话时跳过整个摘要阶段。
-  let summariesGenerated = 0
+  // "不与活跃对话抢资源"这条整理模式通用原则——有活跃对话时跳过整个摘要阶段。当前激活角色
+  // 已经在上面的 embedding 循环里插队处理过，这里再遍历到它时 shouldTriggerSummary 会因为
+  // 待摘要数已经降下去而自然跳过，不会重复生成，不需要专门排除逻辑
 
   if (!computeActiveConversation(getNow())) {
     for (const sessionId of getSessionsWithPendingSummaries()) {

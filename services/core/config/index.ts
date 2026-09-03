@@ -15,6 +15,7 @@ export interface SummaryTriggerConfig {
   oldestPendingAgeMinutes: number
   messageCountThreshold: number
   lockScreenMinutes: number
+  minMessagesForLockTrigger: number
 }
 
 export interface ContextBudgetConfig {
@@ -49,6 +50,7 @@ const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
     oldestPendingAgeMinutes: 120,
     messageCountThreshold: 50,
     lockScreenMinutes: 60,
+    minMessagesForLockTrigger: 4,
   },
   contextBudget: {
     total: 8000,
@@ -89,6 +91,7 @@ function mergeMemoryConfig(raw: unknown): MemoryConfig {
       oldestPendingAgeMinutes: mergeNumberField(summaryTrigger, 'oldestPendingAgeMinutes', DEFAULT_MEMORY_CONFIG.summaryTrigger.oldestPendingAgeMinutes, 'memory.summaryTrigger.oldestPendingAgeMinutes'),
       messageCountThreshold: mergeNumberField(summaryTrigger, 'messageCountThreshold', DEFAULT_MEMORY_CONFIG.summaryTrigger.messageCountThreshold, 'memory.summaryTrigger.messageCountThreshold'),
       lockScreenMinutes: mergeNumberField(summaryTrigger, 'lockScreenMinutes', DEFAULT_MEMORY_CONFIG.summaryTrigger.lockScreenMinutes, 'memory.summaryTrigger.lockScreenMinutes'),
+      minMessagesForLockTrigger: mergeNumberField(summaryTrigger, 'minMessagesForLockTrigger', DEFAULT_MEMORY_CONFIG.summaryTrigger.minMessagesForLockTrigger, 'memory.summaryTrigger.minMessagesForLockTrigger'),
     },
     contextBudget: {
       total: mergeNumberField(contextBudget, 'total', DEFAULT_MEMORY_CONFIG.contextBudget.total, 'memory.contextBudget.total'),

@@ -9,6 +9,9 @@ interface EmbeddingQueueStatusData {
   oldestUnsummarizedAge: number
   activeConversation: boolean
   lastEmbeddingRun: number
+  activePresetPendingCount: number | null
+  activePresetOldestPendingAge: number | null
+  pendingAheadOfActivePreset: number | null
 }
 
 export function EmbeddingQueueStatusView() {
@@ -52,7 +55,7 @@ export function EmbeddingQueueStatusView() {
 
   return (
     <div className="memory-list">
-      <div className="memory-note">此状态为全局统计，不区分角色</div>
+      <div className="memory-note">以下为全局统计；若有激活角色，额外显示该角色自身的排队情况</div>
 
       {error && (
         <div className="character-panel__error">
@@ -71,6 +74,12 @@ export function EmbeddingQueueStatusView() {
             上次 embedding 批处理时间：
             {status.lastEmbeddingRun ? new Date(status.lastEmbeddingRun).toLocaleString() : '从未运行过'}
           </div>
+          {status.activePresetPendingCount !== null && (
+            <>
+              <div>当前角色待处理：{status.activePresetPendingCount} 条（前面还有 {status.pendingAheadOfActivePreset} 条待处理）</div>
+              <div>当前角色最早待处理等待时间：{status.activePresetOldestPendingAge?.toFixed(1)} 分钟</div>
+            </>
+          )}
         </div>
       )}
 

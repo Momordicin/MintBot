@@ -59,6 +59,6 @@ export async function buildStatePayload() {
     ollamaReady,
     embeddingReady,
     emotion: state ? getEmotionState(state.session.sessionId) : null,
-    embeddingQueue: computeEmbeddingQueueStatus(),
+    embeddingQueue: computeEmbeddingQueueStatus(Date.now(), state?.session.sessionId ?? null),
   }
 }

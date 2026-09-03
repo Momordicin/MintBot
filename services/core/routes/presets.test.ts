@@ -686,6 +686,21 @@ describe('PATCH /presets/:presetId', () => {
     expect(preset.modelName).toBe('gpt-4o-mini')
   })
 
+  it('modelType: deepseek 时覆盖生效并写入 DB（DeepSeek 是一等公民 provider 类型）', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { modelType: 'deepseek', modelName: 'deepseek-v4-flash' },
+    })
+
+    expect(response.statusCode).toBe(200)
+    const preset = getPresetById('p1')!
+    expect(preset.modelType).toBe('deepseek')
+    expect(preset.modelName).toBe('deepseek-v4-flash')
+  })
+
   it('modelType/modelName 都设为 null 时，清除覆盖（跟随全局配置）', async () => {
     const fastify = await buildTestApp()
 

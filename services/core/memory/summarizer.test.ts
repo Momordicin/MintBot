@@ -12,7 +12,7 @@ vi.mock('../config/index.js', () => ({
     recentTrackMaxMinutes: 30,
     organizeWindowStartHour: 22,
     organizeWindowEndHour: 8,
-    summaryTrigger: { pendingCountThreshold: 100, oldestPendingAgeMinutes: 120, messageCountThreshold: 50, lockScreenMinutes: 60 },
+    summaryTrigger: { pendingCountThreshold: 100, oldestPendingAgeMinutes: 120, messageCountThreshold: 50, lockScreenMinutes: 60, minMessagesForLockTrigger: 4 },
     contextBudget: { total: 8000, systemPrompt: 1000, summary: 1500, rag: 2000, recentMessages: 3000, responseReserve: 500 },
   }),
 }))
@@ -38,16 +38,16 @@ function throwingModel(): SummaryModelProvider {
 }
 
 describe('shouldTriggerSummary — 组合规则真值表', () => {
-  it('低活跃时段 且 锁屏时长 > 60min → true', () => {
-    expect(shouldTriggerSummary({ messageCountSinceLastSummary: 0, lockScreenMinutes: 61, isLowActivityWindow: true })).toBe(true)
+  it('低活跃时段 且 锁屏时长 > 60min 且消息数达到下限（4） → true', () => {
+    expect(shouldTriggerSummary({ messageCountSinceLastSummary: 4, lockScreenMinutes: 61, isLowActivityWindow: true })).toBe(true)
   })
 
   it('低活跃时段 但 锁屏时长未超过 60min → false', () => {
-    expect(shouldTriggerSummary({ messageCountSinceLastSummary: 0, lockScreenMinutes: 60, isLowActivityWindow: true })).toBe(false)
+    expect(shouldTriggerSummary({ messageCountSinceLastSummary: 4, lockScreenMinutes: 60, isLowActivityWindow: true })).toBe(false)
   })
 
   it('锁屏时长超过 60min 但不在低活跃时段 → false（AND 条件不满足）', () => {
-    expect(shouldTriggerSummary({ messageCountSinceLastSummary: 0, lockScreenMinutes: 120, isLowActivityWindow: false })).toBe(false)
+    expect(shouldTriggerSummary({ messageCountSinceLastSummary: 4, lockScreenMinutes: 120, isLowActivityWindow: false })).toBe(false)
   })
 
   it('消息数 > 50 时无条件触发（OR 条件）', () => {
@@ -60,6 +60,25 @@ describe('shouldTriggerSummary — 组合规则真值表', () => {
 
   it('三个条件都不满足时不触发', () => {
     expect(shouldTriggerSummary({ messageCountSinceLastSummary: 10, lockScreenMinutes: 10, isLowActivityWindow: false })).toBe(false)
+  })
+})
+
+describe('shouldTriggerSummary — 锁屏分支的消息数下限（minMessagesForLockTrigger）', () => {
+  it('锁屏 + 低活跃时段条件都满足，但消息数低于下限（3 < 4）时不触发', () => {
+    expect(shouldTriggerSummary({ messageCountSinceLastSummary: 3, lockScreenMinutes: 61, isLowActivityWindow: true })).toBe(false)
+  })
+
+  it('锁屏 + 低活跃时段条件都满足，消息数恰好达到下限（4）时触发', () => {
+    expect(shouldTriggerSummary({ messageCountSinceLastSummary: 4, lockScreenMinutes: 61, isLowActivityWindow: true })).toBe(true)
+  })
+
+  it('锁屏 + 低活跃时段条件都满足，消息数超过下限时触发', () => {
+    expect(shouldTriggerSummary({ messageCountSinceLastSummary: 10, lockScreenMinutes: 61, isLowActivityWindow: true })).toBe(true)
+  })
+
+  it('messageCount > 50 分支不受下限影响：消息数为 0 时该分支本身就不触发（下限只影响锁屏分支）', () => {
+    expect(shouldTriggerSummary({ messageCountSinceLastSummary: 0, lockScreenMinutes: 0, isLowActivityWindow: false })).toBe(false)
+    expect(shouldTriggerSummary({ messageCountSinceLastSummary: 51, lockScreenMinutes: 0, isLowActivityWindow: false })).toBe(true)
   })
 })
 

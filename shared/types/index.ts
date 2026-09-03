@@ -137,6 +137,9 @@ export interface EmbeddingQueueStatus {
   oldestUnsummarizedAge: number   // 天
   activeConversation: boolean     // 最近 5 分钟内是否有消息
   lastEmbeddingRun: number        // timestamp
+  activePresetPendingCount: number | null      // 当前激活角色自己的待 embedding 消息数；无激活 session 时为 null
+  activePresetOldestPendingAge: number | null  // 分钟；无激活 session 时为 null，有激活 session 但它自己没有待处理消息时为 0
+  pendingAheadOfActivePreset: number | null    // 排在当前角色最旧待处理消息前面、必须先处理完的全局数量；无激活 session 时为 null，有激活 session 但它自己没有待处理消息时为 0
 }
 
 export interface AppState {

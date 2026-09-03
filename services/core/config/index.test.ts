@@ -31,6 +31,7 @@ const DEFAULT_MEMORY_CONFIG = {
     oldestPendingAgeMinutes: 120,
     messageCountThreshold: 50,
     lockScreenMinutes: 60,
+    minMessagesForLockTrigger: 4,
   },
   contextBudget: {
     total: 8000,
@@ -55,6 +56,7 @@ function fullValidConfig(memoryOverrides: Record<string, unknown> = {}) {
         oldestPendingAgeMinutes: 90,
         messageCountThreshold: 40,
         lockScreenMinutes: 30,
+        minMessagesForLockTrigger: 6,
       },
       contextBudget: {
         total: 9000,
@@ -98,6 +100,7 @@ describe('config/index — 有效完整配置', () => {
         oldestPendingAgeMinutes: 90,
         messageCountThreshold: 40,
         lockScreenMinutes: 30,
+        minMessagesForLockTrigger: 6,
       },
       contextBudget: {
         total: 9000,
@@ -148,6 +151,19 @@ describe('config/index — 缺失/类型错误字段回退默认值', () => {
 
     expect(getMemoryConfig().summaryTrigger.pendingCountThreshold).toBe(100)
     expect(getMemoryConfig().summaryTrigger.oldestPendingAgeMinutes).toBe(90)
+  })
+
+  it('memory.summaryTrigger.minMessagesForLockTrigger 缺失时，仅该子字段回退默认值 4', async () => {
+    const config = fullValidConfig()
+    delete (config.memory.summaryTrigger as Record<string, unknown>).minMessagesForLockTrigger
+    readFileSyncMock.mockReturnValue(JSON.stringify(config))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { startConfigWatcher, getMemoryConfig } = await import('./index.js')
+
+    startConfigWatcher()
+
+    expect(getMemoryConfig().summaryTrigger.minMessagesForLockTrigger).toBe(4)
+    expect(getMemoryConfig().summaryTrigger.lockScreenMinutes).toBe(30)
   })
 
   it('memory 整个字段缺失时，MemoryConfig 全部回退默认值', async () => {

@@ -19,6 +19,9 @@ import {
   searchSimilarMessages,
   getPendingEmbeddingMessages,
   getPendingEmbeddingCount,
+  getPendingEmbeddingCountForSession,
+  getOldestPendingEmbeddingTimeForSession,
+  getPendingEmbeddingCountBefore,
   markMessageEmbedded,
   getMostRecentMessageTime,
   getOldestUnsummarizedMessageTime,
@@ -466,6 +469,55 @@ describe('getSessionsWithPendingSummaries / getPendingSummaryCount', () => {
     appendMessage({ sessionId: 's1', role: 'user', content: 'a', createdAt: 1000, embedded: false, summarized: true, visibleToUser: true, trigger: 'user', triggerEventId: null })
     expect(getSessionsWithPendingSummaries()).toEqual([])
     expect(getPendingSummaryCount('s1')).toBe(0)
+  })
+
+  it('按 session 最后一条消息时间（不限于未摘要的）降序返回：最近还在聊的 session 排在前面', () => {
+    // s1 最后一条消息在 1000（早），s2 最后一条消息在 5000（晚，且是已摘要消息，
+    // 但仍代表该 session 最近还在聊），s3 最后一条消息在 3000（居中）
+    appendMessage({ sessionId: 's1', role: 'user', content: 'a', createdAt: 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's2', role: 'user', content: 'b', createdAt: 2000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's2', role: 'user', content: 'c', createdAt: 5000, embedded: false, summarized: true, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's3', role: 'user', content: 'd', createdAt: 3000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+
+    expect(getSessionsWithPendingSummaries()).toEqual(['s2', 's3', 's1'])
+  })
+})
+
+// ─── 当前激活角色 vs. 全局队列（EmbeddingQueueStatus 拆分字段的底层查询）────
+
+describe('getPendingEmbeddingCountForSession / getOldestPendingEmbeddingTimeForSession / getPendingEmbeddingCountBefore', () => {
+  it('session 没有待 embedding 消息时，count 为 0，oldest 为 null', () => {
+    expect(getPendingEmbeddingCountForSession('s1')).toBe(0)
+    expect(getOldestPendingEmbeddingTimeForSession('s1')).toBeNull()
+  })
+
+  it('只统计指定 session 自己的待 embedding 消息，不受其它 session 影响', () => {
+    appendMessage({ sessionId: 's1', role: 'user', content: 'a', createdAt: 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's1', role: 'user', content: 'b', createdAt: 2000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's2', role: 'user', content: 'c', createdAt: 500, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+
+    expect(getPendingEmbeddingCountForSession('s1')).toBe(2)
+    expect(getOldestPendingEmbeddingTimeForSession('s1')).toBe(1000)
+    expect(getPendingEmbeddingCountForSession('s2')).toBe(1)
+  })
+
+  it('已 embedded 的消息不计入 count/oldest', () => {
+    const id = appendMessage({ sessionId: 's1', role: 'user', content: 'a', createdAt: 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    markMessageEmbedded(id)
+    appendMessage({ sessionId: 's1', role: 'user', content: 'b', createdAt: 2000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+
+    expect(getPendingEmbeddingCountForSession('s1')).toBe(1)
+    expect(getOldestPendingEmbeddingTimeForSession('s1')).toBe(2000)
+  })
+
+  it('getPendingEmbeddingCountBefore 统计全局早于给定时间且未 embedded 的消息数（跨 session）', () => {
+    appendMessage({ sessionId: 's1', role: 'user', content: 'a', createdAt: 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's2', role: 'user', content: 'b', createdAt: 2000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's3', role: 'user', content: 'c', createdAt: 3000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+
+    expect(getPendingEmbeddingCountBefore(3000)).toBe(2)
+    expect(getPendingEmbeddingCountBefore(1000)).toBe(0)
+    expect(getPendingEmbeddingCountBefore(3001)).toBe(3)
   })
 })
 

@@ -11,7 +11,7 @@ import type { PresetDisplayConfig } from '../../../shared/types/index.js'
 // 与 services/core/index.ts 里 @fastify/static 的 data/wallpapers 注册使用同一路径约定
 const WALLPAPER_DIR = path.resolve(process.cwd(), 'data/wallpapers')
 const ALLOWED_WALLPAPER_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif'])
-const VALID_MODEL_TYPES: readonly string[] = ['anthropic', 'openai', 'ollama']
+const VALID_MODEL_TYPES: readonly string[] = ['anthropic', 'openai', 'ollama', 'deepseek']
 
 export async function presetRoutes(fastify: FastifyInstance) {
   fastify.get('/presets', async () => {
@@ -148,7 +148,7 @@ export async function presetRoutes(fastify: FastifyInstance) {
       name?: string
       displayConfig?: Partial<PresetDisplayConfig>
       systemPrompt?: string
-      modelType?: 'anthropic' | 'openai' | 'ollama' | null
+      modelType?: 'anthropic' | 'openai' | 'ollama' | 'deepseek' | null
       modelName?: string | null
       applyNow?: boolean
     }
@@ -220,7 +220,7 @@ export async function presetRoutes(fastify: FastifyInstance) {
       } else {
         // 都非 null：自定义覆盖，modelType 必须是合法枚举值，modelName trim 后非空
         if (!VALID_MODEL_TYPES.includes(modelType)) {
-          return reply.status(400).send({ error: 'modelType must be one of anthropic, openai, ollama, or null' })
+          return reply.status(400).send({ error: 'modelType must be one of anthropic, openai, ollama, deepseek, or null' })
         }
         const trimmedModelName = (modelName ?? '').trim()
         if (!trimmedModelName) {
