@@ -178,7 +178,7 @@
 .msg-bubble {
   padding: 8px 12px;
   border-radius: var(--bubble-radius);
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.6;
   word-break: break-word;
   white-space: pre-wrap;
@@ -284,7 +284,7 @@
   border-radius: 8px;
   color: var(--input-text);
   font-family: var(--font);
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.5;
   padding: 8px 12px;
   resize: none;
