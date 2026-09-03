@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, globalShortcut, powerMonitor, ipcMain, dialog, screen } from 'electron'
+import { app, BrowserWindow, Menu, globalShortcut, powerMonitor, ipcMain, dialog, screen, nativeImage } from 'electron'
 import { join, basename } from 'path'
 import { readFile, stat } from 'fs/promises'
 import { is } from '@electron-toolkit/utils'
@@ -16,6 +16,87 @@ function notifySystemEvent(type: 'lock-screen' | 'unlock-screen'): void {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ type }),
   }).catch(() => {})
+}
+
+// 应用图标跟随当前 preset 头像（聊天窗口 + 悬浮窗）：读 GET /state 拿当前 characterId，
+// 再读该角色的 manifest.json 拿 avatar 相对路径，拼出静态资源 URL（/characters/ 前缀
+// 挂载见 services/core/index.ts）。返回 null 表示当前没有可用头像（无活跃 session/
+// manifest 里没有 avatar），调用方据此跳过换图标
+async function resolveCurrentAvatarUrl(): Promise<string | null> {
+  const stateResponse = await fetch(`${CORE_URL}/state`)
+  const state = await stateResponse.json()
+  const characterId = state?.presetSnapshot?.characterId
+  if (!characterId) return null
+
+  const manifestResponse = await fetch(`${CORE_URL}/characters/${encodeURIComponent(characterId)}/manifest.json`)
+  const manifest = await manifestResponse.json()
+  const avatar = manifest?.avatar
+  if (!avatar) return null
+
+  // 按段 encodeURIComponent 再用 '/' 拼接，不对整段相对路径一次性 encodeURIComponent
+  // （那样会把分隔符 '/' 也编码掉）——跟 src/overlay/OverlayApp.tsx 的 resolveAssetUrl
+  // 同一处理方式，主进程没法直接 import renderer 代码，这里体量太小不值得抽共享模块
+  const encodedAvatarPath = avatar.split('/').map(encodeURIComponent).join('/')
+  return `${CORE_URL}/characters/${encodeURIComponent(characterId)}/${encodedAvatarPath}`
+}
+
+// 失败只 console.error，不抛错、不影响应用启动/运行——跟 notifySystemEvent 一样的
+// 降级风格，图标同步是锦上添花的功能，不该拖垮主进程
+//
+// 代次计数器：连续快速切换 preset 时，两次调用各自的异步链（/state → manifest.json →
+// 头像字节）耗时不同，可能后发出的调用先解析完、先发出的调用反而后解析完，导致图标
+// 定格在不是"当前实际 preset"的头像上——跟 src/overlay/OverlayApp.tsx 的 loadGenRef
+// 同一套模式：只有最新一次调用捕获的代次仍然匹配时才真正落地 setIcon
+let iconGeneration = 0
+
+async function applyIconFromCurrentPreset(): Promise<void> {
+  const generation = ++iconGeneration
+  try {
+    const avatarUrl = await resolveCurrentAvatarUrl()
+    if (!avatarUrl) return
+
+    const response = await fetch(avatarUrl)
+    const buffer = Buffer.from(await response.arrayBuffer())
+    const image = nativeImage.createFromBuffer(buffer)
+    if (generation !== iconGeneration) return
+    mainWindow?.setIcon(image)
+    overlayWindow?.setIcon(image)
+  } catch (err) {
+    console.error('[Icon] Failed to apply icon from current preset:', err)
+  }
+}
+
+// 主进程第一次反过来订阅核心服务的 SSE 广播（GET /events，TDD §3.3）——此前主进程只会
+// 单向调用核心服务（见上方 notifySystemEvent）。收到 preset-switched 帧后重新解析头像并
+// 换图标。断线不做自动重连：这是锦上添花的功能，恢复只需重启应用，不值得为它引入重试逻辑
+async function subscribeToPresetSwitchEvents(): Promise<void> {
+  try {
+    const response = await fetch(`${CORE_URL}/events`)
+    const reader = response.body?.getReader()
+    if (!reader) return
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+
+      let frameEnd = buffer.indexOf('\n\n')
+      while (frameEnd !== -1) {
+        const frame = buffer.slice(0, frameEnd)
+        buffer = buffer.slice(frameEnd + 2)
+        // 按行精确匹配 event 字段，不用整帧 substring 搜索——避免未来事件名共享前缀
+        // （如假设的 preset-switched-ack）或 data 载荷文本恰好包含这段字符串时误判
+        if (frame.split('\n').some(line => line === 'event: preset-switched')) {
+          applyIconFromCurrentPreset()
+        }
+        frameEnd = buffer.indexOf('\n\n')
+      }
+    }
+  } catch (err) {
+    console.error('[Icon] preset-switched subscription ended:', err)
+  }
 }
 
 // 与 services/core/routes/presets.ts 的 bodyLimit 保持一致：超过这个大小的文件注定会被
@@ -170,8 +251,8 @@ let mainWindow: BrowserWindow | null = null
 
 function createWindow() {
   const win = new BrowserWindow({
-    width: 900,
-    height: 670,
+    width: 390,
+    height: 700,
     show: false,
     webPreferences: {
       preload: PRELOAD_PATH,
@@ -217,6 +298,11 @@ app.whenReady().then(() => {
   // 悬浮窗跟随聊天窗口的最小化/焦点状态显隐（见上方 createWindow 内的 minimize/focus
   // 监听）；关闭时启动悬浮窗留到系统托盘做完之后再接，见 buzzing-frolicking-eich.md 计划
   overlayWindow = createOverlayWindow()
+
+  // 两个窗口都创建完之后设置启动时的初始图标，并订阅之后的 preset 切换事件（fire-and-forget，
+  // 不阻塞启动；两者内部都已 try/catch，失败只 console.error）
+  applyIconFromCurrentPreset()
+  subscribeToPresetSwitchEvents()
 
   globalShortcut.register('CommandOrControl+Shift+I', () => {
     BrowserWindow.getFocusedWindow()?.webContents.openDevTools()
