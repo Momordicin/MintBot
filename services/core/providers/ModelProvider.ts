@@ -24,6 +24,9 @@ export class ModelProvider {
       case 'openai':
         yield* this.completeOpenAI(messagesWithSystem, options)
         break
+      case 'deepseek':
+        yield* this.completeDeepSeek(messagesWithSystem, options)
+        break
       case 'ollama':
         yield* this.completeOllama(messagesWithSystem, options)
         break
@@ -46,6 +49,8 @@ export class ModelProvider {
         return this.completeSyncAnthropic(context.messages, options, context.system)
       case 'openai':
         return this.completeSyncOpenAI(messagesWithSystem, options)
+      case 'deepseek':
+        return this.completeSyncDeepSeek(messagesWithSystem, options)
       case 'ollama':
         return this.completeSyncOllama(messagesWithSystem, options)
       default:
@@ -136,6 +141,21 @@ export class ModelProvider {
     )
   }
 
+  // DeepSeek 实现（复用 OpenAI 兼容接口，OpenAI 兼容 API）
+
+  private async *completeDeepSeek(
+    messages: ChatMessage[],
+    options: CompletionOptions
+  ): AsyncIterable<string> {
+    yield* ModelProvider.callOpenAICompatible(
+      this.config.deepseekBaseUrl ?? 'https://api.deepseek.com',
+      this.config.deepseekApiKey ?? 'no-key',
+      this.config.modelName ?? 'deepseek-v4-flash',
+      messages,
+      options
+    )
+  }
+
   // Ollama 实现（复用 OpenAI 兼容接口）
 
   private async *completeOllama(
@@ -161,6 +181,21 @@ export class ModelProvider {
       this.config.openaiBaseUrl ?? 'https://api.openai.com/v1',
       this.config.openaiApiKey ?? 'no-key',
       this.config.modelName ?? 'gpt-4o',
+      messages,
+      options
+    )
+  }
+
+  // DeepSeek 实现（非流式，复用 OpenAI 兼容接口）
+
+  private async completeSyncDeepSeek(
+    messages: ChatMessage[],
+    options: CompletionOptions
+  ): Promise<string> {
+    return ModelProvider.callOpenAICompatibleSync(
+      this.config.deepseekBaseUrl ?? 'https://api.deepseek.com',
+      this.config.deepseekApiKey ?? 'no-key',
+      this.config.modelName ?? 'deepseek-v4-flash',
       messages,
       options
     )

@@ -182,6 +182,37 @@ function runMigrations(): { needsFtsBackfill: boolean } {
     console.log('[DB] Migration v9: added addressForms to Presets')
   }
 
+  if (current < 10) {
+    // modelType 的 CHECK 约束需要加入 'deepseek'，SQLite 不支持 ALTER TABLE 修改 CHECK
+    // 约束，只能走 v8 先例的"建新表 + 搬数据 + 删旧表 + 改名"重建流程。新表需要包含
+    // 当前全部 11 列（addressForms 是 v9 用 ALTER TABLE 追加在末尾的，实际列顺序见下方
+    // INSERT INTO ... SELECT 的显式列名）。目的：支持把 DeepSeek 提升为一等公民
+    // model provider 类型（而非此前的"走 openai 类型 + 自定义 baseUrl"）
+    const migrateV10 = db.transaction(() => {
+      db.exec(`
+        CREATE TABLE Presets_new (
+          presetId     TEXT    PRIMARY KEY,
+          name         TEXT    NOT NULL,
+          characterId  TEXT    NOT NULL,
+          modelType    TEXT    CHECK(modelType IS NULL OR modelType IN ('anthropic', 'openai', 'ollama', 'deepseek')),
+          modelName    TEXT,
+          wallpaperPath TEXT,
+          displayConfig TEXT,
+          systemPrompt TEXT    NOT NULL,
+          createdAt    INTEGER NOT NULL,
+          updatedAt    INTEGER NOT NULL,
+          addressForms TEXT
+        );
+        INSERT INTO Presets_new SELECT presetId, name, characterId, modelType, modelName, wallpaperPath, displayConfig, systemPrompt, createdAt, updatedAt, addressForms FROM Presets;
+        DROP TABLE Presets;
+        ALTER TABLE Presets_new RENAME TO Presets;
+      `)
+      db.pragma('user_version = 10')
+    })
+    migrateV10()
+    console.log('[DB] Migration v10: Presets.modelType CHECK constraint now allows deepseek')
+  }
+
   return { needsFtsBackfill }
 }
 

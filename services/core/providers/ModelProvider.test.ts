@@ -117,6 +117,57 @@ describe('createModelProviderForPreset', () => {
     const body = JSON.parse(options.body)
     expect(body.model).toBe('global-model')
   })
+
+  // openai/deepseek 各自拥有独立的凭据槽位（openaiApiKey/openaiBaseUrl 与
+  // deepseekApiKey/deepseekBaseUrl），二者可在同一份 globalConfig 中共存。
+  // preset 覆盖 modelType 时必须只取被覆盖类型对应的那组凭据，不能错拿另一组。
+  it('globalConfig 同时持有 openai/deepseek 两组凭据时，preset 覆盖为 deepseek 只使用 deepseek 凭据', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(fakeStreamResponse())
+    vi.stubGlobal('fetch', fetchSpy)
+
+    const globalConfig: ModelConfig = {
+      type: 'openai',
+      openaiApiKey: 'sk-openai',
+      openaiBaseUrl: 'https://api.openai.com/v1',
+      deepseekApiKey: 'sk-deepseek',
+      deepseekBaseUrl: 'https://api.deepseek.com',
+    }
+    const preset = fakePreset({ modelType: 'deepseek', modelName: 'deepseek-v4-pro' })
+
+    const provider = createModelProviderForPreset(preset, globalConfig)
+    await drain(provider)
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    const [url, options] = fetchSpy.mock.calls[0]
+    expect(url).toBe('https://api.deepseek.com/chat/completions')
+    expect(options.headers.Authorization).toBe('Bearer sk-deepseek')
+    const body = JSON.parse(options.body)
+    expect(body.model).toBe('deepseek-v4-pro')
+  })
+
+  it('globalConfig 同时持有 openai/deepseek 两组凭据时，preset 覆盖为 openai 只使用 openai 凭据', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(fakeStreamResponse())
+    vi.stubGlobal('fetch', fetchSpy)
+
+    const globalConfig: ModelConfig = {
+      type: 'deepseek',
+      openaiApiKey: 'sk-openai',
+      openaiBaseUrl: 'https://api.openai.com/v1',
+      deepseekApiKey: 'sk-deepseek',
+      deepseekBaseUrl: 'https://api.deepseek.com',
+    }
+    const preset = fakePreset({ modelType: 'openai', modelName: 'gpt-4o-mini' })
+
+    const provider = createModelProviderForPreset(preset, globalConfig)
+    await drain(provider)
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    const [url, options] = fetchSpy.mock.calls[0]
+    expect(url).toBe('https://api.openai.com/v1/chat/completions')
+    expect(options.headers.Authorization).toBe('Bearer sk-openai')
+    const body = JSON.parse(options.body)
+    expect(body.model).toBe('gpt-4o-mini')
+  })
 })
 
 describe('completeSync', () => {
@@ -180,5 +231,50 @@ describe('completeSync', () => {
     expect(url).toContain('/v1/chat/completions')
     const body = JSON.parse(options.body)
     expect(body.stream).toBe(false)
+  })
+
+  it('deepseek 类型下请求体 stream 为 false，打到 deepseekBaseUrl + /chat/completions，带 deepseekApiKey 的 Bearer 头', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(fakeNonStreamResponse('deepseek reply'))
+    vi.stubGlobal('fetch', fetchSpy)
+
+    const config: ModelConfig = {
+      type: 'deepseek',
+      deepseekApiKey: 'sk-deepseek',
+      deepseekBaseUrl: 'https://api.deepseek.com',
+      modelName: 'deepseek-v4-pro',
+    }
+    const provider = createModelProvider(config)
+
+    const result = await provider.completeSync(context)
+
+    expect(result).toBe('deepseek reply')
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    const [url, options] = fetchSpy.mock.calls[0]
+    expect(url).toBe('https://api.deepseek.com/chat/completions')
+    expect(options.headers.Authorization).toBe('Bearer sk-deepseek')
+    const body = JSON.parse(options.body)
+    expect(body.model).toBe('deepseek-v4-pro')
+    expect(body.stream).toBe(false)
+  })
+})
+
+describe('deepseek 默认值', () => {
+  it('未配置 deepseekBaseUrl/modelName 时走默认值 https://api.deepseek.com + deepseek-v4-flash（流式）', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(fakeStreamResponse())
+    vi.stubGlobal('fetch', fetchSpy)
+
+    const config: ModelConfig = { type: 'deepseek', deepseekApiKey: 'sk-deepseek' }
+    const provider = createModelProvider(config)
+    const context: BuiltContext = { system: '', messages: [{ role: 'user', content: 'hi' }] }
+
+    for await (const _chunk of provider.complete(context)) {
+      // 只需要触发 fetch 调用，不关心返回内容
+    }
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    const [url, options] = fetchSpy.mock.calls[0]
+    expect(url).toBe('https://api.deepseek.com/chat/completions')
+    const body = JSON.parse(options.body)
+    expect(body.model).toBe('deepseek-v4-flash')
   })
 })

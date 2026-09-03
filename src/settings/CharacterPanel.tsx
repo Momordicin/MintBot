@@ -1129,6 +1129,7 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
                   >
                     <option value="anthropic">Anthropic</option>
                     <option value="openai">OpenAI</option>
+                    <option value="deepseek">DeepSeek</option>
                     <option value="ollama">Ollama</option>
                   </select>
                   <select

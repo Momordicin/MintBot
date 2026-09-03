@@ -76,6 +76,18 @@ describe('GET /models', () => {
     expect(body.models.length).toBeGreaterThan(0)
   })
 
+  it('type=deepseek 时返回静态列表', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({ method: 'GET', url: '/models?type=deepseek' })
+    const body = JSON.parse(response.payload)
+
+    expect(response.statusCode).toBe(200)
+    expect(Array.isArray(body.models)).toBe(true)
+    expect(body.models.length).toBeGreaterThan(0)
+    expect(listOllamaModelsMock).not.toHaveBeenCalled()
+  })
+
   it('type 缺失或无效时返回 400', async () => {
     const fastify = await buildTestApp()
 

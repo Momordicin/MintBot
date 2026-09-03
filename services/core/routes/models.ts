@@ -19,6 +19,14 @@ const KNOWN_OPENAI_MODELS = [
   'gpt-4o-mini',
 ]
 
+// 同上，DeepSeek 没有面向普通用户的"列出可用模型"公开接口，这份列表同样需要人工定期
+// 更新，不会随上游 API 新增/下线模型自动同步
+const KNOWN_DEEPSEEK_MODELS = [
+  'deepseek-v4-flash',
+  'deepseek-v4-pro',
+  'deepseek-v4-flash-vision-exp',
+]
+
 export async function modelsRoutes(fastify: FastifyInstance) {
   fastify.get<{ Querystring: { type?: string } }>('/models', async (request, reply) => {
     const { type } = request.query
@@ -33,7 +41,10 @@ export async function modelsRoutes(fastify: FastifyInstance) {
     if (type === 'openai') {
       return { models: KNOWN_OPENAI_MODELS }
     }
+    if (type === 'deepseek') {
+      return { models: KNOWN_DEEPSEEK_MODELS }
+    }
 
-    return reply.status(400).send({ error: 'type must be one of ollama|anthropic|openai' })
+    return reply.status(400).send({ error: 'type must be one of ollama|anthropic|openai|deepseek' })
   })
 }

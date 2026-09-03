@@ -149,7 +149,7 @@ export function updatePresetAddressForms(presetId: string, addressForms: string[
 // 没 modelName"的半吊子状态，因此不像 name/displayConfig/systemPrompt 那样拆成单字段更新
 export function updatePresetModelConfig(
   presetId: string,
-  modelType: 'anthropic' | 'openai' | 'ollama' | null,
+  modelType: 'anthropic' | 'openai' | 'ollama' | 'deepseek' | null,
   modelName: string | null
 ): void {
   db.prepare(`UPDATE Presets SET modelType = ?, modelName = ?, updatedAt = ? WHERE presetId = ?`)
@@ -331,6 +331,26 @@ export function getPendingEmbeddingCount(): number {
   return row.count
 }
 
+// 当前激活角色自己的待 embedding 消息数/最早等待时间，供 computeEmbeddingQueueStatus
+// 拆分"当前角色" vs. "全局队列"展示使用（EmbeddingQueueStatus.activePresetPendingCount /
+// activePresetOldestPendingAge）
+export function getPendingEmbeddingCountForSession(sessionId: string): number {
+  const row = db.prepare(`SELECT COUNT(*) as count FROM Messages WHERE sessionId = ? AND embedded = 0`).get(sessionId) as any
+  return row.count
+}
+
+export function getOldestPendingEmbeddingTimeForSession(sessionId: string): number | null {
+  const row = db.prepare(`SELECT MIN(createdAt) as minCreatedAt FROM Messages WHERE sessionId = ? AND embedded = 0`).get(sessionId) as any
+  return row.minCreatedAt ?? null
+}
+
+// 排在当前角色最旧待 embedding 消息前面、必须先处理完的全局待处理消息数（全局 FIFO 按
+// createdAt ASC 处理，比该消息更早的都排在它前面），供 EmbeddingQueueStatus.pendingAheadOfActivePreset 使用
+export function getPendingEmbeddingCountBefore(createdAt: number): number {
+  const row = db.prepare(`SELECT COUNT(*) as count FROM Messages WHERE embedded = 0 AND createdAt < ?`).get(createdAt) as any
+  return row.count
+}
+
 export function markMessageEmbedded(messageId: number): void {
   db.prepare(`UPDATE Messages SET embedded = 1 WHERE id = ?`).run(messageId)
 }
@@ -388,9 +408,17 @@ export function getPendingSummaryMessages(sessionId: string, limit = 200): Messa
   }))
 }
 
-// 有待摘要消息的 session 列表，供整理模式编排器（orchestrator.ts）遍历处理
+// 有待摘要消息的 session 列表，供整理模式编排器（orchestrator.ts）遍历处理。按该 session
+// 最后一条消息（不限于未摘要的）的 createdAt 降序排列——最近还在聊的角色排在前面优先处理，
+// 长期没碰的角色排在后面（仍会被处理到，只是靠后）
 export function getSessionsWithPendingSummaries(): string[] {
-  const rows = db.prepare(`SELECT DISTINCT sessionId FROM Messages WHERE summarized = 0`).all() as any[]
+  const rows = db.prepare(`
+    SELECT sessionId, MAX(createdAt) as lastMessageAt
+    FROM Messages
+    GROUP BY sessionId
+    HAVING SUM(CASE WHEN summarized = 0 THEN 1 ELSE 0 END) > 0
+    ORDER BY lastMessageAt DESC
+  `).all() as any[]
   return rows.map(row => row.sessionId)
 }
 

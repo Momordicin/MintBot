@@ -56,8 +56,31 @@ describe('GET /config/model', () => {
       modelName: 'claude-3',
       hasAnthropicApiKey: true,
       hasOpenaiApiKey: false,
+      hasDeepseekApiKey: false,
     })
     expect(JSON.stringify(body)).not.toContain('sk-real-secret')
+  })
+
+  it('type: deepseek 时返回 hasDeepseekApiKey 布尔值，从不回显真实 key', async () => {
+    getModelProviderConfigMock.mockReturnValue({
+      type: 'deepseek',
+      deepseekApiKey: 'sk-deepseek-secret',
+      modelName: 'deepseek-v4-flash',
+    })
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({ method: 'GET', url: '/config/model' })
+    const body = JSON.parse(response.payload)
+
+    expect(response.statusCode).toBe(200)
+    expect(body.modelProvider).toEqual({
+      type: 'deepseek',
+      modelName: 'deepseek-v4-flash',
+      hasAnthropicApiKey: false,
+      hasOpenaiApiKey: false,
+      hasDeepseekApiKey: true,
+    })
+    expect(JSON.stringify(body)).not.toContain('sk-deepseek-secret')
   })
 
   it('modelProvider 未配置（getModelProviderConfig 抛错）时不 500，返回 modelProvider: null', async () => {
@@ -101,6 +124,7 @@ describe('GET /config/model', () => {
       modelName: 'gpt-4o',
       hasAnthropicApiKey: false,
       hasOpenaiApiKey: true,
+      hasDeepseekApiKey: false,
     })
   })
 })
@@ -172,6 +196,66 @@ describe('PATCH /config/model — 校验', () => {
     expect(response.statusCode).toBe(400)
   })
 
+  it('type: deepseek 但合并后缺 deepseekApiKey 时返回 400', async () => {
+    getModelProviderConfigMock.mockImplementation(() => { throw new Error('not configured') })
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/config/model',
+      payload: { modelProvider: { type: 'deepseek', modelName: 'deepseek-v4-flash' } },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(updateModelProviderConfigMock).not.toHaveBeenCalled()
+  })
+
+  it('type: deepseek 但合并后缺 modelName 时返回 400', async () => {
+    getModelProviderConfigMock.mockImplementation(() => { throw new Error('not configured') })
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/config/model',
+      payload: { modelProvider: { type: 'deepseek', deepseekApiKey: 'sk-deepseek' } },
+    })
+
+    expect(response.statusCode).toBe(400)
+  })
+
+  it('type: deepseek 且 deepseekApiKey/modelName 都满足时通过校验并写入成功', async () => {
+    getModelProviderConfigMock.mockImplementation(() => { throw new Error('not configured') })
+    updateModelProviderConfigMock.mockReturnValue({
+      type: 'deepseek',
+      deepseekApiKey: 'sk-deepseek',
+      modelName: 'deepseek-v4-flash',
+    })
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/config/model',
+      payload: { modelProvider: { type: 'deepseek', deepseekApiKey: 'sk-deepseek', modelName: 'deepseek-v4-flash' } },
+    })
+    const body = JSON.parse(response.payload)
+
+    expect(response.statusCode).toBe(200)
+    expect(updateModelProviderConfigMock).toHaveBeenCalledWith({
+      type: 'deepseek',
+      deepseekApiKey: 'sk-deepseek',
+      modelName: 'deepseek-v4-flash',
+    })
+    // GET/PATCH 响应里不含 deepseekApiKey 明文，且 hasDeepseekApiKey 正确
+    expect(body.modelProvider).toEqual({
+      type: 'deepseek',
+      modelName: 'deepseek-v4-flash',
+      hasAnthropicApiKey: false,
+      hasOpenaiApiKey: false,
+      hasDeepseekApiKey: true,
+    })
+    expect(JSON.stringify(body)).not.toContain('sk-deepseek')
+  })
+
   it('合并已存的当前配置后满足必填字段时通过校验（partial 本身不含 modelName，但已存配置里有）', async () => {
     getModelProviderConfigMock.mockReturnValue({ type: 'anthropic', anthropicApiKey: 'sk-old', modelName: 'claude-3' })
     updateModelProviderConfigMock.mockReturnValue({ type: 'anthropic', anthropicApiKey: 'sk-new', modelName: 'claude-3' })
@@ -238,6 +322,7 @@ describe('PATCH /config/model — 成功路径', () => {
       ollamaModel: 'llama3',
       hasAnthropicApiKey: false,
       hasOpenaiApiKey: false,
+      hasDeepseekApiKey: false,
     })
   })
 
@@ -261,12 +346,14 @@ describe('PATCH /config/model — 成功路径', () => {
       ollamaModel: 'qwen3',
       hasAnthropicApiKey: false,
       hasOpenaiApiKey: false,
+      hasDeepseekApiKey: false,
     })
     expect(body.backgroundModelProvider).toEqual({
       type: 'anthropic',
       modelName: 'claude-strong',
       hasAnthropicApiKey: true,
       hasOpenaiApiKey: false,
+      hasDeepseekApiKey: false,
     })
   })
 
@@ -306,6 +393,7 @@ describe('PATCH /config/model — 成功路径', () => {
       modelName: 'claude-strong',
       hasAnthropicApiKey: true,
       hasOpenaiApiKey: false,
+      hasDeepseekApiKey: false,
     })
   })
 })

@@ -8,10 +8,12 @@ const CORE_URL = 'http://127.0.0.1:3000'
 // （同 memory 子面板对 ForgetImpact/ForgetResult 等后端响应类型的约定），不从
 // services/core 反向导入路由文件里的类型
 interface ModelConfigSummary {
-  type: 'anthropic' | 'openai' | 'ollama'
+  type: 'anthropic' | 'openai' | 'ollama' | 'deepseek'
   hasAnthropicApiKey: boolean
   hasOpenaiApiKey: boolean
+  hasDeepseekApiKey: boolean
   openaiBaseUrl?: string
+  deepseekBaseUrl?: string
   ollamaBaseUrl?: string
   ollamaModel?: string
   modelName?: string
@@ -25,10 +27,11 @@ interface ConfigModelResponse {
 // 表单本地编辑状态：apiKey 永远不从服务端响应回填（决定 B——服务端从不回传明文 key），
 // 空字符串代表"用户没有输入新值"，保存时据此决定要不要把这个字段带进 PATCH body
 interface ModelFormState {
-  type: 'anthropic' | 'openai' | 'ollama'
+  type: 'anthropic' | 'openai' | 'ollama' | 'deepseek'
   apiKey: string
   modelName: string
   openaiBaseUrl: string
+  deepseekBaseUrl: string
   ollamaBaseUrl: string
   ollamaModel: string
 }
@@ -38,6 +41,7 @@ const BLANK_FORM: ModelFormState = {
   apiKey: '',
   modelName: '',
   openaiBaseUrl: '',
+  deepseekBaseUrl: '',
   ollamaBaseUrl: '',
   ollamaModel: '',
 }
@@ -49,6 +53,7 @@ function summaryToFormState(summary: ModelConfigSummary | null): ModelFormState 
     apiKey: '',
     modelName: summary.modelName ?? '',
     openaiBaseUrl: summary.openaiBaseUrl ?? '',
+    deepseekBaseUrl: summary.deepseekBaseUrl ?? '',
     ollamaBaseUrl: summary.ollamaBaseUrl ?? '',
     ollamaModel: summary.ollamaModel ?? '',
   }
@@ -67,6 +72,10 @@ function buildPartialConfig(form: ModelFormState): Partial<ModelConfig> {
     partial.modelName = form.modelName.trim()
     partial.openaiBaseUrl = form.openaiBaseUrl.trim()
     if (trimmedApiKey) partial.openaiApiKey = trimmedApiKey
+  } else if (form.type === 'deepseek') {
+    partial.modelName = form.modelName.trim()
+    partial.deepseekBaseUrl = form.deepseekBaseUrl.trim()
+    if (trimmedApiKey) partial.deepseekApiKey = trimmedApiKey
   } else {
     partial.ollamaBaseUrl = form.ollamaBaseUrl.trim()
     partial.ollamaModel = form.ollamaModel.trim()
@@ -85,7 +94,9 @@ function ModelFormFields({ form, onChange, summary }: ModelFormFieldsProps) {
     ? summary?.hasAnthropicApiKey ?? false
     : form.type === 'openai'
       ? summary?.hasOpenaiApiKey ?? false
-      : false
+      : form.type === 'deepseek'
+        ? summary?.hasDeepseekApiKey ?? false
+        : false
 
   return (
     <>
@@ -105,10 +116,11 @@ function ModelFormFields({ form, onChange, summary }: ModelFormFieldsProps) {
         >
           <option value="anthropic">Anthropic</option>
           <option value="openai">OpenAI</option>
+          <option value="deepseek">DeepSeek</option>
           <option value="ollama">Ollama</option>
         </select>
       </div>
-      {(form.type === 'anthropic' || form.type === 'openai') && (
+      {(form.type === 'anthropic' || form.type === 'openai' || form.type === 'deepseek') && (
         <>
           <div className="model-config-panel__field">
             <label>API Key</label>
@@ -134,6 +146,15 @@ function ModelFormFields({ form, onChange, summary }: ModelFormFieldsProps) {
           <input
             value={form.openaiBaseUrl}
             onChange={e => onChange({ ...form, openaiBaseUrl: e.target.value })}
+          />
+        </div>
+      )}
+      {form.type === 'deepseek' && (
+        <div className="model-config-panel__field">
+          <label>Base URL（可选）</label>
+          <input
+            value={form.deepseekBaseUrl}
+            onChange={e => onChange({ ...form, deepseekBaseUrl: e.target.value })}
           />
         </div>
       )}
