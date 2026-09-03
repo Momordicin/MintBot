@@ -70,7 +70,7 @@ DB_ENCRYPTION_KEY=your-32-char-encryption-key-here
 }
 ```
 
-> 如果使用 Anthropic 或 OpenAI，将 `type` 改为 `"anthropic"` 或 `"openai"`，并在 `config.json` 里填入对应 `anthropicApiKey` 或 `openaiApiKey`。所有模型接口配置通过 `config.json` 配置。
+> 如果使用 Anthropic、OpenAI 或 DeepSeek，将 `type` 改为 `"anthropic"`、`"openai"` 或 `"deepseek"`，并在 `config.json` 里填入对应 `anthropicApiKey`、`openaiApiKey` 或 `deepseekApiKey`（DeepSeek 的 `deepseekBaseUrl` 留空时默认使用 `https://api.deepseek.com`，模型名用 `deepseek-v4-flash` / `deepseek-v4-pro`）。所有模型接口配置通过 `config.json` 配置。
 
 ### 4. 初始化数据库
 

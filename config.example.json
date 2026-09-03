@@ -3,10 +3,12 @@
     "type": "ollama", 
     "ollamaBaseUrl": "http://localhost:11434", 
     "ollamaModel": "qwen3", 
-    "anthropicApiKey": "", 
-    "openaiApiKey": "", 
-    "openaiBaseUrl": "" 
-  }, 
+    "anthropicApiKey": "",
+    "openaiApiKey": "",
+    "openaiBaseUrl": "",
+    "deepseekApiKey": "",
+    "deepseekBaseUrl": ""
+  },
   "security": {
     "keyStorage": "system-keychain"
   },
