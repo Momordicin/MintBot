@@ -14,6 +14,37 @@ async function buildTestApp() {
   return fastify
 }
 
+describe('GET /characters', () => {
+  const testCharacterIds: string[] = []
+
+  afterEach(() => {
+    for (const characterId of testCharacterIds) {
+      fs.rmSync(path.join(CHARACTERS_ROOT, characterId), { recursive: true, force: true })
+    }
+    testCharacterIds.length = 0
+  })
+
+  it('返回 CHARACTERS_ROOT 下已有的子目录名，不包含普通文件', async () => {
+    const fastify = await buildTestApp()
+    const characterId = `test-list-${Date.now()}`
+    testCharacterIds.push(characterId)
+    fs.mkdirSync(path.join(CHARACTERS_ROOT, characterId), { recursive: true })
+    // 混入一个普通文件，验证只返回目录，不返回文件
+    fs.writeFileSync(path.join(CHARACTERS_ROOT, 'test-not-a-dir.txt'), 'x')
+
+    try {
+      const response = await fastify.inject({ method: 'GET', url: '/characters' })
+      const body = JSON.parse(response.payload)
+
+      expect(response.statusCode).toBe(200)
+      expect(body.characterIds).toContain(characterId)
+      expect(body.characterIds).not.toContain('test-not-a-dir.txt')
+    } finally {
+      fs.rmSync(path.join(CHARACTERS_ROOT, 'test-not-a-dir.txt'), { force: true })
+    }
+  })
+})
+
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
 function buildChunk(type: string, data: Buffer): Buffer {

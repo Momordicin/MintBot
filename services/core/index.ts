@@ -9,6 +9,7 @@ import { chatRoutes } from './routes/chat.js'
 import { eventsRoutes } from './routes/events.js'
 import { presetRoutes } from './routes/presets.js'
 import { characterImportRoutes } from './routes/characterImport.js'
+import { modelsRoutes } from './routes/models.js'
 import { internalRoutes } from './routes/internal.js'
 import { statusRoutes } from './routes/status.js'
 import { messageRoutes } from './routes/messages.js'
@@ -161,6 +162,7 @@ async function start() {
   await fastify.register(eventsRoutes)
   await fastify.register(presetRoutes)
   await fastify.register(characterImportRoutes)
+  await fastify.register(modelsRoutes)
   await fastify.register(internalRoutes)
   await fastify.register(statusRoutes)
   await fastify.register(messageRoutes)

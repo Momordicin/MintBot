@@ -39,6 +39,9 @@ interface CharacterPanelProps {
 
 export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelProps) {
   const [presets, setPresets] = useState<PresetOption[]>([])
+  // 角色文件夹下拉框（createCharacterId 的选项来源）：assets/characters/ 下已有的角色包
+  // 子目录名，挂载时拉取一次——同 presets 列表一样不需要之后自动刷新
+  const [characterIds, setCharacterIds] = useState<string[]>([])
   const [isUploadingWallpaper, setIsUploadingWallpaper] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [isRenaming, setIsRenaming] = useState(false)
@@ -86,6 +89,13 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
   const [useGlobalModel, setUseGlobalModel] = useState(true)
   const [overrideModelType, setOverrideModelType] = useState<ModelConfig['type']>('anthropic')
   const [overrideModelName, setOverrideModelName] = useState('')
+  // overrideModelName 下拉框的选项来源：随 overrideModelType 变化重新拉取（ollama 走真实
+  // 已拉取模型名，anthropic/openai 走后端静态列表），与 useGlobalModel/编辑态与否无关——
+  // 见下方对应的 useEffect
+  const [modelNameOptions, setModelNameOptions] = useState<string[]>([])
+  // 区分"还在拉取中"和"拉取完成但列表确实是空的"（如 Ollama 没运行）——空数组本身
+  // 无法区分这两种状态，缺了这个 flag 会导致加载中的一瞬间也显示"未运行"的错误提示
+  const [isLoadingModelNames, setIsLoadingModelNames] = useState(false)
   // 同 systemPromptNotice 的"下次生效"一次性提示，各自独立不共用，避免两个不相关的动作
   // 互相覆盖对方的提示文案
   const [modelOverrideNotice, setModelOverrideNotice] = useState<string | null>(null)
@@ -115,6 +125,9 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
   const systemPromptControllerRef = useRef<AbortController | null>(null)
   // 模型覆盖同样没有防抖概念，独立于 systemPromptControllerRef——两个编辑区块互不中断对方
   const modelOverrideControllerRef = useRef<AbortController | null>(null)
+  // 模型名下拉框选项的拉取请求：overrideModelType 快速切换时，旧请求的响应可能比新请求
+  // 更晚返回，abort-then-reissue 避免用旧 type 的结果覆盖新 type 已经拉到的列表
+  const modelNameOptionsControllerRef = useRef<AbortController | null>(null)
   // 让 handleWallpaperPick 在系统文件选择框（非模态，用户可在此期间继续切换 preset）关闭后，
   // 能读到"点击选图按钮那一刻之后是否发生过 preset 切换"的最新值，而不是闭包捕获的旧 prop
   const presetSnapshotRef = useRef<PresetSnapshot | null>(presetSnapshot)
@@ -175,6 +188,7 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
       displayConfigControllerRef.current?.abort()
       systemPromptControllerRef.current?.abort()
       modelOverrideControllerRef.current?.abort()
+      modelNameOptionsControllerRef.current?.abort()
       importControllerRef.current?.abort()
       generateControllerRef.current?.abort()
       avatarUploadControllerRef.current?.abort()
@@ -208,6 +222,46 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
         // preset 列表拉取失败不影响本面板其它功能，静默忽略即可
       })
   }, [])
+
+  useEffect(() => {
+    fetch(`${CORE_URL}/characters`)
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      .then((body: { characterIds: string[] }) => setCharacterIds(body.characterIds))
+      .catch(() => {
+        // 跟旧版自由输入框不同：下拉框选项完全来自这次拉取，拉取失败会让创建入口的
+        // 下拉框永久空着且不可选——必须显式提示，不能静默吞掉让用户以为自己操作有误
+        setErrorMessage('角色文件夹列表加载失败，无法创建新角色，请检查核心服务后重试')
+      })
+  }, [])
+
+  // overrideModelType 变化时重新拉取模型名下拉框的选项——不限定在 modelOverrideStep
+  // === 'editing' 时才拉取，保持逻辑简单：即使当前不在编辑态，下次进入编辑态时选项也已就位
+  useEffect(() => {
+    modelNameOptionsControllerRef.current?.abort()
+    const controller = new AbortController()
+    modelNameOptionsControllerRef.current = controller
+    setModelNameOptions([])
+    setIsLoadingModelNames(true)
+
+    fetch(`${CORE_URL}/models?type=${overrideModelType}`, { signal: controller.signal })
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      .then((body: { models: string[] }) => {
+        if (controller.signal.aborted) return
+        setModelNameOptions(body.models)
+        setIsLoadingModelNames(false)
+      })
+      .catch(err => {
+        if (err instanceof DOMException && err.name === 'AbortError') return
+        // 模型名列表拉取失败（如后端不可达）不阻塞其它功能，下拉框走"空列表占位"分支即可
+        setIsLoadingModelNames(false)
+      })
+  }, [overrideModelType])
 
   const switchPreset = useCallback(async (presetId: string) => {
     switchPresetControllerRef.current?.abort()
@@ -365,7 +419,9 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
 
   const handleCreateStart = useCallback(() => {
     setCreateName('')
-    setCreateCharacterId('')
+    // 手动创建只能从已有文件夹里选（不保留自由输入路径），默认选中第一个已有文件夹；
+    // characterIds 尚未拉取到时退化为空字符串，与之前的行为一致，不阻塞创建入口本身
+    setCreateCharacterId(characterIds[0] ?? '')
     setCreateSystemPrompt('')
     // 手动创建与导入流程共用同一张表单：显式清空上一次可能残留的导入态，
     // 避免手动创建误触发"模型辅助改写"按钮或误上传上一次导入的头像
@@ -374,7 +430,7 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
     setImportedMetadataFields(null)
     setErrorMessage(null)
     setIsCreating(true)
-  }, [])
+  }, [characterIds])
 
   const handleCreateCancel = useCallback(() => {
     setIsCreating(false)
@@ -819,6 +875,28 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
     scheduleDisplayConfigChange({ chatBgOpacity: opacity })
   }, [scheduleDisplayConfigChange])
 
+  // "无色"色块：复用 handleOpacityChange 同一条防抖保存链路，只是把值固定为 0，
+  // 不新增任何 state——chatBgOpacity === 0 本身就是"无色正在生效"的完整信号
+  const handleNoColorClick = useCallback(() => {
+    setChatBgOpacity(0)
+    scheduleDisplayConfigChange({ chatBgOpacity: 0 })
+  }, [scheduleDisplayConfigChange])
+
+  // 角色文件夹下拉框的选项：默认是 assets/characters/ 下已有文件夹；仅当处于"导入角色卡"
+  // 流程（importedCardFields 非空，只在这条路径被赋值）且 suggestedCharacterId 不在已有
+  // 文件夹列表里时，额外在顶部插入一个预选中的合成选项——手动创建（importedCardFields 恒为
+  // null）没有这条合成选项，只能从已有文件夹里选
+  const characterIdOptions = importedCardFields && createCharacterId && !characterIds.includes(createCharacterId)
+    ? [{ value: createCharacterId, label: `（新导入）${createCharacterId}` }, ...characterIds.map(id => ({ value: id, label: id }))]
+    : characterIds.map(id => ({ value: id, label: id }))
+
+  // 模型名下拉框的选项：默认是 modelNameOptions（随 overrideModelType 拉取）；若当前值
+  // （如某个 preset 早先保存的自定义模型名）恰好不在这份列表里，补一项指向它自己，避免
+  // 打开编辑态时下拉框视觉上"看起来选中了别的模型"——与角色文件夹下拉框的合成选项同一顾虑
+  const overrideModelNameOptions = overrideModelName && !modelNameOptions.includes(overrideModelName)
+    ? [overrideModelName, ...modelNameOptions]
+    : modelNameOptions
+
   return (
     <div className="character-panel">
       {/* 创建入口：不像下面几块一样套 presets.length > 0 的门——preset 列表为空（全新安装，
@@ -893,13 +971,15 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
             placeholder="角色名称"
             disabled={isSavingCreate}
           />
-          <input
-            className="character-panel__rename-input"
+          <select
             value={createCharacterId}
             onChange={e => setCreateCharacterId(e.target.value)}
-            placeholder="对应 assets/characters/ 下的文件夹名"
             disabled={isSavingCreate}
-          />
+          >
+            {characterIdOptions.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
           <textarea
             className="character-panel__persona-textarea"
             value={createSystemPrompt}
@@ -939,6 +1019,14 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
               onChange={handleColorChange}
             />
           </label>
+          <button
+            type="button"
+            className={`character-panel__no-color-btn${chatBgOpacity === 0 ? ' character-panel__no-color-btn--active' : ''}`}
+            onClick={handleNoColorClick}
+            title="无色（不透明度设为 0）"
+            aria-label="无色"
+            aria-pressed={chatBgOpacity === 0}
+          />
           <label className="character-panel__display-label" title="聊天区域背景不透明度">
             不透明度
             <input
@@ -1030,18 +1118,36 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
                 <div className="character-panel__row">
                   <select
                     value={overrideModelType}
-                    onChange={e => setOverrideModelType(e.target.value as ModelConfig['type'])}
+                    onChange={e => {
+                      // 切换 provider 类型时必须清空已选模型名，否则上一个 provider 的模型名
+                      // 会被 overrideModelNameOptions 的合成选项逻辑当作"新 provider 下的
+                      // 有效选项"重新展示出来，用户不点这个下拉框也不会注意到这个不匹配，
+                      // 结果保存下一个 provider/上一个模型名 的错配组合
+                      setOverrideModelType(e.target.value as ModelConfig['type'])
+                      setOverrideModelName('')
+                    }}
                   >
                     <option value="anthropic">Anthropic</option>
                     <option value="openai">OpenAI</option>
                     <option value="ollama">Ollama</option>
                   </select>
-                  <input
-                    className="character-panel__rename-input"
+                  <select
                     value={overrideModelName}
                     onChange={e => setOverrideModelName(e.target.value)}
-                    placeholder="模型名称"
-                  />
+                    disabled={overrideModelNameOptions.length === 0}
+                  >
+                    {overrideModelNameOptions.length === 0 ? (
+                      <option value="" disabled>
+                        {isLoadingModelNames
+                          ? '模型列表加载中…'
+                          : overrideModelType === 'ollama' ? 'Ollama 未运行或无可用模型' : '模型列表为空'}
+                      </option>
+                    ) : (
+                      overrideModelNameOptions.map(name => (
+                        <option key={name} value={name}>{name}</option>
+                      ))
+                    )}
+                  </select>
                 </div>
               )}
               <div className="character-panel__row">

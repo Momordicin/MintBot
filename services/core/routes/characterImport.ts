@@ -97,6 +97,23 @@ function mergeManifestAvatar(characterId: string, avatarFilename: string): void 
 }
 
 export async function characterImportRoutes(fastify: FastifyInstance) {
+  // 角色文件夹下拉框（CharacterPanel.tsx §1）：列出 CHARACTERS_ROOT 下已有的角色包子目录名。
+  // 只按目录筛选，不校验目录内是否真的有 manifest.json——manifest 缺失时
+  // loadCharacterManifest 已经能优雅降级（返回 null，角色只是没有立绘），这里不重复那层校验
+  fastify.get('/characters', async () => {
+    // readdirSync 失败（目录不存在/不可读）不该让整个请求抛 500——渲染层没有错误边界，
+    // 一份非 2xx 响应体如果被当成成功解析会导致 characterIds 变成 undefined，
+    // 渲染时 .map/.includes 直接崩掉整棵设置页组件树，降级返回空列表更安全
+    try {
+      const entries = fs.readdirSync(CHARACTERS_ROOT, { withFileTypes: true })
+      const characterIds = entries.filter(entry => entry.isDirectory()).map(entry => entry.name)
+      return { characterIds }
+    } catch (err) {
+      console.error('[Characters] Failed to list character folders:', err)
+      return { characterIds: [] }
+    }
+  })
+
   // 本插件自己的原始二进制 body 请求（parse/avatar 两条路由都用）。这是一个独立的
   // encapsulated 插件上下文，presets.ts 里注册的同名 content type parser 不会跨插件边界
   // 生效（sibling 插件互不继承，只有父子链才继承）——因此这里必须自己重新注册一次，

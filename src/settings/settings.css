@@ -176,6 +176,28 @@
   cursor: pointer;
 }
 
+/* "无色"色块：棋盘格/斜杠图案，业界表示"透明"的通用画法，点击等价于把不透明度滑到 0 */
+
+.character-panel__no-color-btn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  cursor: pointer;
+  background-color: #1a1a1a;
+  background-image:
+    linear-gradient(45deg, rgba(255, 255, 255, 0.3) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.3) 75%),
+    linear-gradient(45deg, rgba(255, 255, 255, 0.3) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.3) 75%);
+  background-size: 8px 8px;
+  background-position: 0 0, 4px 4px;
+}
+
+.character-panel__no-color-btn--active {
+  border-color: rgba(120, 90, 180, 0.9);
+  box-shadow: 0 0 0 2px rgba(120, 90, 180, 0.4);
+}
+
 .character-panel__error {
   color: var(--system-msg-text);
   font-size: 12px;

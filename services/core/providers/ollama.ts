@@ -18,6 +18,25 @@ export async function isOllamaRunning(baseUrl: string): Promise<boolean> {
   }
 }
 
+// 供设置页"模型名下拉框"（CharacterPanel.tsx）使用：列出本机 Ollama 已拉取的模型名。
+// 与 isOllamaRunning 同款降级风格——Ollama 未运行/请求失败/响应形状不对都不抛错，
+// 直接返回空数组，交给调用方（GET /models）决定如何展示空列表
+export async function listOllamaModels(baseUrl: string): Promise<string[]> {
+  try {
+    const response = await fetch(`${baseUrl}/api/tags`, {
+      signal: AbortSignal.timeout(3000),
+    })
+    if (!response.ok) return []
+    const json = await response.json()
+    if (!Array.isArray(json?.models)) return []
+    return json.models
+      .map((model: unknown) => (model && typeof model === 'object' && typeof (model as { name?: unknown }).name === 'string' ? (model as { name: string }).name : null))
+      .filter((name: string | null): name is string => name !== null)
+  } catch {
+    return []
+  }
+}
+
 async function waitForOllama(baseUrl: string, timeoutMs = 30000): Promise<void> {
   const start = Date.now()
   while (Date.now() - start < timeoutMs) {
