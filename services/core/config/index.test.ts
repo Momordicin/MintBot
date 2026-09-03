@@ -446,3 +446,106 @@ describe('config/index — updateBackgroundModelProviderConfig', () => {
     expect(getBackgroundModelProviderConfig()).toEqual(getModelProviderConfig())
   })
 })
+
+// ─── 悬浮窗行为策略（buzzing-frolicking-eich.md 计划子任务①）────────────
+describe('config/index — getWindowBehaviorConfig', () => {
+  it('config.json 不存在时，回退到默认值 { pinMode: off, 两个数组为空 }', async () => {
+    readFileSyncMock.mockImplementation(() => { throw new Error('ENOENT') })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { startConfigWatcher, getWindowBehaviorConfig } = await import('./index.js')
+
+    startConfigWatcher()
+
+    expect(getWindowBehaviorConfig()).toEqual({ pinMode: 'off', fullscreenWhitelist: [], blacklist: [] })
+  })
+
+  it('完整合法的 windowBehavior 按原样使用', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      windowBehavior: { pinMode: 'always-on-top', fullscreenWhitelist: ['chrome.exe'], blacklist: ['game.exe'] },
+    }))
+    const { startConfigWatcher, getWindowBehaviorConfig } = await import('./index.js')
+
+    startConfigWatcher()
+
+    expect(getWindowBehaviorConfig()).toEqual({
+      pinMode: 'always-on-top',
+      fullscreenWhitelist: ['chrome.exe'],
+      blacklist: ['game.exe'],
+    })
+  })
+
+  it('pinMode 不是合法值时回退到 off 并 warn，不影响其它字段', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      windowBehavior: { pinMode: 'not-a-real-mode', fullscreenWhitelist: ['chrome.exe'] },
+    }))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { startConfigWatcher, getWindowBehaviorConfig } = await import('./index.js')
+
+    startConfigWatcher()
+
+    expect(getWindowBehaviorConfig()).toEqual({ pinMode: 'off', fullscreenWhitelist: ['chrome.exe'], blacklist: [] })
+    expect(warnSpy).toHaveBeenCalled()
+  })
+
+  it('数组里的非字符串元素被过滤掉，不连累其它合法元素', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      windowBehavior: { pinMode: 'off', fullscreenWhitelist: ['chrome.exe', 123, null], blacklist: [] },
+    }))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { startConfigWatcher, getWindowBehaviorConfig } = await import('./index.js')
+
+    startConfigWatcher()
+
+    expect(getWindowBehaviorConfig().fullscreenWhitelist).toEqual(['chrome.exe'])
+  })
+
+  it('windowBehavior 整个字段缺失时全部回退默认值，不 warn 数组字段', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({ modelProvider: { type: 'ollama' } }))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { startConfigWatcher, getWindowBehaviorConfig } = await import('./index.js')
+
+    startConfigWatcher()
+
+    expect(getWindowBehaviorConfig()).toEqual({ pinMode: 'off', fullscreenWhitelist: [], blacklist: [] })
+  })
+})
+
+describe('config/index — updateWindowBehaviorConfig', () => {
+  it('合并 partial 到磁盘上已存的 windowBehavior，不 clobber 未提及字段，也不 clobber 其它顶层 key', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      windowBehavior: { pinMode: 'off', fullscreenWhitelist: ['chrome.exe'], blacklist: [] },
+      memory: { recentTrackMaxMessages: 200 },
+    }))
+    const { updateWindowBehaviorConfig, CONFIG_PATH } = await import('./index.js')
+
+    const result = updateWindowBehaviorConfig({ pinMode: 'dodge-fullscreen' })
+
+    expect(result).toEqual({ pinMode: 'dodge-fullscreen', fullscreenWhitelist: ['chrome.exe'], blacklist: [] })
+
+    expect(writeFileSyncMock).toHaveBeenCalledTimes(1)
+    const [tempPath, written] = writeFileSyncMock.mock.calls[0]
+    expect(tempPath).not.toBe(CONFIG_PATH)
+    expect(renameSyncMock).toHaveBeenCalledWith(tempPath, CONFIG_PATH)
+
+    const writtenJson = JSON.parse(written as string)
+    expect(writtenJson.windowBehavior).toEqual({ pinMode: 'dodge-fullscreen', fullscreenWhitelist: ['chrome.exe'], blacklist: [] })
+    expect(writtenJson.memory).toEqual({ recentTrackMaxMessages: 200 })
+  })
+
+  it('写入后 getWindowBehaviorConfig 立即反映新值，不依赖 chokidar 的异步 reload', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      windowBehavior: { pinMode: 'off', fullscreenWhitelist: [], blacklist: [] },
+    }))
+    const onMock = vi.fn()
+    watchMock.mockReturnValue({ on: onMock })
+    const { startConfigWatcher, updateWindowBehaviorConfig, getWindowBehaviorConfig } = await import('./index.js')
+
+    startConfigWatcher()
+    expect(getWindowBehaviorConfig().pinMode).toBe('off')
+
+    updateWindowBehaviorConfig({ pinMode: 'always-on-top' })
+
+    // 故意不触发 chokidar 的 'change' 回调——同步更新内存态不能依赖它
+    expect(getWindowBehaviorConfig().pinMode).toBe('always-on-top')
+  })
+})

@@ -540,3 +540,38 @@
   opacity: 0.5;
   cursor: default;
 }
+
+/* ─── 窗口行为面板（置顶模式 + 全屏白名单/黑名单） ──────────── */
+
+.window-behavior-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.window-behavior-panel__section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--input-border);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.window-behavior-panel__section-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.window-behavior-panel__list-row {
+  border: 1px solid var(--input-border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--input-text);
+}
