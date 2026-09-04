@@ -23,7 +23,7 @@ A locally-run AI character companion desktop app. Supports custom character pers
 - Real-time conversation with a custom AI character — "typing" animation followed by the full message shown at once, an instant-messaging-style experience
 - Full message history retention, with infinite-scroll-up pagination for older conversations
 
-**Desktop overlay** (Phase 3, implemented)
+**Desktop overlay**  
 - Automatically switches to an independent, transparent-background overlay window when the chat window is minimized or closed; character portrait switches in real time based on emotion tags (supports both animated GIF and static images)
 - Auto pin-on-top / hide / jump to another display based on the currently active window, with configurable fullscreen whitelist/blacklist
 - Enters a rest mode on lock screen / screen-off: switches to a sleeping portrait, pauses input monitoring, and preserves conversation context
@@ -238,6 +238,7 @@ Thanks to the following creators for authorizing/openly sharing the sticker asse
 - Xiao Ai sticker pack by [雾雪](https://space.bilibili.com/103739)
 - Xiao Ai idle sticker pack by [\_BLZ\_](https://space.bilibili.com/2255628)
 - Distributor of 雾雪's sticker pack, [凉梦喵啦啦啦](https://space.bilibili.com/51460746)
+- User example sticker by [Ah_San](https://www.pixiv.net/users/101403291)
 
 The send-button icon in the message bar is from *Wuthering Waves*, a game by the Chinese studio Kuro Games.
 

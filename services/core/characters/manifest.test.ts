@@ -2,42 +2,117 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { loadCharacterManifest } from './manifest.js'
+import { loadCharacterManifest, CHARACTERS_ROOT } from './manifest.js'
+
+// Aemeath 是本地专属、未提交进 git 的真实角色包
+const AEMEATH_FIXTURE_PATH = path.join(CHARACTERS_ROOT, 'Aemeath', 'manifest.json')
 
 describe('loadCharacterManifest — 真实角色包 fixture（assets/characters/ 下的实际文件）', () => {
-  it('Aemeath（manifest schema v2 全字段）端到端解析，所有字段与 fixture 一致', () => {
-    const manifest = loadCharacterManifest('Aemeath')
+  it.skipIf(!fs.existsSync(AEMEATH_FIXTURE_PATH))(
+    'Aemeath（manifest schema v2 全字段，仅本地存在真实素材时运行）各层级结构与类型解析正确', 
+    () => {
+      const manifest = loadCharacterManifest('Aemeath')
 
-    expect(manifest).not.toBeNull()
+      expect(manifest).not.toBeNull()
+      if (!manifest) return
+
+      expect(manifest.schemaVersion).toBe(2)
+      expect(manifest.name).toBe('Aemeath')
+      expect(manifest.displayName).toBe('Aemeath')
+      expect(typeof manifest.description).toBe('string')
+      expect(Array.isArray(manifest.tags)).toBe(true)
+      expect(typeof manifest.avatar).toBe('string')
+      expect(manifest.avatar.length).toBeGreaterThan(0)
+      expect(typeof manifest.userAvatar).toBe('string')
+      expect(Array.isArray(manifest.emotionVocabulary)).toBe(true)
+      expect(manifest.emotionVocabulary.length).toBeGreaterThan(0)
+      expect(Array.isArray(manifest.emoteTagVocabulary)).toBe(true)
+
+      expect(typeof manifest.portraits.pixel.fallback).toBe('string')
+      expect(typeof manifest.portraits.pixel.emotions).toBe('object')
+      const pixelEmotionEntries = Object.values(manifest.portraits.pixel.emotions)
+      expect(pixelEmotionEntries.length).toBeGreaterThan(0)
+      for (const files of pixelEmotionEntries) {
+        expect(Array.isArray(files)).toBe(true)
+      }
+
+      expect(typeof manifest.portraits.illustration.fallback).toBe('string')
+      expect(typeof manifest.portraits.illustration.emotions).toBe('object')
+
+      expect(typeof manifest.interactionStates).toBe('object')
+      expect(typeof manifest.reservedStates).toBe('object')
+
+      expect(Array.isArray(manifest.emotePool)).toBe(true)
+      for (const entry of manifest.emotePool) {
+        expect(typeof entry.file).toBe('string')
+        expect(Array.isArray(entry.tags)).toBe(true)
+      }
+    }
+  )
+
+  // Mint 跟 Aemeath 同样是本地专属、未提交进 git 的真实角色包
+  const MINT_FIXTURE_PATH = path.join(CHARACTERS_ROOT, 'Mint', 'manifest.json')
+
+  it.skipIf(!fs.existsSync(MINT_FIXTURE_PATH))(
+    'Mint（legacy + Part D 补充的 emotionVocabulary，仅本地存在真实素材时运行）其余 v2 字段回退安全默认值，且不告警',
+    () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      const manifest = loadCharacterManifest('Mint')
+
+      expect(manifest).not.toBeNull()
+      if (!manifest) return
+
+      expect(manifest.schemaVersion).toBe(1)
+      expect(typeof manifest.avatar).toBe('string')
+      expect(manifest.avatar.length).toBeGreaterThan(0)
+      expect(Array.isArray(manifest.emotionVocabulary)).toBe(true)
+      expect(manifest.emotionVocabulary.length).toBeGreaterThan(0)
+      expect(manifest.emoteTagVocabulary).toEqual([])
+      expect(manifest.portraits).toEqual({
+        pixel: { fallback: '', emotions: {} },
+        illustration: { fallback: '', emotions: {} },
+      })
+      expect(manifest.interactionStates).toEqual({})
+      expect(manifest.reservedStates).toEqual({})
+      expect(manifest.emotePool).toEqual([])
+
+      expect(warnSpy).not.toHaveBeenCalled()
+      warnSpy.mockRestore()
+    }
+  )
+
+  // example 是唯一提交进 git 的角色包
+  it('example（schema v2 完整字段，占位内容，git 内唯一提交的角色包 fixture）解析结果与 fixture 完全一致', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const manifest = loadCharacterManifest('example')
+
     expect(manifest).toEqual({
       schemaVersion: 2,
-      name: 'Aemeath',
-      displayName: 'Aemeath',
-      description: '实验性角色包，用于验证 manifest schema v2（角色卡导入 / 立绘资源管理重设计）',
-      tags: [],
+      name: 'example',
+      displayName: '示例角色',
+      description: '示例角色包，展示 manifest schema v2 的完整字段结构，供开发者参考；不含真实立绘/表情包素材',
+      tags: ['示例', '占位'],
       creator: '',
       version: '1.0',
       creatorNotes: '',
-      avatar: 'avatar.jpg',
-      userAvatar: '女漂圣诞.png',
-      emotionVocabulary: ['idle', 'happy', 'shy', 'playful', 'sleep', 'confused'],
-      emoteTagVocabulary: ['excited', 'performing', 'comforting'],
+      avatar: 'avatar.png',
+      userAvatar: '',
+      emotionVocabulary: ['idle', 'happy', 'sad', 'curious', 'angry', 'surprised', 'shy'],
+      emoteTagVocabulary: ['excited', 'comforting'],
       portraits: {
         pixel: {
           fallback: 'idle',
           emotions: {
-            idle: ['gifs/idle1.gif', 'gifs/idle2.gif', 'gifs/idle3.gif', 'gifs/idle4.gif'],
-            happy: ['gifs/screen1.gif', 'gifs/screen2.gif'],
-            shy: ['gifs/screen2.gif'],
-            playful: ['gifs/screen3.gif'],
-            sleep: ['gifs/screen5.gif'],
-            confused: ['gifs/screen7.gif'],
+            idle: ['gifs/idle1.gif', 'gifs/idle2.gif'],
+            happy: ['gifs/happy1.gif'],
           },
         },
         illustration: {
           fallback: 'idle',
           emotions: {
-            idle: ['full-body.png', 'full-body2.png'],
+            idle: ['full-body.png'],
             happy: ['half-body.png'],
           },
         },
@@ -47,54 +122,14 @@ describe('loadCharacterManifest — 真实角色包 fixture（assets/characters/
         move: 'gifs/move.gif',
       },
       reservedStates: {
-        thinking: ['gifs/screen4.gif'],
-        'listening-to-music': ['gifs/ameath.gif'],
-        'boredom-idle': ['gifs/screen6.gif'],
+        thinking: ['gifs/thinking.gif'],
+        'listening-to-music': ['gifs/music.gif'],
+        'boredom-idle': ['gifs/boredom.gif'],
       },
       emotePool: [
-        { file: 'emotes/singing.jpg', tags: ['excited', 'performing'] },
-        { file: 'half-body.png', tags: ['comforting'] },
+        { file: 'emotes/example.jpg', tags: ['excited'] },
       ],
     })
-  })
-
-  it('Mint（legacy + Part D 补充的 emotionVocabulary）其余 v2 字段回退安全默认值，且不告警（合法缺失，不是错误）', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-    const manifest = loadCharacterManifest('Mint')
-
-    expect(manifest).toEqual({
-      schemaVersion: 1,
-      name: '',
-      displayName: '',
-      description: '',
-      tags: [],
-      creator: '',
-      version: '',
-      creatorNotes: '',
-      avatar: 'avatar.png',
-      userAvatar: '',
-      emotionVocabulary: ['idle', 'happy', 'sad', 'curious', 'angry', 'surprised', 'shy'],
-      emoteTagVocabulary: [],
-      portraits: {
-        pixel: { fallback: '', emotions: {} },
-        illustration: { fallback: '', emotions: {} },
-      },
-      interactionStates: {},
-      reservedStates: {},
-      emotePool: [],
-    })
-    expect(warnSpy).not.toHaveBeenCalled()
-    warnSpy.mockRestore()
-  })
-
-  it('example（legacy，只有 avatar 一个字段）同样正常加载，不告警', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-    const manifest = loadCharacterManifest('example')
-
-    expect(manifest?.avatar).toBe('avatar.png')
-    expect(manifest?.schemaVersion).toBe(1)
     expect(warnSpy).not.toHaveBeenCalled()
     warnSpy.mockRestore()
   })
@@ -109,10 +144,7 @@ describe('loadCharacterManifest — 真实角色包 fixture（assets/characters/
   })
 })
 
-// 以下用例需要手工构造异常内容的 manifest.json（非法 JSON / 字段类型错误），不适合写进
-// assets/characters/ 下的真实 fixture——用临时目录 + ASSET_PATH 环境变量覆盖 + vi.resetModules()
-// 重新加载模块，验证 ASSET_PATH 是本模块解析角色包根目录的唯一来源（同时也是 §3.5 配置外置
-// 原则本身的验证）
+// 以下用例需要手工构造异常内容的 manifest.json, 验证 ASSET_PATH 是本模块解析角色包根目录的唯一来源
 describe('loadCharacterManifest — 手工构造的异常 manifest（临时目录 + ASSET_PATH 覆盖）', () => {
   let tempRoot: string | undefined
 
