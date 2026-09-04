@@ -13,6 +13,79 @@
   overflow: hidden;
 }
 
+/* ─── 自绘标题栏（Window Controls Overlay，TDD §3.7 附） ─── */
+
+.chat-titlebar {
+  /* 必须与主进程 electron/main/index.ts 里 TITLEBAR_OVERLAY_HEIGHT 一致——两处不一致
+     会直接看出一条台阶，且拖拽区与按钮区的边界会错乱 */
+  height: 25px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 6px;
+  /* 满宽，靠 padding-right 让出原生按钮条带的空间（而不是用 width 把本元素收窄到可用
+     内容区）：现在主进程 TITLEBAR_OVERLAY_COLOR 是完全透明（alpha 0），原生层不再贡献
+     任何底色，满宽的 background / backdrop-filter 铺到按钮条带底下不会跟谁叠加，反而是
+     本次想要的效果——按钮符号直接画在自绘的毛玻璃上，消除「毛玻璃 vs 清晰」的接缝。
+     ⚠️ env(titlebar-area-width) 是排除按钮条带之后剩余的可用内容区宽度，不是按钮条带
+     本身的宽度（TDD §3.7 附 :1068 有过这个坑的记录）——直接拿它当 padding-right 会把
+     两者搞反。正确写法是 calc(100% - env(titlebar-area-width, ...))：用 100% 减去可用
+     内容区宽度，才是按钮条带本身的宽度。兜底值同理要先算出兜底可用宽度
+     （100% - 138px，138px 是 Windows 三个原生按钮条带的经验宽度，约 3 × 46px）再用
+     100% 减一次，两条路径才一致。兜底只在 env() 拿不到真实值时生效，那正是 TDD §3.7 附
+     列为「暂不支持」的场景（非 Windows / 缩放比例不同的多屏），该数值在这些场景下未经
+     验证。未叠加 env(titlebar-area-x)：本项目目标平台固定 Windows + 按钮居右，该变量
+     恒为 0；按钮居左（如 RTL）不在支持范围内，加了也没有真机可验证 */
+  padding-right: calc(100% - env(titlebar-area-width, calc(100% - 138px)));
+  /* 不再需要与主进程 TITLEBAR_OVERLAY_COLOR 保持同一 alpha：原生层已改为完全透明，
+     不贡献底色，这里的 0.40 是标题栏唯一的底色来源，两处不存在"叠加"或"一致性"的
+     耦合关系了 */
+  background: rgba(15, 15, 20, 0.40);
+  /* 毛玻璃：让身后壁纸轻微模糊而非完全清晰，避免标题栏区域抢注意力（用户反馈）。8px 取
+     "轻微"区间（6-10px）中段——标题栏净高只有 25px，半径再大会把整条纹理糊成一块纯色，
+     反而丢失跟下方壁纸的观感连续性。
+     批次二会给 .chat-window 加一个绝对定位的 ::before 壁纸图层（带
+     opacity: var(--wallpaper-opacity)，TDD §2.2）——它是 .chat-titlebar 的兄弟节点而非
+     祖先。backdrop root 规则只由祖先链上的 opacity < 1 触发（TDD §五附「推翻『不用
+     backdrop-filter』」），兄弟节点的半透明不会把这里的 backdrop-filter 打掉，理论上仍能
+     把这个已合成的半透明壁纸层当作背景正常捕获、模糊。批次二落地后仍需目视复验一次 */
+  backdrop-filter: blur(8px);
+  -webkit-app-region: drag;
+  /* 批次二会在 .chat-window 上加一个绝对定位的 ::before 壁纸图层——CSS 绘制顺序中
+     静态块先于定位元素绘制，届时任何 position: static 的兄弟节点都会被压到壁纸下面。
+     这里提前占位，现在写零成本，事后补是返工，不要因为暂时看不出作用就删掉 */
+  position: relative;
+}
+
+.chat-titlebar__avatar {
+  width: 17px;
+  height: 17px;
+  flex-shrink: 0;
+}
+
+.chat-titlebar__avatar img {
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.chat-titlebar__avatar-placeholder {
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: rgba(120, 90, 180, 0.6);
+}
+
+.chat-titlebar__name {
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--bubble-bot-text);
+}
+
 /* ─── Embedding 未就绪：头像置灰 ───────────────────────── */
 
 .chat-window--embedding-not-ready .msg-avatar img {
