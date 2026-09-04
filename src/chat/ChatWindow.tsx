@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { MessageList } from './MessageList'
 import { InputBar } from './InputBar'
+import { TitleBar } from './TitleBar'
 import { MessageData } from './MessageBubble'
 import { parseSSE } from './sse'
 import type { AppState, PresetSnapshot } from '../../shared/types/index.js'
@@ -401,6 +402,8 @@ export function ChatWindow() {
         }),
       } as React.CSSProperties}
     >
+      <TitleBar avatarUrl={avatarUrl} displayName={displayName} />
+
       {appState?.ollamaReady === false && (
         <div className="banner banner--warn">
           Ollama 未运行，请先启动 Ollama

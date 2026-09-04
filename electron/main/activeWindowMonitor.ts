@@ -55,7 +55,11 @@ const GWL_STYLE = -16
 const WS_CAPTION = 0xc00000
 const WS_THICKFRAME = 0x40000
 
-export type ActiveWindowInfo = { title: string; isFullscreen: boolean; exeName: string | null }
+// displayId 不设 null：函数内部从 GetForegroundWindow 拿到 hwnd 之后，唯一的显示器解析点
+// screen.getDisplayMatching(dipRect) 在构造最终返回值之前必定已经跑过（用于 isFullscreen
+// 判断），中途任何一步失败都会提前 return null（走的是 ActiveWindowInfo | null 的 null
+// 分支），不会出现"ActiveWindowInfo 非空但 displayId 未解析"的情况
+export type ActiveWindowInfo = { title: string; isFullscreen: boolean; exeName: string | null; displayId: number }
 
 // 拿前台窗口 handle 反查它所属进程的 exe 文件名（不含路径，如 "chrome.exe"）。任何一步
 // 失败（拿不到 pid、OpenProcess 权限不足、查询失败）都返回 null，不影响调用方已经拿到
@@ -122,21 +126,35 @@ export function getActiveWindowInfo(): ActiveWindowInfo | null {
     const gotRect = GetWindowRect(hwnd, rect)
     if (!gotRect) return null
 
-    const display = screen.getDisplayMatching({
+    // GetWindowRect 返回物理像素，而 screen.getDisplayMatching 的匹配依据、Display.bounds
+    // 都是 DIP——非 100% 缩放的显示器上两者单位不一致，此前 v1 直接用物理坐标做这两件事：
+    // 传给 getDisplayMatching 会匹配到错误的显示器（实机诊断过物理 x=1125 的窗口被匹配到
+    // 另一块屏幕的 DIP bounds 上），拿物理坐标精确比较 DIP bounds 则 rectMatchesDisplay
+    // 恒为 false（假阴性）。用 screen.screenToDipRect(null, physicalRect) 把物理矩形换算成
+    // DIP 后再参与这两步，两处都要用换算后的值，缺一处都还是错的
+    const physicalRect = {
       x: rect.left,
       y: rect.top,
       width: rect.right - rect.left,
       height: rect.bottom - rect.top,
-    })
-    // v1 启发式：精确相等即视为全屏，不做容差。已知风险：GetWindowRect 返回物理像素，
-    // screen.getDisplayMatching(...).bounds 在非 100% DPI 缩放的显示器上可能是逻辑像素，
-    // 两者单位不一致时这里会一直判定为非全屏（假阴性）——下一个"悬浮窗行为策略"任务
-    // 消费 isFullscreen 之前需要先确认/修这个问题，不能默认这个值在缩放屏幕上也准
+    }
+    const dipRect = screen.screenToDipRect(null, physicalRect)
+
+    const display = screen.getDisplayMatching(dipRect)
+    // v2：不加容差。依据是 screenToDipRect 与 display.bounds 走的是 Chromium 内部同一套
+    // 物理→DIP 转换（按方向取整、保证换算结果完整覆盖原物理矩形），因此窗口矩形真正等于
+    // 显示器物理边界时两边结果逐像素相等。实机数据印证了这一点：1920×1080 物理 @1.4 缩放
+    // 换算出 1372×772，与 display.bounds 精确吻合（注意 1920/1.4=1371.43，能对上 1372 是
+    // 因为右下角取 ceil 而非四舍五入）。
+    // ⚠️ 但"两条路径共用同一套换算"是 Chromium 的内部实现细节，公开 API 并未承诺——目前
+    // 靠实机现象反推成立。若日后 Electron 升级导致两条换算路径出现分歧，这里会无提示地
+    // 退回"恒为 false"的假阴性（正是 v1 的症状）。加容差会掩盖这个信号，所以仍选精确相等，
+    // 但排查 isFullscreen 失效时应优先怀疑这一点
     const rectMatchesDisplay =
-      rect.left === display.bounds.x &&
-      rect.top === display.bounds.y &&
-      rect.right === display.bounds.x + display.bounds.width &&
-      rect.bottom === display.bounds.y + display.bounds.height
+      dipRect.x === display.bounds.x &&
+      dipRect.y === display.bounds.y &&
+      dipRect.x + dipRect.width === display.bounds.x + display.bounds.width &&
+      dipRect.y + dipRect.height === display.bounds.y + display.bounds.height
 
     // 仅矩形等于显示器边界不足以区分"真全屏"和"普通窗口被最大化到铺满屏幕"——两者视觉
     // 上都占满显示器，但真全屏（独占全屏游戏/播放器）通常创建窗口时就不带标题栏/可调边框
@@ -156,7 +174,7 @@ export function getActiveWindowInfo(): ActiveWindowInfo | null {
       return null
     }
 
-    return { title, isFullscreen, exeName }
+    return { title, isFullscreen, exeName, displayId: display.id }
   } catch {
     return null
   }
@@ -181,7 +199,8 @@ export function startActiveWindowMonitor(onChange: (info: ActiveWindowInfo | nul
         : previous === null ||
           current.title !== previous.title ||
           current.isFullscreen !== previous.isFullscreen ||
-          current.exeName !== previous.exeName
+          current.exeName !== previous.exeName ||
+          current.displayId !== previous.displayId
 
     if (changed) {
       previous = current

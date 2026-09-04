@@ -22,7 +22,8 @@
       "pendingCountThreshold": 100, 
       "oldestPendingAgeMinutes": 120, 
       "messageCountThreshold": 50, 
-      "lockScreenMinutes": 60 
+      "lockScreenMinutes": 60, 
+      "minMessagesForLockTrigger": 4
     }, 
     "contextBudget": { 
       "total": 8000, 

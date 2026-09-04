@@ -3,7 +3,12 @@ import { join, basename } from 'path'
 import { readFile, stat } from 'fs/promises'
 import { is } from '@electron-toolkit/utils'
 import { startActiveWindowMonitor } from './activeWindowMonitor'
-import { initWindowBehaviorConfig, updateCachedWindowBehaviorConfig, handleActiveWindowChange } from './windowBehavior'
+import {
+  initWindowBehaviorConfig,
+  updateCachedWindowBehaviorConfig,
+  handleActiveWindowChange,
+  handleWindowMoved
+} from './windowBehavior'
 
 // startActiveWindowMonitor 返回的清理函数（clearInterval）——挂到 will-quit，避免这个
 // 500ms 轮询器的生命周期问题被"反正 app.quit() 会强杀进程"这个事实悄悄掩盖
@@ -85,6 +90,7 @@ async function applyIconFromCurrentPreset(): Promise<void> {
     if (generation !== iconGeneration) return
     mainWindow?.setIcon(image)
     overlayWindow?.setIcon(image)
+    settingsWindow?.setIcon(image)
     tray?.setImage(image)
   } catch (err) {
     console.error('[Icon] Failed to apply icon from current preset:', err)
@@ -222,6 +228,12 @@ async function handlePinModeClick(pinMode: PinMode): Promise<void> {
 // setImage（见上方该函数末尾），这里不重复计算一份
 function createTray(): void {
   tray = new Tray(nativeImage.createEmpty())
+  // 双击托盘图标打开/恢复聊天窗口，跟右键菜单"打开聊天窗口"项完全同样的动作——.show() 对
+  // 已最小化的窗口也会一并恢复，不需要额外判断
+  tray.on('double-click', () => {
+    mainWindow?.show()
+    mainWindow?.focus()
+  })
   rebuildTrayMenu()
 }
 
@@ -291,6 +303,23 @@ ipcMain.handle('select-exe-file', async () => {
   return { filename: basename(result.filePaths[0]) }
 })
 
+// 问题3（buzzing-frolicking-eich.md）：把 win 定位到聊天窗口当前所在显示器的居中位置——
+// mainWindow 为空/已销毁时退回主显示器。用 win 自己当前的宽高（不强改尺寸），只算居中坐标。
+// createSettingsWindow() 与 open-settings-window 的复用分支共用这一个小函数，两条路径都
+// 可能让设置窗口停留在聊天窗口所在屏幕之外的另一块显示器上（新建时从不指定位置；复用时
+// 用户可能手动把它拖去了别的屏幕）
+function positionOnChatDisplay(win: BrowserWindow): void {
+  const display = mainWindow && !mainWindow.isDestroyed()
+    ? screen.getDisplayMatching(mainWindow.getBounds())
+    : screen.getPrimaryDisplay()
+  const { x: workAreaX, y: workAreaY, width: workAreaWidth, height: workAreaHeight } = display.workArea
+  const [winWidth, winHeight] = win.getSize()
+  win.setPosition(
+    Math.round(workAreaX + (workAreaWidth - winWidth) / 2),
+    Math.round(workAreaY + (workAreaHeight - winHeight) / 2)
+  )
+}
+
 let settingsWindow: BrowserWindow | null = null
 
 function createSettingsWindow(): BrowserWindow {
@@ -303,6 +332,8 @@ function createSettingsWindow(): BrowserWindow {
       sandbox: false
     }
   })
+
+  positionOnChatDisplay(win)
 
   win.on('ready-to-show', () => {
     win.show()
@@ -321,9 +352,16 @@ function createSettingsWindow(): BrowserWindow {
   return win
 }
 
-// 记忆管理数据随时间变化，重开窗口应该拉新数据，不做隐藏保留——已存在且未销毁时只 focus
+// 记忆管理数据随时间变化，重开窗口应该拉新数据，不做隐藏保留——已存在且未销毁时先挪回
+// 聊天窗口所在显示器再 focus：设置窗口若停留在聊天窗口所在屏幕之外的另一块显示器上，
+// 只 focus() 只是把它带到最前面，但仍在用户视线之外的那块屏幕，看起来就像"点了没反应"
 ipcMain.handle('open-settings-window', () => {
   if (settingsWindow && !settingsWindow.isDestroyed()) {
+    positionOnChatDisplay(settingsWindow)
+    if (settingsWindow.isMinimized()) {
+      settingsWindow.restore()
+    }
+    settingsWindow.show()
     settingsWindow.focus()
     return
   }
@@ -377,6 +415,13 @@ function createOverlayWindow(): BrowserWindow {
     overlayWindow = null
   })
 
+  // 问题1（buzzing-frolicking-eich.md）：用户真实拖动悬浮窗时，把拖动后的位置写回持久化
+  // 偏好表（见 windowBehavior.ts handleWindowMoved 的判定逻辑）。悬浮窗当前 resizable:
+  // false 且没有暴露拖动交互，这个监听器目前"装着但触发不到"，以后支持拖动直接生效
+  win.on('moved', () => {
+    handleWindowMoved('overlay', win)
+  })
+
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/overlay/index.html`)
   } else {
@@ -388,11 +433,52 @@ function createOverlayWindow(): BrowserWindow {
 
 let mainWindow: BrowserWindow | null = null
 
+// 聊天窗口标题栏 chrome 常量（TDD §3.7 附「聊天栏 chrome 模型」，批次一）。颜色硬编码，
+// 不接 displayConfig 动态下发——那是批次二的事。
+//
+// color 改为完全透明（alpha = 00）：此前 alpha 0.40 的原生底色与 .chat-titlebar 自绘的
+// rgba(15,15,20,0.40) + backdrop-filter 各自独立绘制、互不叠加（.chat-titlebar 当时用
+// width 收窄到按钮条带以外，见 src/chat/chat.css 里的历史注释），代价是按钮条带底下
+// 没有毛玻璃、能看出一条「毛玻璃 vs 清晰」的接缝。现在反过来：原生层透明、不贡献任何
+// 底色，.chat-titlebar 改回满宽，让它的背景与 backdrop-filter 铺满整条标题栏（包括
+// 按钮条带底下），按钮符号直接画在自绘的毛玻璃上，接缝消失，也不再需要两层 alpha 保持
+// 一致。RGB 分量在 alpha=0 时不可见，仍写 0f0f14 只是留个可读的锚点、便于日后再调 alpha
+// 时有个对照值——它没有任何防御作用：真要是 alpha=0 被当成"未设置"，Electron 回落的是
+// 它自己的系统默认色，根本不会来读这里的 RGB 分量。
+//
+// 已知风险，待实机验证（不在本次改动范围内解决）：
+// 1) alpha=0 是否被 Electron/Chromium 视为合法值而非"未设置"进而回落系统默认色——
+//    electron#38693（2023 合入）修的是"非完全不透明颜色被强制渲染成不透明"，针对的是
+//    0 < alpha < 255 的情形，没有直接证据覆盖 alpha = 0 这个边界值，需实机确认按钮条带
+//    确实变透明而非变回系统默认色。
+// 2) hover/按下态是否仍可见——原生按钮的 hover 高亮是独立于 color 的绘制层，
+//    electron#38431、electron#48193 记录过这块的渲染缺陷，是本次改动风险最高的一点，
+//    必须目视确认交互态可感知。
+const TITLEBAR_OVERLAY_COLOR = '#0f0f1400'
+const TITLEBAR_OVERLAY_SYMBOL_COLOR = '#e8e8f0'
+// 只能加高，不能压矮：Electron 的 WinFrameView::TitlebarHeight() 里是
+// `if (custom_height > TitlebarMaximizedVisualHeight())`，阈值是运行时的
+// `GetSystemMetricsInDIP(SM_CYCAPTION)`，随机器 DPI/文字缩放变化。本机实测 16 DIP，
+// 故 25 有效；在系统标题栏为 32 DIP 的机器上 25 会被静默忽略，且因为
+// `env(titlebar-area-height)` 走的是不过阈值的另一条路径，会出现「自绘区 25px、
+// 按钮条带 32px」的台阶。该值必须与 src/chat/chat.css 里 .chat-titlebar 的 height 一致。
+// 即便过了 DIP 阈值，生效值实际是 `custom_height - WindowTopY()`（非最大化时 WindowTopY()
+// 通常是 1-2px 上边框偏移），而 `env(titlebar-area-height)` 返回的是未减去该偏移的原始值，
+// 所以原生条带可能比 CSS 高度矮 1-2px，需目视确认是否可察觉
+const TITLEBAR_OVERLAY_HEIGHT = 25
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 390,
     height: 700,
     show: false,
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: TITLEBAR_OVERLAY_COLOR,
+      symbolColor: TITLEBAR_OVERLAY_SYMBOL_COLOR,
+      height: TITLEBAR_OVERLAY_HEIGHT
+    },
+    maximizable: false,
     webPreferences: {
       preload: PRELOAD_PATH,
       sandbox: false
@@ -415,6 +501,12 @@ function createWindow() {
 
   win.on('focus', () => {
     overlayWindow?.hide()
+  })
+
+  // 问题1（buzzing-frolicking-eich.md）：用户真实拖动聊天窗口时，把拖动后的位置写回
+  // 持久化偏好表（见 windowBehavior.ts handleWindowMoved 的判定逻辑）
+  win.on('moved', () => {
+    handleWindowMoved('chat', win)
   })
 
   // 关闭按钮不再销毁窗口：跟托盘"退出"区分开（isQuitting），聊天窗口关闭跟最小化一样

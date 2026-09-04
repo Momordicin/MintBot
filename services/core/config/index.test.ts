@@ -548,4 +548,26 @@ describe('config/index — updateWindowBehaviorConfig', () => {
     // 故意不触发 chokidar 的 'change' 回调——同步更新内存态不能依赖它
     expect(getWindowBehaviorConfig().pinMode).toBe('always-on-top')
   })
+
+  // 回归用例：磁盘上的 windowBehavior section 本身就残缺（只有 pinMode，缺
+  // fullscreenWhitelist/blacklist——例如手改 config.json 或旧版本写入的文件），此时 PATCH
+  // 单个字段不应该让返回值/写回内容丢失另外两个数组字段。合并起点若误用 readRawSection
+  // （磁盘原始内容，未补默认值）而非 getWindowBehaviorConfig()（已补默认值的当前配置），
+  // 这两个数组字段会从 merged 里消失，被写回磁盘并同步进内存缓存，广播出去后导致主进程
+  // fullscreenWhitelist.some(...) 在 undefined 上抛错
+  it('磁盘上的 windowBehavior 缺 fullscreenWhitelist/blacklist 时，PATCH pinMode 后返回值与写回内容仍补全两个数组字段', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      windowBehavior: { pinMode: 'dodge-fullscreen' },
+    }))
+    const { updateWindowBehaviorConfig, CONFIG_PATH } = await import('./index.js')
+
+    const result = updateWindowBehaviorConfig({ pinMode: 'always-on-top' })
+
+    expect(result).toEqual({ pinMode: 'always-on-top', fullscreenWhitelist: [], blacklist: [] })
+
+    const [tempPath, written] = writeFileSyncMock.mock.calls[0]
+    expect(tempPath).not.toBe(CONFIG_PATH)
+    const writtenJson = JSON.parse(written as string)
+    expect(writtenJson.windowBehavior).toEqual({ pinMode: 'always-on-top', fullscreenWhitelist: [], blacklist: [] })
+  })
 })
