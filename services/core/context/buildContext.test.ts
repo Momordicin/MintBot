@@ -335,22 +335,24 @@ describe('buildContext — 输出契约块（Part C，TDD §3.9/§3.7）', () =>
   })
 
   it('角色包声明 emotionVocabulary/emoteTagVocabulary 时，system 包含对应枚举行', async () => {
+    // 用 example（git 内唯一提交、schema v2 全字段的角色包 fixture），不用真实的
+    // Aemeath/Mint——那两个是 gitignore 掉的本地专属文件夹，CI/全新 clone 上不存在
     upsertPreset({
-      presetId: 'p-aemeath',
-      name: 'Aemeath 测试',
-      characterId: 'Aemeath',
+      presetId: 'p-vocab',
+      name: '词表测试',
+      characterId: 'example',
       modelType: 'ollama',
       modelName: 'qwen3',
-      systemPrompt: '你是 Aemeath',
+      systemPrompt: '你是示例角色',
     })
-    loadSession('p-aemeath')
+    loadSession('p-vocab')
 
     const ctx = await buildContext('你好', { embedding: fakeEmbeddingProvider() })
 
     expect(ctx.system).toContain('可用的情绪标签')
-    expect(ctx.system).toContain('idle、happy、shy、playful、sleep、confused')
+    expect(ctx.system).toContain('idle、happy、sad、curious、angry、surprised、shy')
     expect(ctx.system).toContain('可用的表情 tag')
-    expect(ctx.system).toContain('excited、performing、comforting')
+    expect(ctx.system).toContain('excited、comforting')
   })
 
   it('preset.addressForms 非空时，system 包含称呼候选行', async () => {

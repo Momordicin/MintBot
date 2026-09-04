@@ -1,3 +1,47 @@
 {
-    "avatar": "avatar.png"
+  "schemaVersion": 2,
+  "name": "example",
+  "displayName": "示例角色",
+  "description": "示例角色包，展示 manifest schema v2 的完整字段结构，供开发者参考；不含真实立绘/表情包素材",
+  "tags": ["示例", "占位"],
+  "creator": "",
+  "version": "1.0",
+  "creatorNotes": "",
+  "avatar": "avatar.png",
+  "userAvatar": "",
+
+  "emotionVocabulary": ["idle", "happy", "sad", "curious", "angry", "surprised", "shy"],
+  "emoteTagVocabulary": ["excited", "comforting"],
+
+  "portraits": {
+    "pixel": {
+      "fallback": "idle",
+      "emotions": {
+        "idle":  ["gifs/idle1.gif", "gifs/idle2.gif"],
+        "happy": ["gifs/happy1.gif"]
+      }
+    },
+    "illustration": {
+      "fallback": "idle",
+      "emotions": {
+        "idle":  ["full-body.png"],
+        "happy": ["half-body.png"]
+      }
+    }
+  },
+
+  "interactionStates": {
+    "drag": "gifs/drag.gif",
+    "move": "gifs/move.gif"
+  },
+
+  "reservedStates": {
+    "thinking":           ["gifs/thinking.gif"],
+    "listening-to-music": ["gifs/music.gif"],
+    "boredom-idle":       ["gifs/boredom.gif"]
+  },
+
+  "emotePool": [
+    { "file": "emotes/example.jpg", "tags": ["excited"] }
+  ]
 }
