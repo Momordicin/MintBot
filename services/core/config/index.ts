@@ -205,9 +205,13 @@ function ensureLoaded(): void {
 
 // 加载一次（同步，返回前完成）后再启动 chokidar 监听；onReload 只在文件变化触发的
 // 重新加载真正成功（config.json 本身读取+解析成功，不管字段级别是否有回退）之后才调用，
-// 供调用方（index.ts）在 modelProvider 等派生状态需要跟着重建时挂钩
+// 供调用方（index.ts）在 modelProvider 等派生状态需要跟着重建时挂钩。
+// 用 ensureLoaded() 而不是无条件 load()：调用方（index.ts）在这之前已经调过
+// getModelProviderConfig() 触发过一次真正的加载，这里如果无条件再 load() 一次，
+// 会把 config.json 重新解析一遍、把同一批字段级警告日志重复打印一遍——ensureLoaded()
+// 只在真的还没加载过时才去读文件，语义（"设置监听前配置一定已加载"）不变
 export function startConfigWatcher(onReload?: () => void): void {
-  load()
+  ensureLoaded()
   chokidar.watch(CONFIG_PATH).on('change', () => {
     console.log('[Config] Reloading config.json...')
     if (load()) onReload?.()
@@ -324,9 +328,17 @@ export function updateBackgroundModelProviderConfig(partial: Partial<ModelConfig
 }
 
 // 悬浮窗行为策略写入：partial 已经在路由层校验过（pinMode 合法值、数组元素为字符串），
-// 这里只负责合并 + 落盘，同上两个 update* 函数一样立即同步内存态，不等 chokidar 的异步 reload
+// 这里只负责合并 + 落盘，同上两个 update* 函数一样立即同步内存态，不等 chokidar 的异步 reload。
+// 合并起点必须用 getWindowBehaviorConfig()（已经过 mergeWindowBehaviorConfig 补齐默认值的
+// 当前配置），不能像 updateModelProviderConfig 那样直接用 readRawSection('windowBehavior')——
+// modelProvider 没有字段级默认值合并逻辑，磁盘原始内容本身就是权威态；但 windowBehavior 的
+// 读取路径会给 pinMode/fullscreenWhitelist/blacklist 各自补默认值，磁盘上的 section 可能
+// 残缺（例如手改/旧版本只留了 pinMode）。若合并起点用 readRawSection，残缺字段会直接从
+// merged 里消失，被写回磁盘、同步进 currentWindowBehaviorConfig，再经 broadcastEvent 发给
+// 主进程，导致 electron/main/windowBehavior.ts 里 fullscreenWhitelist.some(...) 拿到
+// undefined 而抛出 uncaughtException（设置页白屏的直接原因）
 export function updateWindowBehaviorConfig(partial: Partial<WindowBehaviorConfig>): WindowBehaviorConfig {
-  const merged = { ...readRawSection('windowBehavior'), ...partial } as WindowBehaviorConfig
+  const merged = { ...getWindowBehaviorConfig(), ...partial } as WindowBehaviorConfig
   // 后端兜底去重：渲染层的"添加"流程虽然已经检查过 includes()，但这是并发写入下唯一
   // 真正权威的一道关卡——写入的数组里如果混进重复文件名，React 列表按值当 key 会撞车，
   // 删除操作也会一次性把重复项全部删掉而不是删单条，在这里去重从根源上杜绝这种情况
