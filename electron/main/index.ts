@@ -3,7 +3,12 @@ import { join, basename } from 'path'
 import { readFile, stat } from 'fs/promises'
 import { is } from '@electron-toolkit/utils'
 import { startActiveWindowMonitor } from './activeWindowMonitor'
-import { initWindowBehaviorConfig, updateCachedWindowBehaviorConfig, handleActiveWindowChange } from './windowBehavior'
+import {
+  initWindowBehaviorConfig,
+  updateCachedWindowBehaviorConfig,
+  handleActiveWindowChange,
+  handleWindowMoved
+} from './windowBehavior'
 
 // startActiveWindowMonitor 返回的清理函数（clearInterval）——挂到 will-quit，避免这个
 // 500ms 轮询器的生命周期问题被"反正 app.quit() 会强杀进程"这个事实悄悄掩盖
@@ -85,6 +90,7 @@ async function applyIconFromCurrentPreset(): Promise<void> {
     if (generation !== iconGeneration) return
     mainWindow?.setIcon(image)
     overlayWindow?.setIcon(image)
+    settingsWindow?.setIcon(image)
     tray?.setImage(image)
   } catch (err) {
     console.error('[Icon] Failed to apply icon from current preset:', err)
@@ -222,6 +228,12 @@ async function handlePinModeClick(pinMode: PinMode): Promise<void> {
 // setImage（见上方该函数末尾），这里不重复计算一份
 function createTray(): void {
   tray = new Tray(nativeImage.createEmpty())
+  // 双击托盘图标打开/恢复聊天窗口，跟右键菜单"打开聊天窗口"项完全同样的动作——.show() 对
+  // 已最小化的窗口也会一并恢复，不需要额外判断
+  tray.on('double-click', () => {
+    mainWindow?.show()
+    mainWindow?.focus()
+  })
   rebuildTrayMenu()
 }
 
@@ -291,6 +303,23 @@ ipcMain.handle('select-exe-file', async () => {
   return { filename: basename(result.filePaths[0]) }
 })
 
+// 问题3（buzzing-frolicking-eich.md）：把 win 定位到聊天窗口当前所在显示器的居中位置——
+// mainWindow 为空/已销毁时退回主显示器。用 win 自己当前的宽高（不强改尺寸），只算居中坐标。
+// createSettingsWindow() 与 open-settings-window 的复用分支共用这一个小函数，两条路径都
+// 可能让设置窗口停留在聊天窗口所在屏幕之外的另一块显示器上（新建时从不指定位置；复用时
+// 用户可能手动把它拖去了别的屏幕）
+function positionOnChatDisplay(win: BrowserWindow): void {
+  const display = mainWindow && !mainWindow.isDestroyed()
+    ? screen.getDisplayMatching(mainWindow.getBounds())
+    : screen.getPrimaryDisplay()
+  const { x: workAreaX, y: workAreaY, width: workAreaWidth, height: workAreaHeight } = display.workArea
+  const [winWidth, winHeight] = win.getSize()
+  win.setPosition(
+    Math.round(workAreaX + (workAreaWidth - winWidth) / 2),
+    Math.round(workAreaY + (workAreaHeight - winHeight) / 2)
+  )
+}
+
 let settingsWindow: BrowserWindow | null = null
 
 function createSettingsWindow(): BrowserWindow {
@@ -303,6 +332,8 @@ function createSettingsWindow(): BrowserWindow {
       sandbox: false
     }
   })
+
+  positionOnChatDisplay(win)
 
   win.on('ready-to-show', () => {
     win.show()
@@ -321,9 +352,16 @@ function createSettingsWindow(): BrowserWindow {
   return win
 }
 
-// 记忆管理数据随时间变化，重开窗口应该拉新数据，不做隐藏保留——已存在且未销毁时只 focus
+// 记忆管理数据随时间变化，重开窗口应该拉新数据，不做隐藏保留——已存在且未销毁时先挪回
+// 聊天窗口所在显示器再 focus：设置窗口若停留在聊天窗口所在屏幕之外的另一块显示器上，
+// 只 focus() 只是把它带到最前面，但仍在用户视线之外的那块屏幕，看起来就像"点了没反应"
 ipcMain.handle('open-settings-window', () => {
   if (settingsWindow && !settingsWindow.isDestroyed()) {
+    positionOnChatDisplay(settingsWindow)
+    if (settingsWindow.isMinimized()) {
+      settingsWindow.restore()
+    }
+    settingsWindow.show()
     settingsWindow.focus()
     return
   }
@@ -375,6 +413,13 @@ function createOverlayWindow(): BrowserWindow {
 
   win.on('closed', () => {
     overlayWindow = null
+  })
+
+  // 问题1（buzzing-frolicking-eich.md）：用户真实拖动悬浮窗时，把拖动后的位置写回持久化
+  // 偏好表（见 windowBehavior.ts handleWindowMoved 的判定逻辑）。悬浮窗当前 resizable:
+  // false 且没有暴露拖动交互，这个监听器目前"装着但触发不到"，以后支持拖动直接生效
+  win.on('moved', () => {
+    handleWindowMoved('overlay', win)
   })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
@@ -456,6 +501,12 @@ function createWindow() {
 
   win.on('focus', () => {
     overlayWindow?.hide()
+  })
+
+  // 问题1（buzzing-frolicking-eich.md）：用户真实拖动聊天窗口时，把拖动后的位置写回
+  // 持久化偏好表（见 windowBehavior.ts handleWindowMoved 的判定逻辑）
+  win.on('moved', () => {
+    handleWindowMoved('chat', win)
   })
 
   // 关闭按钮不再销毁窗口：跟托盘"退出"区分开（isQuitting），聊天窗口关闭跟最小化一样

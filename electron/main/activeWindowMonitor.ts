@@ -55,7 +55,11 @@ const GWL_STYLE = -16
 const WS_CAPTION = 0xc00000
 const WS_THICKFRAME = 0x40000
 
-export type ActiveWindowInfo = { title: string; isFullscreen: boolean; exeName: string | null }
+// displayId 不设 null：函数内部从 GetForegroundWindow 拿到 hwnd 之后，唯一的显示器解析点
+// screen.getDisplayMatching(dipRect) 在构造最终返回值之前必定已经跑过（用于 isFullscreen
+// 判断），中途任何一步失败都会提前 return null（走的是 ActiveWindowInfo | null 的 null
+// 分支），不会出现"ActiveWindowInfo 非空但 displayId 未解析"的情况
+export type ActiveWindowInfo = { title: string; isFullscreen: boolean; exeName: string | null; displayId: number }
 
 // 拿前台窗口 handle 反查它所属进程的 exe 文件名（不含路径，如 "chrome.exe"）。任何一步
 // 失败（拿不到 pid、OpenProcess 权限不足、查询失败）都返回 null，不影响调用方已经拿到
@@ -170,7 +174,7 @@ export function getActiveWindowInfo(): ActiveWindowInfo | null {
       return null
     }
 
-    return { title, isFullscreen, exeName }
+    return { title, isFullscreen, exeName, displayId: display.id }
   } catch {
     return null
   }
@@ -195,7 +199,8 @@ export function startActiveWindowMonitor(onChange: (info: ActiveWindowInfo | nul
         : previous === null ||
           current.title !== previous.title ||
           current.isFullscreen !== previous.isFullscreen ||
-          current.exeName !== previous.exeName
+          current.exeName !== previous.exeName ||
+          current.displayId !== previous.displayId
 
     if (changed) {
       previous = current
