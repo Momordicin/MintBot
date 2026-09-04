@@ -37,10 +37,10 @@ craft.ts
 # 业务资源目录 / Business resource directory
 /data
 /assets/characters/*
-!/assets/characters/.gitkeep
 !/assets/characters/example/
 /assets/system/models
-/docs
+/docs/*
+!/docs/i18n/
 # 插件目录 / Plugins directory
 /plugins/*
 !/plugins/__init__.py

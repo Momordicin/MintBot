@@ -11,157 +11,174 @@
   <img src="https://img.shields.io/github/last-commit/Momordicin/MintBot" />
 </p>
 
-一个运行在本地的 AI 角色伴侣桌面应用。支持自定义角色设定，语音对话，桌面悬浮窗，以及长期记忆。数据完全留在本机，隐私优先。
+<p align="center">English | <a href="docs/i18n/README.zh-CN.md">简体中文</a></p>
 
-> ⚠️ 目前仅支持 Windows，macOS 暂不兼容
-
----
-
-## 功能特性
-
-**对话**
-- 与自定义 AI 角色实时对话，"对方输入中"动效 + 完整消息一次性显示，类即时通讯体验
-- 消息历史完整留存，支持向上滑动分页加载更早的对话
-
-**桌面悬浮窗**（Phase 3，规划中，尚未实现）
-- 聊天窗口最小化后自动切换至桌面悬浮窗，后台常驻
-- 根据活跃窗口自动置顶 / 隐藏 / 跳屏
-- 角色立绘根据情绪标签实时切换（支持 GIF 动图和静态图片）
-
-**语音**（Phase 4，规划中，尚未实现）
-- 语音输入（faster-whisper ASR）
-- 语音回复（GPT-SoVITS v2，流式合成，首句即播）
-- 多段回复：模型输出按句子边界切分推送，模拟真实对话节奏，与流式 TTS 管线配合实现
-- 情绪标签指导语音语调
-
-**记忆系统**
-- 双轨记忆：近期对话直接注入 context，历史对话 RAG 召回
-- bge-m3 向量 embedding，sqlite-vec 本地索引
-- 自动摘要压缩，实体聚合
-- 情绪状态引擎（Phase 2 基础版）：当前仅实现角色自身（self）情绪的解析与持久化；感知用户情绪（perceived_user）为占位设计，完整的双向情绪模型（self 与 perceived_user 互相影响）为后续规划
-
-**人机交互**（Phase 5 / 6，规划中，尚未实现）
-- 本地系统操作：启动应用、调整音量、截图等
-- MCP 扩展接口（预留）
-- 主动对话调度器：定时、事件、情绪阈值触发
-
-**手机端**（Phase 7，规划中，尚未实现）
-- 通过 Cloudflare Tunnel 访问本地服务
-- 与桌面端共享会话，实时同步
+A locally-run AI character companion desktop app. Supports custom character personas, voice conversation, a desktop overlay window, and long-term memory. All data stays on your machine — privacy first.
 
 ---
 
-## 技术栈
+## Features
 
-| 层级 | 技术选型 |
+**Chat**
+- Real-time conversation with a custom AI character — "typing" animation followed by the full message shown at once, an instant-messaging-style experience
+- Full message history retention, with infinite-scroll-up pagination for older conversations
+
+**Desktop overlay** (Phase 3, implemented)
+- Automatically switches to an independent, transparent-background overlay window when the chat window is minimized or closed; character portrait switches in real time based on emotion tags (supports both animated GIF and static images)
+- Auto pin-on-top / hide / jump to another display based on the currently active window, with configurable fullscreen whitelist/blacklist
+- Enters a rest mode on lock screen / screen-off: switches to a sleeping portrait, pauses input monitoring, and preserves conversation context
+- Persists in the system tray in the background; double-click the tray icon to bring up the chat window
+
+**Voice** (Phase 4, in progress)
+- Voice input (faster-whisper ASR)
+- Voice replies (GPT-SoVITS v2, streaming synthesis — playback starts on the first sentence)
+- Multi-part replies: model output is split at sentence boundaries and pushed incrementally to mimic natural conversation pacing, paired with the streaming TTS pipeline
+- Emotion tags guide vocal tone
+
+**Memory system**
+- Dual-track memory: recent conversation is injected directly into context, older conversation is retrieved via RAG
+- bge-m3 vector embeddings, local sqlite-vec indexing
+- Automatic summary compression, entity aggregation
+- Emotion state engine (Phase 2 baseline): currently only the character's own (self) emotion is parsed and persisted; perceived user emotion (perceived_user) is a placeholder design — a full bidirectional emotion model (self and perceived_user influencing each other) is planned for later
+
+**Human-computer interaction** (Phase 5 / 6, planned — not yet implemented)
+- Local system actions: launching apps, adjusting volume, taking screenshots, etc.
+- MCP extension interface (reserved)
+- Proactive conversation scheduler: triggered by schedule, events, or emotion thresholds
+
+**Mobile** (Phase 7, planned — not yet implemented)
+- Access the local service via Cloudflare Tunnel
+- Shares sessions with the desktop client, synced in real time
+
+---
+
+## Tech stack
+
+| Layer | Technology |
 |---|---|
-| 桌面框架 | Electron + React |
-| 核心服务 | Node.js + Fastify（PM2 守护） |
-| 模型调用 | @anthropic-ai/sdk / OpenAI API / Ollama |
-| 本地模型 | Ollama（可选，Qwen3 / ChatGLM 等） |
-| ASR | faster-whisper（Python HTTP 服务） |
-| TTS | GPT-SoVITS v2（Python HTTP 服务） |
-| Embedding | bge-m3（Python HTTP 服务） |
-| 数据库 | SQLite + sqlite-vec |
+| Desktop framework | Electron + React |
+| Core service | Node.js + Fastify (PM2-managed) |
+| Model calls | @anthropic-ai/sdk / OpenAI API / Ollama |
+| Local model | Ollama (optional, Qwen3 / ChatGLM etc.) |
+| ASR | faster-whisper (Python HTTP service) |
+| TTS | GPT-SoVITS v2 (Python HTTP service) |
+| Embedding | bge-m3 (Python HTTP service) |
+| Database | SQLite + sqlite-vec |
+| Chinese FTS tokenizer | libsimple ([wangfenjin/simple](https://github.com/wangfenjin/simple), prebuilt binary + jieba dictionary) |
 | Win32 FFI | koffi |
-| 配置热生效 | chokidar |
+| Config hot-reload | chokidar |
 
-模型调用支持外部 API（Anthropic / OpenAI）和本地 Ollama，由配置文件决定。数据完全留在本机，不依赖任何云端存储。
-
----
-
-## 开发阶段
-
-- [x] Phase 1：核心对话链路
-- [x] Phase 2：记忆系统
-- [ ] Phase 3：悬浮窗 + 窗口管理
-- [ ] Phase 4：语音
-- [ ] Phase 5：人机交互工具 + MCP
-- [ ] Phase 6：主动对话调度器
-- [ ] Phase 7：手机端 + 收尾
+Model calls support both external APIs (Anthropic / OpenAI) and local Ollama, determined by the config file. All data stays on your machine — no dependency on any cloud storage.
 
 ---
 
-## 快速开始
+## Development stages
 
-> 环境要求和部署文档正在完善中。
+- [x] Phase 1: Core chat pipeline
+- [x] Phase 2: Memory system
+- [x] Phase 3: Overlay window + window management
+- [ ] Phase 4: Voice
+- [ ] Phase 5: Human-computer interaction tools + MCP
+- [ ] Phase 6: Proactive conversation scheduler
+- [ ] Phase 7: Mobile client + wrap-up
 
-**前置依赖**
+---
+
+## Getting started
+
+> Environment requirements and deployment docs are still being written.
+> ⚠️ Windows only for now; macOS is not yet supported.
+
+**Prerequisites**
 - Node.js 20+
-- pnpm（版本见 `package.json`）
+- pnpm (version per `package.json`)
 - Python 3.10+
-- （可选）Ollama 或 OpenAI / Anthropic API Key 二选一
+- (Optional) either Ollama or an OpenAI / Anthropic API key
 
 ```bash
-# 克隆仓库
+# Clone the repo
 git clone https://github.com/Momordicin/MintBot.git
 cd MintBot
 
-# 安装依赖
+# Install dependencies
 pnpm install
 
-# 复制配置文件
+# Download and restore the SQLite FTS Chinese tokenizer extension (libsimple — a prebuilt
+# binary + jieba dictionary from wangfenjin/simple, ~16MB, not committed to the repo). Run
+# this once after cloning; it must complete before `pnpm seed` / the core service's first run,
+# or Chinese full-text-search index initialization will fail.
+pnpm setup:vendor
+
+# Copy config files
 cp .env.example .env
 cp config.example.json config.json
-# 编辑 config.json，填入 API Key 或配置本地 Ollama
-# 注意：config.json 里的 security 字段（encryptSensitiveFields / encryptionAlgorithm /
-# keyStorage）目前还没有真正接入——是否加密敏感字段实际由 .env 里的 ENCRYPT_SENSITIVE_FIELDS
-# 和 DB_ENCRYPTION_KEY 决定，config.json 的这几个字段只是 TDD 里记录的目标设计，尚未生效
-# 另外可选加一个 backgroundModelProvider 字段（结构同 modelProvider）：不配置时整理模式
-# （摘要生成、实体抽取）沿用 modelProvider 的模型；配置了则用独立模型，方便前台用便宜快的
-# 模型、后台摘要/实体抽取用更强的模型
-# 若使用 DeepSeek：type 填 "deepseek"，deepseekBaseUrl 留空默认使用 https://api.deepseek.com，
-# 模型名用 deepseek-v4-flash / deepseek-v4-pro（DeepSeek 是独立的一等公民 provider 类型，
-# 有自己的 deepseekApiKey/deepseekBaseUrl，与 openai 类型的凭据互不共享）
+# Edit config.json: fill in an API key, or configure local Ollama
+# Note: the `security` fields in config.json (encryptSensitiveFields / encryptionAlgorithm /
+# keyStorage) aren't actually wired up yet — whether sensitive fields get encrypted is
+# currently controlled by ENCRYPT_SENSITIVE_FIELDS and DB_ENCRYPTION_KEY in .env. Those
+# config.json fields are just the target design recorded in the TDD and aren't in effect yet.
+# You can also optionally add a `backgroundModelProvider` field (same shape as
+# `modelProvider`): if omitted, background "housekeeping" tasks (summary generation, entity
+# extraction) reuse the `modelProvider` model; if configured, they use a separate model — handy
+# for using a cheap/fast model for the foreground and a stronger model for background
+# summarization/entity extraction.
+# To use DeepSeek: set `type` to "deepseek"; leave `deepseekBaseUrl` empty to default to
+# https://api.deepseek.com; model names are deepseek-v4-flash / deepseek-v4-pro (DeepSeek is
+# its own first-class provider type with its own deepseekApiKey/deepseekBaseUrl, and does not
+# share credentials with the "openai" provider type).
 
-# 初始化数据库（幂等写入测试 preset，首次运行必须执行）
+# Initialize the database (idempotent — writes a test preset; required on first run)
 pnpm seed
 
-# 初始化 Python AI 服务的虚拟环境（services/ai，ASR/TTS/Embedding 等本地模型服务）
-# 假设本机 PATH 上已有 python 命令（Python 3.10+）；首次 clone 后需要跑一次，
-# 之后 requirements.txt 有更新时重新跑一次即可同步依赖。这一步除了装 Python 依赖，
-# 还会预先下载 bge-m3 + bert4ner 模型权重（bge-m3 完整仓库约 4.59GB），首次运行视网络
-# 情况可能要等一段时间，权重会缓存在本地（~/.cache/huggingface/），之后重跑这一步会很快
+# Set up the Python AI service's virtual environment (services/ai — local ASR/TTS/Embedding
+# model services). Assumes a `python` command (Python 3.10+) is already on PATH. Run this once
+# after first cloning, and again whenever requirements.txt changes to sync dependencies. Besides
+# installing Python dependencies, this step also pre-downloads the bge-m3 + bert4ner model
+# weights (the full bge-m3 repo is about 4.59GB) — the first run may take a while depending on
+# your network, but the weights are cached locally (~/.cache/huggingface/) so subsequent runs
+# are fast.
 pnpm setup:ai
 
-# 启动核心服务（Fastify，独立进程）
-# 开发阶段：pnpm dev:core
-# 生产环境：先编译再用 pm2 常驻（pnpm start:core 就是 pm2 start ecosystem.config.cjs，
-# 依赖 out/core/index.js，跳过 build:core 会直接报错找不到文件）
-# 生产环境：Windows 用户首次运行需要管理员权限，之后 pm2 stop mintbot-core; pm2 kill; 最后就可以在普通终端运行了
+# Start the core service (Fastify, its own process)
+# Development: pnpm dev:core
+# Production: build first, then run persistently via pm2 (pnpm start:core just runs
+# `pm2 start ecosystem.config.cjs`, which depends on out/core/index.js — skipping build:core
+# will fail immediately with a missing-file error)
+# Production: on Windows, the first run needs administrator privileges; after that,
+# `pm2 stop mintbot-core; pm2 kill` and you can run it from a regular terminal going forward
 pnpm build:core
 pnpm start:core
 
-# 启动桌面应用（Electron + React）
+# Start the desktop app (Electron + React)
 pnpm dev
 ```
 
-Python AI 服务（services/ai，ASR / TTS / Embedding 等本地模型服务）由核心服务自动启停：`pnpm start:core` / `pnpm dev:core` 启动核心服务时，如果检测到 AI 服务还没在运行会自动拉起对应的 `.venv` 中的进程，退出核心服务时一并停掉本次由它自己启动的实例，不需要再手动跑 `pnpm dev:ai`。`pnpm dev:ai` 仍然保留，供需要热重载调试 Python 代码时手动启动使用——核心服务检测到它已经在跑就不会重复启动，但也不会在退出时帮你停掉这个手动启动的实例（需要自己 Ctrl+C）。这个"检测到已在运行"的判断依赖两边用同一个端口：`pnpm dev:ai` 目前硬编码 `--port 8765`，不读 `.env` 里的 `AI_PORT`，如果你改了 `AI_PORT` 又想用 `dev:ai` 热重载调试，需要手动把端口对齐，否则核心服务会以为没人在跑而额外启动第二个实例。
+The Python AI service (services/ai — local ASR / TTS / Embedding model services) is started and stopped automatically by the core service: when `pnpm start:core` / `pnpm dev:core` starts the core service, if it detects the AI service isn't already running, it automatically spins up the corresponding process from `.venv`, and stops that instance when the core service exits — you don't need to run `pnpm dev:ai` manually. `pnpm dev:ai` still exists for cases where you want to manually start it for hot-reload debugging of the Python code — the core service will detect it's already running and won't start a duplicate, but it also won't stop that manually-started instance for you on exit (you'll need to Ctrl+C it yourself). This "already running" detection relies on both sides using the same port: `pnpm dev:ai` currently hardcodes `--port 8765` and doesn't read `AI_PORT` from `.env`. If you've changed `AI_PORT` and still want to use `dev:ai` for hot-reload debugging, you'll need to manually align the ports, or the core service will think nothing is running and start a second instance.
 
 ---
 
-## 角色配置
+## Character configuration
 
-角色通过配置文件定义，立绘资源放在 `assets/characters/角色名/` 目录下：
+Characters are defined via a config file, with portrait assets placed under `assets/characters/character-name/`:
 
 ```
 assets/characters/my-character/
-  ├── manifest.json     # 情绪标签 → 立绘文件映射
-  ├── avatar.png        # 聊天窗口头像
+  ├── manifest.json     # emotion tag → portrait file mapping
+  ├── avatar.png        # chat window avatar
   ├── idle.gif
   ├── happy.gif
   └── ...
 ```
 
-`manifest.json` 示例：
+Example `manifest.json`:
 
 ```json
 {
   "name": "my-character",
   "version": "1.0",
-  "displayName": "显示用名字",
-  "description": "角色简介，设置页展示用",
-  "tags": ["温柔", "治愈"],
+  "displayName": "Display name",
+  "description": "Character bio, shown on the settings page",
+  "tags": ["gentle", "healing"],
   "avatar": "avatar.png",
   "format": "gif",
   "emotions": {
@@ -181,54 +198,82 @@ assets/characters/my-character/
 
 ---
 
-## 参与贡献
+## Contributing
 
-项目目前处于底层架构建设阶段，暂不接受外部 PR。欢迎通过以下方式参与：
+The project is currently in the foundational-architecture phase and isn't accepting external PRs yet. You're welcome to get involved in other ways:
 
-- ⭐ Star 关注项目进展
-- 🐛 [提交 Issue](https://github.com/Momordicin/MintBot/issues) 反馈 Bug 或建议
-- 🍴 Fork 自行修改使用（遵循 AGPL-3.0）
+- ⭐ Star the repo to follow progress
+- 🐛 [File an issue](https://github.com/Momordicin/MintBot/issues) to report a bug or suggestion
+- 🍴 Fork it and modify it for your own use (under AGPL-3.0)
 
-详见 [CONTRIBUTING.md](./CONTRIBUTING.md)
-
----
-
-## 隐私说明
-
-- 所有对话数据存储在本地 SQLite，不上传任何服务器
-- 使用外部 API（Anthropic / OpenAI）时，对话内容会发送至对应服务商；隐私优先用户建议配置本地 Ollama
-- 敏感字段（消息内容、角色设定、实体信息、摘要）支持 AES-256-GCM 字段级加密，可通过配置开关，线上部署时启用
-- 加密密钥当前通过环境变量（`.env` 的 `DB_ENCRYPTION_KEY`）读取；由系统密钥链（Windows Credential Manager）托管密钥、不落磁盘明文的方案仍在规划中，尚未实现
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
 
 ---
 
-## 免责声明
+## Privacy
 
-本软件开源、免费，任何基于本软件的衍生版本须同样开源。
+- All conversation data is stored in local SQLite — nothing is uploaded to any server
+- When using an external API (Anthropic / OpenAI), conversation content is sent to that provider; for privacy-first use, we recommend configuring local Ollama instead
+- Sensitive fields (message content, character settings, entity info, summaries) support AES-256-GCM field-level encryption, toggleable via config — recommended when deploying online
+- The encryption key is currently read from an environment variable (`DB_ENCRYPTION_KEY` in `.env`); a design where the OS keychain (Windows Credential Manager) manages the key without ever writing it to disk in plaintext is still planned, not yet implemented
 
-若您遇到任何商家基于本软件提供付费服务，请注意其修改后的源代码应依 AGPL-3.0 要求公开。由此产生的任何问题与本软件开发者无关。
+---
 
-**生成内容**：本软件的 AI 回复内容由第三方语言模型生成，不代表开发者立场或观点。开发者不对 AI 生成内容的准确性、适当性或任何后果负责。
+## Acknowledgements
 
-**角色包版权**：用户自行准备和使用的角色包（包括立绘、语音素材等）的版权责任由用户自行承担。请勿使用未经授权的版权素材。开发者不对用户使用的第三方素材产生的任何版权纠纷负责。
+**Open-source projects**
 
-**使用风险**：本软件按现状提供，不附带任何明示或暗示的保证。用户自行承担使用本软件的全部风险。
+The design and implementation of this project drew on the following open-source projects:
+- [Shinsekai](https://github.com/RachelForster/Shinsekai)
+- [Graphiti](https://github.com/getzep/graphiti)
+- [Mem0](https://github.com/mem0ai/mem0)
+- [AstrBot](https://github.com/AstrBotDevs/AstrBot)
+- [ameath](https://gitee.com/lzy-buaa-jdi/ameath)
+- [wangfenjin/simple](https://github.com/wangfenjin/simple) (libsimple) — the SQLite FTS5 Chinese tokenizer this project vendors
+
+**Sticker packs and assets**
+
+Thanks to the following creators for authorizing/openly sharing the sticker assets used here:
+- Aemeath sticker pack by [Stephen樽](https://space.bilibili.com/5609794)
+- Xiao Ai sticker pack by [雾雪](https://space.bilibili.com/103739)
+- Xiao Ai idle sticker pack by [\_BLZ\_](https://space.bilibili.com/2255628)
+- Distributor of 雾雪's sticker pack, [凉梦喵啦啦啦](https://space.bilibili.com/51460746)
+
+The send-button icon in the message bar is from *Wuthering Waves*, a game by the Chinese studio Kuro Games.
+
+**Special thanks**
+
+Thanks to [*Wuthering Waves*](https://mc.kurogames.com/), [*Reverse: 1999*](https://re.bluepoch.com/home/), and [*Goddess of Victory: NIKKE*](https://nikke-en.com/) — they're what inspired me to set out on the journey of building this project, and what keeps me motivated to keep building MintBot.
+
+---
+
+## Disclaimer
+
+This software is open-source and free. Any derivative version based on this software must also be open-sourced.
+
+If you encounter any vendor offering a paid service based on this software, note that their modified source code should be made public as required by AGPL-3.0. This software's developer is not responsible for any issues arising from such use.
+
+**Generated content**: this software's AI reply content is generated by third-party language models and does not represent the developer's positions or views. The developer is not responsible for the accuracy, appropriateness, or any consequences of AI-generated content.
+
+**Character pack copyright**: copyright responsibility for character packs (including portraits, voice assets, etc.) that users prepare and use themselves rests with the user. Do not use unauthorized copyrighted material. The developer is not responsible for any copyright disputes arising from third-party assets used by users.
+
+**Use at your own risk**: this software is provided as-is, without warranty of any kind, express or implied. Users assume all risk of using this software.
 
 ---
 
 ## License
 
-本项目源代码基于 **AGPL-3.0** 协议开源。
+This project's source code is open-sourced under **AGPL-3.0**.
 
-`assets/brand/` 目录下的品牌资产（logo、banner 等）**不在 AGPL-3.0 授权范围内**，版权归项目作者所有，未经授权不得使用、复制或分发。
+Brand assets under `assets/brand/` (logo, banner, etc.) are **not covered by the AGPL-3.0 license** — copyright belongs to the project author, and unauthorized use, copying, or distribution is prohibited.
 
-`assets/characters/` 目录仅包含示例说明，实际角色包由用户自行准备。上传或分享角色包时，请确保立绘资产版权清晰，不得使用未经授权的版权素材。
+The `assets/characters/` directory contains sample descriptions only; actual character packs are prepared by the user. When uploading or sharing character packs, please ensure portrait asset copyright is clear, and do not use unauthorized copyrighted material.
 
 ```
 assets/
-  ├── brand/          # 品牌资产，版权保留，不随代码开源
+  ├── brand/          # Brand assets, copyright reserved, not open-sourced with the code
   │   ├── logo.png
   │   ├── logo.svg
   │   └── COPYRIGHT
-  └── characters/     # 角色包目录，用户自行准备，不纳入仓库
+  └── characters/     # Character pack directory, prepared by the user, not included in the repo
 ```
