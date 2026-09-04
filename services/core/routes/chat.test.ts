@@ -44,6 +44,7 @@ vi.mock('../characters/manifest.js', async importOriginal => {
   const actual = await importOriginal<typeof import('../characters/manifest.js')>()
   const fakeManifest = (overrides: Partial<import('../characters/manifest.js').CharacterManifest>): import('../characters/manifest.js').CharacterManifest => ({
     schemaVersion: 2, name: '', displayName: '', description: '', tags: [], creator: '', version: '', creatorNotes: '', avatar: '',
+    userAvatar: '',
     emotionVocabulary: [], emoteTagVocabulary: [],
     portraits: { pixel: { fallback: '', emotions: {} }, illustration: { fallback: '', emotions: {} } },
     interactionStates: {}, reservedStates: {}, emotePool: [],
