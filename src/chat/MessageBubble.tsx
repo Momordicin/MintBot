@@ -72,13 +72,9 @@ export function MessageBubble({
         </div>
       </div>
 
-      {isUser && (
+      {isUser && userAvatarUrl && (
         <div className="msg-avatar">
-          {showAvatar && (
-            userAvatarUrl
-              ? <img src={userAvatarUrl} alt="我" />
-              : <div className="msg-avatar__placeholder msg-avatar__placeholder--user" />
-          )}
+          {showAvatar && <img src={userAvatarUrl} alt="我" />}
         </div>
       )}
     </div>

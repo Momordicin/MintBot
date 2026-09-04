@@ -62,6 +62,22 @@ async function fetchAvatarUrl(characterId: string, signal?: AbortSignal): Promis
   }
 }
 
+// 用户头像manifest.userAvatar
+// 未配置时返回 undefined，MessageBubble 据此完全不渲染用户侧的头像位置
+async function fetchUserAvatarUrl(characterId: string, signal?: AbortSignal): Promise<string | undefined> {
+  try {
+    const res = await fetch(`${CORE_URL}/characters/${encodeURIComponent(characterId)}/manifest.json`, { signal })
+    if (!res.ok) return undefined
+
+    const manifest: { userAvatar?: string } = await res.json()
+    if (!manifest.userAvatar) return undefined
+
+    return `${CORE_URL}/characters/${encodeURIComponent(characterId)}/${encodeURIComponent(manifest.userAvatar)}`
+  } catch {
+    return undefined
+  }
+}
+
 export function ChatWindow() {
   const hasFetched = useRef(false)
   const [messages, setMessages] = useState<MessageData[]>([])
@@ -72,6 +88,7 @@ export function ChatWindow() {
   const [embeddingReady, setEmbeddingReady] = useState<boolean>(false)
   const [wallpaperUrl, setWallpaperUrl] = useState<string | null>(null)
   const [avatarUrl, setAvatarUrl] = useState<string | undefined>(undefined)
+  const [userAvatarUrl, setUserAvatarUrl] = useState<string | undefined>(undefined)
   // 是否还有更多历史消息可加载，决定 MessageList 要不要在滑到顶部时触发 onLoadMore
   const [hasMoreHistory, setHasMoreHistory] = useState(false)
   // 每次初始历史加载完成后递增，触发 MessageList 一次性滚动到底部
@@ -127,6 +144,10 @@ export function ChatWindow() {
           fetchAvatarUrl(state.presetSnapshot.characterId, controller.signal).then(url => {
             if (controller.signal.aborted) return
             setAvatarUrl(url)
+          })
+          fetchUserAvatarUrl(state.presetSnapshot.characterId, controller.signal).then(url => {
+            if (controller.signal.aborted) return
+            setUserAvatarUrl(url)
           })
         }
         if (state.sessionId) {
@@ -194,6 +215,7 @@ export function ChatWindow() {
         // 立即清空，避免新角色的名字/壁纸/消息列表已经更新、但头像还残留旧角色那张图
         // 的短暂不一致状态——和之前 switchPreset 成功分支的处理保持一致
         setAvatarUrl(undefined)
+        setUserAvatarUrl(undefined)
         setMessages([])
         setHasMoreHistory(false)
         oldestMessageIdRef.current = null
@@ -205,8 +227,12 @@ export function ChatWindow() {
         const nextAvatarUrl = state.presetSnapshot?.characterId
           ? await fetchAvatarUrl(state.presetSnapshot.characterId, controller.signal)
           : undefined
+        const nextUserAvatarUrl = state.presetSnapshot?.characterId
+          ? await fetchUserAvatarUrl(state.presetSnapshot.characterId, controller.signal)
+          : undefined
         if (controller.signal.aborted) return
         setAvatarUrl(nextAvatarUrl)
+        setUserAvatarUrl(nextUserAvatarUrl)
       } catch {
         // 聚焦时的被动同步检查失败不展示错误提示——不是用户主动触发的操作，
         // 静默忽略即可，下次聚焦或轮询会再试
@@ -416,6 +442,7 @@ export function ChatWindow() {
           messages={messages}
           isReplying={isReplying}
           avatarUrl={avatarUrl}
+          userAvatarUrl={userAvatarUrl}
           displayName={displayName}
           hasMoreHistory={hasMoreHistory}
           onLoadMore={loadMoreMessages}

@@ -14,6 +14,7 @@ function fakeManifest(overrides: Partial<CharacterManifest>): CharacterManifest 
     version: '',
     creatorNotes: '',
     avatar: '',
+    userAvatar: '',
     emotionVocabulary: [],
     emoteTagVocabulary: [],
     portraits: { pixel: { fallback: '', emotions: {} }, illustration: { fallback: '', emotions: {} } },

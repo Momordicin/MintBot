@@ -38,6 +38,7 @@ export interface CharacterManifest {
   version: string
   creatorNotes: string
   avatar: string
+  userAvatar: string
   emotionVocabulary: string[]
   emoteTagVocabulary: string[]
   portraits: {
@@ -164,6 +165,7 @@ function mergeManifest(raw: unknown): CharacterManifest {
     version: mergeOptionalString(source.version, 'version'),
     creatorNotes: mergeOptionalString(source.creatorNotes, 'creatorNotes'),
     avatar: mergeRequiredString(source.avatar, 'avatar'),
+    userAvatar: mergeOptionalString(source.userAvatar, 'userAvatar'),
     emotionVocabulary: mergeOptionalStringArray(source.emotionVocabulary, 'emotionVocabulary'),
     emoteTagVocabulary: mergeOptionalStringArray(source.emoteTagVocabulary, 'emoteTagVocabulary'),
     portraits: {

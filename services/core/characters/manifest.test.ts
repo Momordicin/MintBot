@@ -19,6 +19,7 @@ describe('loadCharacterManifest — 真实角色包 fixture（assets/characters/
       version: '1.0',
       creatorNotes: '',
       avatar: 'avatar.jpg',
+      userAvatar: '女漂圣诞.png',
       emotionVocabulary: ['idle', 'happy', 'shy', 'playful', 'sleep', 'confused'],
       emoteTagVocabulary: ['excited', 'performing', 'comforting'],
       portraits: {
@@ -72,6 +73,7 @@ describe('loadCharacterManifest — 真实角色包 fixture（assets/characters/
       version: '',
       creatorNotes: '',
       avatar: 'avatar.png',
+      userAvatar: '',
       emotionVocabulary: ['idle', 'happy', 'sad', 'curious', 'angry', 'surprised', 'shy'],
       emoteTagVocabulary: [],
       portraits: {
