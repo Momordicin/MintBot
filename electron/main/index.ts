@@ -388,11 +388,52 @@ function createOverlayWindow(): BrowserWindow {
 
 let mainWindow: BrowserWindow | null = null
 
+// 聊天窗口标题栏 chrome 常量（TDD §3.7 附「聊天栏 chrome 模型」，批次一）。颜色硬编码，
+// 不接 displayConfig 动态下发——那是批次二的事。
+//
+// color 改为完全透明（alpha = 00）：此前 alpha 0.40 的原生底色与 .chat-titlebar 自绘的
+// rgba(15,15,20,0.40) + backdrop-filter 各自独立绘制、互不叠加（.chat-titlebar 当时用
+// width 收窄到按钮条带以外，见 src/chat/chat.css 里的历史注释），代价是按钮条带底下
+// 没有毛玻璃、能看出一条「毛玻璃 vs 清晰」的接缝。现在反过来：原生层透明、不贡献任何
+// 底色，.chat-titlebar 改回满宽，让它的背景与 backdrop-filter 铺满整条标题栏（包括
+// 按钮条带底下），按钮符号直接画在自绘的毛玻璃上，接缝消失，也不再需要两层 alpha 保持
+// 一致。RGB 分量在 alpha=0 时不可见，仍写 0f0f14 只是留个可读的锚点、便于日后再调 alpha
+// 时有个对照值——它没有任何防御作用：真要是 alpha=0 被当成"未设置"，Electron 回落的是
+// 它自己的系统默认色，根本不会来读这里的 RGB 分量。
+//
+// 已知风险，待实机验证（不在本次改动范围内解决）：
+// 1) alpha=0 是否被 Electron/Chromium 视为合法值而非"未设置"进而回落系统默认色——
+//    electron#38693（2023 合入）修的是"非完全不透明颜色被强制渲染成不透明"，针对的是
+//    0 < alpha < 255 的情形，没有直接证据覆盖 alpha = 0 这个边界值，需实机确认按钮条带
+//    确实变透明而非变回系统默认色。
+// 2) hover/按下态是否仍可见——原生按钮的 hover 高亮是独立于 color 的绘制层，
+//    electron#38431、electron#48193 记录过这块的渲染缺陷，是本次改动风险最高的一点，
+//    必须目视确认交互态可感知。
+const TITLEBAR_OVERLAY_COLOR = '#0f0f1400'
+const TITLEBAR_OVERLAY_SYMBOL_COLOR = '#e8e8f0'
+// 只能加高，不能压矮：Electron 的 WinFrameView::TitlebarHeight() 里是
+// `if (custom_height > TitlebarMaximizedVisualHeight())`，阈值是运行时的
+// `GetSystemMetricsInDIP(SM_CYCAPTION)`，随机器 DPI/文字缩放变化。本机实测 16 DIP，
+// 故 25 有效；在系统标题栏为 32 DIP 的机器上 25 会被静默忽略，且因为
+// `env(titlebar-area-height)` 走的是不过阈值的另一条路径，会出现「自绘区 25px、
+// 按钮条带 32px」的台阶。该值必须与 src/chat/chat.css 里 .chat-titlebar 的 height 一致。
+// 即便过了 DIP 阈值，生效值实际是 `custom_height - WindowTopY()`（非最大化时 WindowTopY()
+// 通常是 1-2px 上边框偏移），而 `env(titlebar-area-height)` 返回的是未减去该偏移的原始值，
+// 所以原生条带可能比 CSS 高度矮 1-2px，需目视确认是否可察觉
+const TITLEBAR_OVERLAY_HEIGHT = 25
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 390,
     height: 700,
     show: false,
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: TITLEBAR_OVERLAY_COLOR,
+      symbolColor: TITLEBAR_OVERLAY_SYMBOL_COLOR,
+      height: TITLEBAR_OVERLAY_HEIGHT
+    },
+    maximizable: false,
     webPreferences: {
       preload: PRELOAD_PATH,
       sandbox: false
