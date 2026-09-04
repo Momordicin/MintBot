@@ -80,13 +80,15 @@ describe('switchPreset', () => {
 
 describe('manifest 缓存（Part A：loadSession/switchPreset 填充 SessionState.manifest）', () => {
   it('preset 的 characterId 对应存在的角色包时，loadSession 返回缓存的 manifest', () => {
+    // 用 example（git 内唯一提交的角色包 fixture），不用真实的 Aemeath/Mint——
+    // 那两个是 gitignore 掉的本地专属文件夹，CI/全新 clone 上不存在
     upsertPreset({
       presetId: 'p3',
       name: '角色三',
-      characterId: 'Mint',
+      characterId: 'example',
       modelType: 'ollama',
       modelName: 'qwen3',
-      systemPrompt: '你是 Mint',
+      systemPrompt: '你是示例角色',
     })
 
     const { manifest } = loadSession('p3')
@@ -108,10 +110,10 @@ describe('manifest 缓存（Part A：loadSession/switchPreset 填充 SessionStat
     upsertPreset({
       presetId: 'p3',
       name: '角色三',
-      characterId: 'Mint',
+      characterId: 'example',
       modelType: 'ollama',
       modelName: 'qwen3',
-      systemPrompt: '你是 Mint',
+      systemPrompt: '你是示例角色',
     })
     loadSession('p1')
 
