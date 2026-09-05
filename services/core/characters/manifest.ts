@@ -25,9 +25,16 @@ export interface EmotePoolEntry {
   tags: string[]
 }
 
-// manifest schema v2（docs/MintBot_TDD.md §3.7「立绘资源管理（manifest schema v2）」）。
+export interface TransitionStep {
+  from: string[]        // 始终归一化为数组，即使 manifest 里声明的是单个字符串
+  pick: 'random'
+  durationMs: number
+}
+
+// manifest schema v3（docs/MintBot_TDD.md §3.7「立绘资源管理（manifest schema v3）」）。
 // 除 avatar 外全部字段可选——旧版角色包（Mint/example）只声明 avatar 一个字段，加载后
-// 必须继续被当成合法输入，其余字段读到安全默认值。
+// 必须继续被当成合法输入，其余字段读到安全默认值。v2 的四类资源划分（portraits/
+// interactionStates/reservedStates/emotePool）不变，v3 只新增 transitions 字段。
 export interface CharacterManifest {
   schemaVersion: number
   name: string
@@ -48,6 +55,7 @@ export interface CharacterManifest {
   interactionStates: Record<string, string>
   reservedStates: Record<string, string[]>
   emotePool: EmotePoolEntry[]
+  transitions: Record<string, TransitionStep[]>
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -151,9 +159,95 @@ function mergeEmotePool(value: unknown): EmotePoolEntry[] {
   return result
 }
 
+// transitions 里的 from 只能引用 `emotions.<key>` 形式，且 <key> 必须存在于该角色包
+// 自己声明的 emotionVocabulary（TDD「转场引用的是 emotionVocabulary 里的键」）——
+// 不校验 portraits.pixel.emotions，因为解析时刻是与显示形态无关的，pixel/illustration
+// 各自声明的情绪集合可以不同
+const TRANSITION_FROM_PREFIX = 'emotions.'
+
+function normalizeTransitionFrom(value: unknown): string[] | null {
+  if (typeof value === 'string') return [value]
+  if (isStringArray(value) && value.length > 0) return value
+  return null
+}
+
+// 单步转场校验：from 类型错误、from 引用了不存在的键、durationMs 缺失或非法，
+// 三者任一命中即跳过整步并告警（TDD「某一步引用了不存在的键时跳过该步并告警，
+// 不使整条链失效」）。pick 走「缺失即合法回退默认值，类型错误告警回退」的既有惯例。
+function mergeTransitionStep(
+  entry: unknown,
+  emotionVocabulary: string[],
+  label: string
+): TransitionStep | null {
+  if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+    console.warn(`[CharacterManifest] ${label} 类型错误，应为对象，跳过该步`)
+    return null
+  }
+  const step = entry as Record<string, unknown>
+
+  const from = normalizeTransitionFrom(step.from)
+  if (from === null) {
+    console.warn(`[CharacterManifest] ${label}.from 缺失、类型错误或为空数组，应为非空字符串数组或单个字符串，跳过该步`)
+    return null
+  }
+
+  for (const source of from) {
+    const key = source.startsWith(TRANSITION_FROM_PREFIX) ? source.slice(TRANSITION_FROM_PREFIX.length) : null
+    if (key === null || !emotionVocabulary.includes(key)) {
+      console.warn(`[CharacterManifest] ${label}.from 引用了不存在的键 '${source}'，跳过该步`)
+      return null
+    }
+  }
+
+  let pick: TransitionStep['pick'] = 'random'
+  if (step.pick !== undefined && step.pick !== 'random') {
+    console.warn(`[CharacterManifest] ${label}.pick 类型错误，应为 'random'，使用默认值 'random'`)
+  }
+
+  if (typeof step.durationMs !== 'number' || !Number.isFinite(step.durationMs) || step.durationMs <= 0) {
+    console.warn(`[CharacterManifest] ${label}.durationMs 缺失或类型错误，应为正数，跳过该步`)
+    return null
+  }
+
+  return { from, pick, durationMs: step.durationMs }
+}
+
+// transitions 整体形状：Record<string, TransitionStep[]>。字段整体缺失是合法情况
+// （TDD「角色包未声明 transitions 时不播转场」），静默回退 {}；一条链的值不是数组时
+// 跳过该链（不写入结果）；链内某一步校验失败只跳过该步，链本身继续存在，即使
+// 全部步骤都被跳过也仍以空数组形式保留（等价于「无转场」）。
+function mergeTransitions(
+  value: unknown,
+  emotionVocabulary: string[],
+  label: string
+): Record<string, TransitionStep[]> {
+  if (value === undefined) return {}
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    console.warn(`[CharacterManifest] ${label} 类型错误，应为对象，使用默认值 {}`)
+    return {}
+  }
+  const result: Record<string, TransitionStep[]> = {}
+  for (const [chainName, chainValue] of Object.entries(value as Record<string, unknown>)) {
+    if (!Array.isArray(chainValue)) {
+      console.warn(`[CharacterManifest] ${label}.${chainName} 类型错误，应为数组，跳过该链`)
+      continue
+    }
+    const steps: TransitionStep[] = []
+    chainValue.forEach((entry, index) => {
+      const step = mergeTransitionStep(entry, emotionVocabulary, `${label}.${chainName}[${index}]`)
+      if (step) steps.push(step)
+    })
+    result[chainName] = steps
+  }
+  return result
+}
+
 function mergeManifest(raw: unknown): CharacterManifest {
   const source = (raw ?? {}) as Record<string, unknown>
   const portraits = (source.portraits ?? {}) as Record<string, unknown>
+  // transitions 校验需要已合并的 emotionVocabulary（而非原始 source.emotionVocabulary），
+  // 因此先算出这份词表再传给 mergeTransitions（TDD 排序说明）
+  const emotionVocabulary = mergeOptionalStringArray(source.emotionVocabulary, 'emotionVocabulary')
 
   return {
     schemaVersion: mergeOptionalNumber(source.schemaVersion, 1, 'schemaVersion'),
@@ -166,7 +260,7 @@ function mergeManifest(raw: unknown): CharacterManifest {
     creatorNotes: mergeOptionalString(source.creatorNotes, 'creatorNotes'),
     avatar: mergeRequiredString(source.avatar, 'avatar'),
     userAvatar: mergeOptionalString(source.userAvatar, 'userAvatar'),
-    emotionVocabulary: mergeOptionalStringArray(source.emotionVocabulary, 'emotionVocabulary'),
+    emotionVocabulary,
     emoteTagVocabulary: mergeOptionalStringArray(source.emoteTagVocabulary, 'emoteTagVocabulary'),
     portraits: {
       pixel: mergePortraitForm(portraits.pixel, 'portraits.pixel'),
@@ -175,6 +269,7 @@ function mergeManifest(raw: unknown): CharacterManifest {
     interactionStates: mergeStringMap(source.interactionStates, 'interactionStates'),
     reservedStates: mergeStringArrayMap(source.reservedStates, 'reservedStates'),
     emotePool: mergeEmotePool(source.emotePool),
+    transitions: mergeTransitions(source.transitions, emotionVocabulary, 'transitions'),
   }
 }
 

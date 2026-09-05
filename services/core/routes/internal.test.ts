@@ -6,9 +6,9 @@ import { initDb, db } from '../db/index.js'
 import { upsertPreset, upsertEmotionState } from '../session/queries.js'
 import { loadSession } from '../session/index.js'
 
-// lock-screen/unlock-screen 广播 emotion 事件（悬浮窗静息模式，Phase 3 收尾）：跟
-// chat.test.ts 同款 partial mock，只关心 internal.ts 是否调用了 broadcastEvent、
-// payload 是否正确，不关心 broadcast.ts 自己的注册表/写入机制
+// lock-screen/unlock-screen 不再广播 emotion 事件（TDD §3.3：POST /internal/system-event
+// 仅保留锁屏时长计时的职责）。这里只关心 internal.ts 是否触发了 broadcastEvent，不关心
+// broadcast.ts 自己的注册表/写入机制
 vi.mock('../events/broadcast.js', async importOriginal => {
   const actual = await importOriginal<typeof import('../events/broadcast.js')>()
   return { ...actual, broadcastEvent: vi.fn() }
@@ -76,9 +76,9 @@ describe('POST /internal/system-event', () => {
     expect(response.statusCode).toBe(400)
   })
 
-  // 注意顺序：session/index.ts 的 current 是模块级单例，一旦某个测试调用过 loadSession()
-  // 就不会在测试之间自动重置——这条"没有激活 session"必须排在本文件所有 loadSession() 调用
-  // 之前，才能真正验证到 getCurrentState() 返回 null 的分支
+  // internal.ts 现在完全不读 session 状态（getCurrentState 分支随 emotion 广播一并删除），
+  // 因此"有没有激活 session"对它已无差别——这条与下一条只是从两种前置状态各验一次
+  // 「不广播」，不再像此前那样依赖"必须排在所有 loadSession() 调用之前"的执行顺序
   it('没有激活 session 时，lock-screen/unlock-screen 都不广播，也不报错', async () => {
     const fastify = await buildTestApp()
 
@@ -90,7 +90,7 @@ describe('POST /internal/system-event', () => {
     expect(broadcastEvent).not.toHaveBeenCalled()
   })
 
-  it('有激活 session 时，lock-screen 广播 sleep 情绪且不落库', async () => {
+  it('有激活 session 时，lock-screen/unlock-screen 均不产生任何 SSE 广播（立绘不因锁屏切换）', async () => {
     upsertPreset({
       presetId: 'p1', name: '角色一', characterId: 'char-001',
       modelType: 'ollama', modelName: 'qwen3', systemPrompt: '你是角色一',
@@ -100,39 +100,8 @@ describe('POST /internal/system-event', () => {
 
     const fastify = await buildTestApp()
     await fastify.inject({ method: 'POST', url: '/internal/system-event', payload: { type: 'lock-screen' } })
-
-    expect(broadcastEvent).toHaveBeenCalledWith('emotion', { self: { label: 'sleep', intensity: 1 }, perceived_user: null })
-
-    // 广播是 sleep，但持久化的情绪状态必须还是锁屏前的真实值——lock-screen 不应该调用
-    // upsertEmotionState 覆盖它
-    const { getEmotionState } = await import('../session/queries.js')
-    expect(getEmotionState(session.sessionId)).toEqual({ self: { label: 'happy', intensity: 0.8 }, perceived_user: null })
-  })
-
-  it('有激活 session 时，unlock-screen 广播锁屏前持久化的真实情绪', async () => {
-    upsertPreset({
-      presetId: 'p1', name: '角色一', characterId: 'char-001',
-      modelType: 'ollama', modelName: 'qwen3', systemPrompt: '你是角色一',
-    })
-    const { session } = loadSession('p1')
-    upsertEmotionState(session.sessionId, { self: { label: 'shy', intensity: 0.5 }, perceived_user: null })
-
-    const fastify = await buildTestApp()
     await fastify.inject({ method: 'POST', url: '/internal/system-event', payload: { type: 'unlock-screen' } })
 
-    expect(broadcastEvent).toHaveBeenCalledWith('emotion', { self: { label: 'shy', intensity: 0.5 }, perceived_user: null })
-  })
-
-  it('有激活 session 但从未记录过情绪时，unlock-screen 广播 self: null（渲染层走 fallback）', async () => {
-    upsertPreset({
-      presetId: 'p1', name: '角色一', characterId: 'char-001',
-      modelType: 'ollama', modelName: 'qwen3', systemPrompt: '你是角色一',
-    })
-    loadSession('p1')
-
-    const fastify = await buildTestApp()
-    await fastify.inject({ method: 'POST', url: '/internal/system-event', payload: { type: 'unlock-screen' } })
-
-    expect(broadcastEvent).toHaveBeenCalledWith('emotion', { self: null, perceived_user: null })
+    expect(broadcastEvent).not.toHaveBeenCalled()
   })
 })

@@ -362,6 +362,13 @@ export function getMostRecentMessageTime(): number | null {
   return row.maxCreatedAt ?? null
 }
 
+// 单 session 最近一条消息的 createdAt，供 session/attention.ts 的 getLastAttentionAt 在内存
+// 无记录时兜底取初值使用（TDD §3.7 附「状态存放」：初值取该 session 最近一条消息的 createdAt）
+export function getMostRecentMessageTimeForSession(sessionId: string): number | null {
+  const row = db.prepare(`SELECT MAX(createdAt) as maxCreatedAt FROM Messages WHERE sessionId = ?`).get(sessionId) as any
+  return row.maxCreatedAt ?? null
+}
+
 // 全表（不分 session）最早一条未摘要消息的 createdAt，供 EmbeddingQueueStatus.oldestUnsummarizedAge 使用
 export function getOldestUnsummarizedMessageTime(): number | null {
   const row = db.prepare(`SELECT MIN(createdAt) as minCreatedAt FROM Messages WHERE summarized = 0`).get() as any

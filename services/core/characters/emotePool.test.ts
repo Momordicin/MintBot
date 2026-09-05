@@ -21,6 +21,7 @@ function fakeManifest(overrides: Partial<CharacterManifest>): CharacterManifest 
     interactionStates: {},
     reservedStates: {},
     emotePool: [],
+    transitions: {},
     ...overrides,
   }
 }

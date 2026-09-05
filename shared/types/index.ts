@@ -145,10 +145,12 @@ export interface EmbeddingQueueStatus {
 export interface AppState {
   sessionId: string | null
   presetSnapshot: PresetSnapshot | null
-  emotion: EmotionState | null        // Phase 2 预留，从最近 Message 解析
+  emotion: EmotionState | null        // 读取 EmotionStates 表（getEmotionState），随 session/preset 恢复
   embeddingQueue: EmbeddingQueueStatus | null  // Phase 2 预留
   embeddingReady: boolean
   ollamaReady: boolean | null   // 仅当前 preset 用 ollama 时为 boolean，否则为 null（见 state.ts buildStatePayload）
+  lastAttentionAt: number | null  // 上次"搭理 bot"的时刻，供悬浮窗立绘状态模型 y 求值使用（TDD §3.7 附）；无激活 session 时为 null
+  explicitSleep: boolean          // 显式睡着标记，同上；无激活 session 时为 false
 }
 
 export type SSEEventType =

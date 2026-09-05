@@ -1,8 +1,8 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "name": "example",
   "displayName": "示例角色",
-  "description": "示例角色包，展示 manifest schema v2 的完整字段结构，供开发者参考；不含真实立绘/表情包素材",
+  "description": "示例角色包，展示 manifest schema v3 的完整字段结构，供开发者参考；不含真实立绘/表情包素材",
   "tags": ["示例", "占位"],
   "creator": "",
   "version": "1.0",
@@ -43,5 +43,18 @@
 
   "emotePool": [
     { "file": "emotes/example.jpg", "tags": ["excited"] }
-  ]
+  ],
+
+  "transitions": {
+    "wake-from-sleep": [
+      { "from": "emotions.sad",   "pick": "random", "durationMs": 3000 },
+      { "from": "emotions.happy", "pick": "random", "durationMs": 3000 }
+    ],
+    "wake-from-bored": [
+      { "from": "emotions.curious", "pick": "random", "durationMs": 3000 }
+    ],
+    "poke-neutral": [
+      { "from": ["emotions.shy", "emotions.happy"], "pick": "random", "durationMs": 3000 }
+    ]
+  }
 }

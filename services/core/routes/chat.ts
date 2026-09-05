@@ -4,6 +4,7 @@ import { buildContext } from '../context/buildContext.js'
 import { parseSelfEmotion, parseEmoteTag } from '../session/emotion.js'
 import { selectEmoteFile } from '../characters/emotePool.js'
 import { upsertEmotionState } from '../session/queries.js'
+import { recordAttention, markExplicitSleep } from '../session/attention.js'
 import { broadcastEvent } from '../events/broadcast.js'
 import { createModelProviderForPreset } from '../providers/ModelProvider.js'
 import { getModelProviderConfig } from '../config/index.js'
@@ -86,6 +87,9 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
       addMessage(sessionId, 'user', message, 'user')
 
+      // 三种"搭理 bot"交互之一（TDD §3.7 附「悬浮窗立绘状态模型」：点击发送即算，不等模型回复）
+      recordAttention(sessionId)
+
       // 按当前请求捕获的 preset 构建 provider，而不是用全局单例 fastify.modelProvider，
       // 保证并发切换 preset 时本次请求仍使用它开始时的模型配置
       const modelProvider = createModelProviderForPreset(state.preset, getModelProviderConfig())
@@ -157,10 +161,18 @@ export async function chatRoutes(fastify: FastifyInstance) {
         // 保持现有降级风格。持久化异常不应影响本轮对话的正常返回
         const selfEmotion = parseSelfEmotion(fullReply)
         if (selfEmotion) {
-          try {
-            upsertEmotionState(sessionId, { self: selfEmotion, perceived_user: null })
-          } catch (err) {
-            console.error('[Chat] Failed to persist emotion state:', err)
+          if (selfEmotion.label === 'sleep') {
+            // sleep 是词表中唯一不落情绪状态的标签（TDD §3.9）：不调 upsertEmotionState，
+            // 只置显式睡着标记，供悬浮窗立绘状态模型的 y 求值消费。下方 send('emotion', …)/
+            // broadcastEvent('emotion', …) 仍照常携带这次的 sleep 结果——本批次唯一允许的
+            // 可见行为变更是锁屏广播的移除（item①），这里刻意不做第二处可见行为改动
+            markExplicitSleep(sessionId)
+          } else {
+            try {
+              upsertEmotionState(sessionId, { self: selfEmotion, perceived_user: null })
+            } catch (err) {
+              console.error('[Chat] Failed to persist emotion state:', err)
+            }
           }
         }
 

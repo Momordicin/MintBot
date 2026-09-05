@@ -24,6 +24,7 @@ import {
   getPendingEmbeddingCountBefore,
   markMessageEmbedded,
   getMostRecentMessageTime,
+  getMostRecentMessageTimeForSession,
   getOldestUnsummarizedMessageTime,
   insertEntity,
   getCurrentEntities,
@@ -588,6 +589,17 @@ describe('Embeddings', () => {
     appendMessage({ sessionId: 's1', role: 'user', content: 'c', createdAt: 2000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
 
     expect(getMostRecentMessageTime()).toBe(3000)
+  })
+
+  it('getMostRecentMessageTimeForSession 无消息时返回 null，有消息时只看该 session 自己的最大 createdAt', () => {
+    expect(getMostRecentMessageTimeForSession('s1')).toBeNull()
+
+    appendMessage({ sessionId: 's1', role: 'user', content: 'a', createdAt: 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's2', role: 'user', content: 'b', createdAt: 5000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's1', role: 'user', content: 'c', createdAt: 2000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+
+    expect(getMostRecentMessageTimeForSession('s1')).toBe(2000)
+    expect(getMostRecentMessageTimeForSession('s2')).toBe(5000)
   })
 
   it('getOldestUnsummarizedMessageTime 无未摘要消息时返回 null，有时返回全表最小 createdAt（不分 session）', () => {

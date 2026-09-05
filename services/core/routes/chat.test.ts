@@ -6,6 +6,7 @@ import { decrypt } from '../db/crypto.js'
 import { upsertPreset, getEmotionState } from '../session/queries.js'
 import * as queries from '../session/queries.js'
 import { loadSession } from '../session/index.js'
+import { getLastAttentionAt, isExplicitSleep, markExplicitSleep } from '../session/attention.js'
 import { chatRoutes } from './chat.js'
 import * as ModelProviderModule from '../providers/ModelProvider.js'
 import * as BuildContextModule from '../context/buildContext.js'
@@ -47,7 +48,7 @@ vi.mock('../characters/manifest.js', async importOriginal => {
     userAvatar: '',
     emotionVocabulary: [], emoteTagVocabulary: [],
     portraits: { pixel: { fallback: '', emotions: {} }, illustration: { fallback: '', emotions: {} } },
-    interactionStates: {}, reservedStates: {}, emotePool: [],
+    interactionStates: {}, reservedStates: {}, emotePool: [], transitions: {},
     ...overrides,
   })
   return {
@@ -227,6 +228,64 @@ describe('POST /chat', () => {
     expect(emotion?.data).toEqual({ self: null, perceived_user: null })
 
     expect(getEmotionState(session.sessionId)).toBeNull()
+  })
+
+  it('self 情绪 label 为 sleep 时：不落 EmotionStates，只置显式睡着标记（TDD §3.9）', async () => {
+    const { session } = loadSession('p1')
+    const { fastify } = await buildTestApp(JSON.stringify({
+      reply: '好困呀',
+      emotion: { self: { label: 'sleep', intensity: 0.9 }, perceived_user: null },
+    }))
+
+    await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+
+    expect(getEmotionState(session.sessionId)).toBeNull()
+    expect(isExplicitSleep(session.sessionId)).toBe(true)
+  })
+
+  it('self 情绪 label 为 sleep 时：SSE 私有流/广播流仍照常携带 sleep（本批次不改这个可见行为）', async () => {
+    loadSession('p1')
+    const { fastify } = await buildTestApp(JSON.stringify({
+      reply: '好困呀',
+      emotion: { self: { label: 'sleep', intensity: 0.9 }, perceived_user: null },
+    }))
+
+    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+    const emotion = parseSSE(response.payload).find(e => e.event === 'emotion')
+
+    expect(emotion?.data).toEqual({ self: { label: 'sleep', intensity: 0.9 }, perceived_user: null })
+    expect(BroadcastModule.broadcastEvent).toHaveBeenCalledWith('emotion', {
+      self: { label: 'sleep', intensity: 0.9 },
+      perceived_user: null,
+    })
+  })
+
+  it('已存在真实情绪时，模型接着回复 sleep 不会覆盖/清除原有的 EmotionStates 记录', async () => {
+    const { session } = loadSession('p1')
+    queries.upsertEmotionState(session.sessionId, { self: { label: 'happy', intensity: 0.8 }, perceived_user: null })
+
+    const { fastify } = await buildTestApp(JSON.stringify({
+      reply: '好困呀',
+      emotion: { self: { label: 'sleep', intensity: 0.9 }, perceived_user: null },
+    }))
+
+    await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+
+    expect(getEmotionState(session.sessionId)).toEqual({ self: { label: 'happy', intensity: 0.8 }, perceived_user: null })
+    expect(isExplicitSleep(session.sessionId)).toBe(true)
+  })
+
+  it('发送用户消息即刷新 lastAttentionAt、清除显式睡着标记（TDD §3.7 附「搭理 bot」）', async () => {
+    const { session } = loadSession('p1')
+    markExplicitSleep(session.sessionId)
+    expect(isExplicitSleep(session.sessionId)).toBe(true)
+
+    const before = Date.now()
+    const { fastify } = await buildTestApp(JSON.stringify({ reply: '嗯嗯' }))
+    await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+
+    expect(getLastAttentionAt(session.sessionId)).toBeGreaterThanOrEqual(before)
+    expect(isExplicitSleep(session.sessionId)).toBe(false)
   })
 
   it('情绪持久化失败时不影响本轮对话正常返回', async () => {
