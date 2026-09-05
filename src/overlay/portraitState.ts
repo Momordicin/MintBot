@@ -32,9 +32,16 @@ export interface OverlayManifest {
     pixel?: PortraitForm
   }
   reservedStates?: Record<string, string[]>
+  // 转场链条声明（schema v3「transitions」小节）。类型定为 unknown 而非具体的步骤形状：
+  // 这是手写 manifest 里最容易写错的一块（from 可以是字符串或数组、durationMs 可能漏填），
+  // 由 src/overlay/transitionState.ts 逐步做防御性解析，本文件的最小形状声明不替它预先假定
+  // 结构是合法的
+  transitions?: Record<string, unknown>
 }
 
-function pickRandom<T>(items: T[]): T {
+// 本批次起被 transitionState.ts 复用（转场每一步「来源内随机挑一个」与「多个来源间随机挑一个」
+// 是同一个操作），因此导出
+export function pickRandom<T>(items: T[]): T {
   return items[Math.floor(Math.random() * items.length)]
 }
 
