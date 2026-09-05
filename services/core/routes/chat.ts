@@ -160,12 +160,14 @@ export async function chatRoutes(fastify: FastifyInstance) {
         // self 情绪校验通过才落库；模型没按格式回复（校验失败/字段缺失）时不落库也不报错，
         // 保持现有降级风格。持久化异常不应影响本轮对话的正常返回
         const selfEmotion = parseSelfEmotion(fullReply)
+        const isSleep = selfEmotion?.label === 'sleep'
         if (selfEmotion) {
-          if (selfEmotion.label === 'sleep') {
-            // sleep 是词表中唯一不落情绪状态的标签（TDD §3.9）：不调 upsertEmotionState，
-            // 只置显式睡着标记，供悬浮窗立绘状态模型的 y 求值消费。下方 send('emotion', …)/
-            // broadcastEvent('emotion', …) 仍照常携带这次的 sleep 结果——本批次唯一允许的
-            // 可见行为变更是锁屏广播的移除（item①），这里刻意不做第二处可见行为改动
+          if (isSleep) {
+            // sleep 是词表中唯一不落情绪状态的标签（TDD §3.9），也是悬浮窗立绘状态模型
+            // 「y 的求值顺序」的输入之一（TDD §3.7 附）而非情绪状态：x（由本 emotion 事件驱动）
+            // 永远不能是 sleep，否则「x 永远不会是 sleep」这条推论在 y 求值落地时就被破坏。
+            // 因此这里既不落 EmotionStates，也不发这次的 emotion 帧（私有流与广播都不发）——
+            // 只置显式睡着标记，供 y 求值消费
             markExplicitSleep(sessionId)
           } else {
             try {
@@ -176,17 +178,21 @@ export async function chatRoutes(fastify: FastifyInstance) {
           }
         }
 
-        send('emotion', {
-          self: selfEmotion,
-          perceived_user: null,  // Phase 2 基础版故意留空占位，不透传模型的尝试性输出，不是遗漏
-        })
+        // sleep 回复不产生 emotion 帧（见上方注释）；没有合法情绪时 selfEmotion 为 null，
+        // 仍照常发一帧 self: null（既有降级行为，不受这次改动影响）
+        if (!isSleep) {
+          send('emotion', {
+            self: selfEmotion,
+            perceived_user: null,  // Phase 2 基础版故意留空占位，不透传模型的尝试性输出，不是遗漏
+          })
 
-        // 双发，不是迁移（TDD §3.3「SSE 事件类型规范」）：私有流零延迟给请求方本身，
-        // 这里额外广播同一份数据给其它窗口（如 Phase 3 悬浮窗按情绪标签联动立绘）
-        broadcastEvent('emotion', {
-          self: selfEmotion,
-          perceived_user: null,
-        })
+          // 双发，不是迁移（TDD §3.3「SSE 事件类型规范」）：私有流零延迟给请求方本身，
+          // 这里额外广播同一份数据给其它窗口（如 Phase 3 悬浮窗按情绪标签联动立绘）
+          broadcastEvent('emotion', {
+            self: selfEmotion,
+            perceived_user: null,
+          })
+        }
 
       } catch (err) {
         // ─── 连接建立后的错误，走 SSE system 事件 ───────────────

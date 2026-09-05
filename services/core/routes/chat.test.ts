@@ -243,21 +243,25 @@ describe('POST /chat', () => {
     expect(isExplicitSleep(session.sessionId)).toBe(true)
   })
 
-  it('self 情绪 label 为 sleep 时：SSE 私有流/广播流仍照常携带 sleep（本批次不改这个可见行为）', async () => {
-    loadSession('p1')
+  it('self 情绪 label 为 sleep 时：SSE 私有流/广播流均不发出 emotion 帧（TDD §3.7 附：x 永远不会是 sleep）', async () => {
+    const { session } = loadSession('p1')
     const { fastify } = await buildTestApp(JSON.stringify({
       reply: '好困呀',
       emotion: { self: { label: 'sleep', intensity: 0.9 }, perceived_user: null },
     }))
 
+    // broadcastEvent 是整个测试文件共享的模块级 mock（vi.mock 工厂里手写的 vi.fn()），不是
+    // 通过 vi.spyOn() 创建的——afterEach 的 vi.restoreAllMocks() 只对 spyOn 创建的 mock 生效，
+    // 对这个 vi.fn() 是空操作，调用记录会跨用例持续累积。因此这里改用调用次数的前后差值来
+    // 断言"这次请求没有再产生新的 emotion 广播"，而不是断言从未被调用过
+    const callsBefore = (BroadcastModule.broadcastEvent as unknown as { mock: { calls: unknown[] } }).mock.calls.length
+
     const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
     const emotion = parseSSE(response.payload).find(e => e.event === 'emotion')
 
-    expect(emotion?.data).toEqual({ self: { label: 'sleep', intensity: 0.9 }, perceived_user: null })
-    expect(BroadcastModule.broadcastEvent).toHaveBeenCalledWith('emotion', {
-      self: { label: 'sleep', intensity: 0.9 },
-      perceived_user: null,
-    })
+    expect(emotion).toBeUndefined()
+    expect((BroadcastModule.broadcastEvent as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBe(callsBefore)
+    expect(isExplicitSleep(session.sessionId)).toBe(true)
   })
 
   it('已存在真实情绪时，模型接着回复 sleep 不会覆盖/清除原有的 EmotionStates 记录', async () => {

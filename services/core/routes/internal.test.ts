@@ -5,6 +5,8 @@ import { recordSystemEvent, getLockScreenMinutes } from '../system/lockState.js'
 import { initDb, db } from '../db/index.js'
 import { upsertPreset, upsertEmotionState } from '../session/queries.js'
 import { loadSession } from '../session/index.js'
+import { markExplicitSleep } from '../session/attention.js'
+import { buildStatePayload } from '../state.js'
 
 // lock-screen/unlock-screen 不再广播 emotion 事件（TDD §3.3：POST /internal/system-event
 // 仅保留锁屏时长计时的职责）。这里只关心 internal.ts 是否触发了 broadcastEvent，不关心
@@ -33,6 +35,24 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks()
+})
+
+// getCurrentState()/current 是 session 模块内的进程级单例，不随 beforeEach 的 DB 清理重置，
+// 只能靠“整个文件里第一次调用 loadSession() 之前”这个执行顺序天然获得“无激活 session”这个
+// 前提——因此这条必须排在本文件全部 loadSession() 调用之前（后面 system-event 描述块最后一条测试也会调用
+// loadSession），单独拆成一个提前的 describe 块
+describe('POST /internal/overlay-interaction —— 无激活 session', () => {
+  it('没有激活 session 时，仍返回 200 且不报错', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'POST',
+      url: '/internal/overlay-interaction',
+      payload: { type: 'drag-end' },
+    })
+
+    expect(response.statusCode).toBe(200)
+  })
 })
 
 describe('POST /internal/system-event', () => {
@@ -103,5 +123,70 @@ describe('POST /internal/system-event', () => {
     await fastify.inject({ method: 'POST', url: '/internal/system-event', payload: { type: 'unlock-screen' } })
 
     expect(broadcastEvent).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /internal/overlay-interaction', () => {
+  it('有效上报后，GET /state 的 lastAttentionAt 被刷新且 explicitSleep 变为 false（TDD §3.3「新增交互上报端点」）', async () => {
+    upsertPreset({
+      presetId: 'p1', name: '角色一', characterId: 'char-001',
+      modelType: 'ollama', modelName: 'qwen3', systemPrompt: '你是角色一',
+    })
+    const { session } = loadSession('p1')
+    markExplicitSleep(session.sessionId)
+
+    const fastify = await buildTestApp()
+    const before = Date.now()
+    const response = await fastify.inject({
+      method: 'POST',
+      url: '/internal/overlay-interaction',
+      payload: { type: 'portrait-click' },
+    })
+
+    expect(response.statusCode).toBe(200)
+    const state = await buildStatePayload()
+    expect(state.lastAttentionAt).toBeGreaterThanOrEqual(before)
+    expect(state.explicitSleep).toBe(false)
+  })
+
+  it('type=portrait-click 与 type=drag-end 都被接受', async () => {
+    upsertPreset({
+      presetId: 'p1', name: '角色一', characterId: 'char-001',
+      modelType: 'ollama', modelName: 'qwen3', systemPrompt: '你是角色一',
+    })
+    loadSession('p1')
+    const fastify = await buildTestApp()
+
+    const clickResponse = await fastify.inject({
+      method: 'POST',
+      url: '/internal/overlay-interaction',
+      payload: { type: 'portrait-click' },
+    })
+    const dragResponse = await fastify.inject({
+      method: 'POST',
+      url: '/internal/overlay-interaction',
+      payload: { type: 'drag-end' },
+    })
+
+    expect(clickResponse.statusCode).toBe(200)
+    expect(dragResponse.statusCode).toBe(200)
+  })
+
+  it('非法/缺失 type 返回 400', async () => {
+    const fastify = await buildTestApp()
+
+    const invalidResponse = await fastify.inject({
+      method: 'POST',
+      url: '/internal/overlay-interaction',
+      payload: { type: 'foo' },
+    })
+    const missingResponse = await fastify.inject({
+      method: 'POST',
+      url: '/internal/overlay-interaction',
+      payload: {},
+    })
+
+    expect(invalidResponse.statusCode).toBe(400)
+    expect(missingResponse.statusCode).toBe(400)
   })
 })
