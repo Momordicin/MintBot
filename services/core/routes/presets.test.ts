@@ -10,9 +10,12 @@ import { presetRoutes } from './presets.js'
 import { buildStatePayload } from '../state.js'
 
 // buildStatePayload 内部读取 getModelProviderConfig().ollamaBaseUrl，mock 掉独立 config
-// 模块（而不是依赖真实的本地 config.json），保证测试结果不受本机 config.json 内容影响
+// 模块（而不是依赖真实的本地 config.json），保证测试结果不受本机 config.json 内容影响。
+// setDefaultPresetId 同样 mock 掉——POST /switch-preset 经 session/index.ts 的 switchPreset
+// 调用它，真实实现会写本机 config.json，测试不应该有这个副作用
 vi.mock('../config/index.js', () => ({
   getModelProviderConfig: vi.fn(() => ({ type: 'ollama' })),
+  setDefaultPresetId: vi.fn(),
 }))
 
 initDb()

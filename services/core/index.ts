@@ -3,7 +3,7 @@ import path from 'path'
 import fs from 'fs'
 import * as dotenv from 'dotenv'
 import { initDb } from './db/index.js'
-import { loadSession } from './session/index.js'
+import { loadSession, resolveStartupPresetId } from './session/index.js'
 import { getAllPresets, backfillMessageFts } from './session/queries.js'
 import { chatRoutes } from './routes/chat.js'
 import { eventsRoutes } from './routes/events.js'
@@ -20,7 +20,7 @@ import { windowBehaviorRoutes } from './routes/windowBehavior.js'
 import { createModelProvider, ModelProvider } from './providers/ModelProvider.js'
 import { BGEProvider, getAiBaseUrl, type EmbeddingProvider } from './providers/EmbeddingProvider.js'
 import { Bert4NerProvider, type NERProvider } from './providers/NERProvider.js'
-import { startConfigWatcher, getModelProviderConfig, getBackgroundModelProviderConfig } from './config/index.js'
+import { startConfigWatcher, getModelProviderConfig, getBackgroundModelProviderConfig, getDefaultPresetId } from './config/index.js'
 import { ensureOllama, stopOllamaIfManaged } from './providers/ollama.js'
 import { ensureAiService, stopAiServiceIfManaged } from './providers/aiService.js'
 import { startOrganizeModeScheduler } from './memory/orchestrator.js'
@@ -45,20 +45,12 @@ declare module 'fastify' {
   }
 }
 
-// defaultPresetId / streaming 目前都没有真实的类型化消费者，不属于独立 config 模块的类型范围
-// （见 config/index.ts 头部说明），这里各自保留一次独立的原始读取，行为与迁移前一致：
-// defaultPresetId 只在启动时读取一次；streaming 被 chat.ts 每次请求读取，因此额外 decorate
-// 到 fastify 实例上缓存（避免每个请求都读一次磁盘），并在 startConfigWatcher 的热更新回调里
-// 跟着 modelProvider 一起刷新
-function readDefaultPresetId(): string | undefined {
-  try {
-    const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'))
-    return raw.defaultPresetId as string | undefined
-  } catch {
-    return undefined
-  }
-}
-
+// streaming 目前没有真实的类型化消费者，不属于独立 config 模块的类型范围（见 config/index.ts
+// 头部说明），这里保留一次独立的原始读取，行为与迁移前一致：被 chat.ts 每次请求读取，因此
+// 额外 decorate 到 fastify 实例上缓存（避免每个请求都读一次磁盘），并在 startConfigWatcher
+// 的热更新回调里跟着 modelProvider 一起刷新。defaultPresetId 曾经也走这条 ad-hoc 读取路径，
+// 现已迁移进独立 config 模块（getDefaultPresetId()，见下方启动逻辑）——它现在有了真正的
+// 写入通道（session/index.ts 的 switchPreset），不再是"只读不写"的孤立字段
 function readStreamingEnabled(): boolean {
   try {
     const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'))
@@ -134,9 +126,12 @@ async function start() {
     await ensureOllama(modelConfig.ollamaBaseUrl)
   }
 
-  const defaultPresetId = readDefaultPresetId()
-  if (defaultPresetId) {
-    loadSession(defaultPresetId)
+  // resolveStartupPresetId 处理"没有 persisted 值"（首次启动）与"persisted 值指向的
+  // preset 已不存在"两种降级情况，一律回退到最近更新的 preset；一个 preset 都没有时返回
+  // undefined，此时不加载任何 session（与迁移前 defaultPresetId 缺失的行为一致）
+  const startupPresetId = resolveStartupPresetId(getDefaultPresetId())
+  if (startupPresetId) {
+    loadSession(startupPresetId)
   }
 
   // @fastify/cors 在不传 methods 时的默认值是 'GET,HEAD,POST'（见其 node_modules 源码），

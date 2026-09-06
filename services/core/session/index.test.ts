@@ -1,14 +1,22 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { initDb, db } from '../db/index.js'
 import { upsertPreset, upsertEmotionState, getEmotionState, updatePresetSystemPrompt } from './queries.js'
-import { loadSession, switchPreset, getCurrentState, refreshCurrentPresetIfActive } from './index.js'
+import { loadSession, switchPreset, getCurrentState, refreshCurrentPresetIfActive, resolveStartupPresetId } from './index.js'
 import * as BroadcastModule from '../events/broadcast.js'
+import * as ConfigModule from '../config/index.js'
 
 // switchPreset 广播 preset-switched（GET /events，TDD §3.3）：与 chat.test.ts 里 mock
 // broadcastEvent 的既有约定一致，只替换掉这一个函数，不影响 broadcast.ts 自身的注册表逻辑
 vi.mock('../events/broadcast.js', async importOriginal => {
   const actual = await importOriginal<typeof import('../events/broadcast.js')>()
   return { ...actual, broadcastEvent: vi.fn() }
+})
+
+// switchPreset 持久化 defaultPresetId（config.json，见 config/index.ts）：mock 掉写入函数，
+// 测试不应该有真实写本机 config.json 的副作用
+vi.mock('../config/index.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../config/index.js')>()
+  return { ...actual, setDefaultPresetId: vi.fn() }
 })
 
 initDb()
@@ -75,6 +83,44 @@ describe('switchPreset', () => {
       sessionId: newState.session.sessionId,
       presetId: newState.session.presetId,
     })
+  })
+
+  it('切换成功后持久化 defaultPresetId（重启后恢复上次激活的角色），只写切换后的新 presetId', () => {
+    loadSession('p1')
+    vi.clearAllMocks()
+
+    switchPreset('p2')
+
+    expect(ConfigModule.setDefaultPresetId).toHaveBeenCalledTimes(1)
+    expect(ConfigModule.setDefaultPresetId).toHaveBeenCalledWith('p2')
+  })
+})
+
+describe('resolveStartupPresetId', () => {
+  // beforeEach 里 p1/p2 是同步连续创建的，updatedAt（Date.now()，毫秒精度）可能相同，
+  // getAllPresets 的 ORDER BY updatedAt DESC 对相同值不保证顺序——显式把 p2 的 updatedAt
+  // 往后推，保证"最近更新的 preset"这一断言不依赖时钟精度/执行速度
+  beforeEach(() => {
+    db.prepare(`UPDATE Presets SET updatedAt = updatedAt + 1000 WHERE presetId = 'p2'`).run()
+  })
+
+  it('persisted 的 presetId 对应的 preset 仍然存在时，直接使用它', () => {
+    expect(resolveStartupPresetId('p1')).toBe('p1')
+  })
+
+  it('没有 persisted 值（首次启动）时，回退到最近更新的 preset', () => {
+    expect(resolveStartupPresetId(undefined)).toBe('p2')
+  })
+
+  it('persisted 的 presetId 已不存在（如角色被删除）时，回退到最近更新的 preset，不抛错', () => {
+    expect(resolveStartupPresetId('deleted-preset')).toBe('p2')
+  })
+
+  it('一个 preset 都没有时返回 undefined，不崩溃', () => {
+    db.exec(`DELETE FROM Presets`)
+
+    expect(resolveStartupPresetId(undefined)).toBeUndefined()
+    expect(resolveStartupPresetId('p1')).toBeUndefined()
   })
 })
 
@@ -160,5 +206,15 @@ describe('refreshCurrentPresetIfActive', () => {
     refreshCurrentPresetIfActive('p1')
 
     expect(BroadcastModule.broadcastEvent).not.toHaveBeenCalled()
+  })
+
+  it('不持久化 defaultPresetId——同上，不是真正的切换，不该影响重启后恢复的角色', () => {
+    loadSession('p1')
+    vi.clearAllMocks()
+
+    updatePresetSystemPrompt('p1', '更新后的人设')
+    refreshCurrentPresetIfActive('p1')
+
+    expect(ConfigModule.setDefaultPresetId).not.toHaveBeenCalled()
   })
 })

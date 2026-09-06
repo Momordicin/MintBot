@@ -2,8 +2,10 @@ import { randomUUID } from 'crypto'
 import type { Session, Preset, Message, PresetSnapshot } from '../../../shared/types/index.js'
 import { loadCharacterManifest, type CharacterManifest } from '../characters/manifest.js'
 import { broadcastEvent } from '../events/broadcast.js'
+import { setDefaultPresetId } from '../config/index.js'
 import {
   getPresetById,
+  getAllPresets,
   getLatestSessionByPreset,
   createSession,
   touchSession,
@@ -69,6 +71,13 @@ export function switchPreset(presetId: string): SessionState {
   current = null
   const state = loadSession(presetId)
 
+  // 持久化"当前激活 preset"（config.json 的 defaultPresetId 字段，见 config/index.ts），
+  // 供重启后 services/core/index.ts 启动时恢复。写在切换成功之后（loadSession 没有抛错），
+  // 且只写在真正的切换路径里，不写在进程退出时——退出路径（尤其 Windows 上）不可靠，
+  // 只有"切换发生的当下"才是保证会执行到的时机。同样不放进 loadSession 本身（服务启动时
+  // 调用一次没有必要往回写同一个值）
+  setDefaultPresetId(presetId)
+
   // 广播真正的"切换"发生（GET /events，TDD §3.3「SSE 事件类型规范」）：其它窗口（聊天窗口、
   // 悬浮窗）借此感知 session/preset 已变，自己去重新 fetch GET /state。只放最小 payload，
   // 不带完整 state——与 chat.ts 里 emotion 广播同一约定。只从这里广播，不放进 loadSession
@@ -78,6 +87,17 @@ export function switchPreset(presetId: string): SessionState {
   broadcastEvent('preset-switched', { sessionId: state.session.sessionId, presetId: state.session.presetId })
 
   return state
+}
+
+// 启动时应加载哪个 preset：persisted 的 defaultPresetId（config.json，见 setDefaultPresetId）
+// 若指向仍然存在的 preset 直接用；首次启动（尚无 persisted 值）或该 preset 已不存在
+// （比如未来支持删除角色后用户删掉了它）时，回退到最近更新过的一个 preset
+// （getAllPresets() 本身按 updatedAt DESC 排序，见 queries.ts）。一个 preset 都没有时返回
+// undefined，调用方（services/core/index.ts）据此跳过 loadSession——不崩溃、也不建一个
+// 指向不存在角色的空壳 session，与 defaultPresetId 缺失时的既有行为一致
+export function resolveStartupPresetId(persistedPresetId: string | undefined): string | undefined {
+  if (persistedPresetId && getPresetById(persistedPresetId)) return persistedPresetId
+  return getAllPresets()[0]?.presetId
 }
 
 // 设置页编辑 systemPrompt 后"立即生效"用：只替换内存缓存的 preset 对象本身，不碰 session
