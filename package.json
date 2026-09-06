@@ -7,6 +7,7 @@
     "dev": "electron-vite dev",
     "dev:core": "tsx watch services/core/index.ts",
     "dev:ai": "cd services/ai && uvicorn main:app --reload --port 8765",
+    "dev:all": "concurrently -k -n core,app -c cyan,green \"pnpm dev:core\" \"wait-on -l -t 120s http-get://127.0.0.1:3000/health && pnpm dev\"",
     "start:core": "pm2 start ecosystem.config.cjs",
     "build": "electron-vite build",
     "build:core": "pnpm exec tsc -p shared/tsconfig.json && pnpm exec tsc -p services/core/tsconfig.json",
@@ -58,6 +59,7 @@
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
     "vite": "^8.1.0",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.9",
+    "wait-on": "^9.1.0"
   }
 }
