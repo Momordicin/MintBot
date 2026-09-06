@@ -30,7 +30,7 @@ import fastifyStatic from '@fastify/static'
 import fastifyCors from '@fastify/cors'
 
 
-dotenv.config()
+dotenv.config({ quiet: true })
 
 const PORT = parseInt(process.env.CORE_PORT ?? '3000')
 const CONFIG_PATH = path.resolve(process.cwd(), 'config.json')

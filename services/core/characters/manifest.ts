@@ -6,7 +6,7 @@ import * as dotenv from 'dotenv'
 // 读 DB_PATH 前自己调用 dotenv.config() 同一做法，保证 .env 里的 ASSET_PATH 生效不依赖
 // "这个模块凑巧在 db/index.ts 之后被 import"这种隐式顺序；dotenv.config() 内部本身是幂等的
 // （重复调用不会覆盖已经存在的 process.env 值），跟其它模块各自调用不会互相冲突
-dotenv.config()
+dotenv.config({ quiet: true })
 
 // ASSET_PATH：角色包等静态资源根目录，配置外置（见 docs/MintBot_TDD.md §3.5「配置外置原则」）。
 // 与 services/core/db/index.ts 的 DB_PATH 同一约定：读 env，缺省回退到项目内相对路径。
