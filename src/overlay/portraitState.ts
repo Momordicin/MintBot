@@ -32,6 +32,13 @@ export interface OverlayManifest {
     pixel?: PortraitForm
   }
   reservedStates?: Record<string, string[]>
+  // 瞬间交互动作素材声明（TDD「立绘资源管理」interactionStates 小节）。⚠️ 形状与
+  // reservedStates 不同——值是单个字符串（如 "drag": "gifs/drag.gif"），不是数组：交互动作
+  // 没有"同一状态多变体随机展示"的诉求，manifest 作者只给一个素材，因此取材（见下方
+  // selectInteractionStateFile）不能照抄 reservedStates[y] 那条「查表再 pickRandom」的路径。
+  // 本批次只用得到 drag 这一个键（move 是另一个瞬间交互动作，不在本批次范围），但字段本身
+  // 按 schema 声明为通用的 Record，不为了"只认 drag"而特化
+  interactionStates?: Record<string, string>
   // 转场链条声明（schema v3「transitions」小节）。类型定为 unknown 而非具体的步骤形状：
   // 这是手写 manifest 里最容易写错的一块（from 可以是字符串或数组、durationMs 可能漏填），
   // 由 src/overlay/transitionState.ts 逐步做防御性解析，本文件的最小形状声明不替它预先假定
@@ -103,6 +110,15 @@ function selectYFile(manifest: OverlayManifest, y: YState): string | null {
   const candidates = manifest.reservedStates?.[y]
   if (!candidates || candidates.length === 0) return null
   return pickRandom(candidates)
+}
+
+// interactionStates 取材（TDD「interactionStates」小节）：值本身就是单个文件路径，不是数组，
+// 因此这里是一次直接查表，不需要 pickRandom——不要把这个函数和上面的 selectYFile 搞混，
+// 两者查的字段形状不同（本批次任务书明确点名的陷阱）。manifest/键都可能缺失（角色包没声明
+// 这个交互动作），缺失时返回 null，由调用方（resolveOverlayDisplayFile）按展示优先级继续
+// 回落，而不是直接空白
+export function selectInteractionStateFile(manifest: OverlayManifest | undefined, key: string): string | null {
+  return manifest?.interactionStates?.[key] ?? null
 }
 
 // 展示规则 + 素材回落链的完整组合（TDD「展示规则」「素材回落链」）：

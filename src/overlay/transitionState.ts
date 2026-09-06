@@ -9,6 +9,7 @@ import {
   type YState,
   pickRandom,
   resolveDisplayFile,
+  selectInteractionStateFile,
 } from './portraitState.js'
 
 // 四条转场链条（TDD「唤醒与转场」表格 + 「入睡转场 fall-asleep」）。poke-neutral 本批次
@@ -158,18 +159,25 @@ export function isTransitionLocked(lockedUntil: number | null, now: number): boo
   return lockedUntil !== null && now < lockedUntil
 }
 
-// 展示优先级新增转场这一层，且优先级最高（本批次任务书"Display priority becomes: transition
-// (if playing) → y → x → declared fallback → blank"；对应 TDD「y 的求值顺序」"转场进行中 →
-// y = 该转场"——转场是维护在接线层、凌驾于 y 之上的覆盖层，不是 YState 本身的第四个取值，
-// 因此这里的类型签名里没有出现 YState 之外的新状态，只是多加一个前置分支）。转场播放期间
-// 展示的文件由调用方（OverlayApp）在开始播放/切换到下一步时直接给出，不需要再走一遍
-// y/x 回落链；转场不在播放时才回落到既有的 resolveDisplayFile
+// 展示优先级：转场 → 拖拽 → y → x → declared fallback → blank（TDD「y 的求值顺序」"转场进行中
+// → y = 该转场""拖拽进行中 → y = drag"；两者都是维护在接线层、凌驾于 y 之上的覆盖层，不是
+// YState 本身的取值，因此这里的类型签名里没有出现 YState 之外的新状态，只是多加两个前置
+// 分支）。转场播放期间展示的文件由调用方（OverlayApp）在开始播放/切换到下一步时直接给出，
+// 不需要再走一遍 y/x 回落链；拖拽只是一个布尔位（isDragging），素材本身固定，因此在这里
+// 直接查 manifest.interactionStates.drag，不需要调用方另外解析好再传入。角色包没声明 drag
+// 素材时（selectInteractionStateFile 返回 null）不当作空白，而是继续落回 y/x 回落链——与
+// 素材回落链其它每一层"没有就往下落"的既有约定一致，不单独为 drag 破例
 export function resolveOverlayDisplayFile(
   manifest: OverlayManifest | undefined,
   transitionFile: string | null,
+  isDragging: boolean,
   y: YState,
   x: string | undefined,
 ): string | null {
   if (transitionFile !== null) return transitionFile
+  if (isDragging) {
+    const dragFile = selectInteractionStateFile(manifest, 'drag')
+    if (dragFile !== null) return dragFile
+  }
   return resolveDisplayFile(manifest, y, x)
 }

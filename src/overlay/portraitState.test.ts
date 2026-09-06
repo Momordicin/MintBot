@@ -5,6 +5,7 @@ import {
   deriveY,
   nextThresholdInstant,
   resolveDisplayFile,
+  selectInteractionStateFile,
   type OverlayManifest,
 } from './portraitState.js'
 
@@ -144,5 +145,25 @@ describe('portraitState: resolveDisplayFile 素材回落链', () => {
       portraits: { pixel: { fallback: 'idle', emotions: { happy: ['gifs/happy.gif'] } } },
     }
     expect(resolveDisplayFile(noSleep, 'sleeping', 'happy')).toBe('gifs/happy.gif')
+  })
+})
+
+describe('portraitState: selectInteractionStateFile（interactionStates 取材，形状是单个字符串不是数组）', () => {
+  it('声明了对应键时直接返回该字符串，不做随机挑选', () => {
+    const withDrag: OverlayManifest = { ...manifest, interactionStates: { drag: 'gifs/drag.gif' } }
+    expect(selectInteractionStateFile(withDrag, 'drag')).toBe('gifs/drag.gif')
+  })
+
+  it('manifest 未声明 interactionStates 时返回 null', () => {
+    expect(selectInteractionStateFile(manifest, 'drag')).toBeNull()
+  })
+
+  it('interactionStates 里没有该键时返回 null', () => {
+    const withMove: OverlayManifest = { ...manifest, interactionStates: { move: 'gifs/move.gif' } }
+    expect(selectInteractionStateFile(withMove, 'drag')).toBeNull()
+  })
+
+  it('manifest 未加载完成（undefined）时返回 null', () => {
+    expect(selectInteractionStateFile(undefined, 'drag')).toBeNull()
   })
 })
