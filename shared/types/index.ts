@@ -181,7 +181,6 @@ export interface PendingTool {
 
 export interface CompletionOptions {
   maxTokens?: number
-  temperature?: number
   signal?: AbortSignal  // 用于中断流式请求（Phase 6 预留）
   // 向模型发信json格式化的显式开关 
   // 对不满足格式条件的调用开启

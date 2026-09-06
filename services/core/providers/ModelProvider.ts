@@ -150,7 +150,7 @@ export class ModelProvider {
   ): AsyncIterable<string> {
     yield* ModelProvider.callOpenAICompatible(
       this.config.openaiBaseUrl ?? 'https://api.openai.com/v1',
-      this.config.openaiApiKey ?? 'no-key',
+      ModelProvider.requireApiKey(this.config.openaiApiKey, 'OpenAI'),
       this.config.modelName ?? 'gpt-4o',
       messages,
       { ...options, maxTokens: this.resolveMaxTokens(options) },
@@ -166,7 +166,7 @@ export class ModelProvider {
   ): AsyncIterable<string> {
     yield* ModelProvider.callOpenAICompatible(
       this.config.deepseekBaseUrl ?? 'https://api.deepseek.com',
-      this.config.deepseekApiKey ?? 'no-key',
+      ModelProvider.requireApiKey(this.config.deepseekApiKey, 'DeepSeek'),
       this.config.modelName ?? 'deepseek-v4-flash',
       messages,
       { ...options, maxTokens: this.resolveMaxTokens(options) },
@@ -198,7 +198,7 @@ export class ModelProvider {
   ): Promise<string> {
     return ModelProvider.callOpenAICompatibleSync(
       this.config.openaiBaseUrl ?? 'https://api.openai.com/v1',
-      this.config.openaiApiKey ?? 'no-key',
+      ModelProvider.requireApiKey(this.config.openaiApiKey, 'OpenAI'),
       this.config.modelName ?? 'gpt-4o',
       messages,
       { ...options, maxTokens: this.resolveMaxTokens(options) },
@@ -214,7 +214,7 @@ export class ModelProvider {
   ): Promise<string> {
     return ModelProvider.callOpenAICompatibleSync(
       this.config.deepseekBaseUrl ?? 'https://api.deepseek.com',
-      this.config.deepseekApiKey ?? 'no-key',
+      ModelProvider.requireApiKey(this.config.deepseekApiKey, 'DeepSeek'),
       this.config.modelName ?? 'deepseek-v4-flash',
       messages,
       { ...options, maxTokens: this.resolveMaxTokens(options) },
@@ -271,6 +271,63 @@ export class ModelProvider {
     }
   }
 
+  // openai/deepseek 走 callOpenAICompatible 时，此前缺失 apiKey 会静默落到字面量 'no-key'，
+  // 把"用户从未配置凭据"这个可自愈的问题伪装成一次真实请求，最终从 provider 收到一个不知所云的
+  // 401——这里改为提前失败并明说缺的是什么。ollama 不走这个检查：它传的 'ollama' 是固定占位
+  // 字符串，不是"缺失凭据"的兜底，本地端点原本就不做鉴权，误加检查会把"正常可用"判成"未配置"
+  private static requireApiKey(apiKey: string | undefined, providerLabel: string): string {
+    if (!apiKey) {
+      throw new Error(`[ModelProvider] ${providerLabel} API key is not configured`)
+    }
+    return apiKey
+  }
+
+  // ─── 失败响应体读取 ──────────────────────────────────────────────
+  // 此前 !response.ok 分支只抛状态行（如 "404 Not Found"），响应体里 provider 真正给出的
+  // 诊断信息（无效 model id、参数错误、超额、内容策略拒绝……）被完全丢弃。callOpenAICompatible
+  // （流式）与 callOpenAICompatibleSync（非流式）在各自的 !response.ok 分支命中时都还没读过
+  // response.body——流式分支的 SSE 读取从这行之后才开始，非流式分支的 response.json() 也在
+  // 这个判断之后——因此这里读一次是安全的，不会与后续读取冲突，也不会读两次。
+  //
+  // body 读取本身可能失败（截断的响应、非文本 body）：用 try/catch 兜底，读失败时退回状态行
+  // 本身，不让"读 body 出错"盖过"请求本身失败"这个更有用的原始信息。
+  //
+  // provider 的错误体形如 { error: { message, type, code } }（OpenAI/DeepSeek 一致）；这里
+  // 选用裸 JSON.parse + try/catch，而不是 util/jsonSalvage.ts 的兜底解析——jsonSalvage 是为
+  // 模型生成内容（可能被 ```json 围栏包裹、混有说明文字）设计的；provider 的错误响应体不是
+  // 模型生成内容，要么是规整的 JSON，要么是网关/CDN 吐出的 HTML 错误页——后者如果被
+  // jsonSalvage 的贪婪花括号兜底从 HTML 里意外摘出一段不相关的 "{...}"，会得到一段看似解析
+  // 成功、实际上是错误信息碎片的东西，比"解析失败、原样展示 HTML 文本"更糟。裸 JSON.parse
+  // 在这里更诚实：能解析就是真正的结构化错误，不能解析就如实展示原始文本。
+  //
+  // 长度上限 500 字符：足够容纳完整的 { error: { message, type, code } }，又能拦住网关错误页
+  // 或超长 message 把异常信息拉得没法读
+  private static async describeErrorResponse(response: Response): Promise<string> {
+    const statusLine = `${response.status} ${response.statusText}`
+    let text: string
+    try {
+      text = await response.text()
+    } catch {
+      return statusLine
+    }
+    if (!text) return statusLine
+
+    const detail = ModelProvider.extractErrorDetail(text)
+    const bounded = detail.length > 500 ? `${detail.slice(0, 500)}…` : detail
+    return `${statusLine} - ${bounded}`
+  }
+
+  private static extractErrorDetail(text: string): string {
+    try {
+      const parsed = JSON.parse(text) as { error?: { message?: unknown } }
+      const message = parsed?.error?.message
+      if (typeof message === 'string' && message) return message
+    } catch {
+      // 非 JSON body，原样返回原始文本
+    }
+    return text
+  }
+
   // OpenAI 兼容接口调用
 
   private static async *callOpenAICompatible(
@@ -305,7 +362,7 @@ export class ModelProvider {
       signal: options.signal,
     })
 
-    if (!response.ok) { throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`) }
+    if (!response.ok) { throw new Error(`OpenAI API error: ${await ModelProvider.describeErrorResponse(response)}`) }
     if (!response.body) { throw new Error('[ModelProvider] Response body is null') }
 
     const reader = response.body.getReader()
@@ -367,7 +424,7 @@ export class ModelProvider {
       signal: options.signal,
     })
 
-    if (!response.ok) { throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`) }
+    if (!response.ok) { throw new Error(`OpenAI API error: ${await ModelProvider.describeErrorResponse(response)}`) }
 
     const json = await response.json()
     return json.choices?.[0]?.message?.content ?? ''

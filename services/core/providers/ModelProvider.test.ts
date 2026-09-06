@@ -54,6 +54,11 @@ function fakeNonStreamResponse(content: string): Response {
   return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 })
 }
 
+// !response.ok 分支用的失败响应，body 按各测试用例自定（well-formed JSON / 非 JSON / 空 / 超长）
+function fakeErrorResponse(status: number, statusText: string, body: string): Response {
+  return new Response(body, { status, statusText })
+}
+
 async function drain(provider: ReturnType<typeof createModelProviderForPreset>): Promise<void> {
   const context: BuiltContext = { system: '', messages: [{ role: 'user', content: 'hi' }] }
   for await (const _chunk of provider.complete(context)) {
@@ -86,7 +91,7 @@ describe('createModelProviderForPreset', () => {
     const fetchSpy = vi.fn().mockResolvedValue(fakeStreamResponse())
     vi.stubGlobal('fetch', fetchSpy)
 
-    const globalConfig: ModelConfig = { type: 'ollama', ollamaModel: 'should-not-be-used' }
+    const globalConfig: ModelConfig = { type: 'ollama', ollamaModel: 'should-not-be-used', openaiApiKey: 'key' }
     const preset = fakePreset({ modelType: 'openai', modelName: 'gpt-4o-mini' })
 
     const provider = createModelProviderForPreset(preset, globalConfig)
@@ -433,5 +438,122 @@ describe('resolveMaxTokens 三级 fallback', () => {
 
     const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
     expect(body.max_completion_tokens).toBe(1000)
+  })
+})
+
+// 此前 !response.ok 分支只抛状态行，provider 真正返回的诊断信息被丢弃；这里覆盖 describeErrorResponse
+// 读取到的四种 body 形态，以及流式路径同样生效（不只是非流式路径）
+describe('失败响应体读取（describeErrorResponse）', () => {
+  const context: BuiltContext = { system: '', messages: [{ role: 'user', content: 'hi' }] }
+
+  it('well-formed JSON error 对象：从 error.message 提取诊断信息，而不是只有状态行', async () => {
+    const errorBody = JSON.stringify({
+      error: { message: 'Invalid model ID: gpt-99', type: 'invalid_request_error', code: 'model_not_found' },
+    })
+    const fetchSpy = vi.fn().mockResolvedValue(fakeErrorResponse(400, 'Bad Request', errorBody))
+    vi.stubGlobal('fetch', fetchSpy)
+    const provider = createModelProvider({ type: 'openai', modelName: 'gpt-99', openaiApiKey: 'key' })
+
+    await expect(provider.completeSync(context)).rejects.toThrow(
+      'OpenAI API error: 400 Bad Request - Invalid model ID: gpt-99'
+    )
+  })
+
+  it('非 JSON body：解析失败时原样展示原始文本，而不是丢弃', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(
+      fakeErrorResponse(502, 'Bad Gateway', '<html><body>Bad Gateway</body></html>')
+    )
+    vi.stubGlobal('fetch', fetchSpy)
+    const provider = createModelProvider({ type: 'openai', modelName: 'gpt-4o-mini', openaiApiKey: 'key' })
+
+    await expect(provider.completeSync(context)).rejects.toThrow(
+      'OpenAI API error: 502 Bad Gateway - <html><body>Bad Gateway</body></html>'
+    )
+  })
+
+  it('空 body：退回状态行本身，不拼接多余的 " - "', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(fakeErrorResponse(500, 'Internal Server Error', ''))
+    vi.stubGlobal('fetch', fetchSpy)
+    const provider = createModelProvider({ type: 'openai', modelName: 'gpt-4o-mini', openaiApiKey: 'key' })
+
+    let caught: Error | undefined
+    try {
+      await provider.completeSync(context)
+    } catch (err) {
+      caught = err as Error
+    }
+    expect(caught?.message).toBe('OpenAI API error: 500 Internal Server Error')
+  })
+
+  it('超长 body：截断到 500 字符并加省略号，不把整段塞进异常信息', async () => {
+    const longMessage = 'x'.repeat(2000)
+    const fetchSpy = vi.fn().mockResolvedValue(
+      fakeErrorResponse(400, 'Bad Request', JSON.stringify({ error: { message: longMessage } }))
+    )
+    vi.stubGlobal('fetch', fetchSpy)
+    const provider = createModelProvider({ type: 'openai', modelName: 'gpt-4o-mini', openaiApiKey: 'key' })
+
+    let caught: Error | undefined
+    try {
+      await provider.completeSync(context)
+    } catch (err) {
+      caught = err as Error
+    }
+    expect(caught).toBeDefined()
+    const detail = caught!.message.slice('OpenAI API error: 400 Bad Request - '.length)
+    expect(detail.length).toBe(501) // 500 字符 + 1 个省略号
+    expect(detail.endsWith('…')).toBe(true)
+  })
+
+  it('流式路径（complete）同样读取失败响应体，不只是非流式路径独有', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(
+      fakeErrorResponse(429, 'Too Many Requests', JSON.stringify({ error: { message: 'Rate limit exceeded' } }))
+    )
+    vi.stubGlobal('fetch', fetchSpy)
+    const provider = createModelProvider({ type: 'openai', modelName: 'gpt-4o-mini', openaiApiKey: 'key' })
+
+    await expect(drain(provider)).rejects.toThrow(
+      'OpenAI API error: 429 Too Many Requests - Rate limit exceeded'
+    )
+  })
+})
+
+// apiKey 兜底为字面量 'no-key' 会把"用户从未配置凭据"伪装成一次真实请求，最终从 provider 收到
+// 不知所云的 401；openai/deepseek 需要真实凭据，提前失败且不发起 fetch；ollama 本地端点不认证，
+// 不在此列，必须仍能正常请求
+describe('缺失 API Key 时提前失败', () => {
+  const context: BuiltContext = { system: '', messages: [{ role: 'user', content: 'hi' }] }
+
+  it('openai 未配置 openaiApiKey 时提前失败，不发起 fetch', async () => {
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    const provider = createModelProvider({ type: 'openai', modelName: 'gpt-4o-mini' })
+
+    await expect(provider.completeSync(context)).rejects.toThrow(
+      '[ModelProvider] OpenAI API key is not configured'
+    )
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('deepseek 未配置 deepseekApiKey 时提前失败，不发起 fetch', async () => {
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    const provider = createModelProvider({ type: 'deepseek' })
+
+    await expect(provider.completeSync(context)).rejects.toThrow(
+      '[ModelProvider] DeepSeek API key is not configured'
+    )
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('ollama 未配置任何凭据字段时仍正常发起请求（本地端点不认证，不应被误判为缺失凭据）', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(fakeNonStreamResponse('ollama reply'))
+    vi.stubGlobal('fetch', fetchSpy)
+    const provider = createModelProvider({ type: 'ollama' })
+
+    const result = await provider.completeSync(context)
+
+    expect(result).toBe('ollama reply')
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
   })
 })
