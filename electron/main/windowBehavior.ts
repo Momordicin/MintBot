@@ -225,7 +225,7 @@ export function markProgrammaticWindowPlacement(): void {
 // independent，见该函数注释），因此这里不再需要 baseline/baselineDisplay 参数
 //
 // 跳屏动画：走 animateTo 而不是直接 setBounds，悬浮窗和聊天窗口共用这个函数，因此两者的
-// 跳屏都会带上划出/飞入动画（同屏/尺寸变化会被 animateTo 内部的前置守卫短路成瞬间跳）。
+// 跳屏都会带上划出/飞入动画（同屏调用会被 animateTo 内部的前置守卫短路成瞬间跳（尺寸守卫已随飞近动画一并移除——尺寸不再参与补间））。
 // 这里不使用 animateTo 返回的取消函数——中断处理（最小化/隐藏/关闭/销毁）已经由
 // windowAnimation.ts 内部的一次性监听自行兜底，调用方不需要持有它
 export function moveToNonFullscreenDisplay(
