@@ -1,9 +1,20 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { db, initDb } from '../db/index.js'
 import { appendMessage, insertEntity, getCurrentEntities } from '../session/queries.js'
 import { extractEntities, type EntityModelProvider } from './entityExtractor.js'
 import type { NERProvider } from '../providers/NERProvider.js'
 import type { Message, NerEntity } from '../../../shared/types/index.js'
+
+// config.json 是 gitignored 的（装着 API key），CI 上没有这个文件，而 getBackgroundModelProviderConfig()
+// 在未配置时会抛错。entityExtractor.ts 从 config 只引了这一个函数，把它换掉之后，本文件测的
+// 就只剩实体变更逻辑本身，跟"这台机器有没有配模型"无关——否则这些用例会在有 config.json 的
+// 机器上过、在 CI 上挂，而挂的位置（Layer 3 的 try/catch 把配置抛错当成"Layer 3 失败"吞掉）
+// 跟真正要验证的逻辑毫无关系。与 summarizer.test.ts 同一写法。
+//
+// 不返回 maxTokens：下方有一条用例专门验证"未覆盖时回落到 1000"，需要这里保持缺省
+vi.mock('../config/index.js', () => ({
+  getBackgroundModelProviderConfig: () => ({ type: 'ollama' }),
+}))
 
 initDb()
 beforeEach(() => {

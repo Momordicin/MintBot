@@ -16,6 +16,16 @@ vi.mock('../events/broadcast.js', async importOriginal => {
   return { ...actual, broadcastEvent: vi.fn() }
 })
 
+// buildStatePayload() 会读 getModelProviderConfig()（判断是否需要探测 ollama 运行状态），
+// 而 config.json 是 gitignored 的、CI 上不存在，未配置时该函数抛错。这里只覆盖这一个导出、
+// 其余保持真实（与上面 broadcast 的 mock 同一写法），把本文件的验证范围收回到
+// lastAttentionAt / explicitSleep 本身。刻意返回非 ollama 的 type：ollama 分支会真的去
+// 探测本地端口，那是另一种环境依赖
+vi.mock('../config/index.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../config/index.js')>()
+  return { ...actual, getModelProviderConfig: () => ({ type: 'anthropic' as const }) }
+})
+
 import { broadcastEvent } from '../events/broadcast.js'
 
 async function buildTestApp() {
