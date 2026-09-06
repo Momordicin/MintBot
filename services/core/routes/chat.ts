@@ -4,7 +4,7 @@ import { buildContext } from '../context/buildContext.js'
 import { parseSelfEmotion, parseEmoteTag } from '../session/emotion.js'
 import { selectEmoteFile } from '../characters/emotePool.js'
 import { upsertEmotionState } from '../session/queries.js'
-import { recordAttention, markExplicitSleep } from '../session/attention.js'
+import { recordAttention, markExplicitSleep, isExplicitSleep } from '../session/attention.js'
 import { broadcastEvent } from '../events/broadcast.js'
 import { createModelProviderForPreset } from '../providers/ModelProvider.js'
 import { getModelProviderConfig } from '../config/index.js'
@@ -210,21 +210,35 @@ export async function chatRoutes(fastify: FastifyInstance) {
           }
         }
 
-        // sleep 回复不产生 emotion 帧（见上方注释）；没有合法情绪时 selfEmotion 为 null，
-        // 仍照常发一帧 self: null（既有降级行为，不受这次改动影响）
-        if (!isSleep) {
-          send('emotion', {
-            self: selfEmotion,
-            perceived_user: null,  // Phase 2 基础版故意留空占位，不透传模型的尝试性输出，不是遗漏
-          })
-
-          // 双发，不是迁移（TDD §3.3「SSE 事件类型规范」）：私有流零延迟给请求方本身，
-          // 这里额外广播同一份数据给其它窗口（如 Phase 3 悬浮窗按情绪标签联动立绘）
-          broadcastEvent('emotion', {
-            self: selfEmotion,
-            perceived_user: null,
-          })
+        // 帧本身总是发出，isSleep 只决定**要不要带 self**，不再决定要不要发帧。
+        // 这个区别很关键：isSleep 这个守卫的职责是「x 永不为 sleep」（TDD §3.9），而 x 只
+        // 从 self.label 派生——省掉 self 就已经完全达到目的。此前连整帧一起吞掉，会顺带
+        // 把 sessionId / explicitSleep 也吞掉：模型这一轮既被 §3.8 文本检测判为困了、又恰好
+        // 自发把 label 标成 sleep 时，标记置上了却一帧不发，悬浮窗要等到下一次阈值轮询才
+        // 知道——正是这两个字段要消除的那个洞。两个检测器读的是同一段「角色说自己困了」的
+        // 文本，所以这不是随机撞车，而是恰好在最该生效的那一轮撞车。
+        //
+        // 省的是**整个 self 键**，不是发 self: null。后者会把渲染层的 x 清空，而 TDD §3.9
+        // 的推论要求「从睡着唤醒后回落到上一次真实的情绪」——x 必须保留原值。渲染层按
+        // 「self 键在不在」决定要不要动 x，与 message_done 的 emote 字段同一约定。
+        // 没有合法情绪时 selfEmotion 为 null，仍照常带 self: null（既有降级行为，不受影响）
+        //
+        // sessionId：请求 dispatch 时刻捕获的值（同 message_done），不是重新读取的当前
+        // 全局 session——悬浮窗据此判断这帧是否还属于它当前展示的角色，同一竞态防线。
+        // explicitSleep：在此刻（帧即将发出前）读取，而不是请求开始时的快照——上面的
+        // detectSleepiness → markExplicitSleep 已经跑完，这里读到的是本轮真正生效的值
+        const emotionPayload = {
+          sessionId,
+          explicitSleep: isExplicitSleep(sessionId),
+          // perceived_user：Phase 2 基础版故意留空占位，不透传模型的尝试性输出，不是遗漏
+          ...(isSleep ? {} : { self: selfEmotion, perceived_user: null }),
         }
+
+        send('emotion', emotionPayload)
+
+        // 双发，不是迁移（TDD §3.3「SSE 事件类型规范」）：私有流零延迟给请求方本身，
+        // 这里额外广播同一份数据给其它窗口（悬浮窗按情绪标签联动立绘）
+        broadcastEvent('emotion', emotionPayload)
 
       } catch (err) {
         // ─── 连接建立后的错误，走 SSE system 事件 ───────────────

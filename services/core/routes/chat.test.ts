@@ -158,7 +158,12 @@ describe('POST /chat', () => {
     expect(messageDone?.data.text).toBe('你好呀')
 
     const emotion = events.find(e => e.event === 'emotion')
-    expect(emotion?.data).toEqual({ self: { label: 'happy', intensity: 0.8 }, perceived_user: null })
+    expect(emotion?.data).toEqual({
+      self: { label: 'happy', intensity: 0.8 },
+      perceived_user: null,
+      sessionId: session.sessionId,
+      explicitSleep: false,
+    })
 
     const stored = getEmotionState(session.sessionId)
     expect(stored?.self).toEqual({ label: 'happy', intensity: 0.8 })
@@ -203,7 +208,7 @@ describe('POST /chat', () => {
   })
 
   it('self 情绪合法时，广播流也收到与私有流一致的 emotion payload', async () => {
-    loadSession('p1')
+    const { session } = loadSession('p1')
     const { fastify } = await buildTestApp(JSON.stringify({
       reply: '你好呀',
       emotion: { self: { label: 'happy', intensity: 0.8 }, perceived_user: null },
@@ -214,6 +219,8 @@ describe('POST /chat', () => {
     expect(BroadcastModule.broadcastEvent).toHaveBeenCalledWith('emotion', {
       self: { label: 'happy', intensity: 0.8 },
       perceived_user: null,
+      sessionId: session.sessionId,
+      explicitSleep: false,
     })
   })
 
@@ -225,9 +232,29 @@ describe('POST /chat', () => {
     const events = parseSSE(response.payload)
 
     const emotion = events.find(e => e.event === 'emotion')
-    expect(emotion?.data).toEqual({ self: null, perceived_user: null })
+    expect(emotion?.data).toEqual({
+      self: null,
+      perceived_user: null,
+      sessionId: session.sessionId,
+      explicitSleep: false,
+    })
 
     expect(getEmotionState(session.sessionId)).toBeNull()
+  })
+
+  it('reply 正文命中困意检测规则时，emotion 帧的 explicitSleep 携带 true（私有流与广播流一致，TDD §3.7 附「入睡转场」"回复内容检测到困意"）', async () => {
+    const { session } = loadSession('p1')
+    const { fastify } = await buildTestApp(JSON.stringify({ reply: '啊我好困呀' }))
+
+    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+    const events = parseSSE(response.payload)
+
+    const emotion = events.find(e => e.event === 'emotion')
+    expect(emotion?.data).toMatchObject({ sessionId: session.sessionId, explicitSleep: true })
+    expect(BroadcastModule.broadcastEvent).toHaveBeenCalledWith(
+      'emotion',
+      expect.objectContaining({ sessionId: session.sessionId, explicitSleep: true }),
+    )
   })
 
   it('self 情绪 label 为 sleep 时：不落 EmotionStates，但也不再置显式睡着标记（TDD §3.9「必须保留的守卫」：sleep 归位后，自发的 sleep label 是未定义行为，不能触发睡着）', async () => {
@@ -245,7 +272,7 @@ describe('POST /chat', () => {
     expect(isExplicitSleep(session.sessionId)).toBe(false)
   })
 
-  it('self 情绪 label 为 sleep 时：SSE 私有流/广播流均不发出 emotion 帧（TDD §3.7 附：x 永远不会是 sleep）', async () => {
+  it('self 情绪 label 为 sleep 时：帧照常发出但整个省掉 self 键（x 永不为 sleep 靠不给 self 达成，而不是吞掉整帧——sessionId/explicitSleep 必须照常送达）', async () => {
     const { session } = loadSession('p1')
     // reply 正文特意选用不会触发文本检测类（好困/困了等模式）的中性文本，这样这里观察到
     // 的行为只来自 emotion.label === 'sleep' 这条路径本身，不与 §3.8 的困意文本检测混在一起
@@ -263,11 +290,48 @@ describe('POST /chat', () => {
     const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
     const emotion = parseSSE(response.payload).find(e => e.event === 'emotion')
 
-    expect(emotion).toBeUndefined()
-    expect((BroadcastModule.broadcastEvent as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBe(callsBefore)
+    // 帧必须发出：吞掉整帧会连 sessionId/explicitSleep 一起吞掉，而模型「既被文本检测判为
+    // 困了、又自发标 label 为 sleep」时正是最需要这两个字段送达的那一轮
+    expect(emotion).toBeDefined()
+    // self 键整个不存在——不是 self: null。发 null 会把渲染层的 x 清空，而 TDD §3.9 的推论
+    // 要求唤醒后回落到上一次真实的情绪，x 必须保留
+    expect(emotion!.data).not.toHaveProperty('self')
+    expect(emotion!.data).toMatchObject({ sessionId: session.sessionId, explicitSleep: false })
+
+    const broadcastCalls = (BroadcastModule.broadcastEvent as unknown as { mock: { calls: unknown[][] } }).mock.calls
+    expect(broadcastCalls.length).toBe(callsBefore + 1)
+    const broadcastPayload = broadcastCalls[broadcastCalls.length - 1][1] as Record<string, unknown>
+    expect(broadcastPayload).not.toHaveProperty('self')
+    expect(broadcastPayload).toMatchObject({ sessionId: session.sessionId, explicitSleep: false })
+
     expect(isExplicitSleep(session.sessionId)).toBe(false)
   })
 
+  it('两个检测器同时命中（正文含困意 + label 也是 sleep）：帧仍照常发出，explicitSleep 为 true 且不带 self', async () => {
+    const { session } = loadSession('p1')
+    // 这是本条修复真正针对的场景：§3.8 的文本检测与 §3.9 的 label 守卫读的是同一段「角色说
+    // 自己困了」的文本，所以两者会相关地一起命中。此前 emotion 帧被 isSleep 整个吞掉，
+    // 标记置上了却送不出去，悬浮窗要等下一次阈值轮询才知道——正好回到这两个字段要消除的洞
+    const { fastify } = await buildTestApp(JSON.stringify({
+      reply: '啊我好困呀',
+      emotion: { self: { label: 'sleep', intensity: 0.9 }, perceived_user: null },
+    }))
+
+    const callsBefore = (BroadcastModule.broadcastEvent as unknown as { mock: { calls: unknown[] } }).mock.calls.length
+    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+    const emotion = parseSSE(response.payload).find(e => e.event === 'emotion')
+
+    expect(emotion).toBeDefined()
+    expect(emotion!.data).not.toHaveProperty('self')
+    expect(emotion!.data).toMatchObject({ sessionId: session.sessionId, explicitSleep: true })
+
+    const broadcastCalls = (BroadcastModule.broadcastEvent as unknown as { mock: { calls: unknown[][] } }).mock.calls
+    expect(broadcastCalls.length).toBe(callsBefore + 1)
+    expect(broadcastCalls[broadcastCalls.length - 1][1] as Record<string, unknown>).toMatchObject({ explicitSleep: true })
+
+    // 文本检测置的标记生效；label 那条路径仍然只拦 x，不落 EmotionStates
+    expect(isExplicitSleep(session.sessionId)).toBe(true)
+  })
   it('已存在真实情绪时，模型接着回复 sleep 不会覆盖/清除原有的 EmotionStates 记录', async () => {
     const { session } = loadSession('p1')
     queries.upsertEmotionState(session.sessionId, { self: { label: 'happy', intensity: 0.8 }, perceived_user: null })
