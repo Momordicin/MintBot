@@ -16,6 +16,14 @@ export class ModelProvider {
     this.config = config
   }
 
+  // 三级 fallback：调用方显式传入 > provider 自身配置的 maxTokens > 1000。
+  // 后两级此前散落在四个请求构造点各自硬编码 `options.maxTokens ?? 1000`，
+  // 完全没看 this.config——导致整理模式调用方（summarizer/characterImport/
+  // entityExtractor）不得不各自跑去读一次全局 config 模块拿 maxTokens 再传进来
+  private resolveMaxTokens(options: CompletionOptions): number {
+    return options.maxTokens ?? this.config.maxTokens ?? 1000
+  }
+
   // 流式
   async *complete(
     context: BuiltContext,
@@ -84,7 +92,7 @@ export class ModelProvider {
       model: this.config.modelName ?? (() => {
         throw new Error('[ModelProvider] modelName is required in config')
       })(),
-      max_tokens: options.maxTokens ?? 1000,
+      max_tokens: this.resolveMaxTokens(options),
       system: system || undefined,
       messages: chatMessages.map(m => ({
         role: m.role as 'user' | 'assistant',
@@ -119,7 +127,7 @@ export class ModelProvider {
       model: this.config.modelName ?? (() => {
         throw new Error('[ModelProvider] modelName is required in config')
       })(),
-      max_tokens: options.maxTokens ?? 1000,
+      max_tokens: this.resolveMaxTokens(options),
       system: system || undefined,
       messages: chatMessages.map(m => ({
         role: m.role as 'user' | 'assistant',
@@ -145,7 +153,7 @@ export class ModelProvider {
       this.config.openaiApiKey ?? 'no-key',
       this.config.modelName ?? 'gpt-4o',
       messages,
-      options,
+      { ...options, maxTokens: this.resolveMaxTokens(options) },
       ModelProvider.openAIRequestOverrides(options)
     )
   }
@@ -161,7 +169,7 @@ export class ModelProvider {
       this.config.deepseekApiKey ?? 'no-key',
       this.config.modelName ?? 'deepseek-v4-flash',
       messages,
-      options,
+      { ...options, maxTokens: this.resolveMaxTokens(options) },
       ModelProvider.deepSeekRequestOverrides(options)
     )
   }
@@ -177,7 +185,7 @@ export class ModelProvider {
       'ollama',
       this.config.ollamaModel ?? 'qwen3',
       messages,
-      options,
+      { ...options, maxTokens: this.resolveMaxTokens(options) },
       ModelProvider.ollamaRequestOverrides(options)
     )
   }
@@ -193,7 +201,7 @@ export class ModelProvider {
       this.config.openaiApiKey ?? 'no-key',
       this.config.modelName ?? 'gpt-4o',
       messages,
-      options,
+      { ...options, maxTokens: this.resolveMaxTokens(options) },
       ModelProvider.openAIRequestOverrides(options)
     )
   }
@@ -209,7 +217,7 @@ export class ModelProvider {
       this.config.deepseekApiKey ?? 'no-key',
       this.config.modelName ?? 'deepseek-v4-flash',
       messages,
-      options,
+      { ...options, maxTokens: this.resolveMaxTokens(options) },
       ModelProvider.deepSeekRequestOverrides(options)
     )
   }
@@ -225,7 +233,7 @@ export class ModelProvider {
       'ollama',
       this.config.ollamaModel ?? 'qwen3',
       messages,
-      options,
+      { ...options, maxTokens: this.resolveMaxTokens(options) },
       ModelProvider.ollamaRequestOverrides(options)
     )
   }

@@ -395,3 +395,43 @@ describe('provider 专属请求体覆盖（response_format / max_completion_toke
     expect(body.thinking).toEqual({ type: 'disabled' })
   })
 })
+
+// resolveMaxTokens 三级 fallback（调用方显式传入 > provider 自身配置的 maxTokens > 1000）：
+// summarizer.ts / characterImport.ts / entityExtractor.ts 这三个整理模式调用方不再显式传
+// maxTokens，改为完全依赖这条 fallback 链——覆盖点从这三个模块的测试挪到这里
+describe('resolveMaxTokens 三级 fallback', () => {
+  const context: BuiltContext = { system: '', messages: [{ role: 'user', content: 'hi' }] }
+
+  it('调用方显式传入 maxTokens 时优先生效，即便 provider 自身配置了另一个值', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(fakeNonStreamResponse('reply'))
+    vi.stubGlobal('fetch', fetchSpy)
+    const provider = createModelProvider({ type: 'openai', modelName: 'gpt-4o-mini', openaiApiKey: 'key', maxTokens: 2000 })
+
+    await provider.completeSync(context, { maxTokens: 500 })
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
+    expect(body.max_completion_tokens).toBe(500)
+  })
+
+  it('调用方未传 maxTokens 时使用 provider 自身配置的 maxTokens', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(fakeNonStreamResponse('reply'))
+    vi.stubGlobal('fetch', fetchSpy)
+    const provider = createModelProvider({ type: 'openai', modelName: 'gpt-4o-mini', openaiApiKey: 'key', maxTokens: 2000 })
+
+    await provider.completeSync(context)
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
+    expect(body.max_completion_tokens).toBe(2000)
+  })
+
+  it('调用方未传 maxTokens 且 provider 自身也未配置时，回落到默认值 1000', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(fakeNonStreamResponse('reply'))
+    vi.stubGlobal('fetch', fetchSpy)
+    const provider = createModelProvider({ type: 'openai', modelName: 'gpt-4o-mini', openaiApiKey: 'key' })
+
+    await provider.completeSync(context)
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
+    expect(body.max_completion_tokens).toBe(1000)
+  })
+})

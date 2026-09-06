@@ -1,20 +1,14 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { db, initDb } from '../db/index.js'
 import { appendMessage, insertEntity, getCurrentEntities } from '../session/queries.js'
 import { extractEntities, type EntityModelProvider } from './entityExtractor.js'
 import type { NERProvider } from '../providers/NERProvider.js'
 import type { Message, NerEntity } from '../../../shared/types/index.js'
 
-// config.json 是 gitignored 的（装着 API key），CI 上没有这个文件，而 getBackgroundModelProviderConfig()
-// 在未配置时会抛错。entityExtractor.ts 从 config 只引了这一个函数，把它换掉之后，本文件测的
-// 就只剩实体变更逻辑本身，跟"这台机器有没有配模型"无关——否则这些用例会在有 config.json 的
-// 机器上过、在 CI 上挂，而挂的位置（Layer 3 的 try/catch 把配置抛错当成"Layer 3 失败"吞掉）
-// 跟真正要验证的逻辑毫无关系。与 summarizer.test.ts 同一写法。
-//
-// 不返回 maxTokens：下方有一条用例专门验证"未覆盖时回落到 1000"，需要这里保持缺省
-vi.mock('../config/index.js', () => ({
-  getBackgroundModelProviderConfig: () => ({ type: 'ollama' }),
-}))
+// entityExtractor.ts 不再引用 config 模块（maxTokens 现在随 deps.model 一起从 index.ts 组装
+// 时带入，见 ModelProvider.resolveMaxTokens），本文件因此不需要 mock config/index.js——此前
+// 这里的 mock 只是为了绕开 getBackgroundModelProviderConfig() 在未配置时抛错（config.json 是
+// gitignored 的，CI 上没有这个文件），现在这个理由已经不存在
 
 initDb()
 beforeEach(() => {
@@ -180,25 +174,6 @@ describe('extractEntities — 双时态实体变更（Layer 3）', () => {
     expect(result.inserted).toBe(1)
     const oldRow = db.prepare(`SELECT * FROM MessageEntities WHERE id = ?`).get(oldId) as any
     expect(oldRow.validUntil).not.toBeNull()
-  })
-
-  it('主模型调用带上 maxTokens（读自 backgroundModelProvider 配置，未覆盖时回落到 1000），而不是被硬编码遗漏', async () => {
-    const msg = addMessage('s1', '普通消息', 5000)
-    let capturedOptions: { maxTokens?: number } | undefined
-    const capturingModel: EntityModelProvider = {
-      async completeSync(_context, options) {
-        capturedOptions = options
-        return '{"changes":[]}'
-      },
-    }
-
-    await extractEntities([msg], { ner: emptyNer(), model: capturingModel })
-
-    // 测试环境没有 mock ../config/index.js（真实读取仓库根目录 config.json，其中未配置
-    // backgroundModelProvider.maxTokens），因此这里断言的是 fallback 到默认值 1000 这条路径；
-    // “读到非默认配置值”这一半已经在 summarizer.test.ts / characterImport.test.ts 用
-    // mock 过的 getBackgroundModelProviderConfig() 覆盖过
-    expect(capturedOptions).toEqual({ maxTokens: 1000 })
   })
 })
 

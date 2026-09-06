@@ -5,13 +5,6 @@ import path from 'path'
 import { characterImportRoutes } from './characterImport.js'
 import { CHARACTERS_ROOT } from '../characters/manifest.js'
 
-// 只 mock characterImport.ts 实际用到的这一个 config 函数（getBackgroundModelProviderConfig），
-// 让"maxTokens 读配置而非硬编码"的用例能覆盖非默认值
-let backgroundModelProviderMaxTokens: number | undefined
-vi.mock('../config/index.js', () => ({
-  getBackgroundModelProviderConfig: () => ({ type: 'ollama', maxTokens: backgroundModelProviderMaxTokens }),
-}))
-
 async function buildTestApp() {
   const fastify = Fastify()
   // 路由内部读取 fastify.backgroundModelProvider（POST /characters/import/generate），
@@ -199,40 +192,6 @@ describe('POST /characters/import/generate', () => {
     expect(response.statusCode).toBe(200)
     expect(body).toEqual({ systemPrompt: '改写后的人设正文' })
     expect(fastify.backgroundModelProvider.completeSync).toHaveBeenCalledTimes(1)
-  })
-
-  it('maxTokens 未配置 backgroundModelProvider 覆盖时，回落到默认值 1000', async () => {
-    backgroundModelProviderMaxTokens = undefined
-    const fastify = await buildTestApp()
-    ;(fastify.backgroundModelProvider.completeSync as any).mockResolvedValue('改写后的人设正文')
-
-    await fastify.inject({
-      method: 'POST',
-      url: '/characters/import/generate',
-      payload: { description: '一只猫娘' },
-    })
-
-    expect(fastify.backgroundModelProvider.completeSync).toHaveBeenCalledWith(
-      expect.anything(),
-      { maxTokens: 1000 }
-    )
-  })
-
-  it('maxTokens 读取 backgroundModelProvider 配置的值，而不是硬编码 1000', async () => {
-    backgroundModelProviderMaxTokens = 3000
-    const fastify = await buildTestApp()
-    ;(fastify.backgroundModelProvider.completeSync as any).mockResolvedValue('改写后的人设正文')
-
-    await fastify.inject({
-      method: 'POST',
-      url: '/characters/import/generate',
-      payload: { description: '一只猫娘' },
-    })
-
-    expect(fastify.backgroundModelProvider.completeSync).toHaveBeenCalledWith(
-      expect.anything(),
-      { maxTokens: 3000 }
-    )
   })
 
   it('model 调用失败时返回 502，不抛出未捕获异常', async () => {
