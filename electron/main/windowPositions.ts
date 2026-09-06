@@ -190,19 +190,32 @@ export function computeSizeForDisplay(
 // 原先的算法一致），用上面算出的宽高代入。聊天窗口启动时用的是"居中"而不是这个公式（见
 // index.ts computeDefaultChatBounds），两者共享的只是尺寸计算（computeSizeForDisplay），
 // 位置公式本来就分属两种不同的默认落点约定，不在这里合并
+//
+// windowKey 是可选的第四个参数（review 发现的问题1b）：聊天窗口首次启动走的是上面提到的
+// "居中"公式，不经过这里；但聊天窗口 dodge-fullscreen 跳屏/归位到一块从未去过的显示器时
+// 确实会经过这里（windowBehavior.ts 的 moveToNonFullscreenDisplay/restoreToDisplay 两个
+// 窗口共用同一个函数）。悬浮窗与聊天窗口现在各自独立判断是否需要跳屏（不再是 either/or），
+// 若两者在同一个 tick 都第一次落到同一块全新显示器上（常见于双屏、且两者跳屏前恰好都在
+// 同一块"家"屏幕），排除项相同、目标显示器也会算出相同结果——都贴同一个右下角的话，
+// 132×132 的悬浮窗会被 290×520 的聊天窗口默认落点完全包住（同一个角，悬浮窗几何上是
+// 聊天窗口的子集）。悬浮窗改贴右上角而不是右下角，与聊天窗口的默认角错开，避免这种重叠；
+// 聊天窗口自己的默认落点（windowKey 不是 'overlay' 时）保持右下角不变，不影响任何既有调用
+// （省略 windowKey 时同样是右下角，兼容此前所有调用点与既有单测）
 export function computeDefaultBoundsForDisplay(
   display: Electron.Display,
   displays: Electron.Display[],
-  defaultSize: { width: number; height: number }
+  defaultSize: { width: number; height: number },
+  windowKey?: WindowKey
 ): Bounds {
   const { width, height } = computeSizeForDisplay(display, displays, defaultSize)
 
   // 用 workArea（带 x/y 偏移）而不是 workAreaSize：任务栏停靠在上边/左边时 workArea.x/y
   // 不为 0，只用宽高算出来的坐标会跟任务栏厚度错位
   const { x: workAreaX, y: workAreaY, width: workAreaWidth, height: workAreaHeight } = display.workArea
+  const y = windowKey === 'overlay' ? workAreaY : workAreaY + workAreaHeight - height
   return {
     x: workAreaX + workAreaWidth - width,
-    y: workAreaY + workAreaHeight - height,
+    y,
     width,
     height,
   }

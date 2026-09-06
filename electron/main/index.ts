@@ -502,7 +502,7 @@ function resolveOverlayStartupBounds(): Bounds {
   const stored = getPreferredBounds('overlay', targetDisplay.id)
   const bounds = stored
     ? clampBoundsToWorkArea(stored, targetDisplay.workArea)
-    : computeDefaultBoundsForDisplay(targetDisplay, displays, DEFAULT_WINDOW_SIZE.overlay)
+    : computeDefaultBoundsForDisplay(targetDisplay, displays, DEFAULT_WINDOW_SIZE.overlay, 'overlay')
   if (!stored) {
     setPreferredBounds('overlay', targetDisplay.id, bounds)
   }
@@ -515,7 +515,7 @@ function createOverlayWindow(): BrowserWindow {
 
   // 构造窗口同样是一次程序放置，必须记进冷却期——否则窗口落到目标屏后 Windows 异步发来的
   // WM_DPICHANGED 尺寸校正会被 handleWindowMoved 当成用户手动调整写进偏好表（详见该函数）
-  markProgrammaticWindowPlacement()
+  markProgrammaticWindowPlacement('overlay')
 
   const win = new BrowserWindow({
     width,
@@ -524,6 +524,10 @@ function createOverlayWindow(): BrowserWindow {
     y,
     frame: false,
     transparent: true,
+    // 透明无边框窗口在 Windows 上仍会由 DWM 沿窗口矩形画一圈投影（hasShadow 默认 true）。
+    // 深色桌面上看不出来，浅色/白底桌面上就是一个明显的方框——而悬浮窗的可见形状应该只有
+    // 立绘本身，窗口矩形不该被看见
+    hasShadow: false,
     alwaysOnTop: true,
     resizable: false,
     skipTaskbar: true,
@@ -650,7 +654,7 @@ function createWindow() {
   const { x, y, width, height } = resolveChatStartupBounds()
 
   // 同 createOverlayWindow：构造即程序放置，先进冷却期再建窗口
-  markProgrammaticWindowPlacement()
+  markProgrammaticWindowPlacement('chat')
 
   const win = new BrowserWindow({
     x,

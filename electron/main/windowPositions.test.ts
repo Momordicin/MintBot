@@ -195,4 +195,18 @@ describe('computeDefaultBoundsForDisplay', () => {
       height: 300,
     })
   })
+
+  it('anchors the overlay to the top-right corner instead, so it never lands fully inside the chat window default bottom-right footprint (review issue 1b)', () => {
+    // 两块屏密度相同（都不传 scaleFactor，默认 1），不触发 computeSizeForDisplay 的密度换算，
+    // defaultSize 原样使用——把这个测试跟"密度换算是否正确"（上面那个测试）完全分开，只验证
+    // windowKey='overlay' 时 y 锚点确实换成了工作区顶端
+    const display = makeDisplay(1, { x: 0, y: 0, width: 1920, height: 1080 }, { x: 0, y: 40, width: 1920, height: 1040 })
+    const defaultSize = { width: 150, height: 300 }
+    expect(computeDefaultBoundsForDisplay(display, [display], defaultSize, 'overlay')).toEqual({
+      x: 1920 - 150,
+      y: 40,
+      width: 150,
+      height: 300,
+    })
+  })
 })
