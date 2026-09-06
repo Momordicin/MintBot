@@ -88,13 +88,65 @@ const DEFAULT_CONFIG: WindowBehaviorConfig = {
 // 初始化完成之前用默认值兜底，不阻塞 handleActiveWindowChange 的其它逻辑
 let cachedConfig: WindowBehaviorConfig = DEFAULT_CONFIG
 
-export async function initWindowBehaviorConfig(): Promise<void> {
+// 按 pinMode 套用置顶态的"基线"规则：只由 pinMode 本身决定目标态（'off' → false，
+// 'always-on-top'/'dodge-fullscreen' → true，P-2：非冲突态基线已改为常驻置顶），三种模式
+// 恰好用 pinMode !== 'off' 一个表达式覆盖。
+//
+// 但 dodge-fullscreen 且 dodgeDisplayId !== null 时必须跳过：那表示轮询驱动的 handlePinMode
+// 已经判定当前存在全屏冲突并做过处置，其中"跳不出去只能让位"这一支会特意把置顶设成 false。
+// 调用这个函数的两个时机（配置变更 / 冷启动）都可能发生在前台其实是 MintBot 自己的时刻，
+// 那只说明"这一瞬间没有冲突"，不代表 handlePinMode 之前做的让位决定已经失效——无条件套用
+// 基线会把窗口顶到全屏应用之上，直到下一次轮询才自我纠正。冲突态下的置顶归 handlePinMode
+// 独占管理，这个函数只处理非冲突的基线情形。
+//
+// updateCachedWindowBehaviorConfig（配置变更）与 initWindowBehaviorConfig（冷启动）共用这
+// 一份判断，避免两处各自维护同一条规则、之后改动只改了一处而彼此漂移
+function applyBaselinePinMode(mainWindow: BrowserWindow, pinMode: PinMode): void {
+  if (pinMode !== 'dodge-fullscreen' || dodgeDisplayId === null) {
+    applyAlwaysOnTop(mainWindow, pinMode !== 'off')
+  }
+}
+
+// mainWindow 传入是为了冷启动那一刻就把置顶态套用到主窗口——不能指望 handlePinMode 靠
+// activeWindowMonitor 的下一次轮询来触发：应用刚启动时前台大概率就是 MintBot 自己，
+// activeWindowMonitor 会因自我排除直接返回 null，handleActiveWindowChange 整个短路，
+// handlePinMode 根本不会被调用，用户在切到外部窗口一次之前聊天窗口都不会置顶。
+//
+// fetch 失败（网络错误或响应非 2xx）时 cachedConfig 保留模块初始值 DEFAULT_CONFIG
+// （pinMode: 'off'），下面仍会走 applyBaselinePinMode——对 'off' 该套用的目标态本来就是
+// false，等价于什么都不做，不需要为失败路径单独分支
+export async function initWindowBehaviorConfig(mainWindow: BrowserWindow | null): Promise<void> {
   try {
     const response = await fetch(`${CORE_URL}/config/window-behavior`)
-    if (!response.ok) return
-    cachedConfig = await response.json()
+    if (response.ok) {
+      cachedConfig = await response.json()
+    }
   } catch (err) {
     console.error('[WindowBehavior] Failed to fetch initial config, using defaults:', err)
+  }
+  // isDestroyed 守卫：本函数在 await fetch 前后跨了异步，mainWindow 是调用时刻捕获的引用，
+  // 窗口若在这期间被销毁，setAlwaysOnTop 会抛在一个 fire-and-forget 的 Promise 上（调用点
+  // 不 await），变成未捕获的 rejection。与本文件/index.ts 中其它跨异步使用窗口引用的地方
+  // 同一写法（positionOnChatDisplay、设置窗口那条 handler）。实际竞态窗口极小，属防御
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    // 与 updateCachedWindowBehaviorConfig 做同样的两步，不能只做后一步。本函数现在不只
+    // 在冷启动时跑——SSE 每次重连成功都会再跑一次以重新同步配置（见 index.ts 的重连循环），
+    // 而断线期间用户完全可能改过 pinMode。若这里只 applyBaselinePinMode，遇到「断线期间从
+    // dodge-fullscreen 切走、且当时正在跳屏躲避」这种组合，缓存更新了但 dodgeDisplayId 仍
+    // 悬着、窗口也不归位。轮询会在 500ms 内自愈，但没有理由让两个调用点对同一条规则做得
+    // 不一样。冷启动时 dodgeDisplayId 必为 null，这一步是 no-op，加上它不影响原有路径
+    // 单独一个 try，不并进上面那个：上面那个包着 fetch，合并后 fetch 失败就会跳过 apply，
+    // 而「取不到配置时也按默认值 apply 一次」是刻意的（见函数头注释）。这里要防的是另一件
+    // 事——上面的 isDestroyed() 只收窄、没有消除 TOCTOU：窗口可能在检查之后、原生调用之前
+    // 被销毁，setBounds/setAlwaysOnTop 便会抛错。本函数是 fire-and-forget 调用的（两个调用点
+    // 都不 await），抛出去就是未捕获的 rejection。冷启动时这段只跑一次，现在 SSE 每次重连
+    // 都会再跑一次，暴露面随之放大，因此在函数内部收口一次，而不是让每个调用点各自 .catch()
+    try {
+      restoreHomeBoundsIfLeavingDodgeMode(mainWindow, cachedConfig.pinMode)
+      applyBaselinePinMode(mainWindow, cachedConfig.pinMode)
+    } catch (err) {
+      console.error('[WindowBehavior] Failed to apply pin state:', err)
+    }
   }
 }
 
@@ -123,19 +175,9 @@ export function updateCachedWindowBehaviorConfig(config: WindowBehaviorConfig, m
     restoreHomeBoundsIfLeavingDodgeMode(mainWindow, config.pinMode)
     // P-3：配置变更这一刻立即把置顶态套用到新模式，不等下一次轮询——不然从设置页/托盘
     // 切完模式后，置顶态要拖到用户下一次切到外部窗口、handlePinMode 被轮询驱动调用时
-    // 才补上（见上面 restoreHomeBoundsIfLeavingDodgeMode 的调用点注释）。
-    // 'off' → false，'always-on-top' → true，'dodge-fullscreen' → true（P-2：非冲突态基线
-    // 已改为常驻置顶）。三种模式恰好用 pinMode !== 'off' 一个表达式覆盖。
-    //
-    // 但 dodge-fullscreen 且 dodgeDisplayId !== null 时必须跳过：那表示轮询已经判定当前存在
-    // 全屏冲突并做过处置，其中"跳不出去只能让位"这一支会特意把置顶设成 false。触发这次
-    // 调用时前台确实是 MintBot 自己，但那只说明"这一瞬间没有冲突"，不代表那个让位决定
-    // 已经失效——用户可能只是 Alt-Tab 过来改了个跟 pinMode 无关的字段（如黑名单），
-    // 服务端广播的却是合并后的完整配置。此时无条件置顶会把窗口顶到全屏应用之上，
-    // 直到下一次轮询才自我纠正。冲突态下的置顶归轮询驱动的 handlePinMode 独占管理
-    if (config.pinMode !== 'dodge-fullscreen' || dodgeDisplayId === null) {
-      applyAlwaysOnTop(mainWindow, config.pinMode !== 'off')
-    }
+    // 才补上（见上面 restoreHomeBoundsIfLeavingDodgeMode 的调用点注释）。守卫逻辑与
+    // initWindowBehaviorConfig 共用 applyBaselinePinMode，见该函数注释
+    applyBaselinePinMode(mainWindow, config.pinMode)
   }
 }
 
