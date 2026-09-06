@@ -655,7 +655,7 @@ export function OverlayApp() {
       )}
       {/* 专属拖拽手柄（TDD「拖拽的实现方式」⚠️ 透明拖拽带零宽度风险已在真机确认发生）：
           近方形立绘吃满 max-width/height 100% 时，root 上没被立绘盖住的可拖区域宽度为 0，
-          唯一还留着的可拖区就是这个固定 16px 角标。始终挂载在 DOM 里（只用 opacity 切换
+          唯一还留着的可拖区就是这个固定 20px 圆形角标。始终挂载在 DOM 里（只用 opacity 切换
           可见度），不透明度不影响命中区——手柄淡出后原地仍可拖，可见度只是提示不是开关。
           .overlay-root--locked 时被下面 CSS 覆盖为 no-drag，见 overlay.css 顶部注释 */}
       <div

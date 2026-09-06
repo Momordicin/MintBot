@@ -31,26 +31,42 @@
 
 /* 专属拖拽手柄（docs/MintBot_TDD.md §3.7 附「拖拽的实现方式」⚠️「透明拖拽带可能没有
    宽度」的风险已在真机确认发生：近方形立绘吃满 max-width/height 100% 时，root 上没被
-   立绘盖住的可拖区宽度为 0，悬浮窗完全拖不动）。固定 16px、钉在右上角，始终挂载在 DOM 里，
-   只用 opacity 在基线 0.15 / 醒目 0.8 之间切换——不透明度不影响 -webkit-app-region 的命中区，
+   立绘盖住的可拖区宽度为 0，悬浮窗完全拖不动）。固定 20px 圆形、钉在右上角，始终挂载在
+   DOM 里，只用 opacity 在基线 0.18 / 醒目 0.95 之间切换——不透明度不影响 -webkit-app-region 的命中区，
    淡出后原地仍可拖，可见度只是提示不是开关。可见状态由 OverlayApp.tsx 的 isHandleVisible
    state + 这个 class 驱动，不用 :hover——手柄本身是 drag 区域，:hover 命中在到达 DOM 之前
    就被 WM_NCHITTEST 拦成 HTCAPTION，:hover 伪类完全不会触发（electron#13534） */
 .overlay-drag-handle {
   position: absolute;
-  top: 0;
-  right: 0;
-  width: 16px;
-  height: 16px;
+  top: 2px;
+  right: 2px;
+  width: 20px;
+  height: 20px;
   -webkit-app-region: drag;
-  background-color: rgba(255, 255, 255, 0.6);
-  border-radius: 3px;
-  opacity: 0.15;
+  border-radius: 50%;
+  /* 灰底 + 一圈白边 + 一层投影：灰底在白桌面上靠自身明度立住，白边在深色桌面上勾出轮廓，
+     两种极端桌面底色下都不会消失。旧版是纯白方块，白底桌面上等于隐形——那不是高亮不够，
+     是底色选错了 */
+  background-color: rgba(168, 170, 176, 0.85);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.5),
+    0 1px 3px rgba(0, 0, 0, 0.35);
+  /* 三道横杠用三层 background-image 画，不额外引入伪元素或 svg——手柄是 drag 区域，
+     结构越简单越不容易在命中测试上出意外。杠宽 10px、杠高 2px、间距 2px，纵向占
+     5~15px，在 20px 的圆里正好居中 */
+  background-image:
+    linear-gradient(rgba(24, 24, 28, 0.88), rgba(24, 24, 28, 0.88)),
+    linear-gradient(rgba(24, 24, 28, 0.88), rgba(24, 24, 28, 0.88)),
+    linear-gradient(rgba(24, 24, 28, 0.88), rgba(24, 24, 28, 0.88));
+  background-size: 10px 2px;
+  background-position: 5px 5px, 5px 9px, 5px 13px;
+  background-repeat: no-repeat;
+  opacity: 0.18;
   transition: opacity 150ms ease;
 }
 
 .overlay-drag-handle.overlay-drag-handle--visible {
-  opacity: 0.8;
+  opacity: 0.95;
 }
 
 /* 交互锁期间手柄也必须变回 no-drag：锁的目的是「转场进行中禁止拖拽」（见上方
