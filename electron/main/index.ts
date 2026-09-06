@@ -438,6 +438,13 @@ function positionOnChatDisplay(win: BrowserWindow): void {
 
 let settingsWindow: BrowserWindow | null = null
 
+// parent: mainWindow
+// 实测Electron 42.4.1 owned window 的三种父窗口状态迁移：
+// ① 父窗口 minimize() → 子窗口自动隐藏（isVisible() 变 false），
+// 父窗口 restore() 后子窗口自动恢复可见，不需要本文件任何代码介入；
+// ② 父窗口 hide() → 子窗口不仍然可见；
+// ③ 父窗口 应用退出路径正常 destroy()  → 子窗口跟着销毁
+// ?? undefined 是类型层面的兜底
 function createSettingsWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 760,
