@@ -8,7 +8,7 @@
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
-  background-color: #0f0f14;
+  background-color: rgb(var(--window-bg-rgb));
   position: relative;
   overflow: hidden;
 }
@@ -38,24 +38,68 @@
      验证。未叠加 env(titlebar-area-x)：本项目目标平台固定 Windows + 按钮居右，该变量
      恒为 0；按钮居左（如 RTL）不在支持范围内，加了也没有真机可验证 */
   padding-right: calc(100% - env(titlebar-area-width, calc(100% - 138px)));
-  /* 不再需要与主进程 TITLEBAR_OVERLAY_COLOR 保持同一 alpha：原生层已改为完全透明，
-     不贡献底色，这里的 0.40 是标题栏唯一的底色来源，两处不存在"叠加"或"一致性"的
-     耦合关系了 */
-  background: rgba(15, 15, 20, 0.40);
-  /* 毛玻璃：让身后壁纸轻微模糊而非完全清晰，避免标题栏区域抢注意力（用户反馈）。8px 取
-     "轻微"区间（6-10px）中段——标题栏净高只有 25px，半径再大会把整条纹理糊成一块纯色，
-     反而丢失跟下方壁纸的观感连续性。
-     批次二会给 .chat-window 加一个绝对定位的 ::before 壁纸图层（带
-     opacity: var(--wallpaper-opacity)，TDD §2.2）——它是 .chat-titlebar 的兄弟节点而非
-     祖先。backdrop root 规则只由祖先链上的 opacity < 1 触发（TDD §五附「推翻『不用
-     backdrop-filter』」），兄弟节点的半透明不会把这里的 backdrop-filter 打掉，理论上仍能
-     把这个已合成的半透明壁纸层当作背景正常捕获、模糊。批次二落地后仍需目视复验一次 */
-  backdrop-filter: blur(8px);
   -webkit-app-region: drag;
   /* 批次二会在 .chat-window 上加一个绝对定位的 ::before 壁纸图层——CSS 绘制顺序中
      静态块先于定位元素绘制，届时任何 position: static 的兄弟节点都会被压到壁纸下面。
      这里提前占位，现在写零成本，事后补是返工，不要因为暂时看不出作用就删掉 */
   position: relative;
+}
+
+/* ─── 材质（毛玻璃）：标题栏与输入栏共用同一个配方 ───────────
+   厚模糊 + 色彩叠加 + 饱和度提升，仿 Windows Acrylic 这一类系统级"材质"的观感，
+   但这类材质的具体配方上游都不公开，这里的 12px / 180% / 0.65 全部是本项目自己选的。
+   --titlebar-bg / --input-bg 由 src/chat/themeVars.ts 算出（bg2 按 CHROME_MATERIAL_ALPHA
+   合成的半透明色，取代了上一代模型里固定的 CHROME_SURFACE_ALPHA = 0.40——那个 0.40 是从
+   已删除的 chromeColor.ts 沿用下来的历史约定，从来不是为这一套新配色专门选的，本次一并
+   删除，不再作为任何 token 存在）。
+
+   毛玻璃半径 12px 而不是社区常见的约 20px：标题栏净高只有 25px，半径再大会把整条纹理
+   糊成一块纯色，反而丢失跟下方壁纸的观感连续性——这条推理延续自本文件此前对 8px 的
+   论证（净高有限、半径必须收着选），只是把具体数字从 8px 调到 12px，配合新增的
+   saturate(180%) 一起构成"材质"而不是单纯的模糊。saturate(180%) 是让被半透明叠色冲淡、
+   被模糊糊开的壁纸看起来依然有色彩，不是灰蒙蒙一片。
+
+   ⚠️ backdrop-filter 有 backdrop root 规则：任何祖先元素 opacity < 1 都会让子元素的
+   backdrop-filter 只在该祖先与自身之间取材质，捕获不到再往上的内容（TDD §五附「推翻
+   『不用 backdrop-filter』」）。.chat-titlebar / .input-area 目前的祖先链上没有
+   opacity < 1 的元素，材质能正常捕获到壁纸；但日后如果给 .chat-window 或更外层加一个
+   淡入淡出动画（常见做法是在动画的祖先节点上过渡 opacity），会在动画期间悄悄让这里的
+   材质失效而不报错——写这条动画时要留意 */
+.chat-titlebar {
+  background: var(--titlebar-bg);
+}
+
+.input-area {
+  background: var(--input-bg);
+}
+
+/* --titlebar-bg 与 --input-bg 目前取值相等（两者都是 bg2 按 CHROME_MATERIAL_ALPHA
+   合成的同一份材质色，见 src/chat/themeVars.ts），但仍分别声明成两个变量而不是共用
+   一个——settings.css 的设置窗口标题栏 / 输入栏也各自消费同名变量，两边各自独立才不
+   会在设置窗口的实现细节变化时意外牵动聊天窗口 */
+.chat-titlebar,
+.input-area {
+  backdrop-filter: blur(12px) saturate(180%);
+}
+
+/* 材质是不是一种"必需品"：同类的系统级材质（Windows Acrylic 等）都会在电池节能模式、
+   用户关闭透明度、低配硬件、窗口失焦等情形下强制退化为纯色——材质从来不是"锦上添花"，
+   退化路径是规格的一部分，不是可选项。这里镜像同一个态度，用两条独立路径都退化到不透明
+   的 bg2（--bg2-rgb 是 themeVars.ts 提供的原始三元组，不带 CHROME_MATERIAL_ALPHA）：
+   ① 引擎本身不支持 backdrop-filter；② 用户在系统里开启了"减少透明度" */
+@supports not (backdrop-filter: blur(1px)) {
+  .chat-titlebar,
+  .input-area {
+    background: rgb(var(--bg2-rgb));
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .chat-titlebar,
+  .input-area {
+    background: rgb(var(--bg2-rgb));
+    backdrop-filter: none;
+  }
 }
 
 .chat-titlebar__avatar {
@@ -75,7 +119,7 @@
   width: 17px;
   height: 17px;
   border-radius: 50%;
-  background: rgba(120, 90, 180, 0.6);
+  background: var(--fill3);
 }
 
 .chat-titlebar__name {
@@ -83,7 +127,10 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: var(--bubble-bot-text);
+  /* 文字深浅随模式翻转（day 纯黑 / night 纯白），即 theme.ts 的 label，
+     与窗口按钮符号色同一个值（TDD §2.2「派生策略」、src/chat/themeVars.ts
+     titlebarOverlayFromTheme） */
+  color: var(--titlebar-text);
 }
 
 /* ─── Embedding 未就绪：头像置灰 ───────────────────────── */
@@ -106,8 +153,11 @@
 }
 
 .banner--warn {
-  background: rgba(200, 120, 30, 0.85);
-  color: #fff;
+  /* M3 没有 warning 角色，任何版本的规范都没有定义、Google 也没有发布替代方案
+     （见 theme.ts error 色板小节注释）——这里刻意复用 error 色板而不是发明一个
+     warning 角色 */
+  background: var(--error-container);
+  color: var(--on-error-container);
 }
 
 /* ─── 聊天区域 ─────────────────────────────────────────── */
@@ -126,7 +176,7 @@
   padding: 16px 12px;
   display: flex;
   flex-direction: column;
-  background: rgba(var(--chat-bg-rgb), var(--chat-bg-opacity));
+  background: rgba(var(--window-bg-rgb), var(--chat-bg-opacity));
 }
 
 .msg-list__inner {
@@ -148,8 +198,8 @@
   height: 32px;
   border-radius: 50%;
   border: none;
-  background: rgba(255, 255, 255, 0.15);
-  color: #fff;
+  background: var(--fill2);
+  color: var(--label);
   font-size: 18px;
   cursor: pointer;
   display: flex;
@@ -159,7 +209,11 @@
 }
 
 .scroll-btn:hover {
-  background: rgba(255, 255, 255, 0.25);
+  background: var(--fill1);
+}
+
+.scroll-btn:active {
+  opacity: 0.8;
 }
 
 /* ─── 消息行 ───────────────────────────────────────────── */
@@ -199,11 +253,7 @@
   width: var(--avatar-size);
   height: var(--avatar-size);
   border-radius: 50%;
-  background: rgba(120, 90, 180, 0.6);
-}
-
-.msg-avatar__placeholder--user {
-  background: rgba(80, 140, 200, 0.6);
+  background: var(--fill3);
 }
 
 /* ─── 消息列 ───────────────────────────────────────────── */
@@ -255,6 +305,15 @@
   line-height: 1.6;
   word-break: break-word;
   white-space: pre-wrap;
+  /* 经典投影：光源左上、影子落右下，day/night 两个模式共用同一条规则，不按模式分支
+     （用户的选择：纯黑背景上这条阴影确实看不出效果，但背景通常是壁纸而不是纯黑，
+     那种情况下阴影仍然起作用，为一种几乎不会发生的极端情形单独分叉不值得）。
+     这条投影本身承担的分量比看起来重：bubbleIn 现在是 bg2，day 模式下 #F2F2F7 叠在
+     #FFFFFF 的窗口底色上，对比度只有约 1.05:1——真正把气泡从页面里分离出来的是这条
+     阴影，不是底色本身。参考：Telegram Desktop 官方主题字段里 msgInShadow/msgOutShadow
+     是一等公民；Material 3 的立场相反（阴影只留给会与其它内容物理重叠的组件，静息表面
+     用 tonal elevation），这里明确选择前者 */
+  box-shadow: var(--bubble-shadow);
 }
 
 .msg-bubble--bot {
@@ -270,8 +329,8 @@
 }
 
 .msg-bubble--error {
-  background: rgba(180, 60, 60, 0.6);
-  color: rgba(255, 220, 220, 0.9);
+  background: var(--error-container);
+  color: var(--on-error-container);
 }
 
 /* ─── 系统消息 ─────────────────────────────────────────── */
@@ -296,12 +355,15 @@
   width: var(--avatar-size);
   height: var(--avatar-size);
   border-radius: 50%;
-  background: rgba(120, 90, 180, 0.6);
+  background: var(--fill3);
   flex-shrink: 0;
 }
 
 .typing-bubble {
   background: var(--bubble-bot-bg);
+  /* 与 .msg-bubble 同一道投影：它跟 bot 气泡用的是同一个底色，日间对页面同样只有约
+     1.05:1，分离靠的是投影不是填充色——漏掉这里就等于打字指示器独自退回没修之前的状态 */
+  box-shadow: var(--bubble-shadow);
   border-radius: var(--bubble-radius);
   border-bottom-left-radius: 4px;
   padding: 10px 14px;
@@ -314,7 +376,7 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.5);
+  background: var(--label3);
   animation: typing-dot 1.2s infinite ease-in-out;
 }
 
@@ -329,7 +391,6 @@
 /* ─── 输入区域容器 ─────────────────────────────────────── */
 
 .input-area {
-  background: var(--input-bg);
   border-top: 1px solid var(--input-border);
   padding: 8px 12px 6px;
   display: flex;
@@ -352,7 +413,7 @@
 
 .input-bar__textarea {
   flex: 1;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--fill3);
   border: 1px solid var(--input-border);
   border-radius: 8px;
   color: var(--input-text);
@@ -373,7 +434,7 @@
 }
 
 .input-bar__textarea:focus {
-  border-color: rgba(120, 90, 180, 0.6);
+  border-color: var(--accent);
 }
 
 /* ─── 发送按钮（小飞机） ───────────────────────────────── */
@@ -432,7 +493,7 @@
   border: none;
   border-radius: 6px;
   background: transparent;
-  color: rgba(255, 255, 255, 0.35);
+  color: var(--label4);
   cursor: not-allowed;
   display: flex;
   align-items: center;
@@ -449,7 +510,7 @@
   border: none;
   border-radius: 6px;
   background: transparent;
-  color: rgba(255, 255, 255, 0.6);
+  color: var(--label2);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -459,6 +520,6 @@
 }
 
 .settings-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.85);
+  background: var(--fill2);
+  color: var(--label);
 }

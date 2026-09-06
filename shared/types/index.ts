@@ -12,6 +12,8 @@ export interface ModelConfig {
   ollamaBaseUrl?: string
   ollamaModel?: string
   modelName?: string
+  maxTokens?: number   // max_tokens 上限，对话和整理模式公用，空值默认各自落回1000
+  
 }
 
 export interface ToolSchema {
@@ -77,6 +79,11 @@ export interface Summary {
 export interface PresetDisplayConfig {
   chatBgRgb: [number, number, number]   // 0-255 整数，对应 CSS 变量 --chat-bg-rgb
   chatBgOpacity: number                 // 0-1，对应 CSS 变量 --chat-bg-opacity
+  // 以下三个字段服务于 src/chat/theme.ts 的参考实现结构化主题模型（day/night + 单一 accent +
+  // tint 旋钮），本层只存储与校验，派生消费不在这层的职责范围内：
+  themeMode: 'day' | 'night' | 'auto'   // 'auto' 解析成具体 'day'/'night' 是渲染层/主进程的职责，这一层原样存储
+  accentRgb: [number, number, number]   // 0-255 整数，用户选择的唯一 accent 色，对应 theme.ts ThemeInput.accentRgb
+  tintStrength: number                  // 0-1，0 = 纯参考发布值，对应 theme.ts ThemeInput.tintStrength
 }
 
 // Preset（可复用的配置模板，用户管理）
@@ -145,10 +152,12 @@ export interface EmbeddingQueueStatus {
 export interface AppState {
   sessionId: string | null
   presetSnapshot: PresetSnapshot | null
-  emotion: EmotionState | null        // Phase 2 预留，从最近 Message 解析
+  emotion: EmotionState | null        // 读取 EmotionStates 表（getEmotionState），随 session/preset 恢复
   embeddingQueue: EmbeddingQueueStatus | null  // Phase 2 预留
   embeddingReady: boolean
   ollamaReady: boolean | null   // 仅当前 preset 用 ollama 时为 boolean，否则为 null（见 state.ts buildStatePayload）
+  lastAttentionAt: number | null  // 上次"搭理 bot"的时刻，供悬浮窗立绘状态模型 y 求值使用（TDD §3.7 附）；无激活 session 时为 null
+  explicitSleep: boolean          // 显式睡着标记，同上；无激活 session 时为 false
 }
 
 export type SSEEventType =
@@ -174,4 +183,9 @@ export interface CompletionOptions {
   maxTokens?: number
   temperature?: number
   signal?: AbortSignal  // 用于中断流式请求（Phase 6 预留）
+  // 向模型发信json格式化的显式开关 
+  // 对不满足格式条件的调用开启
+  // response_format: json_object 会导致 OpenAI 400 或 DeepSeek 输出空白直到耗尽 token 预算
+  // 因此只有 chat.ts 的对话链路显式传 true，其余调用方默认关闭
+  jsonMode?: boolean
 }

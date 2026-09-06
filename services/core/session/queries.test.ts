@@ -24,6 +24,7 @@ import {
   getPendingEmbeddingCountBefore,
   markMessageEmbedded,
   getMostRecentMessageTime,
+  getMostRecentMessageTimeForSession,
   getOldestUnsummarizedMessageTime,
   insertEntity,
   getCurrentEntities,
@@ -124,7 +125,7 @@ describe('Preset', () => {
   })
 
   it('upsertPreset 传入 displayConfig 时按传入值写入', () => {
-    const displayConfig = { chatBgRgb: [1, 2, 3] as [number, number, number], chatBgOpacity: 0.2 }
+    const displayConfig = { ...DEFAULT_DISPLAY_CONFIG, chatBgRgb: [1, 2, 3] as [number, number, number], chatBgOpacity: 0.2 }
     upsertPreset({ presetId: 'p1', name: 'A', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: 'a', wallpaperPath: undefined, displayConfig })
     expect(getPresetById('p1')!.displayConfig).toEqual(displayConfig)
   })
@@ -140,7 +141,7 @@ describe('Preset', () => {
 
   it('updatePresetDisplayConfig 更新后能通过 getPresetById 读回，其余字段不受影响', () => {
     upsertPreset({ presetId: 'p1', name: 'A', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: 'a', wallpaperPath: undefined })
-    const displayConfig = { chatBgRgb: [100, 100, 100] as [number, number, number], chatBgOpacity: 0.1 }
+    const displayConfig = { ...DEFAULT_DISPLAY_CONFIG, chatBgRgb: [100, 100, 100] as [number, number, number], chatBgOpacity: 0.1 }
     updatePresetDisplayConfig('p1', displayConfig)
 
     const preset = getPresetById('p1')!
@@ -588,6 +589,17 @@ describe('Embeddings', () => {
     appendMessage({ sessionId: 's1', role: 'user', content: 'c', createdAt: 2000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
 
     expect(getMostRecentMessageTime()).toBe(3000)
+  })
+
+  it('getMostRecentMessageTimeForSession 无消息时返回 null，有消息时只看该 session 自己的最大 createdAt', () => {
+    expect(getMostRecentMessageTimeForSession('s1')).toBeNull()
+
+    appendMessage({ sessionId: 's1', role: 'user', content: 'a', createdAt: 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's2', role: 'user', content: 'b', createdAt: 5000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    appendMessage({ sessionId: 's1', role: 'user', content: 'c', createdAt: 2000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+
+    expect(getMostRecentMessageTimeForSession('s1')).toBe(2000)
+    expect(getMostRecentMessageTimeForSession('s2')).toBe(5000)
   })
 
   it('getOldestUnsummarizedMessageTime 无未摘要消息时返回 null，有时返回全表最小 createdAt（不分 session）', () => {

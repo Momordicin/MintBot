@@ -9,14 +9,14 @@ const AEMEATH_FIXTURE_PATH = path.join(CHARACTERS_ROOT, 'Aemeath', 'manifest.jso
 
 describe('loadCharacterManifest — 真实角色包 fixture（assets/characters/ 下的实际文件）', () => {
   it.skipIf(!fs.existsSync(AEMEATH_FIXTURE_PATH))(
-    'Aemeath（manifest schema v2 全字段，仅本地存在真实素材时运行）各层级结构与类型解析正确', 
+    'Aemeath（manifest schema v3 全字段，仅本地存在真实素材时运行）各层级结构与类型解析正确', 
     () => {
       const manifest = loadCharacterManifest('Aemeath')
 
       expect(manifest).not.toBeNull()
       if (!manifest) return
 
-      expect(manifest.schemaVersion).toBe(2)
+      expect(manifest.schemaVersion).toBe(3)
       expect(manifest.name).toBe('Aemeath')
       expect(manifest.displayName).toBe('Aemeath')
       expect(typeof manifest.description).toBe('string')
@@ -46,6 +46,23 @@ describe('loadCharacterManifest — 真实角色包 fixture（assets/characters/
       for (const entry of manifest.emotePool) {
         expect(typeof entry.file).toBe('string')
         expect(Array.isArray(entry.tags)).toBe(true)
+      }
+
+      // v3 新增：transitions 的每一步都必须解析成归一化后的结构（from 恒为数组），
+      // 且引用的情绪键都在该角色包自己的 emotionVocabulary 内——本地真实角色包上
+      // 校验一遍解析结果，与上面各字段同款的结构性断言
+      expect(typeof manifest.transitions).toBe('object')
+      for (const steps of Object.values(manifest.transitions)) {
+        expect(Array.isArray(steps)).toBe(true)
+        for (const step of steps) {
+          expect(Array.isArray(step.from)).toBe(true)
+          expect(step.from.length).toBeGreaterThan(0)
+          for (const source of step.from) {
+            expect(manifest.emotionVocabulary).toContain(source.replace('emotions.', ''))
+          }
+          expect(step.pick).toBe('random')
+          expect(step.durationMs).toBeGreaterThan(0)
+        }
       }
     }
   )
@@ -83,16 +100,16 @@ describe('loadCharacterManifest — 真实角色包 fixture（assets/characters/
   )
 
   // example 是唯一提交进 git 的角色包
-  it('example（schema v2 完整字段，占位内容，git 内唯一提交的角色包 fixture）解析结果与 fixture 完全一致', () => {
+  it('example（schema v3 完整字段，占位内容，git 内唯一提交的角色包 fixture）解析结果与 fixture 完全一致', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     const manifest = loadCharacterManifest('example')
 
     expect(manifest).toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
       name: 'example',
       displayName: '示例角色',
-      description: '示例角色包，展示 manifest schema v2 的完整字段结构，供开发者参考；不含真实立绘/表情包素材',
+      description: '示例角色包，展示 manifest schema v3 的完整字段结构，供开发者参考；不含真实立绘/表情包素材',
       tags: ['示例', '占位'],
       creator: '',
       version: '1.0',
@@ -125,10 +142,26 @@ describe('loadCharacterManifest — 真实角色包 fixture（assets/characters/
         thinking: ['gifs/thinking.gif'],
         'listening-to-music': ['gifs/music.gif'],
         'boredom-idle': ['gifs/boredom.gif'],
+        sleeping: ['gifs/sleeping.gif'],
       },
       emotePool: [
         { file: 'emotes/example.jpg', tags: ['excited'] },
       ],
+      transitions: {
+        'fall-asleep': [
+          { from: ['emotions.idle'], pick: 'random', durationMs: 3000 },
+        ],
+        'wake-from-sleep': [
+          { from: ['emotions.sad'], pick: 'random', durationMs: 3000 },
+          { from: ['emotions.happy'], pick: 'random', durationMs: 3000 },
+        ],
+        'wake-from-bored': [
+          { from: ['emotions.curious'], pick: 'random', durationMs: 3000 },
+        ],
+        'poke-neutral': [
+          { from: ['emotions.shy', 'emotions.happy'], pick: 'random', durationMs: 3000 },
+        ],
+      },
     })
     expect(warnSpy).not.toHaveBeenCalled()
     warnSpy.mockRestore()
@@ -222,6 +255,109 @@ describe('loadCharacterManifest — 手工构造的异常 manifest（临时目�
 
     expect(manifest?.avatar).toBe('')
     expect(warnSpy).toHaveBeenCalled()
+    warnSpy.mockRestore()
+  })
+
+  it('v2 manifest（未声明 transitions）仍能加载，transitions 回退为 {}，不告警', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const manifest = await loadWithFixture('v2-no-transitions', JSON.stringify({
+      schemaVersion: 2,
+      avatar: 'avatar.jpg',
+    }))
+
+    expect(manifest?.transitions).toEqual({})
+    expect(warnSpy).not.toHaveBeenCalled()
+    warnSpy.mockRestore()
+  })
+
+  it('transitions 声明且全部合法时被解析，单字符串 from 被归一化为数组', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const manifest = await loadWithFixture('transitions-valid', JSON.stringify({
+      avatar: 'avatar.jpg',
+      emotionVocabulary: ['idle', 'happy'],
+      transitions: {
+        'wake-from-sleep': [
+          { from: 'emotions.idle', durationMs: 3000 },
+        ],
+      },
+    }))
+
+    expect(manifest?.transitions).toEqual({
+      'wake-from-sleep': [
+        { from: ['emotions.idle'], pick: 'random', durationMs: 3000 },
+      ],
+    })
+    expect(warnSpy).not.toHaveBeenCalled()
+    warnSpy.mockRestore()
+  })
+
+  it('步骤缺少 durationMs 时跳过该步，链内其它步骤不受影响，并告警', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const manifest = await loadWithFixture('transitions-bad-duration', JSON.stringify({
+      avatar: 'avatar.jpg',
+      emotionVocabulary: ['idle', 'happy'],
+      transitions: {
+        'wake-from-bored': [
+          { from: 'emotions.idle' },
+          { from: 'emotions.happy', durationMs: 3000 },
+        ],
+      },
+    }))
+
+    expect(manifest?.transitions).toEqual({
+      'wake-from-bored': [
+        { from: ['emotions.happy'], pick: 'random', durationMs: 3000 },
+      ],
+    })
+    expect(warnSpy).toHaveBeenCalled()
+    warnSpy.mockRestore()
+  })
+
+  it('步骤引用了不存在于 emotionVocabulary 的键时跳过该步，链内其它步骤仍解析，并告警', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const manifest = await loadWithFixture('transitions-bad-ref', JSON.stringify({
+      avatar: 'avatar.jpg',
+      emotionVocabulary: ['idle', 'happy'],
+      transitions: {
+        'poke-neutral': [
+          { from: 'emotions.missing', durationMs: 3000 },
+          { from: 'emotions.happy', durationMs: 3000 },
+        ],
+      },
+    }))
+
+    expect(manifest?.transitions).toEqual({
+      'poke-neutral': [
+        { from: ['emotions.happy'], pick: 'random', durationMs: 3000 },
+      ],
+    })
+    expect(warnSpy).toHaveBeenCalled()
+    warnSpy.mockRestore()
+  })
+
+  it('多来源 from 数组按完整来源列表解析', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const manifest = await loadWithFixture('transitions-multi-source', JSON.stringify({
+      avatar: 'avatar.jpg',
+      emotionVocabulary: ['idle', 'happy', 'shy'],
+      transitions: {
+        'poke-neutral': [
+          { from: ['emotions.shy', 'emotions.happy'], durationMs: 3000 },
+        ],
+      },
+    }))
+
+    expect(manifest?.transitions).toEqual({
+      'poke-neutral': [
+        { from: ['emotions.shy', 'emotions.happy'], pick: 'random', durationMs: 3000 },
+      ],
+    })
+    expect(warnSpy).not.toHaveBeenCalled()
     warnSpy.mockRestore()
   })
 })

@@ -115,6 +115,7 @@ export function WindowBehaviorPanel() {
         <div className="window-behavior-panel__section-label">聊天窗口置顶</div>
         <div className="character-panel__row">
           <select
+            className="window-behavior-panel__select"
             value={config.pinMode}
             onChange={e => handlePinModeChange(e.target.value as WindowBehaviorConfig['pinMode'])}
           >

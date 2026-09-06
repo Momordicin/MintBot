@@ -6,7 +6,7 @@ import * as dotenv from 'dotenv'
 import { getEncryptSensitiveFields } from '../config/security.js'
 
 
-dotenv.config()
+dotenv.config({ quiet: true })
  
 const DB_PATH = process.env.DB_PATH ?? './data/db.sqlite'
  

@@ -571,3 +571,46 @@ describe('config/index — updateWindowBehaviorConfig', () => {
     expect(writtenJson.windowBehavior).toEqual({ pinMode: 'always-on-top', fullscreenWhitelist: [], blacklist: [] })
   })
 })
+
+describe('config/index — getDefaultPresetId', () => {
+  it('config.json 里有合法字符串时按原样返回', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({ defaultPresetId: 'preset-001' }))
+    const { getDefaultPresetId } = await import('./index.js')
+
+    expect(getDefaultPresetId()).toBe('preset-001')
+  })
+
+  it('config.json 不存在/字段缺失/类型错误时返回 undefined，不 warn（首次启动的正常情况）', async () => {
+    readFileSyncMock.mockImplementation(() => { throw new Error('ENOENT') })
+    const { getDefaultPresetId } = await import('./index.js')
+
+    expect(getDefaultPresetId()).toBeUndefined()
+  })
+})
+
+describe('config/index — setDefaultPresetId', () => {
+  it('写入后 getDefaultPresetId 立即反映新值，不依赖 chokidar 的异步 reload，且不 clobber 其它顶层字段', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      defaultPresetId: 'preset-001',
+      memory: { recentTrackMaxMessages: 200 },
+    }))
+    const { setDefaultPresetId, getDefaultPresetId, CONFIG_PATH } = await import('./index.js')
+
+    expect(getDefaultPresetId()).toBe('preset-001')
+
+    setDefaultPresetId('preset-002')
+
+    // 故意不触发 chokidar 的 'change' 回调——同步更新内存态不能依赖它
+    expect(getDefaultPresetId()).toBe('preset-002')
+
+    expect(writeFileSyncMock).toHaveBeenCalledTimes(1)
+    const [tempPath, written] = writeFileSyncMock.mock.calls[0]
+    expect(tempPath).not.toBe(CONFIG_PATH)
+    expect(renameSyncMock).toHaveBeenCalledWith(tempPath, CONFIG_PATH)
+
+    const writtenJson = JSON.parse(written as string)
+    expect(writtenJson.defaultPresetId).toBe('preset-002')
+    // memory 这个本模块不管的顶层字段必须原样保留
+    expect(writtenJson.memory).toEqual({ recentTrackMaxMessages: 200 })
+  })
+})

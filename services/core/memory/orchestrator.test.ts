@@ -19,6 +19,9 @@ vi.mock('../config/index.js', () => ({
     summaryTrigger: { pendingCountThreshold: 100, oldestPendingAgeMinutes: 120, messageCountThreshold: 50, lockScreenMinutes: 60, minMessagesForLockTrigger: 4 },
     contextBudget: { total: 8000, systemPrompt: 1000, summary: 1500, rag: 2000, recentMessages: 3000, responseReserve: 500 },
   }),
+  // summarizer.ts generateSummary 现在读这个函数取 maxTokens；本文件的用例不关心具体数值，
+  // 未配置覆盖时回落到默认值 1000，与迁移前硬编码 1000 的行为一致
+  getBackgroundModelProviderConfig: () => ({ type: 'ollama' }),
 }))
 
 // getCurrentState 用于当前激活角色的摘要插队检查——mock 成受控的 vi.fn()，每个用例自己

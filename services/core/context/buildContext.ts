@@ -145,5 +145,11 @@ export async function buildContext(
   contractLines.push('请严格用以下 JSON 格式回复，不要输出任何其他内容：\n{"reply": "你的回复内容", "emotion": {"self": {"label": "情绪标签", "intensity": 0.7}, "perceived_user": null}, "emote": "表情 tag（可选，不附表情时省略该字段）"}')
   system = `${system}\n\n${contractLines.join('\n')}`
 
+  // 显式断言，处理硬前置条件（不是软性提示）：chat.ts 对 OpenAI/DeepSeek 都要求 messages 里出现字面的 "json"——
+  // 缺失时 OpenAI 直接 400，DeepSeek 官方文档警告会输出空白直到耗尽 token 预算
+  if (!/json/i.test(system)) {
+    throw new Error('[BuildContext] system prompt must contain the literal word "json" (required by OpenAI/DeepSeek json_object mode)')
+  }
+
   return { system, messages }
 }

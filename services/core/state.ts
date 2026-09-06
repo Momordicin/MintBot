@@ -1,5 +1,6 @@
 import { getCurrentState } from './session/index.js'
 import { getEmotionState, getPresetById } from './session/queries.js'
+import { getLastAttentionAt, isExplicitSleep } from './session/attention.js'
 import { getOllamaBaseUrl, isOllamaRunning } from './providers/ollama.js'
 import { getAiBaseUrl, isEmbeddingReady } from './providers/EmbeddingProvider.js'
 import { computeEmbeddingQueueStatus } from './memory/orchestrator.js'
@@ -60,5 +61,9 @@ export async function buildStatePayload() {
     embeddingReady,
     emotion: state ? getEmotionState(state.session.sessionId) : null,
     embeddingQueue: computeEmbeddingQueueStatus(Date.now(), state?.session.sessionId ?? null),
+    // 供悬浮窗重载时重建立绘状态的 y 求值（TDD §3.3「悬浮窗立绘状态相关接口」/ §3.7 附）：
+    // 两者都是核心服务内存态，按 session，没有激活 session 时分别回落到 null / false
+    lastAttentionAt: state ? getLastAttentionAt(state.session.sessionId) : null,
+    explicitSleep: state ? isExplicitSleep(state.session.sessionId) : false,
   }
 }

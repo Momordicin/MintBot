@@ -10,6 +10,11 @@ import { createModelProvider } from '../providers/ModelProvider.js'
 import type { ModelConfig } from '../../../shared/types/index.js'
 
 const VALID_MODEL_TYPES: readonly string[] = ['anthropic', 'openai', 'ollama', 'deepseek']
+// maxTokens 边界：下限 1（0 或负数会让模型调用变得毫无意义甚至被下游 API 直接拒绝），
+// 上限 32000 覆盖目前接入的几家供应商常见输出上限并留出余量，同时挡住用户误输入一个
+// 离谱的大数字（如多打了几个 0）导致一次请求失控地烧掉大量 token/时间
+const MIN_MAX_TOKENS = 1
+const MAX_MAX_TOKENS = 32000
 
 // GET /config/model 的响应类型：anthropicApiKey/openaiApiKey/deepseekApiKey 永远不回显明文，
 // 只回传 hasAnthropicApiKey/hasOpenaiApiKey/hasDeepseekApiKey 供设置页判断是否已配置
@@ -23,6 +28,7 @@ export interface ModelConfigSummary {
   ollamaBaseUrl?: string
   ollamaModel?: string
   modelName?: string
+  maxTokens?: number
 }
 
 function toSummary(config: ModelConfig): ModelConfigSummary {
@@ -41,6 +47,13 @@ function toSummary(config: ModelConfig): ModelConfigSummary {
 function validateModelConfigPartial(partial: Partial<ModelConfig>, current: Partial<ModelConfig>): string | null {
   if (partial.type !== undefined && !VALID_MODEL_TYPES.includes(partial.type)) {
     return 'type must be one of anthropic, openai, ollama, deepseek'
+  }
+
+  // maxTokens 与 type 无关，只要请求体带了这个字段就校验，不参与下面按 type 分支的必填字段判断
+  if (partial.maxTokens !== undefined) {
+    if (!Number.isInteger(partial.maxTokens) || partial.maxTokens < MIN_MAX_TOKENS || partial.maxTokens > MAX_MAX_TOKENS) {
+      return `maxTokens must be an integer between ${MIN_MAX_TOKENS} and ${MAX_MAX_TOKENS}`
+    }
   }
 
   const merged = { ...current, ...partial }

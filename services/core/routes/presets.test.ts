@@ -10,9 +10,12 @@ import { presetRoutes } from './presets.js'
 import { buildStatePayload } from '../state.js'
 
 // buildStatePayload 内部读取 getModelProviderConfig().ollamaBaseUrl，mock 掉独立 config
-// 模块（而不是依赖真实的本地 config.json），保证测试结果不受本机 config.json 内容影响
+// 模块（而不是依赖真实的本地 config.json），保证测试结果不受本机 config.json 内容影响。
+// setDefaultPresetId 同样 mock 掉——POST /switch-preset 经 session/index.ts 的 switchPreset
+// 调用它，真实实现会写本机 config.json，测试不应该有这个副作用
 vi.mock('../config/index.js', () => ({
   getModelProviderConfig: vi.fn(() => ({ type: 'ollama' })),
+  setDefaultPresetId: vi.fn(),
 }))
 
 initDb()
@@ -488,8 +491,10 @@ describe('PATCH /presets/:presetId', () => {
     const body = JSON.parse(response.payload)
 
     expect(response.statusCode).toBe(200)
-    expect(body.presetSnapshot.displayConfig).toEqual({ chatBgRgb: [10, 20, 30], chatBgOpacity: 0.4 })
-    expect(getPresetById('p1')!.displayConfig).toEqual({ chatBgRgb: [10, 20, 30], chatBgOpacity: 0.4 })
+    // 只 PATCH 了 chatBgRgb/chatBgOpacity，themeMode/accentRgb/tintStrength 未传，
+    // 沿用创建时写入的 DEFAULT_DISPLAY_CONFIG 默认值
+    expect(body.presetSnapshot.displayConfig).toEqual({ ...DEFAULT_DISPLAY_CONFIG, chatBgRgb: [10, 20, 30], chatBgOpacity: 0.4 })
+    expect(getPresetById('p1')!.displayConfig).toEqual({ ...DEFAULT_DISPLAY_CONFIG, chatBgRgb: [10, 20, 30], chatBgOpacity: 0.4 })
   })
 
   it('name 和 displayConfig 同时传入时两者都生效', async () => {
@@ -505,11 +510,11 @@ describe('PATCH /presets/:presetId', () => {
 
     expect(response.statusCode).toBe(200)
     expect(body.presetSnapshot.name).toBe('新名字')
-    expect(body.presetSnapshot.displayConfig).toEqual({ chatBgRgb: [5, 5, 5], chatBgOpacity: 0.9 })
+    expect(body.presetSnapshot.displayConfig).toEqual({ ...DEFAULT_DISPLAY_CONFIG, chatBgRgb: [5, 5, 5], chatBgOpacity: 0.9 })
   })
 
   it('只更新 chatBgOpacity 时，服务端合并不会清空已存的 chatBgRgb', async () => {
-    updatePresetDisplayConfig('p1', { chatBgRgb: [7, 8, 9], chatBgOpacity: 0.5 })
+    updatePresetDisplayConfig('p1', { ...DEFAULT_DISPLAY_CONFIG, chatBgRgb: [7, 8, 9], chatBgOpacity: 0.5 })
     loadSession('p1')
     const fastify = await buildTestApp()
 
@@ -521,8 +526,8 @@ describe('PATCH /presets/:presetId', () => {
     const body = JSON.parse(response.payload)
 
     expect(response.statusCode).toBe(200)
-    expect(body.presetSnapshot.displayConfig).toEqual({ chatBgRgb: [7, 8, 9], chatBgOpacity: 0.8 })
-    expect(getPresetById('p1')!.displayConfig).toEqual({ chatBgRgb: [7, 8, 9], chatBgOpacity: 0.8 })
+    expect(body.presetSnapshot.displayConfig).toEqual({ ...DEFAULT_DISPLAY_CONFIG, chatBgRgb: [7, 8, 9], chatBgOpacity: 0.8 })
+    expect(getPresetById('p1')!.displayConfig).toEqual({ ...DEFAULT_DISPLAY_CONFIG, chatBgRgb: [7, 8, 9], chatBgOpacity: 0.8 })
   })
 
   it('chatBgRgb 长度不是 3 时返回 400', async () => {
@@ -580,6 +585,108 @@ describe('PATCH /presets/:presetId', () => {
       method: 'PATCH',
       url: '/presets/p1',
       payload: { displayConfig: { chatBgOpacity: '0.5' } },
+    })
+
+    expect(response.statusCode).toBe(400)
+  })
+
+  // 回归用例：themeMode/accentRgb/tintStrength 三个字段都必须出现在路由的服务端合并挑选
+  // 列表里，否则会被静默丢弃且不报错（docs/MintBot_TDD.md §3.2.2 记录的已知坑），
+  // 因此这里用真实 PATCH + 读回断言，而不是检查代码里的字段列表
+  it('PATCH themeMode 后读回新值，其余字段不受影响', async () => {
+    loadSession('p1')
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { displayConfig: { themeMode: 'night' } },
+    })
+    const body = JSON.parse(response.payload)
+
+    expect(response.statusCode).toBe(200)
+    expect(body.presetSnapshot.displayConfig).toEqual({ ...DEFAULT_DISPLAY_CONFIG, themeMode: 'night' })
+    expect(getPresetById('p1')!.displayConfig).toEqual({ ...DEFAULT_DISPLAY_CONFIG, themeMode: 'night' })
+  })
+
+  it('themeMode 不是 day/night/auto 之一时返回 400', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { displayConfig: { themeMode: 'dusk' } },
+    })
+
+    expect(response.statusCode).toBe(400)
+  })
+
+  it('PATCH accentRgb 后读回新值，其余字段不受影响', async () => {
+    loadSession('p1')
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { displayConfig: { accentRgb: [200, 100, 50] } },
+    })
+    const body = JSON.parse(response.payload)
+
+    expect(response.statusCode).toBe(200)
+    expect(body.presetSnapshot.displayConfig).toEqual({ ...DEFAULT_DISPLAY_CONFIG, accentRgb: [200, 100, 50] })
+    expect(getPresetById('p1')!.displayConfig).toEqual({ ...DEFAULT_DISPLAY_CONFIG, accentRgb: [200, 100, 50] })
+  })
+
+  it('accentRgb 元素超出 [0, 255] 范围时返回 400', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { displayConfig: { accentRgb: [0, 0, 300] } },
+    })
+
+    expect(response.statusCode).toBe(400)
+  })
+
+  it('PATCH tintStrength 后读回新值，其余字段不受影响', async () => {
+    loadSession('p1')
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { displayConfig: { tintStrength: 0.4 } },
+    })
+    const body = JSON.parse(response.payload)
+
+    expect(response.statusCode).toBe(200)
+    expect(body.presetSnapshot.displayConfig).toEqual({ ...DEFAULT_DISPLAY_CONFIG, tintStrength: 0.4 })
+    expect(getPresetById('p1')!.displayConfig).toEqual({ ...DEFAULT_DISPLAY_CONFIG, tintStrength: 0.4 })
+  })
+
+  it('tintStrength 超出 [0, 1] 范围时被夹回边界而不是拒绝（是有限数字就接受）', async () => {
+    loadSession('p1')
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { displayConfig: { tintStrength: 1.5 } },
+    })
+    const body = JSON.parse(response.payload)
+
+    expect(response.statusCode).toBe(200)
+    expect(body.presetSnapshot.displayConfig.tintStrength).toBe(1)
+  })
+
+  it('tintStrength 类型错误（非数字）时返回 400', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { displayConfig: { tintStrength: '0.5' } },
     })
 
     expect(response.statusCode).toBe(400)
@@ -802,10 +909,10 @@ describe('buildStatePayload — displayConfig 现查覆盖', () => {
     const before = await buildStatePayload()
     expect(before.presetSnapshot?.displayConfig).toEqual(DEFAULT_DISPLAY_CONFIG)
 
-    updatePresetDisplayConfig('p1', { chatBgRgb: [200, 0, 0], chatBgOpacity: 0.9 })
+    updatePresetDisplayConfig('p1', { ...DEFAULT_DISPLAY_CONFIG, chatBgRgb: [200, 0, 0], chatBgOpacity: 0.9 })
 
     const after = await buildStatePayload()
-    expect(after.presetSnapshot?.displayConfig).toEqual({ chatBgRgb: [200, 0, 0], chatBgOpacity: 0.9 })
+    expect(after.presetSnapshot?.displayConfig).toEqual({ ...DEFAULT_DISPLAY_CONFIG, chatBgRgb: [200, 0, 0], chatBgOpacity: 0.9 })
   })
 })
 

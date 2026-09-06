@@ -17,7 +17,14 @@ interface ModelConfigSummary {
   ollamaBaseUrl?: string
   ollamaModel?: string
   modelName?: string
+  maxTokens?: number
 }
+
+// max_tokens 输入框边界：与 services/core/routes/config.ts 的 MIN_MAX_TOKENS/MAX_MAX_TOKENS
+// 保持一致（下限 1、上限 32000）——前端这里只做输入体验层面的即时提示，真正拒绝非法值的
+// 权威校验在服务端 PATCH /config/model
+const MIN_MAX_TOKENS = 1
+const MAX_MAX_TOKENS = 32000
 
 interface ConfigModelResponse {
   modelProvider: ModelConfigSummary | null
@@ -34,6 +41,7 @@ interface ModelFormState {
   deepseekBaseUrl: string
   ollamaBaseUrl: string
   ollamaModel: string
+  maxTokens: string   // 数字输入框的原始文本值，跟 apiKey 等字段一样用字符串承载表单状态
 }
 
 const BLANK_FORM: ModelFormState = {
@@ -44,6 +52,7 @@ const BLANK_FORM: ModelFormState = {
   deepseekBaseUrl: '',
   ollamaBaseUrl: '',
   ollamaModel: '',
+  maxTokens: '',
 }
 
 function summaryToFormState(summary: ModelConfigSummary | null): ModelFormState {
@@ -56,6 +65,7 @@ function summaryToFormState(summary: ModelConfigSummary | null): ModelFormState 
     deepseekBaseUrl: summary.deepseekBaseUrl ?? '',
     ollamaBaseUrl: summary.ollamaBaseUrl ?? '',
     ollamaModel: summary.ollamaModel ?? '',
+    maxTokens: summary.maxTokens !== undefined ? String(summary.maxTokens) : '',
   }
 }
 
@@ -79,6 +89,16 @@ function buildPartialConfig(form: ModelFormState): Partial<ModelConfig> {
   } else {
     partial.ollamaBaseUrl = form.ollamaBaseUrl.trim()
     partial.ollamaModel = form.ollamaModel.trim()
+  }
+
+  // maxTokens 是跟 type 无关的字段：留空代表"不改动"，不进入 body（同 apiKey 的留空语义）；
+  // 非整数（如用户手改出 "12.5"）同样不进入 body，交由用户已存的旧值继续生效，不把明显
+  // 有问题的值硬塞给服务端换一个 400——真正的范围校验（[1, 32000]）仍在服务端 PATCH /config/model，
+  // 这里只做"看起来像个合法整数才带上"的最低限度前端把关
+  const trimmedMaxTokens = form.maxTokens.trim()
+  if (trimmedMaxTokens) {
+    const parsedMaxTokens = Number(trimmedMaxTokens)
+    if (Number.isInteger(parsedMaxTokens)) partial.maxTokens = parsedMaxTokens
   }
   return partial
 }
@@ -119,6 +139,18 @@ function ModelFormFields({ form, onChange, summary }: ModelFormFieldsProps) {
           <option value="deepseek">DeepSeek</option>
           <option value="ollama">Ollama</option>
         </select>
+      </div>
+      <div className="model-config-panel__field">
+        <label>最大回复 token 数（max_tokens）</label>
+        <input
+          type="number"
+          min={MIN_MAX_TOKENS}
+          max={MAX_MAX_TOKENS}
+          step={1}
+          placeholder="默认 1000"
+          value={form.maxTokens}
+          onChange={e => onChange({ ...form, maxTokens: e.target.value })}
+        />
       </div>
       {(form.type === 'anthropic' || form.type === 'openai' || form.type === 'deepseek') && (
         <>

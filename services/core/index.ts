@@ -3,7 +3,7 @@ import path from 'path'
 import fs from 'fs'
 import * as dotenv from 'dotenv'
 import { initDb } from './db/index.js'
-import { loadSession } from './session/index.js'
+import { loadSession, resolveStartupPresetId } from './session/index.js'
 import { getAllPresets, backfillMessageFts } from './session/queries.js'
 import { chatRoutes } from './routes/chat.js'
 import { eventsRoutes } from './routes/events.js'
@@ -20,7 +20,7 @@ import { windowBehaviorRoutes } from './routes/windowBehavior.js'
 import { createModelProvider, ModelProvider } from './providers/ModelProvider.js'
 import { BGEProvider, getAiBaseUrl, type EmbeddingProvider } from './providers/EmbeddingProvider.js'
 import { Bert4NerProvider, type NERProvider } from './providers/NERProvider.js'
-import { startConfigWatcher, getModelProviderConfig, getBackgroundModelProviderConfig } from './config/index.js'
+import { startConfigWatcher, getModelProviderConfig, getBackgroundModelProviderConfig, getDefaultPresetId } from './config/index.js'
 import { ensureOllama, stopOllamaIfManaged } from './providers/ollama.js'
 import { ensureAiService, stopAiServiceIfManaged } from './providers/aiService.js'
 import { startOrganizeModeScheduler } from './memory/orchestrator.js'
@@ -30,7 +30,7 @@ import fastifyStatic from '@fastify/static'
 import fastifyCors from '@fastify/cors'
 
 
-dotenv.config()
+dotenv.config({ quiet: true })
 
 const PORT = parseInt(process.env.CORE_PORT ?? '3000')
 const CONFIG_PATH = path.resolve(process.cwd(), 'config.json')
@@ -45,20 +45,12 @@ declare module 'fastify' {
   }
 }
 
-// defaultPresetId / streaming 目前都没有真实的类型化消费者，不属于独立 config 模块的类型范围
-// （见 config/index.ts 头部说明），这里各自保留一次独立的原始读取，行为与迁移前一致：
-// defaultPresetId 只在启动时读取一次；streaming 被 chat.ts 每次请求读取，因此额外 decorate
-// 到 fastify 实例上缓存（避免每个请求都读一次磁盘），并在 startConfigWatcher 的热更新回调里
-// 跟着 modelProvider 一起刷新
-function readDefaultPresetId(): string | undefined {
-  try {
-    const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'))
-    return raw.defaultPresetId as string | undefined
-  } catch {
-    return undefined
-  }
-}
-
+// streaming 目前没有真实的类型化消费者，不属于独立 config 模块的类型范围（见 config/index.ts
+// 头部说明），这里保留一次独立的原始读取，行为与迁移前一致：被 chat.ts 每次请求读取，因此
+// 额外 decorate 到 fastify 实例上缓存（避免每个请求都读一次磁盘），并在 startConfigWatcher
+// 的热更新回调里跟着 modelProvider 一起刷新。defaultPresetId 曾经也走这条 ad-hoc 读取路径，
+// 现已迁移进独立 config 模块（getDefaultPresetId()，见下方启动逻辑）——它现在有了真正的
+// 写入通道（session/index.ts 的 switchPreset），不再是"只读不写"的孤立字段
 function readStreamingEnabled(): boolean {
   try {
     const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'))
@@ -68,7 +60,8 @@ function readStreamingEnabled(): boolean {
   }
 }
 
-const fastify = Fastify({ logger: true })
+// 同一个 logger 实例的request.log.error/fastify.log.* 仍正常输出
+const fastify = Fastify({ logger: true, disableRequestLogging: true })
 
 fastify.get('/health', async () => ({ status: 'ok', uptime: process.uptime() }))
 
@@ -98,13 +91,10 @@ async function start() {
   const aiBaseUrl = getAiBaseUrl()
   fastify.decorate('embeddingProvider', new BGEProvider(aiBaseUrl))
   fastify.decorate('nerProvider', new Bert4NerProvider(aiBaseUrl))
-  // 非阻塞：不 await，不能延迟 fastify.listen()。ensureAiService 内部的健康检查轮询可能
-  // 耗时数秒到最多 90 秒（Python 侧 torch/模型库 import 比 Ollama 更重，且 tsx watch 热重载时
-  // 几乎每次都会触发一次冷启动），等它 resolve 后再发预热请求，保证预热发出时服务大概率
-  // 已经监听；两者失败都只记录日志，不影响功能（下一次真实 /embed 调用时 load_model()
-  // 会照常懒加载，只是错过了提前加载的时机）。
-  // ensureAiService 返回 false（生成失败/等待超时）时直接跳过预热请求——此时已经确定服务
-  // 没就绪，再发一次必然失败的 /embed 只会多打一条误导性的报错日志，不提供任何新信息
+  // ensureAiService 本地模型轮询 可能较长
+  // tsx watch 热重载时会触发冷启动
+  // 两者失败都只记录日志，只是错过了提前加载的时机，不影响功能
+  // ensureAiService 返回 false（生成失败/等待超时）时直接跳过预热请求 /embed
   ensureAiService(aiBaseUrl)
     .then(ready => {
       if (!ready) return
@@ -126,17 +116,18 @@ async function start() {
 
   organizeModeTask = startOrganizeModeScheduler(fastify)
 
-  // 全局配置或任意 preset 用 ollama，都需要确保 ollama 已启动（per-preset provider 构建
-  // 依赖 preset.modelType，而不仅仅是全局配置）
+  // 任意配置用 ollama，都需确保 ollama 已启动?
   const anyPresetUsesOllama = getAllPresets().some(p => p.modelType === 'ollama')
   const modelConfig = getModelProviderConfig()
   if (modelConfig.type === 'ollama' || anyPresetUsesOllama) {
     await ensureOllama(modelConfig.ollamaBaseUrl)
   }
 
-  const defaultPresetId = readDefaultPresetId()
-  if (defaultPresetId) {
-    loadSession(defaultPresetId)
+  // 处理"没有 persisted 值"（首次启动）与 reset 已不存在两种降级情况
+  // 一律回退到最近更新的 preset；一个 preset 都没有时不加载任何 session
+  const startupPresetId = resolveStartupPresetId(getDefaultPresetId())
+  if (startupPresetId) {
+    loadSession(startupPresetId)
   }
 
   // @fastify/cors 在不传 methods 时的默认值是 'GET,HEAD,POST'（见其 node_modules 源码），

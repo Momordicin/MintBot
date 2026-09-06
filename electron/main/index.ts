@@ -3,16 +3,48 @@ import { join, basename } from 'path'
 import { readFile, stat } from 'fs/promises'
 import { is } from '@electron-toolkit/utils'
 import { startActiveWindowMonitor } from './activeWindowMonitor'
+import { startOverlayDragMonitor } from './overlayDragMonitor'
+import { nextReconnectDelayMs, RECONNECT_BACKOFF_FLOOR_MS } from './reconnectBackoff'
 import {
   initWindowBehaviorConfig,
   updateCachedWindowBehaviorConfig,
   handleActiveWindowChange,
-  handleWindowMoved
+  handleWindowMoved,
+  markProgrammaticWindowPlacement
 } from './windowBehavior'
+import {
+  getPreferredBounds,
+  setPreferredBounds,
+  getLastDisplayId,
+  setLastDisplayId,
+  resolveStartupDisplay,
+  clampBoundsToWorkArea,
+  computeSizeForDisplay,
+  computeDefaultBoundsForDisplay,
+  DEFAULT_WINDOW_SIZE
+} from './windowPositions'
+import type { Bounds } from './windowPositions'
 
-// startActiveWindowMonitor 返回的清理函数（clearInterval）——挂到 will-quit，避免这个
-// 500ms 轮询器的生命周期问题被"反正 app.quit() 会强杀进程"这个事实悄悄掩盖
+// startActiveWindowMonitor 返回的清理函数（clearInterval）。非空即代表监听正在运行——
+// 这个判断本身就是下方 startActiveWindowMonitoring/stopActiveWindowMonitoring 防重复
+// 启动/防重复停止的依据，不另设一个布尔标志
 let stopActiveWindowMonitor: (() => void) | null = null
+
+// 锁屏期间暂停 Win32 前台窗口轮询（TDD §2.3「Win32 前台窗口轮询在锁屏期间暂停」）：
+// lock-screen 停止、unlock-screen 重新拉起。两个函数都是幂等的——stopActiveWindowMonitor
+// 非空才代表"正在运行"，因此 lock/unlock 事件即使乱序或重复到达也不会出现重复启动
+// （再次调用 start 时若已在运行直接跳过）或重复停止（再次调用 stop 时 `?.()` 在 null
+// 上是无操作）。重启后 startActiveWindowMonitor 内部的 `previous` 是全新闭包（初值
+// null），解锁后第一次 tick 因此会多触发一次 onChange——这是预期行为，不需要抑制
+function startActiveWindowMonitoring(): void {
+  if (stopActiveWindowMonitor) return
+  stopActiveWindowMonitor = startActiveWindowMonitor(info => handleActiveWindowChange(info, mainWindow, overlayWindow))
+}
+
+function stopActiveWindowMonitoring(): void {
+  stopActiveWindowMonitor?.()
+  stopActiveWindowMonitor = null
+}
 
 // 核心服务地址：与渲染层 ChatWindow.tsx 的 CORE_URL 各自独立定义（两边本来就是独立代码，
 // 不共享 shared/types，这里沿用既有约定）
@@ -101,13 +133,47 @@ async function applyIconFromCurrentPreset(): Promise<void> {
 // 单向调用核心服务（见上方 notifySystemEvent）。收到 preset-switched 帧后重新解析头像并
 // 换图标；收到 window-behavior-changed 帧（子任务③新增）后更新 windowBehavior.ts 的内存
 // 缓存并刷新托盘菜单勾选态。两个事件类型共用同一个 frame reader（buffer/'\n\n' 拆帧循环
-// 只写一份），不为 window-behavior-changed 再单独开一个 /events 连接。断线不做自动重连：
-// 这是锦上添花的功能，恢复只需重启应用，不值得为它引入重试逻辑
-async function subscribeToCoreEvents(): Promise<void> {
+// 只写一份），不为 window-behavior-changed 再单独开一个 /events 连接。
+//
+// 断线重连（此前这里写的是「不做自动重连，锦上添花，不值得引入重试逻辑」——那个判断
+// 已经不成立了）：这条连接现在同时是 windowBehavior.ts 缓存配置在冷启动之外唯一的
+// resync 时机（见下面 connectToCoreEvents 里紧跟 initWindowBehaviorConfig 的调用），
+// 断线不重连意味着核心服务一旦重启（`pnpm dev:core` 用 tsx watch，保存 services/core
+// 下任意文件就会重启一次；生产环境的 PM2 重启/崩溃同理），聊天窗口的置顶功能会在
+// 整个进程剩余生命周期里失效，必须重启 Electron 应用才能恢复。retry 循环见
+// subscribeToCoreEvents；单次连接尝试见 connectToCoreEvents
+async function connectToCoreEvents(): Promise<boolean> {
+  // 记录"是否真正建立过这次连接"（拿到了 body reader），与"这次连接最终是怎么结束的"
+  // （正常 done 还是中途抛错）分开判断——tsx watch 保存触发核心服务重启时，Node 侧的
+  // TCP 连接通常是被对端直接重置，表现为 reader.read() 抛错而不是干净的 done:true，
+  // 会落进下面的 catch 分支。若只用"函数是否正常 return（没抛错）"当作退避重置的依据，
+  // 恰恰会把 tsx watch 重连这个最该重置退避的场景误判成"从未连接过"而不重置，
+  // 于是快速重连的效果只对几乎不会发生的"服务端优雅关闭连接"这种情形生效——
+  // 用这个独立的 didConnect 变量保证只要真正连过，不论后续以哪种方式断开都会返回 true
+  let didConnect = false
   try {
     const response = await fetch(`${CORE_URL}/events`)
     const reader = response.body?.getReader()
-    if (!reader) return
+    if (!reader) return false
+    didConnect = true
+
+    // 连接（含拿到 body reader）成功即证明核心服务此刻可达——不管是冷启动的第一次连接
+    // 还是断线重连，都借这个信号 resync 一次悬浮窗行为策略配置并重新套用置顶态，覆盖
+    // 「核心服务在应用运行期间重启/崩溃恢复」这个 initWindowBehaviorConfig 冷启动一次性
+    // 调用覆盖不到的场景。刻意不在 initWindowBehaviorConfig 内部再加一层独立重试——
+    // 一个重试机制、一个地方维护，SSE 连接成功已经隐含了紧跟着的这次 config fetch
+    // 大概率也会成功。
+    //
+    // 托盘图标与托盘菜单同理：它们平时分别由 preset-switched / window-behavior-changed 两个
+    // 广播驱动，而断线期间到达的帧是**收不到也补不回来**的（SSE 没有重放，服务端也不记录
+    // 谁漏了什么）。断线期间换过角色或改过置顶模式，重连后图标和菜单会一直停在旧值，直到
+    // 下一次真的发生同类变更——而那可能很久都不会发生。这三件事共用同一条理由：**重连成功
+    // 是唯一能确定「我可能错过了东西」的时刻，也是唯一能补的时刻**，所以一并在这里重新拉取
+    // 一次当前真值。三者都是幂等的（重复套用同一张图标 / 重建同样的菜单 / 套用同一个置顶态
+    // 都不产生可见变化），冷启动第一次连接时跑一遍也只是与 whenReady 里的初始化重合，无害
+    initWindowBehaviorConfig(mainWindow)
+    applyIconFromCurrentPreset()
+    rebuildTrayMenu()
 
     const decoder = new TextDecoder()
     let buffer = ''
@@ -140,8 +206,58 @@ async function subscribeToCoreEvents(): Promise<void> {
         frameEnd = buffer.indexOf('\n\n')
       }
     }
+    return true
   } catch (err) {
-    console.error('[Events] core event subscription ended:', err)
+    console.error('[Events] core event subscription failed:', err)
+    return didConnect
+  }
+}
+
+// will-quit 里置位，阻止退出过程中还在跑的 subscribeToCoreEvents 循环发起新一轮连接/
+// 继续等待退避——没有这个标志，应用退出时循环仍会在 fetch 失败后排一个新的 setTimeout，
+// 变成退出后还在后台重试的孤儿循环
+let isShuttingDownCoreEventsLoop = false
+
+// 当前待触发的退避定时器：will-quit 里 clearTimeout 掉，防止它在应用退出后继续持有
+// 事件循环的引用/在退出后触发一次没有意义的重连。isShuttingDownCoreEventsLoop 与这个
+// 定时器共同承担停止职责——前者防止「发起新一轮」，后者防止「已经在等待的这一轮还是触发了」
+let coreEventsReconnectTimer: NodeJS.Timeout | null = null
+
+function waitForCoreEventsReconnect(delayMs: number): Promise<void> {
+  return new Promise(resolve => {
+    coreEventsReconnectTimer = setTimeout(() => {
+      coreEventsReconnectTimer = null
+      resolve()
+    }, delayMs)
+  })
+}
+
+// 长连接重连循环：无限重试（这是常驻共享广播流，不是 aiService.ts waitForAiService 那种
+// 有界等待），指数退避封顶在 RECONNECT_BACKOFF_CAP_MS（见 reconnectBackoff.ts）。
+// 只有真正连接成功过（connectToCoreEvents 返回 true，哪怕之后是正常 done 还是读到一半
+// 出错）才把退避重置回下限 RECONNECT_BACKOFF_FLOOR_MS——tsx watch 保存触发的核心服务
+// 重启正是这种「连过、又断开」的模式，退避重置保证这类重载几乎感觉不到断线；只有从未连上过
+// （核心服务还没起来/整个不可达）才持续加倍退避，避免变成每次都立即重试的请求风暴
+async function subscribeToCoreEvents(): Promise<void> {
+  let delayMs = RECONNECT_BACKOFF_FLOOR_MS
+  while (!isShuttingDownCoreEventsLoop) {
+    const connected = await connectToCoreEvents()
+    if (isShuttingDownCoreEventsLoop) return
+
+    // 具体断开原因（fetch 失败/中途读取抛错）已经由 connectToCoreEvents 内部的
+    // catch 打过一条日志，这里只打一条"接下来会怎么重试"的通用日志，不重复描述原因，
+    // 也不会随退避轮次逐 tick 重复打（每次真正发起新一轮连接尝试前只打一次）
+    if (connected) {
+      delayMs = RECONNECT_BACKOFF_FLOOR_MS
+    }
+    console.log(`[Events] reconnecting to core in ${delayMs}ms`)
+
+    await waitForCoreEventsReconnect(delayMs)
+    if (isShuttingDownCoreEventsLoop) return
+
+    if (!connected) {
+      delayMs = nextReconnectDelayMs(delayMs)
+    }
   }
 }
 
@@ -322,11 +438,19 @@ function positionOnChatDisplay(win: BrowserWindow): void {
 
 let settingsWindow: BrowserWindow | null = null
 
+// parent: mainWindow
+// 实测Electron 42.4.1 owned window 的三种父窗口状态迁移：
+// ① 父窗口 minimize() → 子窗口自动隐藏（isVisible() 变 false），
+// 父窗口 restore() 后子窗口自动恢复可见，不需要本文件任何代码介入；
+// ② 父窗口 hide() → 子窗口不仍然可见；
+// ③ 父窗口 应用退出路径正常 destroy()  → 子窗口跟着销毁
+// ?? undefined 是类型层面的兜底
 function createSettingsWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 760,
     height: 560,
     show: false,
+    parent: mainWindow ?? undefined,
     webPreferences: {
       preload: PRELOAD_PATH,
       sandbox: false
@@ -366,27 +490,54 @@ ipcMain.handle('open-settings-window', () => {
     return
   }
   settingsWindow = createSettingsWindow()
+  // applyIconFromCurrentPreset() 只在启动、preset-switched广播、SSE 重连时调用
+  applyIconFromCurrentPreset()
 })
 
 let overlayWindow: BrowserWindow | null = null
 
-// 悬浮窗尺寸/位置是这轮实现默认值，不是 TDD 已经写死的架构决定（写死的只有下面
-// alwaysOnTop/transparent/frame 三项，见 docs/MintBot_TDD.md §3.7「悬浮窗技术要点」）
-const OVERLAY_WIDTH = 220
-const OVERLAY_HEIGHT = 220
+// 悬浮窗尺寸是这轮实现默认值，不是 TDD 已经写死的架构决定（写死的只有下面
+// alwaysOnTop/transparent/frame 三项，见 docs/MintBot_TDD.md §3.7「悬浮窗技术要点」）。
+// 实际数值（132×132）与聊天窗口的默认值（290×520）一起定义在 windowPositions.ts 的
+// DEFAULT_WINDOW_SIZE 里——那边的密度换算规则（computeSizeForDisplay/
+// computeDefaultBoundsForDisplay）也需要同一份数字，两处不再各自维护一份。
+//
+// 启动恢复现在信任表里存的宽高（不再像旧版本那样恒用固定常量覆盖）：这块屏第一次出现时，
+// computeDefaultBoundsForDisplay 算出的就是"这块屏该有的悬浮窗尺寸"这个唯一答案，
+// 跳屏/归位/启动恢复三处都经过同一个函数，不会再出现"表里存的是跳屏换算出来的临时值"
+// 这种需要不信任的情况（见该函数注释）
+function resolveOverlayStartupBounds(): Bounds {
+  const displays = screen.getAllDisplays()
+  const targetDisplay = resolveStartupDisplay(displays, getLastDisplayId('overlay'))
+  const stored = getPreferredBounds('overlay', targetDisplay.id)
+  const bounds = stored
+    ? clampBoundsToWorkArea(stored, targetDisplay.workArea)
+    : computeDefaultBoundsForDisplay(targetDisplay, displays, DEFAULT_WINDOW_SIZE.overlay, 'overlay')
+  if (!stored) {
+    setPreferredBounds('overlay', targetDisplay.id, bounds)
+  }
+  setLastDisplayId('overlay', targetDisplay.id)
+  return bounds
+}
 
 function createOverlayWindow(): BrowserWindow {
-  // 用 workArea（带 x/y 偏移）而不是 workAreaSize（只有宽高）：任务栏停靠在上边/左边时
-  // workArea.x/y 不为 0，只用宽高算出来的坐标会跟任务栏厚度错位，没有真正贴住右下角
-  const { x: workAreaX, y: workAreaY, width: workAreaWidth, height: workAreaHeight } = screen.getPrimaryDisplay().workArea
+  const { x, y, width, height } = resolveOverlayStartupBounds()
+
+  // 构造窗口同样是一次程序放置，必须记进冷却期——否则窗口落到目标屏后 Windows 异步发来的
+  // WM_DPICHANGED 尺寸校正会被 handleWindowMoved 当成用户手动调整写进偏好表（详见该函数）
+  markProgrammaticWindowPlacement('overlay')
 
   const win = new BrowserWindow({
-    width: OVERLAY_WIDTH,
-    height: OVERLAY_HEIGHT,
-    x: workAreaX + workAreaWidth - OVERLAY_WIDTH,
-    y: workAreaY + workAreaHeight - OVERLAY_HEIGHT,
+    width,
+    height,
+    x,
+    y,
     frame: false,
     transparent: true,
+    // 透明无边框窗口在 Windows 上仍会由 DWM 沿窗口矩形画一圈投影（hasShadow 默认 true）。
+    // 深色桌面上看不出来，浅色/白底桌面上就是一个明显的方框——而悬浮窗的可见形状应该只有
+    // 立绘本身，窗口矩形不该被看见
+    hasShadow: false,
     alwaysOnTop: true,
     resizable: false,
     skipTaskbar: true,
@@ -467,10 +618,59 @@ const TITLEBAR_OVERLAY_SYMBOL_COLOR = '#e8e8f0'
 // 所以原生条带可能比 CSS 高度矮 1-2px，需目视确认是否可察觉
 const TITLEBAR_OVERLAY_HEIGHT = 25
 
+// 聊天窗口默认尺寸（此前是硬编码 390×700，从不查表，每次启动都会重置——现在改为
+// 启动时查表恢复）实际数值定义在 windowPositions.ts 的 DEFAULT_WINDOW_SIZE.chat 里，
+// 只在"该显示器第一次出现、表里还没有偏好记录"时才会被 computeSizeForDisplay 用到，
+// 见 resolveChatStartupBounds
+
+// 首次在某块显示器上打开聊天窗口时的默认位置：居中于该显示器的 workArea——用 workArea
+// 而不是 workAreaSize，理由跟 windowPositions.ts 里 computeDefaultBoundsForDisplay
+// 同一条注释：任务栏停靠在上边/左边时 workArea.x/y 不为 0，只用宽高算会跟任务栏厚度错位。
+// 宽高走 computeSizeForDisplay（跟悬浮窗、跳屏/归位共用同一个密度换算规则），只有"贴
+// workArea 右下角"换成"居中"这一点位置公式是聊天窗口自己的约定，两者不合并
+function computeDefaultChatBounds(display: Electron.Display, displays: Electron.Display[]): Bounds {
+  const { width, height } = computeSizeForDisplay(display, displays, DEFAULT_WINDOW_SIZE.chat)
+  const { x: workAreaX, y: workAreaY, width: workAreaWidth, height: workAreaHeight } = display.workArea
+  return {
+    width,
+    height,
+    x: Math.round(workAreaX + (workAreaWidth - width) / 2),
+    y: Math.round(workAreaY + (workAreaHeight - height) / 2),
+  }
+}
+
+// 启动时的显示器/边界解析：① 上次退出时在用的显示器仍连接着就用它，否则退回最大显示器
+// （resolveStartupDisplay，见 windowPositions.ts 注释）；② 该显示器有偏好记录就查表夹紧
+// 后使用，没有就居中算一次默认值并立刻存表——跟 windowBehavior.ts 里跳屏首次出现某块
+// 显示器时"查不到就算一次、立刻存表"的约定一致；③ 无论走哪条分支，都把这块显示器记成
+// "最近一次使用"，即使用户这次会话从未拖动/缩放过窗口，下次启动也能定位回同一块屏幕，
+// 不必依赖 handleWindowMoved 才能记录
+function resolveChatStartupBounds(): Bounds {
+  const displays = screen.getAllDisplays()
+  const targetDisplay = resolveStartupDisplay(displays, getLastDisplayId('chat'))
+  const stored = getPreferredBounds('chat', targetDisplay.id)
+  const bounds = stored ? clampBoundsToWorkArea(stored, targetDisplay.workArea) : computeDefaultChatBounds(targetDisplay, displays)
+  if (!stored) {
+    setPreferredBounds('chat', targetDisplay.id, bounds)
+  }
+  setLastDisplayId('chat', targetDisplay.id)
+  return bounds
+}
+
+// 聊天窗口 resize 事件的防抖间隔：拖拽缩放期间 'resize' 会连续触发，跟 'moved' 共用同一个
+// handleWindowMoved 落盘路径，但不做防抖会导致一次缩放动作触发几十次同步磁盘写入
+
 function createWindow() {
+  const { x, y, width, height } = resolveChatStartupBounds()
+
+  // 同 createOverlayWindow：构造即程序放置，先进冷却期再建窗口
+  markProgrammaticWindowPlacement('chat')
+
   const win = new BrowserWindow({
-    width: 390,
-    height: 700,
+    x,
+    y,
+    width,
+    height,
     show: false,
     titleBarStyle: 'hidden',
     titleBarOverlay: {
@@ -509,6 +709,13 @@ function createWindow() {
     handleWindowMoved('chat', win)
   })
 
+  // 拖拽缩放同样要写回持久化偏好表，与 'moved' 共用 handleWindowMoved。防抖、跳屏守卫、
+  // 窗口已销毁的判断全部收在该函数内部——两个监听在一次拖拽里都是逐帧连续触发的（从上边/
+  // 左边拖拽缩放时原点也在动，会一路发 move），闸门放在公共入口才不会只保护住其中一种
+  win.on('resize', () => {
+    handleWindowMoved('chat', win)
+  })
+
   // 关闭按钮不再销毁窗口：跟托盘"退出"区分开（isQuitting），聊天窗口关闭跟最小化一样
   // 只是隐藏 + 触发悬浮窗显示，应用继续在托盘常驻。用 close（可 preventDefault）而非
   // closed（已销毁后触发，拦不住）
@@ -534,12 +741,42 @@ ipcMain.on('overlay:activate', () => {
   overlayWindow?.hide()
 })
 
+// 主题变化时更新聊天窗口原生按钮条带（TDD §3.2.2「渲染层消费」路径 3、§3.7 附「聊天
+// 窗口 chrome 模型」）：渲染层用 src/chat/themeVars.ts 的 titlebarOverlayFromTheme 算好
+// { color, symbolColor } 后单向下发，这里只负责转调 win.setTitleBarOverlay()，不做颜色
+// 计算。setTitleBarOverlay 只在构造时已启用 WCO（titleBarStyle: 'hidden' + 传了
+// titleBarOverlay）的窗口上生效，createWindow 里已满足这个前提。渲染层是本仓库唯一的
+// 调用方，值来自 themeVars.ts 而非用户可任意输入的表单，这里只做类型层面的最小校验
+ipcMain.on('titlebar:set-overlay', (_event, overlay: { color?: unknown; symbolColor?: unknown }) => {
+  // isDestroyed()：mainWindow 只在 'closed' 回调里被置 null，而那回调发生在原生窗口销毁**之后**，
+  // 中间那段窗口非空但已销毁。与本文件其它跨异步使用窗口引用的地方同一守卫
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (typeof overlay?.color !== 'string' || typeof overlay?.symbolColor !== 'string') return
+  // setTitleBarOverlay 在颜色串格式非法、或窗口未启用 WCO 时会抛。当前唯一调用方是本仓库
+  // 渲染层、值来自 themeVars.ts，格式可控；但这是个暴露给渲染层的通道，而 ipcMain.on 里的
+  // 同步抛出会变成主进程未捕获异常——不值得为一次配色更新冒这个险
+  try {
+    mainWindow.setTitleBarOverlay({ color: overlay.color, symbolColor: overlay.symbolColor })
+  } catch (err) {
+    console.error('[Titlebar] Failed to apply overlay:', err)
+  }
+})
+
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null)
   createWindow()
   // 悬浮窗跟随聊天窗口的最小化/焦点/关闭状态显隐（见上方 createWindow 内的
   // minimize/focus/close 监听）
   overlayWindow = createOverlayWindow()
+  // 拖拽起止信号直传悬浮窗渲染层（IPC，不经核心服务，见 docs/MintBot_TDD.md §3.7 附
+  // 「拖拽的实现方式」）：这是窗口本地的展示事件，走 HTTP→SSE 既慢又会把 core 拖进一件
+  // 与它无关的事情；转场锁、no-drag 切换等判断全部留给渲染层，主进程只转发。悬浮窗这轮
+  // 只在启动时创建一次（没有像聊天窗口那样的重建路径），因此不保留返回的 unhook 函数
+  startOverlayDragMonitor(
+    overlayWindow,
+    () => overlayWindow?.webContents.send('overlay:drag-start'),
+    () => overlayWindow?.webContents.send('overlay:drag-end')
+  )
   // 托盘骨架先于 applyIconFromCurrentPreset 创建，保证该函数末尾的 tray?.setImage 生效时
   // tray 已存在（createTray 内部第一行同步执行 new Tray(...)，之后才有异步的菜单构建）
   createTray()
@@ -548,20 +785,26 @@ app.whenReady().then(() => {
   // preset 切换 / window-behavior-changed 事件（fire-and-forget，不阻塞启动；三者内部都已
   // try/catch，失败只 console.error）
   applyIconFromCurrentPreset()
-  initWindowBehaviorConfig()
+  initWindowBehaviorConfig(mainWindow)
   subscribeToCoreEvents()
 
   globalShortcut.register('CommandOrControl+Shift+I', () => {
     BrowserWindow.getFocusedWindow()?.webContents.openDevTools()
   })
 
-  powerMonitor.on('lock-screen', () => notifySystemEvent('lock-screen'))
-  powerMonitor.on('unlock-screen', () => notifySystemEvent('unlock-screen'))
+  powerMonitor.on('lock-screen', () => {
+    notifySystemEvent('lock-screen')
+    stopActiveWindowMonitoring()
+  })
+  powerMonitor.on('unlock-screen', () => {
+    notifySystemEvent('unlock-screen')
+    startActiveWindowMonitoring()
+  })
 
   // 真正的跳屏/隐藏/置顶/白名单黑名单逻辑见 electron/main/windowBehavior.ts
   // （buzzing-frolicking-eich.md 计划子任务③）。mainWindow/overlayWindow 在闭包里按引用
   // 读取，每次 tick 拿到的都是调用时刻的当前值，不会因为窗口重建/置空而脱节
-  stopActiveWindowMonitor = startActiveWindowMonitor(info => handleActiveWindowChange(info, mainWindow, overlayWindow))
+  startActiveWindowMonitoring()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -572,7 +815,15 @@ app.whenReady().then(() => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll()
-  stopActiveWindowMonitor?.()
+  stopActiveWindowMonitoring()
+  // 停止 subscribeToCoreEvents 的重连循环：置位阻止发起新一轮连接尝试，并清掉可能正在
+  // 等待中的退避定时器——不清掉的话，退出时若循环恰好处于等待退避的阶段，这个 setTimeout
+  // 会继续持有事件循环的引用（进程不能真正退出）并在到期后触发一次没有意义的重连
+  isShuttingDownCoreEventsLoop = true
+  if (coreEventsReconnectTimer) {
+    clearTimeout(coreEventsReconnectTimer)
+    coreEventsReconnectTimer = null
+  }
 })
 
 app.on('window-all-closed', () => {

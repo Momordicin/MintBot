@@ -7,8 +7,11 @@ import type { ModelConfig } from '../../../shared/types/index.js'
 // 独立 config 模块（TDD Phase 2 checklist）：集中承载 config.json 里"有真实消费者"的字段，
 // 取代此前分散在各文件里的硬编码常量（buildContext.ts / orchestrator.ts / summarizer.ts）
 // 以及 index.ts 内联的 loadConfig/watchConfig。security.encryptSensitiveFields 是部署驱动的
-// 独立开关（见 config/security.ts），不在本模块范围内。voice/scheduler/overlay/defaultPresetId/
-// streaming 目前没有消费者，同样不在本模块类型范围内——避免为未使用的字段做投机性建模。
+// 独立开关（见 config/security.ts），不在本模块范围内。voice/scheduler/overlay/streaming
+// 目前没有消费者，同样不在本模块类型范围内——避免为未使用的字段做投机性建模。defaultPresetId
+// 曾经也在这一批里（只被 index.ts 启动时读一次，从未有过写入通道），现在有了真正的消费者：
+// 记住重启前激活的 preset（services/core/session/index.ts 的 switchPreset 写入，
+// services/core/index.ts 启动时读取），因此纳入本模块。
 
 export interface SummaryTriggerConfig {
   pendingCountThreshold: number
@@ -82,6 +85,7 @@ let currentMemoryConfig: MemoryConfig = DEFAULT_MEMORY_CONFIG
 let currentModelProviderConfig: ModelConfig | undefined
 let currentBackgroundModelProviderConfig: ModelConfig | undefined
 let currentWindowBehaviorConfig: WindowBehaviorConfig = DEFAULT_WINDOW_BEHAVIOR_CONFIG
+let currentDefaultPresetId: string | undefined
 let loaded = false
 
 // 单个数字字段的按字段合并：存在且类型正确则使用，否则告警 + 回退到该字段自己的默认值
@@ -168,6 +172,7 @@ function load(): boolean {
       currentModelProviderConfig = undefined
       currentBackgroundModelProviderConfig = undefined
       currentWindowBehaviorConfig = mergeWindowBehaviorConfig(undefined)
+      currentDefaultPresetId = undefined
       loaded = true
     } else {
       console.warn('[Config] config.json 重新加载失败，保留上一次的有效配置:', err)
@@ -194,6 +199,12 @@ function load(): boolean {
       : undefined
 
   currentWindowBehaviorConfig = mergeWindowBehaviorConfig(raw)
+
+  // defaultPresetId 是可选字段（首次启动时磁盘上还没有这个 key，是正常情况），不 warn；
+  // 类型错误则视为未设置，交给 session/index.ts 的 resolveStartupPresetId 走首次启动同一条
+  // 回退路径，而不是在这里报错阻塞启动
+  const defaultPresetIdRaw = (raw as Record<string, unknown>)?.defaultPresetId
+  currentDefaultPresetId = typeof defaultPresetIdRaw === 'string' ? defaultPresetIdRaw : undefined
 
   loaded = true
   return true
@@ -226,6 +237,13 @@ export function getMemoryConfig(): MemoryConfig {
 export function getWindowBehaviorConfig(): WindowBehaviorConfig {
   ensureLoaded()
   return currentWindowBehaviorConfig
+}
+
+// 重启后恢复上次激活 preset 用（services/core/index.ts 启动时读取）；未设置过时返回
+// undefined，调用方（session/index.ts 的 resolveStartupPresetId）负责首次启动的回退
+export function getDefaultPresetId(): string | undefined {
+  ensureLoaded()
+  return currentDefaultPresetId
 }
 
 export function getModelProviderConfig(): ModelConfig {
@@ -275,8 +293,21 @@ function readRawSection(section: 'modelProvider' | 'backgroundModelProvider' | '
 // （services/core/routes/presets.ts）相同的"临时文件 + 同目录 rename"原子写模式，
 // 不直接 writeFileSync 到 CONFIG_PATH。value 为 null 时把该 key 从写出的 JSON 里整个删掉
 // （而不是写入 JSON null），与 load() 里"该字段类型不是 object 就视为未配置"的判断逻辑
-// 保持一致，保证下次 reload 时被当成"未配置"
-function writeConfigSection(section: 'modelProvider' | 'backgroundModelProvider' | 'windowBehavior', value: ModelConfig | WindowBehaviorConfig | null): void {
+// 保持一致，保证下次 reload 时被当成"未配置"。defaultPresetId 是纯字符串顶层字段
+// （不像其它 section 是嵌套对象），value 直接原样赋给 raw[section] 同样成立
+// section 名与它允许的 value 类型的对应表。不用裸联合（'a'|'b' + A|B|null）——那样
+// 两个参数互相脱钩，writeConfigSection('modelProvider', someString) 也能编译过
+type ConfigSectionValue = {
+  modelProvider: ModelConfig
+  backgroundModelProvider: ModelConfig
+  windowBehavior: WindowBehaviorConfig
+  defaultPresetId: string
+}
+
+function writeConfigSection<K extends keyof ConfigSectionValue>(
+  section: K,
+  value: ConfigSectionValue[K] | null
+): void {
   const raw = readRawConfig()
   if (value === null) {
     delete raw[section]
@@ -348,4 +379,13 @@ export function updateWindowBehaviorConfig(partial: Partial<WindowBehaviorConfig
   currentWindowBehaviorConfig = merged
   loaded = true
   return merged
+}
+
+// 当前激活 preset 写入：由 session/index.ts 的 switchPreset 在切换成功后调用，不在进程
+// 退出时才写——退出路径（尤其 Windows 上）不可靠，切换发生的当下才是唯一保证会执行到的时机。
+// 与其它 update* 函数一样立即同步内存态，不等 chokidar 的异步 reload
+export function setDefaultPresetId(presetId: string): void {
+  writeConfigSection('defaultPresetId', presetId)
+  currentDefaultPresetId = presetId
+  loaded = true
 }

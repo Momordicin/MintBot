@@ -22,37 +22,62 @@
   /* 字体 */
   --font: 'Noto Sans SC', system-ui, sans-serif;
 
-  /* 聊天区域半透明（Phase 1 写死，后期设置页控制） */
-  --chat-bg-rgb: 15, 15, 20;
+  /* React 挂载前那一瞬的占位值。ChatWindow.tsx 现在把 deriveTheme()+themeCssVars() 的
+     整组输出连同 color-scheme 一起挂在 document.documentElement 上（而不是聊天窗口根
+     div 的内联 style），挂载之后这些值全部会被 documentElement 上的内联样式覆盖（内联
+     样式的优先级天然高于这里的 :root 规则），不需要再要求这里的字面值与
+     deriveTheme(DEFAULT_THEME_INPUT) 的输出逐字节相等——这些值只需要合理，不需要跟
+     任何东西对齐。
+     color-scheme 同理：这里给的 dark 只是 React 挂载前的静态占位（DEFAULT_THEME_INPUT
+     的 mode 固定是 'night'，见 themeVars.ts），挂载后由 ChatWindow.tsx 按 resolvedMode
+     写到 documentElement 的内联样式上，跟随日间/夜间/跟随系统实时更新 */
   --chat-bg-opacity: 0.65;
-
-  /* 气泡颜色 */
-  --bubble-user-bg: rgba(200, 200, 210, 0.25);
-  --bubble-user-text: #e8e8f0;
-  --bubble-bot-bg: rgba(45, 45, 49, 0.8);
-  --bubble-bot-text: #d3d3d9;
-
-  /* 输入框 */
-  --input-bg: rgba(20, 20, 28, 0.90);
-  --input-border: rgba(255, 255, 255, 0.10);
-  --input-text: #e8e8f0;
-  --input-placeholder: rgba(255, 255, 255, 0.35);
-
-  /* 时间戳、次要文字 */
-  --text-secondary: rgba(255, 255, 255, 0.40);
-
-  /* 系统消息（错误状态） */
-  --system-msg-text: rgba(255, 255, 255, 0.45);
-
-  /* 滚动条 */
-  --scrollbar-thumb: rgba(255, 255, 255, 0.15);
+  --window-bg-rgb: 0, 0, 0;
+  --bg2-rgb: 28, 28, 30;
+  --bubble-bot-bg: rgb(44, 44, 46);
+  --bubble-bot-text: rgb(255, 255, 255);
+  --bubble-user-bg: rgb(0, 112, 245);
+  --bubble-user-text: rgb(255, 255, 255);
+  --titlebar-bg: rgba(28, 28, 30, 0.65);
+  --titlebar-text: rgb(255, 255, 255);
+  --input-bg: rgba(28, 28, 30, 0.65);
+  --input-text: rgb(255, 255, 255);
+  --input-placeholder: rgba(235, 235, 245, 0.30);
+  --input-border: rgba(84, 84, 88, 0.60);
+  --text-secondary: rgba(235, 235, 245, 0.60);
+  --system-msg-text: rgba(235, 235, 245, 0.60);
+  --scrollbar-thumb: rgba(120, 120, 128, 0.36);
+  --scrollbar-thumb-hover: rgba(120, 120, 128, 0.51);
+  --label: rgb(255, 255, 255);
+  --label2: rgba(235, 235, 245, 0.60);
+  --label3: rgba(235, 235, 245, 0.30);
+  --label4: rgba(235, 235, 245, 0.18);
+  --fill1: rgba(120, 120, 128, 0.36);
+  --fill2: rgba(120, 120, 128, 0.26);
+  --fill3: rgba(120, 120, 128, 0.16);
+  --accent: rgb(0, 112, 245);
+  --accent-rgb: 0, 112, 245;
+  --error-container: rgb(140, 29, 24);
+  --on-error-container: rgb(249, 222, 220);
+  color-scheme: dark;
 
   /* 尺寸 */
   --avatar-size: 32px;
   --bubble-radius: 12px;
+  /* 气泡投影：左上光源，阴影落向右下。日夜同一条（纯黑背景上它确实不起作用，但背景
+     通常是壁纸，那时它照样有效——一条规则不分叉）。不走 themeCssVars 是因为它不随
+     模式或 accent 变化，是个常量。.msg-bubble 与 .typing-bubble 共用，两者底色相同 */
+  --bubble-shadow: 1px 2px 3px rgba(0, 0, 0, 0.16);
   --input-height: 52px;
 }
 
+/* html/body/#root 是聊天窗口根 div 的**祖先**，div 上的内联样式只会级联到它自己的子树，
+   到不了祖先——这里的 color 此前读的是 --bubble-bot-text，而下发那批变量的地方一直是
+   聊天窗口根 div 的内联 style，于是这条规则实际上永远只读到上面 :root 的静态占位值
+   （固定纯白），day 模式下窗口本该是黑字却始终显示白字，是一个存在已久、从未真正生效
+   过的 bug。修法是把变量挂到 document.documentElement 上（ChatWindow.tsx 的
+   useLayoutEffect），documentElement 是 html/body/#root 共同的祖先（html 本身就是它），
+   这样这条规则才能吃到当前真实的主题色，而不是止步于 :root 占位值 */
 html, body, #root {
   width: 100%;
   height: 100%;
@@ -61,8 +86,22 @@ html, body, #root {
   font-weight: 400;
   font-size: 14px;
   line-height: 1.6;
-  color: var(--bubble-bot-text);
+  color: var(--label);
+  caret-color: var(--accent);
+  accent-color: var(--accent);
   -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: rgba(var(--accent-rgb), 0.30);
+  color: var(--label);
+}
+
+/* :focus-visible 在改动前的仓库里出现次数为零——除了 textarea 之外的每个控件都还在用
+   Chromium 默认的蓝色系统焦点环，跟主题完全脱节 */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* 滚动条样式 */
@@ -75,4 +114,7 @@ html, body, #root {
 ::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
   border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
 }
