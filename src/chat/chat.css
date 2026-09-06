@@ -40,8 +40,9 @@
   padding-right: calc(100% - env(titlebar-area-width, calc(100% - 138px)));
   /* 不再需要与主进程 TITLEBAR_OVERLAY_COLOR 保持同一 alpha：原生层已改为完全透明，
      不贡献底色，这里的 0.40 是标题栏唯一的底色来源，两处不存在"叠加"或"一致性"的
-     耦合关系了 */
-  background: rgba(15, 15, 20, 0.40);
+     耦合关系了。批次二起改用 --titlebar-bg（src/chat/chromeColor.ts
+     deriveChromeSurfaceColor，主题色本身 + 固定 alpha 0.40），不再写死 rgba 字面量 */
+  background: var(--titlebar-bg);
   /* 毛玻璃：让身后壁纸轻微模糊而非完全清晰，避免标题栏区域抢注意力（用户反馈）。8px 取
      "轻微"区间（6-10px）中段——标题栏净高只有 25px，半径再大会把整条纹理糊成一块纯色，
      反而丢失跟下方壁纸的观感连续性。
@@ -83,7 +84,9 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: var(--bubble-bot-text);
+  /* 文字深浅随主题明暗翻转，复用与纱色方向、窗口按钮符号色同一次 readableColor()
+     判断（TDD §2.2「派生策略」、src/chat/chromeColor.ts deriveVeilColor） */
+  color: var(--veil-color);
 }
 
 /* ─── Embedding 未就绪：头像置灰 ───────────────────────── */
@@ -148,7 +151,8 @@
   height: 32px;
   border-radius: 50%;
   border: none;
-  background: rgba(255, 255, 255, 0.15);
+  /* hover 纱：装饰性部位，走 color-mix 就地算出（TDD §2.2「派生策略」） */
+  background: color-mix(in oklab, rgb(var(--chat-bg-rgb)) 85%, var(--veil-color) 15%);
   color: #fff;
   font-size: 18px;
   cursor: pointer;
@@ -159,7 +163,7 @@
 }
 
 .scroll-btn:hover {
-  background: rgba(255, 255, 255, 0.25);
+  background: color-mix(in oklab, rgb(var(--chat-bg-rgb)) 75%, var(--veil-color) 25%);
 }
 
 /* ─── 消息行 ───────────────────────────────────────────── */
@@ -459,6 +463,7 @@
 }
 
 .settings-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
+  /* hover 纱：装饰性部位，走 color-mix 就地算出（TDD §2.2「派生策略」） */
+  background: color-mix(in oklab, rgb(var(--chat-bg-rgb)) 92%, var(--veil-color) 8%);
   color: rgba(255, 255, 255, 0.85);
 }

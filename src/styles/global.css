@@ -26,15 +26,27 @@
   --chat-bg-rgb: 15, 15, 20;
   --chat-bg-opacity: 0.65;
 
-  /* 气泡颜色 */
-  --bubble-user-bg: rgba(200, 200, 210, 0.25);
+  /* 纱色方向（白纱/黑纱）：默认主题 [15,15,20] 属深色，取白纱。由 ChatWindow.tsx 按
+     src/chat/chromeColor.ts 的 readableColor() 判断按角色覆盖，供下面的 color-mix
+     装饰派生、.chat-titlebar__name 文字颜色、IPC 下发的窗口按钮符号色三处复用
+     （TDD §2.2「派生策略」） */
+  --veil-color: #fff;
+
+  /* 气泡颜色：默认值是 src/chat/chromeColor.ts 对默认主题 [15,15,20] 的 oklab
+     三段式派生结果（TDD §2.2），按角色自定义主题色时由 ChatWindow.tsx 覆盖这两个变量，
+     不在这里重新计算 */
+  --bubble-user-bg: rgba(200, 200, 202, 0.65);
   --bubble-user-text: #e8e8f0;
-  --bubble-bot-bg: rgba(45, 45, 49, 0.8);
+  --bubble-bot-bg: rgba(44, 44, 49, 0.8);
   --bubble-bot-text: #d3d3d9;
 
+  /* 标题栏底 / 输入栏底：默认值同上，均为 deriveChromeSurfaceColor([15,15,20])
+     （主题色本身，固定 alpha 0.40，见 TDD §3.7 附「chrome 不透明度 0.40」） */
+  --titlebar-bg: rgba(15, 15, 20, 0.40);
+
   /* 输入框 */
-  --input-bg: rgba(20, 20, 28, 0.90);
-  --input-border: rgba(255, 255, 255, 0.10);
+  --input-bg: rgba(15, 15, 20, 0.40);
+  --input-border: color-mix(in oklab, rgb(var(--chat-bg-rgb)) 90%, var(--veil-color) 10%);
   --input-text: #e8e8f0;
   --input-placeholder: rgba(255, 255, 255, 0.35);
 
@@ -44,8 +56,8 @@
   /* 系统消息（错误状态） */
   --system-msg-text: rgba(255, 255, 255, 0.45);
 
-  /* 滚动条 */
-  --scrollbar-thumb: rgba(255, 255, 255, 0.15);
+  /* 滚动条：装饰性部位，走 color-mix 就地算出（TDD §2.2「派生策略」），零依赖 */
+  --scrollbar-thumb: color-mix(in oklab, rgb(var(--chat-bg-rgb)) 85%, var(--veil-color) 15%);
 
   /* 尺寸 */
   --avatar-size: 32px;

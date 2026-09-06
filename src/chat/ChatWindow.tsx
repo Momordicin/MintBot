@@ -4,6 +4,7 @@ import { InputBar } from './InputBar'
 import { TitleBar } from './TitleBar'
 import { MessageData } from './MessageBubble'
 import { parseSSE } from './sse'
+import { deriveChromeVars, deriveTitlebarOverlay, DEFAULT_CHAT_BG_RGB } from './chromeColor.js'
 import type { AppState, PresetSnapshot } from '../../shared/types/index.js'
 import './chat.css'
 
@@ -264,6 +265,21 @@ export function ChatWindow() {
     }
   }, [])
 
+  // 原生窗口按钮条带（Window Controls Overlay）不受 CSS 管辖，主题色变化时把算好的
+  // { color, symbolColor } 经单向 IPC 'titlebar:set-overlay' 下发给主进程，由它调用
+  // win.setTitleBarOverlay() 应用（TDD §3.2.2「渲染层消费」路径 3、§3.7 附「聊天窗口
+  // chrome 模型」）。
+  //
+  // displayConfig 缺失时（v7 之前创建的历史冻结快照）**不能直接 return**：CSS 那半会自然
+  // 降级到 global.css `:root` 里的默认主题色，而原生条带没有等价降级——它会停在上一个
+  // preset 推下来的值。于是浅色主题切到旧会话时，自绘标题栏回到深色、按钮符号却还是黑的，
+  // 正是 §3.7 附警告过的「两层各说各话」，只是成因从双重叠加变成了残留。这里改为回落到与
+  // `:root` 同一份字面默认色，让两层始终收敛到同一个值
+  useEffect(() => {
+    const chatBgRgb = appState?.presetSnapshot?.displayConfig?.chatBgRgb ?? DEFAULT_CHAT_BG_RGB
+    window.electronAPI.setTitlebarOverlay(deriveTitlebarOverlay(chatBgRgb))
+  }, [appState?.presetSnapshot?.displayConfig?.chatBgRgb])
+
   // 加载最近一页历史消息（挂载时的初始 /state 请求成功后、以及每次聚焦触发的 session 同步
   // 成功后各调用一次），接入调用方传入的 controller signal，与 fetchAvatarUrl 同款竞态保护
   async function loadInitialMessages(sessionId: string, signal: AbortSignal) {
@@ -414,17 +430,27 @@ export function ChatWindow() {
   }, [])
 
   const displayName = appState?.presetSnapshot?.name ?? '角色'
+  const displayConfig = appState?.presetSnapshot?.displayConfig
+  // 装饰性部位（hover 纱、边框、滚动条 thumb）在 CSS 里用 color-mix 就地算出，只需要
+  // --chat-bg-rgb / --veil-color 两个输入；承载内容的表面（气泡底、标题栏底、输入栏底）
+  // 需要具体色值，在这里算好后同样作为 CSS 变量下发（TDD §3.2.2「渲染层消费」路径 1/2）
+  const chromeVars = displayConfig ? deriveChromeVars(displayConfig.chatBgRgb) : null
 
   return (
     <div
       className={`chat-window${embeddingReady ? '' : ' chat-window--embedding-not-ready'}`}
       style={{
         ...(wallpaperUrl ? { backgroundImage: `url(${wallpaperUrl})` } : {}),
-        // displayConfig 缺失时（v7 之前创建的历史冻结快照）不写这两个变量，
+        // displayConfig 缺失时（v7 之前创建的历史冻结快照）不写这些变量，
         // 让 global.css 里 :root 的默认值继续兜底，外观与现在完全一致
-        ...(appState?.presetSnapshot?.displayConfig && {
-          '--chat-bg-rgb': appState.presetSnapshot.displayConfig.chatBgRgb.join(', '),
-          '--chat-bg-opacity': String(appState.presetSnapshot.displayConfig.chatBgOpacity),
+        ...(displayConfig && chromeVars && {
+          '--chat-bg-rgb': displayConfig.chatBgRgb.join(', '),
+          '--chat-bg-opacity': String(displayConfig.chatBgOpacity),
+          '--veil-color': chromeVars.veilColor,
+          '--bubble-bot-bg': chromeVars.bubbleBotBg,
+          '--bubble-user-bg': chromeVars.bubbleUserBg,
+          '--titlebar-bg': chromeVars.titlebarBg,
+          '--input-bg': chromeVars.inputBg,
         }),
       } as React.CSSProperties}
     >
