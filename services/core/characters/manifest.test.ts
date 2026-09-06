@@ -142,11 +142,15 @@ describe('loadCharacterManifest — 真实角色包 fixture（assets/characters/
         thinking: ['gifs/thinking.gif'],
         'listening-to-music': ['gifs/music.gif'],
         'boredom-idle': ['gifs/boredom.gif'],
+        sleeping: ['gifs/sleeping.gif'],
       },
       emotePool: [
         { file: 'emotes/example.jpg', tags: ['excited'] },
       ],
       transitions: {
+        'fall-asleep': [
+          { from: ['emotions.idle'], pick: 'random', durationMs: 3000 },
+        ],
         'wake-from-sleep': [
           { from: ['emotions.sad'], pick: 'random', durationMs: 3000 },
           { from: ['emotions.happy'], pick: 'random', durationMs: 3000 },

@@ -11,17 +11,45 @@ import {
   resolveDisplayFile,
 } from './portraitState.js'
 
-// 三条转场链条（TDD「唤醒与转场」表格）。poke-neutral 本批次没有调用入口（仅拖拽可触发，
-// 批次 4 范围），但类型与解析逻辑照常支持它——批次任务书明确要求"实现它，只是暂时没有
-// 触发它的入口"，不是遗漏
-export type TransitionTrigger = 'wake-from-sleep' | 'wake-from-bored' | 'poke-neutral'
+// 四条转场链条（TDD「唤醒与转场」表格 + 「入睡转场 fall-asleep」）。poke-neutral 本批次
+// 没有调用入口（仅拖拽可触发，批次 4 范围），但类型与解析逻辑照常支持它——批次任务书明确
+// 要求"实现它，只是暂时没有触发它的入口"，不是遗漏。fall-asleep 与另外三条唤醒转场共用
+// 同一套解析/播放/锁机制（是否上锁由调用方按 trigger 区分，见 OverlayApp.tsx
+// startTransition），这里不需要为它单独开一个类型分支
+export type TransitionTrigger = 'wake-from-sleep' | 'wake-from-bored' | 'poke-neutral' | 'fall-asleep'
 
 // 唤醒前的 y → 对应转场链条名（TDD「唤醒与转场」表格）。YState 只有三个取值（睡着/无聊/空），
 // 映射是满射，不存在"无对应转场"的第四分支
 export function selectTransitionTrigger(previousY: YState): TransitionTrigger {
-  if (previousY === 'sleep') return 'wake-from-sleep'
+  if (previousY === 'sleeping') return 'wake-from-sleep'
   if (previousY === 'boredom-idle') return 'wake-from-bored'
   return 'poke-neutral'
+}
+
+// 入睡转场的触发判定（TDD「入睡转场 fall-asleep」表格：只有"距上次搭理满 60 分钟（运行期
+// 计时）"这一条播，载入期判定与文本检测入睡都不播）。四个条件缺一不可：
+//
+// 1. calledByThresholdTimer——由调用方显式声明，不能靠其它状态推断。挂载 / preset-switched /
+//    转场结束都会重新求值 y，但都不是阈值定时器触发的，不能误播
+// 2. previousY !== 'sleeping'——已经是睡着说明这不是一次新的迁移（例如转场刚结束后的那次
+//    重新求值），不该重播
+// 3. nextY === 'sleeping'——确实迁移到了睡着
+// 4. !explicitSleep——**这一条是把"文本检测入睡不播"真正落实的地方**。前三条只说明"是阈值
+//    定时器这次轮询发现了睡着"，不说明"睡着是时长走到造成的"：显式睡着标记一旦被 §3.8 的
+//    文本检测置上，就会一直挂到下一次 recordAttention 才清，于是**任意一次**后续的阈值定时器
+//    轮询都会发现它并判成迁移，把本该静默到来的入睡播成动画。而 deriveY 是先看 explicitSleep
+//    再查时长表，因此 "explicitSleep 为假且 nextY 为睡着" 恰好等价于"这次睡着来自 60 分钟
+//    时长档"，正是表格里唯一该播的那一行。两者同时成立时也不会漏播：标记先到会让 y 早就
+//    变成睡着，等时长真的走到时 previousY 已是 'sleeping'，被第 2 条挡住
+export function shouldPlayFallAsleep(params: {
+  calledByThresholdTimer: boolean
+  previousY: YState
+  nextY: YState
+  explicitSleep: boolean
+}): boolean {
+  if (!params.calledByThresholdTimer) return false
+  if (params.explicitSleep) return false
+  return params.previousY !== 'sleeping' && params.nextY === 'sleeping'
 }
 
 // 防御性解析后、尚未做素材解析的单步（TDD「transitions」字段表：from/pick/durationMs）。

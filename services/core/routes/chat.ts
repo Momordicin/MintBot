@@ -8,6 +8,8 @@ import { recordAttention, markExplicitSleep } from '../session/attention.js'
 import { broadcastEvent } from '../events/broadcast.js'
 import { createModelProviderForPreset } from '../providers/ModelProvider.js'
 import { getModelProviderConfig } from '../config/index.js'
+import { isEmptyReply } from '../reply/interceptor.js'
+import { detectSleepiness } from '../reply/sleepDetector.js'
 
 // ─── 回复队列（单会话场景下的串行化）──────────────────────
 // MintBot 同一时刻只有一个 SessionState（services/core/session/index.ts 的 current 是单例，
@@ -92,7 +94,12 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
       // 按当前请求捕获的 preset 构建 provider，而不是用全局单例 fastify.modelProvider，
       // 保证并发切换 preset 时本次请求仍使用它开始时的模型配置
-      const modelProvider = createModelProviderForPreset(state.preset, getModelProviderConfig())
+      const modelProviderConfig = getModelProviderConfig()
+      const modelProvider = createModelProviderForPreset(state.preset, modelProviderConfig)
+      // 拦截类命中时的日志需要"模型类型"（TDD §3.8「拦截类」第 1 条：带上 sessionId、模型
+      // 类型、原始输出截断片段），实际生效的类型是 preset 覆盖优先、否则回落全局配置，
+      // 与 createModelProviderForPreset 内部判定一致
+      const modelType = state.preset.modelType ?? modelProviderConfig.type
 
       reply.raw.setHeader('Access-Control-Allow-Origin', 'http://localhost:5173')
       reply.raw.setHeader('Content-Type', 'text/event-stream')
@@ -128,10 +135,32 @@ export async function chatRoutes(fastify: FastifyInstance) {
           const parsed = JSON.parse(fullReply)
           replyText = parsed.reply ?? fullReply
         } catch {
-          // 模型没有返回 JSON，直接用原文
+          // 模型没有返回 JSON，直接用原文——§3.9 既有降级风格保持不变：拦截类只挡空正文，
+          // 不要求回复必须是合法 JSON（TDD §3.8「与 §3.9 降级风格的边界」）
+        }
+
+        // ─── 回复检查·拦截类（TDD §3.8「回复检查」）：reply 正文去掉首尾空白后为空则不入库。
+        // 命中时三件事一起做：console.error 定位是哪个模型哪次调用返的空、不 addMessage
+        // （连带不落情绪、不发 message_done）、发一条 system 事件——第 3 条是必须的，
+        // 不然 message_done 不发，聊天窗口会永远停在"对方输入中"，没有气泡也没有报错，
+        // 「不入库」这个正确决定会以「界面卡死」的形式暴露给用户 ───
+        if (isEmptyReply(replyText)) {
+          console.error(
+            `[Chat] Empty reply body (sessionId=${sessionId}, modelType=${modelType}): ` +
+            JSON.stringify(fullReply.slice(0, 200))
+          )
+          send('system', { type: 'error', payload: { message: 'Model call failed' }, sessionId })
+          return
         }
 
         const messageId = addMessage(sessionId, 'assistant', replyText, 'user')
+
+        // ─── 回复检查·文本检测类（TDD §3.8「回复检查」+ §3.9）：从解析后的 reply 正文（不是
+        // 原始 JSON，否则会匹配到 JSON 字段值本身）里识别困意，命中即置显式睡着标记，供悬浮窗
+        // 立绘状态模型的 y 求值消费 ───
+        if (detectSleepiness(replyText)) {
+          markExplicitSleep(sessionId)
+        }
 
         // 表情包挑选（TDD §3.9「表情包挑选机制：模型选 tag，应用选文件」）：parseEmoteTag 只做
         // 结构校验，词表校验 + 随机选文件交给 selectEmoteFile，用请求捕获的 state.manifest
@@ -160,21 +189,24 @@ export async function chatRoutes(fastify: FastifyInstance) {
         // self 情绪校验通过才落库；模型没按格式回复（校验失败/字段缺失）时不落库也不报错，
         // 保持现有降级风格。持久化异常不应影响本轮对话的正常返回
         const selfEmotion = parseSelfEmotion(fullReply)
+        // 这不是"词表里的特例分支"，是「x 永不为 sleep」这条不变式的守卫（TDD §3.9「必须
+        // 保留的守卫」）：emotionVocabulary 已经不再声明 sleep（本轮 sleep 归位改动），但词表
+        // 干净不代表模型不会输出它——sleep 是常见词，角色人设里也常有困倦相关描写，模型仍可能
+        // 自发吐出这个 label。看到词表已经"删掉 sleep"就顺手删掉这条守卫，是这里最容易犯的
+        // 错误：一旦守卫被撤掉，x 就会变成 sleep，下一轮被 buildContext 当真实情绪喂回模型，
+        // 角色会从此一直表现困倦——这正是 §3.9 要避免的后果。
+        //
+        // 命中时只拦 x：不落 EmotionStates，也不发这次的 emotion 帧（私有流与广播都不发，
+        // 见下方 !isSleep 分支）。但**不再** markExplicitSleep——自发的 sleep label 是未定义
+        // 行为（词表没声明它，模型输出它没有任何契约保证），不能拿一段未定义行为当触发睡着
+        // 的依据。显式睡着标记现在唯一的触发来源是上面的回复检查·文本检测类，那是一条经过
+        // 单测覆盖的规则，不是"模型偶尔吐出一个词表外的 label"这种不可预测的行为
         const isSleep = selfEmotion?.label === 'sleep'
-        if (selfEmotion) {
-          if (isSleep) {
-            // sleep 是词表中唯一不落情绪状态的标签（TDD §3.9），也是悬浮窗立绘状态模型
-            // 「y 的求值顺序」的输入之一（TDD §3.7 附）而非情绪状态：x（由本 emotion 事件驱动）
-            // 永远不能是 sleep，否则「x 永远不会是 sleep」这条推论在 y 求值落地时就被破坏。
-            // 因此这里既不落 EmotionStates，也不发这次的 emotion 帧（私有流与广播都不发）——
-            // 只置显式睡着标记，供 y 求值消费
-            markExplicitSleep(sessionId)
-          } else {
-            try {
-              upsertEmotionState(sessionId, { self: selfEmotion, perceived_user: null })
-            } catch (err) {
-              console.error('[Chat] Failed to persist emotion state:', err)
-            }
+        if (selfEmotion && !isSleep) {
+          try {
+            upsertEmotionState(sessionId, { self: selfEmotion, perceived_user: null })
+          } catch (err) {
+            console.error('[Chat] Failed to persist emotion state:', err)
           }
         }
 

@@ -38,7 +38,8 @@
   "reservedStates": {
     "thinking":           ["gifs/thinking.gif"],
     "listening-to-music": ["gifs/music.gif"],
-    "boredom-idle":       ["gifs/boredom.gif"]
+    "boredom-idle":       ["gifs/boredom.gif"],
+    "sleeping":           ["gifs/sleeping.gif"]
   },
 
   "emotePool": [
@@ -46,6 +47,9 @@
   ],
 
   "transitions": {
+    "fall-asleep": [
+      { "from": "emotions.idle", "pick": "random", "durationMs": 3000 }
+    ],
     "wake-from-sleep": [
       { "from": "emotions.sad",   "pick": "random", "durationMs": 3000 },
       { "from": "emotions.happy", "pick": "random", "durationMs": 3000 }

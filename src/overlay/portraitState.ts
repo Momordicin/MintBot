@@ -12,7 +12,7 @@ export const SLEEP_THRESHOLD_MS = 60 * 60 * 1000
 
 // y 的三类占位者（TDD「y 的三类占位者」）本批次只实现「持久条件状态」里的无聊/睡着两个
 // 成员；瞬间交互动作（drag）与转场序列不在本批次范围内，故此类型不为它们留分支
-export type YState = 'boredom-idle' | 'sleep' | null
+export type YState = 'boredom-idle' | 'sleeping' | null
 
 // manifest schema v3（docs/MintBot_TDD.md「立绘资源管理」）本悬浮窗用得到的最小形状。
 // 除 avatar 外全部字段可选，渲染层不共享 services/core/characters/manifest.ts 的
@@ -55,10 +55,10 @@ export function deriveY(params: {
   explicitSleep: boolean
   now: number
 }): YState {
-  if (params.explicitSleep) return 'sleep'
+  if (params.explicitSleep) return 'sleeping'
   if (params.lastAttentionAt === null) return null
   const elapsed = params.now - params.lastAttentionAt
-  if (elapsed >= SLEEP_THRESHOLD_MS) return 'sleep'
+  if (elapsed >= SLEEP_THRESHOLD_MS) return 'sleeping'
   if (elapsed >= BOREDOM_THRESHOLD_MS) return 'boredom-idle'
   return null
 }
@@ -92,14 +92,15 @@ function selectXFile(pixel: PortraitForm | undefined, x: string | undefined): st
   return pickRandom(candidates)
 }
 
-// y 当前对应的素材来源（TDD「y 的三类占位者」「素材回落链」）：无聊 → reservedStates 的
-// boredom-idle；睡着 → portraits.pixel.emotions.sleep（不是 reservedStates——TDD
-// 「portraits」小节明确写"静息模式切换到 sleep 情绪对应资源"）
+// y 当前对应的素材来源（TDD「y 的三类占位者」「素材回落链」）：y 的持久态取值就是
+// reservedStates 的键，逐字一致（TDD 原文「这不是巧合而是约束」）——取材因此是一次直接
+// 查表，不是按状态分支的 switch。sleeping 的素材现在也归 reservedStates（不再是
+// portraits.pixel.emotions.sleep——那个键已随 emotionVocabulary 一起移除，见「立绘资源
+// 管理」"emotions 里没有 sleep，这是有意的"），因此本函数对 boredom-idle/sleeping 一视同仁；
+// 将来新增 thinking/listening-to-music 时这里一行都不用改
 function selectYFile(manifest: OverlayManifest, y: YState): string | null {
-  const candidates =
-    y === 'boredom-idle' ? manifest.reservedStates?.['boredom-idle']
-    : y === 'sleep' ? manifest.portraits?.pixel?.emotions?.['sleep']
-    : undefined
+  if (y === null) return null
+  const candidates = manifest.reservedStates?.[y]
   if (!candidates || candidates.length === 0) return null
   return pickRandom(candidates)
 }

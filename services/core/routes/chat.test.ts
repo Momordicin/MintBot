@@ -5,7 +5,7 @@ import { initDb, db } from '../db/index.js'
 import { decrypt } from '../db/crypto.js'
 import { upsertPreset, getEmotionState } from '../session/queries.js'
 import * as queries from '../session/queries.js'
-import { loadSession } from '../session/index.js'
+import { loadSession, getHistory } from '../session/index.js'
 import { getLastAttentionAt, isExplicitSleep, markExplicitSleep } from '../session/attention.js'
 import { chatRoutes } from './chat.js'
 import * as ModelProviderModule from '../providers/ModelProvider.js'
@@ -230,23 +230,27 @@ describe('POST /chat', () => {
     expect(getEmotionState(session.sessionId)).toBeNull()
   })
 
-  it('self 情绪 label 为 sleep 时：不落 EmotionStates，只置显式睡着标记（TDD §3.9）', async () => {
+  it('self 情绪 label 为 sleep 时：不落 EmotionStates，但也不再置显式睡着标记（TDD §3.9「必须保留的守卫」：sleep 归位后，自发的 sleep label 是未定义行为，不能触发睡着）', async () => {
     const { session } = loadSession('p1')
+    // reply 正文特意选用不会触发文本检测类（好困/困了等模式）的中性文本，这样这里观察到
+    // 的行为只来自 emotion.label === 'sleep' 这条路径本身，不与 §3.8 的困意文本检测混在一起
     const { fastify } = await buildTestApp(JSON.stringify({
-      reply: '好困呀',
+      reply: '嗯嗯',
       emotion: { self: { label: 'sleep', intensity: 0.9 }, perceived_user: null },
     }))
 
     await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
 
     expect(getEmotionState(session.sessionId)).toBeNull()
-    expect(isExplicitSleep(session.sessionId)).toBe(true)
+    expect(isExplicitSleep(session.sessionId)).toBe(false)
   })
 
   it('self 情绪 label 为 sleep 时：SSE 私有流/广播流均不发出 emotion 帧（TDD §3.7 附：x 永远不会是 sleep）', async () => {
     const { session } = loadSession('p1')
+    // reply 正文特意选用不会触发文本检测类（好困/困了等模式）的中性文本，这样这里观察到
+    // 的行为只来自 emotion.label === 'sleep' 这条路径本身，不与 §3.8 的困意文本检测混在一起
     const { fastify } = await buildTestApp(JSON.stringify({
-      reply: '好困呀',
+      reply: '嗯嗯',
       emotion: { self: { label: 'sleep', intensity: 0.9 }, perceived_user: null },
     }))
 
@@ -261,22 +265,24 @@ describe('POST /chat', () => {
 
     expect(emotion).toBeUndefined()
     expect((BroadcastModule.broadcastEvent as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBe(callsBefore)
-    expect(isExplicitSleep(session.sessionId)).toBe(true)
+    expect(isExplicitSleep(session.sessionId)).toBe(false)
   })
 
   it('已存在真实情绪时，模型接着回复 sleep 不会覆盖/清除原有的 EmotionStates 记录', async () => {
     const { session } = loadSession('p1')
     queries.upsertEmotionState(session.sessionId, { self: { label: 'happy', intensity: 0.8 }, perceived_user: null })
 
+    // reply 正文特意选用不会触发文本检测类（好困/困了等模式）的中性文本，这样这里观察到
+    // 的行为只来自 emotion.label === 'sleep' 这条路径本身，不与 §3.8 的困意文本检测混在一起
     const { fastify } = await buildTestApp(JSON.stringify({
-      reply: '好困呀',
+      reply: '嗯嗯',
       emotion: { self: { label: 'sleep', intensity: 0.9 }, perceived_user: null },
     }))
 
     await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
 
     expect(getEmotionState(session.sessionId)).toEqual({ self: { label: 'happy', intensity: 0.8 }, perceived_user: null })
-    expect(isExplicitSleep(session.sessionId)).toBe(true)
+    expect(isExplicitSleep(session.sessionId)).toBe(false)
   })
 
   it('发送用户消息即刷新 lastAttentionAt、清除显式睡着标记（TDD §3.7 附「搭理 bot」）', async () => {
@@ -290,6 +296,39 @@ describe('POST /chat', () => {
 
     expect(getLastAttentionAt(session.sessionId)).toBeGreaterThanOrEqual(before)
     expect(isExplicitSleep(session.sessionId)).toBe(false)
+  })
+
+  it('reply 正文去掉首尾空白后为空时：不入库、不发 message_done，改发 system 事件（TDD §3.8「回复检查」拦截类）', async () => {
+    const { session } = loadSession('p1')
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const { fastify } = await buildTestApp(JSON.stringify({ reply: '   ' }))
+    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+    const events = parseSSE(response.payload)
+
+    expect(events.find(e => e.event === 'message_done')).toBeUndefined()
+    const systemEvent = events.find(e => e.event === 'system')
+    expect(systemEvent?.data.sessionId).toBe(session.sessionId)
+    expect(errorSpy).toHaveBeenCalled()
+
+    // 用户消息仍照常入库（发生在拦截判定之前），但没有对应的 assistant 消息——
+    // 「不入库」只挡这一轮的空回复，不影响已经写入的用户消息
+    const history = getHistory(50)
+    expect(history.some(m => m.role === 'assistant')).toBe(false)
+    expect(history.some(m => m.role === 'user')).toBe(true)
+
+    errorSpy.mockRestore()
+  })
+
+  it('reply 正文命中困意检测规则时置显式睡着标记，且照常入库（TDD §3.8「回复检查」文本检测类，不依赖 emotion.label）', async () => {
+    const { session } = loadSession('p1')
+    const { fastify } = await buildTestApp(JSON.stringify({ reply: '啊我好困呀' }))
+
+    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+    const events = parseSSE(response.payload)
+
+    expect(events.find(e => e.event === 'message_done')).toBeDefined()
+    expect(isExplicitSleep(session.sessionId)).toBe(true)
   })
 
   it('情绪持久化失败时不影响本轮对话正常返回', async () => {

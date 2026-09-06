@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   selectTransitionTrigger,
+  shouldPlayFallAsleep,
   resolveTransitionChain,
   transitionEndInstant,
   isTransitionLocked,
@@ -22,6 +23,9 @@ const manifest: OverlayManifest = {
     },
   },
   transitions: {
+    'fall-asleep': [
+      { from: 'emotions.idle', pick: 'random', durationMs: 3000 },
+    ],
     'wake-from-sleep': [
       { from: 'emotions.confused', pick: 'random', durationMs: 3000 },
       { from: 'emotions.happy', pick: 'random', durationMs: 3000 },
@@ -37,7 +41,7 @@ const manifest: OverlayManifest = {
 
 describe('transitionState: selectTransitionTrigger', () => {
   it('唤醒前 y = 睡着 → wake-from-sleep', () => {
-    expect(selectTransitionTrigger('sleep')).toBe('wake-from-sleep')
+    expect(selectTransitionTrigger('sleeping')).toBe('wake-from-sleep')
   })
 
   it('唤醒前 y = 无聊 → wake-from-bored', () => {
@@ -46,6 +50,28 @@ describe('transitionState: selectTransitionTrigger', () => {
 
   it('唤醒前 y = 空 → poke-neutral（本批次无调用入口，但映射本身要能算对）', () => {
     expect(selectTransitionTrigger(null)).toBe('poke-neutral')
+  })
+})
+
+describe('transitionState: shouldPlayFallAsleep（TDD「入睡转场」表格：只有运行期阈值定时器造成的迁移才播）', () => {
+  it('阈值定时器触发 + y 从空迁移到睡着 → 播', () => {
+    expect(shouldPlayFallAsleep({ explicitSleep: false, calledByThresholdTimer: true, previousY: null, nextY: 'sleeping' })).toBe(true)
+  })
+
+  it('阈值定时器触发 + y 从无聊迁移到睡着 → 播', () => {
+    expect(shouldPlayFallAsleep({ explicitSleep: false, calledByThresholdTimer: true, previousY: 'boredom-idle', nextY: 'sleeping' })).toBe(true)
+  })
+
+  it('非阈值定时器触发（挂载/preset-switched/转场结束）即使算出睡着也不播——载入是取快照，不是真实迁移', () => {
+    expect(shouldPlayFallAsleep({ explicitSleep: false, calledByThresholdTimer: false, previousY: null, nextY: 'sleeping' })).toBe(false)
+  })
+
+  it('阈值定时器触发但迁移前已经是睡着 → 不重播（避免转场结束后的重新求值把自己又触发一遍）', () => {
+    expect(shouldPlayFallAsleep({ explicitSleep: false, calledByThresholdTimer: true, previousY: 'sleeping', nextY: 'sleeping' })).toBe(false)
+  })
+
+  it('阈值定时器触发但这次没有迁移到睡着（只是到了无聊档）→ 不播', () => {
+    expect(shouldPlayFallAsleep({ explicitSleep: false, calledByThresholdTimer: true, previousY: null, nextY: 'boredom-idle' })).toBe(false)
   })
 })
 
@@ -65,6 +91,12 @@ describe('transitionState: resolveTransitionChain 防御性解析', () => {
     expect(['gifs/confused1.gif', 'gifs/confused2.gif']).toContain(steps[0].file)
     expect(steps[0].durationMs).toBe(3000)
     expect(steps[1]).toEqual({ file: 'gifs/happy.gif', durationMs: 3000 })
+  })
+
+  it('fall-asleep 与唤醒三条转场走同一套解析机制，不需要特殊处理（TDD「名字不编码来源」）', () => {
+    expect(resolveTransitionChain(manifest, 'fall-asleep')).toEqual([
+      { file: 'gifs/idle1.gif', durationMs: 3000 },
+    ])
   })
 
   it('from 为数组时能在多个来源间解析出素材（TDD「from 可以是数组（先在多个来源间随机挑一个）」）', () => {
@@ -198,7 +230,7 @@ describe('transitionState: isTransitionLocked', () => {
 
 describe('transitionState: resolveOverlayDisplayFile 展示优先级', () => {
   it('转场播放中时，转场文件优先于 y/x（即使 y/x 另有对应素材）', () => {
-    expect(resolveOverlayDisplayFile(manifest, 'gifs/confused1.gif', 'sleep', 'happy')).toBe('gifs/confused1.gif')
+    expect(resolveOverlayDisplayFile(manifest, 'gifs/confused1.gif', 'sleeping', 'happy')).toBe('gifs/confused1.gif')
   })
 
   it('没有转场在播放（null）时落回既有的 y/x 回落链', () => {
@@ -238,5 +270,37 @@ describe('transitionState: from 数组先筛可用来源再随机', () => {
     }
 
     expect(resolveTransitionChain(emptyManifest, 'wake-from-bored')).toEqual([])
+  })
+})
+
+describe('transitionState: shouldPlayFallAsleep 只认时长档造成的入睡', () => {
+  // TDD「入睡转场 fall-asleep」表格第二行：文本检测到困意时本轮播不了，表现为「下次看到它
+  // 时已经睡着了」。显式睡着标记会一直挂到下一次 recordAttention 才清，所以任意一次后续的
+  // 阈值定时器轮询都会「发现」它——若不看 explicitSleep，本该静默到来的入睡会被播成动画
+  it('文本检测置上的显式睡着标记被阈值定时器发现时不播', () => {
+    expect(shouldPlayFallAsleep({
+      calledByThresholdTimer: true,
+      previousY: null,
+      nextY: 'sleeping',
+      explicitSleep: true,
+    })).toBe(false)
+  })
+
+  it('从无聊档被标记推进到睡着时同样不播', () => {
+    expect(shouldPlayFallAsleep({
+      calledByThresholdTimer: true,
+      previousY: 'boredom-idle',
+      nextY: 'sleeping',
+      explicitSleep: true,
+    })).toBe(false)
+  })
+
+  it('没有标记、由 60 分钟时长档迁移到睡着时照常播', () => {
+    expect(shouldPlayFallAsleep({
+      calledByThresholdTimer: true,
+      previousY: 'boredom-idle',
+      nextY: 'sleeping',
+      explicitSleep: false,
+    })).toBe(true)
   })
 })

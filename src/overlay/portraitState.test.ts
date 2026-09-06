@@ -15,12 +15,12 @@ const manifest: OverlayManifest = {
       emotions: {
         idle: ['gifs/idle1.gif', 'gifs/idle2.gif'],
         happy: ['gifs/happy.gif'],
-        sleep: ['gifs/sleep.gif'],
       },
     },
   },
   reservedStates: {
     'boredom-idle': ['gifs/bored.gif'],
+    sleeping: ['gifs/sleep.gif'],
   },
 }
 
@@ -46,22 +46,22 @@ describe('portraitState: deriveY', () => {
 
   it('距上次搭理恰好 60 分钟时 y = 睡着（边界含）', () => {
     const now = 1_000_000
-    expect(deriveY({ lastAttentionAt: now - SLEEP_THRESHOLD_MS, explicitSleep: false, now })).toBe('sleep')
+    expect(deriveY({ lastAttentionAt: now - SLEEP_THRESHOLD_MS, explicitSleep: false, now })).toBe('sleeping')
   })
 
   it('距上次搭理 >= 60 分钟时 y = 睡着', () => {
     const now = 1_000_000
-    expect(deriveY({ lastAttentionAt: now - (SLEEP_THRESHOLD_MS + 1), explicitSleep: false, now })).toBe('sleep')
+    expect(deriveY({ lastAttentionAt: now - (SLEEP_THRESHOLD_MS + 1), explicitSleep: false, now })).toBe('sleeping')
   })
 
   it('显式睡着标记优先于时长阈值——即使时长本应判定为空', () => {
     const now = 1_000_000
-    expect(deriveY({ lastAttentionAt: now, explicitSleep: true, now })).toBe('sleep')
+    expect(deriveY({ lastAttentionAt: now, explicitSleep: true, now })).toBe('sleeping')
   })
 
   it('显式睡着标记优先于时长阈值——即使时长本应判定为无聊', () => {
     const now = 1_000_000
-    expect(deriveY({ lastAttentionAt: now - (BOREDOM_THRESHOLD_MS + 1), explicitSleep: true, now })).toBe('sleep')
+    expect(deriveY({ lastAttentionAt: now - (BOREDOM_THRESHOLD_MS + 1), explicitSleep: true, now })).toBe('sleeping')
   })
 })
 
@@ -115,8 +115,8 @@ describe('portraitState: resolveDisplayFile 素材回落链', () => {
     expect(resolveDisplayFile(manifest, 'boredom-idle', 'happy')).toBe('gifs/bored.gif')
   })
 
-  it('y = 睡着 时取 portraits.pixel.emotions.sleep，不是 reservedStates', () => {
-    expect(resolveDisplayFile(manifest, 'sleep', 'happy')).toBe('gifs/sleep.gif')
+  it('y = 睡着 时取 reservedStates.sleeping，不是 portraits.pixel.emotions（TDD「emotions 里没有 sleep」）', () => {
+    expect(resolveDisplayFile(manifest, 'sleeping', 'happy')).toBe('gifs/sleep.gif')
   })
 
   it('y 没有对应素材时落到 x', () => {
@@ -143,6 +143,6 @@ describe('portraitState: resolveDisplayFile 素材回落链', () => {
     const noSleep: OverlayManifest = {
       portraits: { pixel: { fallback: 'idle', emotions: { happy: ['gifs/happy.gif'] } } },
     }
-    expect(resolveDisplayFile(noSleep, 'sleep', 'happy')).toBe('gifs/happy.gif')
+    expect(resolveDisplayFile(noSleep, 'sleeping', 'happy')).toBe('gifs/happy.gif')
   })
 })

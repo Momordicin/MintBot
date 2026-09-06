@@ -14,6 +14,7 @@ import {
   resolveOverlayDisplayFile,
   resolveTransitionChain,
   selectTransitionTrigger,
+  shouldPlayFallAsleep,
   transitionEndInstant,
 } from './transitionState.js'
 
@@ -64,9 +65,17 @@ export function OverlayApp() {
   // 转场播放期间的当前步文件（null 表示当前没有转场在播放，见 transitionState.ts
   // resolveOverlayDisplayFile 的展示优先级）。转场结束（播完或被隐藏切断）时清回 null
   const transitionFileRef = useRef<string | null>(null)
+  // 当前正在播放的转场，null 表示没有转场在播（与下面的锁分开存放，是两件不同的事）：
+  // fall-asleep 有转场在播但不上锁（TDD「入睡转场」"不上锁，且可被交互打断"），若只留锁
+  // 这一个字段来表示"转场在播"，fall-asleep 就只能把它留 null，会连带让隐藏窗口
+  // （visibilitychange）判断"有没有转场在播"失效——隐藏不再终结它，转场分步定时器会在
+  // 隐藏的窗口里继续推进。visibilitychange、preset-switched 清理、点击打断都应该看这个
+  // 字段，不是看下面的锁
+  const transitionInProgressRef = useRef<TransitionTrigger | null>(null)
   // 交互锁的绝对结束时刻（TDD「交互锁」：持续到转场的绝对结束时刻，而非倒计时）。
-  // null 表示当前未锁。isTransitionLocked 只依赖这个时刻与当前时钟判断，不依赖下面
-  // transitionTimerRef 的回调是否已经触发——素材加载失败/404 不该影响锁的释放
+  // null 表示当前未锁——"没有转场在播"与"转场在播但不上锁（fall-asleep）"都属于这种情况。
+  // isTransitionLocked 只依赖这个时刻与当前时钟判断，不依赖下面 transitionTimerRef 的
+  // 回调是否已经触发——素材加载失败/404 不该影响锁的释放
   const transitionEndAtRef = useRef<number | null>(null)
   // 转场播放的分步定时器：每步播完后推进到下一步，最后一步播完后结束转场。preset-switched
   // 广播、隐藏窗口（visibilitychange）与卸载时都需要清掉，避免旧转场在新状态之上继续推进
@@ -89,14 +98,20 @@ export function OverlayApp() {
     }
     const next = nextThresholdInstant(lastAttentionAt, Date.now())
     if (next === null) return
-    timerRef.current = setTimeout(loadCharacterAndPortrait, Math.max(0, next - Date.now()))
+    timerRef.current = setTimeout(() => loadCharacterAndPortrait(true), Math.max(0, next - Date.now()))
   }
 
   // 读取 characterId + 立绘状态（y/x）+ manifest 并应用展示——挂载时跑一次，收到
-  // preset-switched 广播时跑一次，阈值定时器触发时也跑一次，三处复用同一套逻辑，不各写一遍
-  // （TDD「悬浮窗重载时主动调用状态快照接口拉取当前情绪标签和立绘状态，不依赖本地缓存」）
-  function loadCharacterAndPortrait() {
+  // preset-switched 广播时跑一次，阈值定时器触发时也跑一次，转场结束时也跑一次，四处
+  // 复用同一套逻辑，不各写一遍（TDD「悬浮窗重载时主动调用状态快照接口拉取当前情绪标签和
+  // 立绘状态，不依赖本地缓存」）。calledByThresholdTimer 由调用方显式声明"这次调用是不是
+  // 由阈值定时器发起的"（TDD「入睡转场」表格：只有运行期阈值定时器造成的迁移才播
+  // fall-asleep，挂载/preset-switched/转场结束都是取快照或收尾，不算一次真实迁移）——
+  // 显式传参而不是靠其它状态推断，调用点一目了然，也不会因为将来插入新调用点而漏判
+  function loadCharacterAndPortrait(calledByThresholdTimer: boolean) {
     const gen = ++loadGenRef.current
+    // 迁移判定要用"这次调用重新求值之前"的 y，必须在下面任何异步/重算发生之前同步取值
+    const previousY = yRef.current
 
     fetch(`${CORE_URL}/state`)
       .then(r => r.json())
@@ -121,6 +136,18 @@ export function OverlayApp() {
           .then((manifest: OverlayManifest) => {
             if (gen !== loadGenRef.current) return
             manifestRef.current = manifest
+            // 阈值定时器把 y 从非睡着迁移到睡着才播入睡转场（TDD「入睡转场」表格第一行）；
+            // 载入期判定到的睡着（挂载/preset-switched）与转场刚结束后的这次重新求值都不
+            // 满足 shouldPlayFallAsleep，直接走下面的常规展示分支
+            if (shouldPlayFallAsleep({
+              calledByThresholdTimer,
+              previousY,
+              nextY: yRef.current,
+              explicitSleep: state.explicitSleep,
+            })) {
+              startTransition('fall-asleep')
+              return
+            }
             setFile(resolveOverlayDisplayFile(manifestRef.current, transitionFileRef.current, yRef.current, xRef.current))
           })
       })
@@ -145,43 +172,55 @@ export function OverlayApp() {
   }
 
   // 转场结束——无论是正常播完最后一步，还是被隐藏窗口（visibilitychange）提前切断：
-  // 清空转场态与锁，然后复用 loadCharacterAndPortrait 重新拉取 /state（本批次任务书
+  // 清空转场进行中状态、锁，然后复用 loadCharacterAndPortrait 重新拉取 /state（本批次任务书
   // "refetch /state by reusing loadCharacterAndPortrait"）。这样才能拿到唤醒动作已经
   // 刷新过的 lastAttentionAt/explicitSleep，重新起链阈值定时器——portraitState.ts
-  // nextThresholdInstant 的既有注释也点名调用方必须另有重新起链的入口，这里正是其一
+  // nextThresholdInstant 的既有注释也点名调用方必须另有重新起链的入口，这里正是其一。
+  // calledByThresholdTimer 传 false：转场结束是"取快照/收尾"，不是阈值定时器本身触发的
+  // 迁移，不该让这次重新求值再去误播一次 fall-asleep（入睡转场自己播完的这次回拉正是
+  // 需要被 shouldPlayFallAsleep 挡住的例子——此时 previousY 已经是 'sleeping'）
   function endTransition() {
     if (transitionTimerRef.current !== undefined) {
       clearTimeout(transitionTimerRef.current)
       transitionTimerRef.current = undefined
     }
     transitionFileRef.current = null
+    transitionInProgressRef.current = null
     transitionEndAtRef.current = null
-    loadCharacterAndPortrait()
+    loadCharacterAndPortrait(false)
   }
 
-  // 唤醒并播放对应转场（TDD「点击小人按 y 分支」+「唤醒与转场」）。trigger 由调用方按
-  // 唤醒前的 y 选定。链条一步都解析不出素材时 resolveTransitionChain 返回空数组——按
-  // TDD「回落规则」"不播转场，直接完成状态切换"的等价情况处理：不上锁、不播放，直接
-  // 复用 loadCharacterAndPortrait 让状态切换（唤醒本身已经在调用方里通过 POST
-  // /internal/overlay-interaction 生效）立即反映出来，绝不能让转场把立绘卡住
+  // 播放一条转场（TDD「唤醒与转场」+「入睡转场 fall-asleep」，四条转场共用同一份播放/
+  // 锁机制）。trigger 为唤醒三条时由调用方按唤醒前的 y 选定；为 fall-asleep 时由
+  // loadCharacterAndPortrait 在检测到阈值定时器把 y 迁移到睡着时调用。链条一步都解析不出
+  // 素材时 resolveTransitionChain 返回空数组——按 TDD「回落规则」"不播转场，直接完成状态
+  // 切换"的等价情况处理：不上锁、不播放，直接按本地已知的 y/x 完成展示，绝不能让转场把
+  // 立绘卡住
   function startTransition(trigger: TransitionTrigger) {
     const steps = resolveTransitionChain(manifestRef.current, trigger)
     if (steps.length === 0) {
-      // 不播转场时直接按本地已知状态完成切换，而不是回拉 /state：调用方在唤醒时已经
-      // 把 y 按"刚被搭理"更新过，而那次 POST 与这里的 GET 之间没有任何顺序保证——先到的
-      // /state 可能还没反映出唤醒，立绘会表现成"点了没醒"。有转场的路径不受影响：3~6 秒的
-      // 播放时间足够让上报落地，所以 endTransition 那次回拉仍然照常保留
+      // 不播转场时直接按本地已知状态完成切换，而不是回拉 /state：唤醒路径的调用方在唤醒时
+      // 已经把 y 按"刚被搭理"更新过，而那次 POST 与这里的 GET 之间没有任何顺序保证——先到的
+      // /state 可能还没反映出唤醒，立绘会表现成"点了没醒"；入睡路径的 y 本就是这次 /state
+      // 拉取如实算出的迁移结果，同样不需要再拉一次。有转场的路径不受影响：3~6 秒的播放时间
+      // 足够任何上报落地，所以 endTransition 那次回拉仍然照常保留
       setFile(resolveOverlayDisplayFile(manifestRef.current, null, yRef.current, xRef.current))
       return
     }
-    transitionEndAtRef.current = transitionEndInstant(steps, Date.now())
+    transitionInProgressRef.current = trigger
+    // 只有 fall-asleep 不上锁（TDD「入睡转场」"不上锁，且可被交互打断"——角色自己犯困，
+    // 锁住用户三秒没有道理，反而像卡住）；其余三条唤醒转场维持既有的锁到绝对结束时刻
+    transitionEndAtRef.current = trigger === 'fall-asleep' ? null : transitionEndInstant(steps, Date.now())
     playTransitionStep(steps, 0)
   }
 
   // 点击判定：mousedown 记录起点，click 触发时先按位移阈值过滤误触发（TDD ⚠️「附带的误
-  // 触发」），再检查交互锁（锁期间一律丢弃，不排队），最后按 y 分支决定动作（TDD「点击
-  // 小人按 y 分支」）：无聊/睡着 → 上报交互 + 播放对应转场、不开聊天窗口；空 → 沿用既有的
-  // 打开聊天窗口行为
+  // 触发」），再检查交互锁（锁期间一律丢弃，不排队）。锁检查之后、按 y 分支决定动作之前，
+  // 还要单独拦一次"入睡转场正在播放"（TDD「入睡转场」"可被交互打断"）：fall-asleep 不
+  // 上锁，但此刻 y 已经因为迁移被写成'sleeping'，若落进下面的 y 分支会被当成"唤醒点击"
+  // 误播 wake-from-sleep（角色其实还没播完入睡，就先播一次醒来），因此必须单独处理，见下方
+  // 分支注释。此后才是既有的 y 分支（TDD「点击小人按 y 分支」）：无聊/睡着 → 上报交互 +
+  // 播放对应转场、不开聊天窗口；空 → 沿用既有的打开聊天窗口行为
   function handleMouseDown(event: React.MouseEvent) {
     mouseDownPosRef.current = { x: event.clientX, y: event.clientY }
   }
@@ -196,7 +235,35 @@ export function OverlayApp() {
 
     if (isTransitionLocked(transitionEndAtRef.current, Date.now())) return // 锁期间丢弃交互
 
-    if (yRef.current === 'boredom-idle' || yRef.current === 'sleep') {
+    if (transitionInProgressRef.current === 'fall-asleep') {
+      // 打断入睡（TDD「入睡转场」"可被交互打断……打断后必须同时刷新'上次搭理时刻'"）：
+      // 这是与下面"唤醒点击"不同的一条路径——唤醒时 y 已经是睡着，点击是要清掉它；打断时
+      // y 也已经是睡着（迁移发生时就写下了），但打断不能走 wake-from-sleep，否则就是
+      // TDD 点名要避免的"还没睡着就先醒一次"。打断要走完整的"搭理"语义：取消播放
+      // （清定时器 + 清转场进行中状态，不锁，没有锁可释放）+ 上报交互 + 本地乐观刷新时刻，
+      // y 回到空。刷新时刻是必须的，不是可选的优化：60 分钟阈值在迁移发生时已经越过，
+      // 只取消播放而不刷新时刻，下一次求值立刻又是睡着，转场会原地重新触发
+      if (transitionTimerRef.current !== undefined) {
+        clearTimeout(transitionTimerRef.current)
+        transitionTimerRef.current = undefined
+      }
+      transitionInProgressRef.current = null
+      transitionFileRef.current = null
+
+      fetch(`${CORE_URL}/internal/overlay-interaction`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'portrait-click' }),
+      }).catch(() => {})
+
+      const now = Date.now()
+      yRef.current = deriveY({ lastAttentionAt: now, explicitSleep: false, now })
+      scheduleThresholdCheck(now)
+      setFile(resolveOverlayDisplayFile(manifestRef.current, null, yRef.current, xRef.current))
+      return
+    }
+
+    if (yRef.current === 'boredom-idle' || yRef.current === 'sleeping') {
       const trigger = selectTransitionTrigger(yRef.current)
       // 上报失败也照常播放转场——播放只依赖本地时钟与已加载的 manifest，不依赖这次上报
       // 成功与否；真实是否"唤醒"以服务端记录为准，转场结束后 endTransition 重新拉取
@@ -226,7 +293,7 @@ export function OverlayApp() {
   }
 
   useEffect(() => {
-    loadCharacterAndPortrait()
+    loadCharacterAndPortrait(false)
     // 卸载时把代次再往前推一格，让挂载期间任何仍在途的回调都识别为过期——不需要额外的
     // 布尔标记，判断逻辑与"被更新的一次调用取代"完全一样，天然覆盖卸载这一种情况。同时
     // 清掉阈值定时器与转场分步定时器，避免组件已卸载后它们还各自触发一次副作用
@@ -241,15 +308,18 @@ export function OverlayApp() {
     }
   }, [])
 
-  // 悬浮窗隐藏即终结转场、释放交互锁（TDD「交互锁」必须由构造保证的性质第二条：隐藏不等于
-  // 唤醒，只终结转场本身，不触碰持久条件状态）。用 document.visibilityState 而不是监听
-  // Electron 窗口事件：BrowserWindow.hide()（主进程 overlay:activate / win.on('focus') 都会
-  // 触发）会让渲染进程的 visibilityState 变成 hidden，这是纯 Web 标准事件，不需要额外的
-  // IPC 通道。只有确实有转场在播放（transitionEndAtRef 非 null）时才需要处理，没有转场时
-  // 隐藏不做任何事——没有锁可释放，也不该无谓地重新拉取 /state
+  // 悬浮窗隐藏即终结转场（TDD「交互锁」必须由构造保证的性质第二条：隐藏不等于唤醒，只
+  // 终结转场本身，不触碰持久条件状态）；有锁的转场一并释放锁，fall-asleep 本来就没上锁，
+  // 隐藏对它而言只是把播放中断掉。用 document.visibilityState 而不是监听 Electron 窗口
+  // 事件：BrowserWindow.hide()（主进程 overlay:activate / win.on('focus') 都会触发）会让
+  // 渲染进程的 visibilityState 变成 hidden，这是纯 Web 标准事件，不需要额外的 IPC 通道。
+  // 判断要看 transitionInProgressRef 而不是下面的锁——fall-asleep 播放期间锁恒为 null，
+  // 若还用锁判断"有没有转场在播"，隐藏窗口时就不会终结它，转场分步定时器会在隐藏的窗口里
+  // 继续推进。只有确实有转场在播放时才需要处理，没有转场时隐藏不做任何事——没有锁可释放，
+  // 也不该无谓地重新拉取 /state
   useEffect(() => {
     function handleVisibilityChange() {
-      if (document.visibilityState === 'hidden' && transitionEndAtRef.current !== null) {
+      if (document.visibilityState === 'hidden' && transitionInProgressRef.current !== null) {
         endTransition()
       }
     }
@@ -303,9 +373,9 @@ export function OverlayApp() {
     source.addEventListener('preset-switched', () => {
       // 新角色的 manifest/立绘状态到达前先清空展示，避免新角色的情绪标签下短暂闪出
       // 旧角色的立绘（旧 file 对新角色的 emotions 词表大概率无意义，即使凑巧同名也是误导）。
-      // 同时清掉旧 preset 的阈值定时器、转场分步定时器与交互锁，以及 y/x——旧 preset 的转场
-      // 引用的是旧角色包的素材路径，继续播放会对着新 characterId 请求错误的文件，
-      // 锁也没有理由继续拦截新 preset 上的交互
+      // 同时清掉旧 preset 的阈值定时器、转场分步定时器、转场进行中状态与交互锁，以及
+      // y/x——旧 preset 的转场引用的是旧角色包的素材路径，继续播放会对着新 characterId
+      // 请求错误的文件，锁也没有理由继续拦截新 preset 上的交互
       if (timerRef.current !== undefined) {
         clearTimeout(timerRef.current)
         timerRef.current = undefined
@@ -315,12 +385,13 @@ export function OverlayApp() {
         transitionTimerRef.current = undefined
       }
       transitionFileRef.current = null
+      transitionInProgressRef.current = null
       transitionEndAtRef.current = null
       manifestRef.current = undefined
       yRef.current = null
       xRef.current = undefined
       setFile(null)
-      loadCharacterAndPortrait()
+      loadCharacterAndPortrait(false)
     })
     return () => {
       source.close()
