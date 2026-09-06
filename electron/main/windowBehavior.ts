@@ -1,8 +1,8 @@
 import { BrowserWindow, screen } from 'electron'
 import type { ActiveWindowInfo } from './activeWindowMonitor'
 import { animateTo, isAnimating } from './windowAnimation'
-import { getPreferredBounds, setPreferredBounds, computeDefaultBoundsForDisplay } from './windowPositions'
-import type { Bounds, WindowKey } from './windowPositions'
+import { getPreferredBounds, setPreferredBounds, computeDefaultBoundsForDisplay, DEFAULT_WINDOW_SIZE } from './windowPositions'
+import type { WindowKey } from './windowPositions'
 
 // 悬浮窗行为策略的实际置顶/躲避逻辑（buzzing-frolicking-eich.md 计划子任务③，依赖子任务①
 // 的配置层/托盘骨架 + 子任务②的 activeWindowMonitor 扩展，均已合入）。从 index.ts 独立成
@@ -195,6 +195,17 @@ function includesIgnoreCase(list: string[], name: string): boolean {
 // （见该函数注释）
 let lastProgrammaticMoveAt = 0
 
+// 供 index.ts 在 new BrowserWindow(...) 之后立刻调用一次。构造函数的 x/y/width/height
+// 同样是一次「程序放置窗口」，和 animateTo 没有本质区别，却一直没有被记进这个时间戳：
+// Windows 会在窗口刚落到某块屏上时异步发一次 WM_DPICHANGED 校正（见 windowAnimation.ts
+// 顶部关于 electron#27651 的说明），那次校正触发的 moved/resize 到达 handleWindowMoved 时
+// lastProgrammaticMoveAt 还是初值 0、isAnimating() 也为 false，于是漂移后的矩形会被当成
+// 用户手动调整写进偏好表。以前启动不读表，这种错写只影响后续跳屏；现在启动要从表里恢复，
+// 它会变成那块屏永久的「标准尺寸」
+export function markProgrammaticWindowPlacement(): void {
+  lastProgrammaticMoveAt = Date.now()
+}
+
 // 共用工具函数：把 win 挪到 excludeDisplayId 之外的某块显示器上——查表拿该显示器的
 // 偏好位置/尺寸（getPreferredBounds），查到就直接用；查不到（这块显示器第一次出现）就用
 // computeDefaultBoundsForDisplay 算一次默认值、立刻存表，再用。找不到替代显示器（单屏，
@@ -208,10 +219,10 @@ let lastProgrammaticMoveAt = 0
 // 诊断过聊天窗口 256×476 → 260×479、悬浮窗 223×225 → 225×226 均为单调增长）。现在跳屏
 // 目标恒定来自查表，查到的值不管跳多少次、跳多快都不变，反馈环被彻底切断。
 //
-// baseline/baselineDisplay 只在"这块目标显示器第一次出现、查表落空"时才会被
-// computeDefaultBoundsForDisplay 用到——调用方应传入"进入这次跳屏之前，窗口在原本那块
-// 屏幕上静止时的真实尺寸/所在显示器"（一次真实的、非跳屏产物的现场读数），不是上一次
-// setBounds 的回读值。
+// 尺寸不再由调用方传入的"当前窗口现场读数"决定（那正是历史相关、会累积漂移的旧设计）——
+// computeDefaultBoundsForDisplay 现在只依赖 windowPositions.ts 里全局的密度锚点规则：
+// 目标屏该多大只取决于"当前连接的显示器都有谁"，跟窗口从哪块屏跳过来的完全无关（history
+// independent，见该函数注释），因此这里不再需要 baseline/baselineDisplay 参数
 //
 // 跳屏动画：走 animateTo 而不是直接 setBounds，悬浮窗和聊天窗口共用这个函数，因此两者的
 // 跳屏都会带上划出/飞入动画（同屏/尺寸变化会被 animateTo 内部的前置守卫短路成瞬间跳）。
@@ -220,16 +231,15 @@ let lastProgrammaticMoveAt = 0
 export function moveToNonFullscreenDisplay(
   win: BrowserWindow,
   windowKey: WindowKey,
-  excludeDisplayId: number,
-  baseline: Bounds,
-  baselineDisplay: Electron.Display
+  excludeDisplayId: number
 ): boolean {
-  const target = screen.getAllDisplays().find(display => display.id !== excludeDisplayId)
+  const displays = screen.getAllDisplays()
+  const target = displays.find(display => display.id !== excludeDisplayId)
   if (!target) return false
 
   let bounds = getPreferredBounds(windowKey, target.id)
   if (!bounds) {
-    bounds = computeDefaultBoundsForDisplay(target, baseline, baselineDisplay)
+    bounds = computeDefaultBoundsForDisplay(target, displays, DEFAULT_WINDOW_SIZE[windowKey])
     setPreferredBounds(windowKey, target.id, bounds)
   }
 
@@ -239,25 +249,24 @@ export function moveToNonFullscreenDisplay(
 }
 
 // 归位（"跳回原来那块屏幕"）用的也是同一套查表逻辑：目标显示器换成"进入躲避前所在的
-// 那块屏幕"，查到偏好位置就直接用。查不到时理论上不应该发生——handleOverlayDodge/
-// handlePinMode 进入躲避的那一刻已经会主动把家这块显示器的偏好记录补上（见两处调用点
-// 注释），这里只是一道兜底安全网。homeDisplay 本身已经从当前连接的显示器里消失（比如
-// 被拔掉）时不归位，原地不动——没有目标显示器的 workArea 可用，没法算出任何有意义的落点。
+// 那块屏幕"，查到偏好位置就直接用。查不到时理论上不应该发生——首次躲避进入某块目标屏时，
+// moveToNonFullscreenDisplay 已经会把它的偏好记录补上；这块"家"屏幕本身理应早已有记录
+// （启动恢复/上一次归位都会补），这里只是一道兜底安全网。homeDisplay 本身已经从当前连接的
+// 显示器里消失（比如被拔掉）时不归位，原地不动——没有目标显示器的 workArea 可用，没法算出
+// 任何有意义的落点。
 //
-// ⚠️ 兜底分支的 baseline/baselineDisplay 必须现读"窗口此刻实际所在的显示器"（调用这个
-// 函数时窗口还没挪动，仍然停在跳屏目的地上），不能像最初实现那样直接传 homeDisplay 自己
-// 当 baselineDisplay——那样会把缩放比例差强制算成 0，把"跳屏目的地缩放过的尺寸"原样存成
-// 家这块屏幕的永久偏好，在缩放比例不同的双屏环境下第一次归位就把窗口尺寸永久搞错（且没有
-// 自愈机制，一直错到用户手动拖动为止）——这正是 review 抓到的 bug
+// 兜底分支不再需要现读"窗口此刻实际所在的显示器"当基准——旧版本这里曾经因为拿跳屏目的地
+// 当基准，在缩放比例不同的双屏环境下把窗口尺寸永久搞错（review 抓到的 bug）；现在
+// computeDefaultBoundsForDisplay 完全不依赖调用方传入的现场读数，这一类 bug 从根上不再
+// 可能出现
 function restoreToDisplay(win: BrowserWindow, windowKey: WindowKey, homeDisplayId: number): void {
-  const homeDisplay = screen.getAllDisplays().find(display => display.id === homeDisplayId)
+  const displays = screen.getAllDisplays()
+  const homeDisplay = displays.find(display => display.id === homeDisplayId)
   if (!homeDisplay) return
 
   let bounds = getPreferredBounds(windowKey, homeDisplayId)
   if (!bounds) {
-    const currentBounds = win.getBounds()
-    const currentDisplay = screen.getDisplayMatching(currentBounds)
-    bounds = computeDefaultBoundsForDisplay(homeDisplay, currentBounds, currentDisplay)
+    bounds = computeDefaultBoundsForDisplay(homeDisplay, displays, DEFAULT_WINDOW_SIZE[windowKey])
     setPreferredBounds(windowKey, homeDisplayId, bounds)
   }
 
@@ -275,11 +284,40 @@ function restoreToDisplay(win: BrowserWindow, windowKey: WindowKey, homeDisplayI
 // 再触发一次 'moved'，冷却期把这些程序自己的动作也滤掉。悬浮窗当前 resizable: false 且
 // 没有暴露拖动交互，这个监听器对它而言目前是"装着但触发不到"——以后如果悬浮窗支持拖动，
 // 直接生效，不需要再改这部分
-export function handleWindowMoved(windowKey: WindowKey, win: BrowserWindow): void {
+// 落盘防抖。'moved' 与 'resize' 都汇到本函数，而**两者在一次拖拽里都是逐帧连续触发的**：
+// 从上边/左边拖拽缩放会同时改变原点，Windows 会一路发 move。因此防抖必须放在这个公共入口，
+// 而不是某一个监听点上——放在监听点只会保护到那一种拖法，另一种照样每帧一次同步
+// writeFileSync + renameSync。按 windowKey 分别计时，聊天窗与悬浮窗互不干扰
+const PERSIST_DEBOUNCE_MS = 300
+const persistTimers = new Map<WindowKey, ReturnType<typeof setTimeout>>()
+
+// 该窗口此刻是否正停在跳屏目标上。这与下面的时间守卫是**两件不同的事**：时间守卫挡的是
+// 「程序自己刚移动完」的余波，而这个挡的是「窗口在整段冲突期间一直停在别处」——两者时长
+// 完全不同，一次全屏会话可以持续几十分钟，远超那 1 秒
+function isDodgeParked(windowKey: WindowKey): boolean {
+  return windowKey === 'chat' ? dodgeDisplayId !== null : overlayDodgeSourceDisplayId !== null
+}
+
+function persistBoundsNow(windowKey: WindowKey, win: BrowserWindow): void {
   if (isAnimating() || Date.now() - lastProgrammaticMoveAt < 1000) return
+  // 跳屏期间一律不写表。缺了这条，一次迟到的 WM_DPICHANGED 尺寸校正（windowAnimation.ts
+  // 顶部注释记录了它异步且可能迟到，没有上界）会在 1 秒时间窗之后到达，被当成用户手动
+  // resize 写进偏好表，把该显示器上真正的用户偏好覆盖掉。此前只监听 'moved' 时这条缺口
+  // 咬不到人——纯尺寸变化不触发 'moved'；接上 'resize' 之后它就真实可达了
+  if (isDodgeParked(windowKey)) return
   const bounds = win.getBounds()
   const displayId = screen.getDisplayMatching(bounds).id
   setPreferredBounds(windowKey, displayId, bounds)
+}
+
+export function handleWindowMoved(windowKey: WindowKey, win: BrowserWindow): void {
+  const pending = persistTimers.get(windowKey)
+  if (pending) clearTimeout(pending)
+  persistTimers.set(windowKey, setTimeout(() => {
+    persistTimers.delete(windowKey)
+    if (win.isDestroyed()) return
+    persistBoundsNow(windowKey, win)
+  }, PERSIST_DEBOUNCE_MS))
 }
 
 // 悬浮窗躲避状态：只保留"进入躲避状态那一刻，悬浮窗当时所在的显示器 id"这一个整数，不再
@@ -302,14 +340,14 @@ function handleOverlayDodge(info: ActiveWindowInfo, overlayWindow: BrowserWindow
 
   // 上一轮跳屏/归位动画还没结束时整体跳过这个 tick，不只是为了避免半路打断动画（那部分
   // 交给 animateTo 自己的取消/重开逻辑处理，本来就是安全的）——更重要的是下面
-  // overlayDodgeSourceDisplayId === null 那次性的"补种家的偏好记录"必须读到窗口真正静止
+  // overlayDodgeSourceDisplayId === null 那次性判定"家是哪块屏幕"必须读到窗口真正静止
   // 时的坐标，动画进行中读 getBounds() 可能读到半路的位置，把 screen.getDisplayMatching
-  // 判断成错误的显示器，进而把这块屏幕的偏好记录永久写坏（review 抓到的同类风险）。
-  // isAnimating() 是 windowAnimation.ts 模块级单飞状态，跟聊天窗口共用（同一时刻只有一个
-  // 窗口在动画中）。这里的守卫覆盖整个函数（含下面的归位分支），比 handlePinMode 只把
-  // 守卫放在冲突分支里更宽——意味着聊天窗口那边的动画在跑时，悬浮窗的归位也会被这个
-  // tick 一起跳过、顺延到下一 tick 才重新判断，最多多等约 500ms，不会导致状态卡死或
-  // 数据错误，只是刻意选择了更保守、不需要按分支精细拆分的写法
+  // 判断成错误的显示器，之后归位就会归错地方。isAnimating() 是 windowAnimation.ts 模块级
+  // 单飞状态，跟聊天窗口共用（同一时刻只有一个窗口在动画中）。这里的守卫覆盖整个函数
+  // （含下面的归位分支），比 handlePinMode 只把守卫放在冲突分支里更宽——意味着聊天窗口
+  // 那边的动画在跑时，悬浮窗的归位也会被这个 tick 一起跳过、顺延到下一 tick 才重新判断，
+  // 最多多等约 500ms，不会导致状态卡死或数据错误，只是刻意选择了更保守、不需要按分支
+  // 精细拆分的写法
   if (isAnimating()) return
 
   // 黑名单单独也算"必须躲避"（不要求同时全屏）：黑名单的语义是"这个程序不全屏也不能被
@@ -319,26 +357,11 @@ function handleOverlayDodge(info: ActiveWindowInfo, overlayWindow: BrowserWindow
 
   if (needsToDodge && !isWhitelisted) {
     if (overlayDodgeSourceDisplayId === null) {
-      const homeBounds = overlayWindow.getBounds()
-      const homeDisplay = screen.getDisplayMatching(homeBounds)
-      overlayDodgeSourceDisplayId = homeDisplay.id
-      // 进入躲避的这一刻，悬浮窗还在家、完全没被跳屏影响过，是本次躲避会话里唯一一次
-      // "真正静止"的读数——如果家这块显示器还没有偏好记录，只有现在是安全的时机把它
-      // 存进表里。等到之后归位时才现读（restoreToDisplay 的兜底分支），读到的会是刚从
-      // 目标显示器跳回来之后的状态（可能是按目标显示器缩放过的尺寸），不是家本身的真实
-      // 尺寸——那正是 review 抓到的 bug，这里在源头补上，让 restoreToDisplay 的兜底分支
-      // 退化成一个理论上不会命中的安全网，而不是实际生效的主路径
-      if (!getPreferredBounds('overlay', overlayDodgeSourceDisplayId)) {
-        setPreferredBounds('overlay', overlayDodgeSourceDisplayId, homeBounds)
-      }
+      overlayDodgeSourceDisplayId = screen.getDisplayMatching(overlayWindow.getBounds()).id
     }
-    // baseline 只在跳屏目标显示器第一次出现、查表落空时才会被用到（见
-    // moveToNonFullscreenDisplay 注释）；这里现读一次悬浮窗当前实际尺寸/所在显示器即可，
-    // 是否"当前"就是刚跳过去的位置不影响正确性——已经查到表项的 tick 里这两个值根本不会
-    // 被用上
-    const baseline = overlayWindow.getBounds()
-    const baselineDisplay = screen.getDisplayMatching(baseline)
-    const moved = moveToNonFullscreenDisplay(overlayWindow, 'overlay', overlayDodgeSourceDisplayId, baseline, baselineDisplay)
+    // moveToNonFullscreenDisplay 现在完全自己查表/算默认值（见该函数注释），不再需要
+    // 调用方传入现场读数当基准
+    const moved = moveToNonFullscreenDisplay(overlayWindow, 'overlay', overlayDodgeSourceDisplayId)
     if (moved) {
       overlayWindow.showInactive()
     } else {
@@ -438,32 +461,21 @@ function handlePinMode(info: ActiveWindowInfo, mainWindow: BrowserWindow): void 
 
   if (inContention) {
     // 轮询每 500ms tick 一次，进入冲突后只要仍在冲突就会一直落到这个分支。这个判断必须
-    // 放在整个分支最前面，早于下面 dodgeDisplayId === null 的"补种家的偏好记录"——那段
+    // 放在整个分支最前面，早于下面 dodgeDisplayId === null 的"判定家是哪块屏幕"——那段
     // 逻辑需要读窗口此刻的真实静止坐标，如果上一轮跳屏/归位动画还没跑完就先判断了它，
     // 读到的会是动画半路的位置，可能被 screen.getDisplayMatching 误判成错误的显示器，
-    // 把这块屏幕的偏好记录永久写坏（review 抓到的同类风险，跟 handleOverlayDodge 同样
-    // 处理）。跳屏动画本身约 360ms，通常在下一次 tick 前就已经跑完，但不能保证：若不加
-    // 这道抑制，动画途中再调 moveToNonFullscreenDisplay 也会拿"半路"的 getBounds() 当
-    // 新起点重新起算一次动画，逐帧打断、可能来回抖动。跳过时不重复判断 moved/
-    // applyAlwaysOnTop——上一次已经跑完的那次调用已经把置顶态设成了该有的样子，本 tick
-    // 没有新信息，维持现状即可
+    // 之后归位就会归错地方（跟 handleOverlayDodge 同样的处理）。跳屏动画本身约 360ms，
+    // 通常在下一次 tick 前就已经跑完，但不能保证：若不加这道抑制，动画途中再调
+    // moveToNonFullscreenDisplay 也会拿"半路"的 getBounds() 当新起点重新起算一次动画，
+    // 逐帧打断、可能来回抖动。跳过时不重复判断 moved/applyAlwaysOnTop——上一次已经跑完的
+    // 那次调用已经把置顶态设成了该有的样子，本 tick 没有新信息，维持现状即可
     if (isAnimating()) return
     if (dodgeDisplayId === null) {
-      const homeBounds = mainWindow.getBounds()
-      const homeDisplay = screen.getDisplayMatching(homeBounds)
-      dodgeDisplayId = homeDisplay.id
-      // 进入冲突的这一刻，聊天窗口还在家、完全没被跳屏影响过——跟 handleOverlayDodge
-      // 同样的理由，只有现在才是安全时机把家这块显示器的偏好记录补上（如果还没有的话），
-      // 让 restoreToDisplay 的兜底分支在实践中几乎不会被真正用到
-      if (!getPreferredBounds('chat', dodgeDisplayId)) {
-        setPreferredBounds('chat', dodgeDisplayId, homeBounds)
-      }
+      dodgeDisplayId = screen.getDisplayMatching(mainWindow.getBounds()).id
     }
-    // baseline 只在跳屏目标显示器第一次出现、查表落空时才会被用到，见
-    // moveToNonFullscreenDisplay 注释
-    const baseline = mainWindow.getBounds()
-    const baselineDisplay = screen.getDisplayMatching(baseline)
-    const moved = moveToNonFullscreenDisplay(mainWindow, 'chat', dodgeDisplayId, baseline, baselineDisplay)
+    // moveToNonFullscreenDisplay 现在完全自己查表/算默认值（见该函数注释），不再需要
+    // 调用方传入现场读数当基准
+    const moved = moveToNonFullscreenDisplay(mainWindow, 'chat', dodgeDisplayId)
     // P-2：dodge-fullscreen 的语义改为"常驻置顶 + 遇全屏跳屏"。跳成功后聊天窗口已经不
     // 跟全屏应用共享同一块屏幕，置顶不再构成遮挡，继续置顶才是用户预期的默认体验（等价
     // 于非冲突场景下的悬浮置顶）

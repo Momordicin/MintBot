@@ -32,6 +32,39 @@ export function isAnimating(): boolean {
   return activeCancel !== null
 }
 
+// animateTo 的两条前置守卫，抽成纯函数供单测——本模块其余部分依赖真实 BrowserWindow/
+// screen，不可测；这两条守卫只依赖矩形数值和显示器 id，可以独立验证（跟 windowPositions.ts
+// 把 pickLargestDisplay/clampBoundsToWorkArea 等纯函数从依赖 app.getPath 的部分拆出来
+// 单测同一个约定）。
+//
+// 前置守卫①：同屏移动做「飞出去再飞回来」没有意义，且 restoreHomeBoundsIfLeavingDodgeMode
+// 与冲突解除归位都可能是同屏调用——这条守卫是必需的，不是可选优化
+//
+// 前置守卫②：本动画只处理平移，调用方主动要求的真尺寸变化不做补间——但要留出容差，
+// 不能用逐像素相等。根因（已定位，非猜测）：跳屏在两块缩放比例不同的显示器间来回时，
+// Windows 会在目标屏对窗口发一次 WM_DPICHANGED 强改尺寸（本文件顶部注释、leg2 末尾注释
+// 都已记录这个平台行为）；这次改动发生在 setBounds 调用链之外、异步触发，哪怕 leg2
+// 末帧已经把尺寸写死成 target，只要 WM_DPICHANGED 在动画结束之后才到达，窗口的真实尺寸
+// 仍会在动画返回之后被悄悄带偏——而 DIP 取整（screenToDipRect 单次换算即可能有 1px
+// 误差，activeWindowMonitor.ts 里 1920/1.4=1371.43→1372 是同一机制的实测案例）决定了
+// 这个偏移通常只有 1px 量级。归位正是会撞上这个偏移的调用点：它的 target 是查表查到的
+// 该显示器偏好尺寸，start 却是窗口刚在另一块屏幕上待过一段时间、可能已被上述异步事件
+// 带偏的当前尺寸，两者只差 1px 就会被逐像素比较误判成「调用方真的要 resize」，退化成
+// 瞬间 setBounds、动画消失——恰是"归位没有动画"这个 bug 的根因。2px 留了一次跨屏来回的
+// 双倍余量，仍然远小于真实 resize（通常以十/百像素为单位），不会掩盖真正的守卫场景
+export function evaluateAnimationGuards(
+  start: Electron.Rectangle,
+  target: Electron.Rectangle,
+  srcDisplayId: number,
+  dstDisplayId: number
+): { sameDisplay: boolean; sizeChanged: boolean } {
+  const sameDisplay = srcDisplayId === dstDisplayId
+  const sizeChanged =
+    Math.abs(target.width - start.width) > SIZE_DRIFT_TOLERANCE_PX ||
+    Math.abs(target.height - start.height) > SIZE_DRIFT_TOLERANCE_PX
+  return { sameDisplay, sizeChanged }
+}
+
 // 返回的 CancelFn 无参数，语义单一：停表并立刻 setBounds(target)，调用方永远不必考虑
 // 「取消后窗口在哪」。多次调用是安全的 no-op（第二次起直接返回）。
 export function animateTo(win: BrowserWindow, target: Electron.Rectangle): () => void {
@@ -51,27 +84,18 @@ export function animateTo(win: BrowserWindow, target: Electron.Rectangle): () =>
   const srcDisplay = screen.getDisplayMatching(start)
   const dstDisplay = screen.getDisplayMatching(target)
 
-  // 前置守卫①：同屏移动做「飞出去再飞回来」没有意义，且 restoreHomeBoundsIfLeavingDodgeMode
-  // 与冲突解除归位都可能是同屏调用——这条守卫是必需的，不是可选优化
-  const sameDisplay = srcDisplay.id === dstDisplay.id
-  // 前置守卫②：本动画只处理平移，调用方主动要求的真尺寸变化不做补间——但要留出容差，
-  // 不能用逐像素相等。根因（已定位，非猜测）：跳屏在两块缩放比例不同的显示器间来回时，
-  // Windows 会在目标屏对窗口发一次 WM_DPICHANGED 强改尺寸（本文件顶部注释、leg2 末尾注释
-  // 都已记录这个平台行为）；这次改动发生在 setBounds 调用链之外、异步触发，哪怕 leg2
-  // 末帧已经把尺寸写死成 target，只要 WM_DPICHANGED 在动画结束之后才到达，窗口的真实尺寸
-  // 仍会在动画返回之后被悄悄带偏——而 DIP 取整（screenToDipRect 单次换算即可能有 1px
-  // 误差，activeWindowMonitor.ts 里 1920/1.4=1371.43→1372 是同一机制的实测案例）决定了
-  // 这个偏移通常只有 1px 量级。homeBounds 归位正是会撞上这个偏移的调用点：它的 target 是
-  // 冲突前记下的旧尺寸，start 却是窗口刚在另一块屏幕上待过一段时间、可能已被上述异步事件
-  // 带偏的当前尺寸，两者只差 1px 就会被逐像素比较误判成「调用方真的要 resize」，退化成
-  // 瞬间 setBounds、动画消失——恰是"归位没有动画"这个 bug 的根因。2px 留了一次跨屏来回的
-  // 双倍余量，仍然远小于真实 resize（通常以十/百像素为单位），不会掩盖真正的守卫场景
-  const sizeChanged =
-    Math.abs(target.width - start.width) > SIZE_DRIFT_TOLERANCE_PX ||
-    Math.abs(target.height - start.height) > SIZE_DRIFT_TOLERANCE_PX
-
+  const { sameDisplay, sizeChanged } = evaluateAnimationGuards(start, target, srcDisplay.id, dstDisplay.id)
 
   if (sameDisplay || sizeChanged) {
+    // 永久诊断日志（取代此前提交又删除的 DIAG TEMP 调试块）：跳屏/归位事件本身很稀疏
+    // （全屏冲突进入/解除才触发一次），这一行不构成日志噪音，换来的是下一次有人报告
+    // "没有动画"时能直接从日志里看到是哪条守卫命中、start/target 矩形具体是什么，
+    // 不用再临时加埋点复现
+    console.log(
+      `[WindowAnimation] Skipped animation (sameDisplay=${sameDisplay} sizeChanged=${sizeChanged}): ` +
+        `start=${start.width}x${start.height}@${start.x},${start.y} -> ` +
+        `target=${target.width}x${target.height}@${target.x},${target.y}`
+    )
     win.setBounds(target)
     return () => {}
   }

@@ -9,8 +9,21 @@ import {
   initWindowBehaviorConfig,
   updateCachedWindowBehaviorConfig,
   handleActiveWindowChange,
-  handleWindowMoved
+  handleWindowMoved,
+  markProgrammaticWindowPlacement
 } from './windowBehavior'
+import {
+  getPreferredBounds,
+  setPreferredBounds,
+  getLastDisplayId,
+  setLastDisplayId,
+  resolveStartupDisplay,
+  clampBoundsToWorkArea,
+  computeSizeForDisplay,
+  computeDefaultBoundsForDisplay,
+  DEFAULT_WINDOW_SIZE
+} from './windowPositions'
+import type { Bounds } from './windowPositions'
 
 // startActiveWindowMonitor 返回的清理函数（clearInterval）。非空即代表监听正在运行——
 // 这个判断本身就是下方 startActiveWindowMonitoring/stopActiveWindowMonitoring 防重复
@@ -473,21 +486,42 @@ ipcMain.handle('open-settings-window', () => {
 
 let overlayWindow: BrowserWindow | null = null
 
-// 悬浮窗尺寸/位置是这轮实现默认值，不是 TDD 已经写死的架构决定（写死的只有下面
-// alwaysOnTop/transparent/frame 三项，见 docs/MintBot_TDD.md §3.7「悬浮窗技术要点」）
-const OVERLAY_WIDTH = 132
-const OVERLAY_HEIGHT = 132
+// 悬浮窗尺寸是这轮实现默认值，不是 TDD 已经写死的架构决定（写死的只有下面
+// alwaysOnTop/transparent/frame 三项，见 docs/MintBot_TDD.md §3.7「悬浮窗技术要点」）。
+// 实际数值（132×132）与聊天窗口的默认值（290×520）一起定义在 windowPositions.ts 的
+// DEFAULT_WINDOW_SIZE 里——那边的密度换算规则（computeSizeForDisplay/
+// computeDefaultBoundsForDisplay）也需要同一份数字，两处不再各自维护一份。
+//
+// 启动恢复现在信任表里存的宽高（不再像旧版本那样恒用固定常量覆盖）：这块屏第一次出现时，
+// computeDefaultBoundsForDisplay 算出的就是"这块屏该有的悬浮窗尺寸"这个唯一答案，
+// 跳屏/归位/启动恢复三处都经过同一个函数，不会再出现"表里存的是跳屏换算出来的临时值"
+// 这种需要不信任的情况（见该函数注释）
+function resolveOverlayStartupBounds(): Bounds {
+  const displays = screen.getAllDisplays()
+  const targetDisplay = resolveStartupDisplay(displays, getLastDisplayId('overlay'))
+  const stored = getPreferredBounds('overlay', targetDisplay.id)
+  const bounds = stored
+    ? clampBoundsToWorkArea(stored, targetDisplay.workArea)
+    : computeDefaultBoundsForDisplay(targetDisplay, displays, DEFAULT_WINDOW_SIZE.overlay)
+  if (!stored) {
+    setPreferredBounds('overlay', targetDisplay.id, bounds)
+  }
+  setLastDisplayId('overlay', targetDisplay.id)
+  return bounds
+}
 
 function createOverlayWindow(): BrowserWindow {
-  // 用 workArea（带 x/y 偏移）而不是 workAreaSize（只有宽高）：任务栏停靠在上边/左边时
-  // workArea.x/y 不为 0，只用宽高算出来的坐标会跟任务栏厚度错位，没有真正贴住右下角
-  const { x: workAreaX, y: workAreaY, width: workAreaWidth, height: workAreaHeight } = screen.getPrimaryDisplay().workArea
+  const { x, y, width, height } = resolveOverlayStartupBounds()
+
+  // 构造窗口同样是一次程序放置，必须记进冷却期——否则窗口落到目标屏后 Windows 异步发来的
+  // WM_DPICHANGED 尺寸校正会被 handleWindowMoved 当成用户手动调整写进偏好表（详见该函数）
+  markProgrammaticWindowPlacement()
 
   const win = new BrowserWindow({
-    width: OVERLAY_WIDTH,
-    height: OVERLAY_HEIGHT,
-    x: workAreaX + workAreaWidth - OVERLAY_WIDTH,
-    y: workAreaY + workAreaHeight - OVERLAY_HEIGHT,
+    width,
+    height,
+    x,
+    y,
     frame: false,
     transparent: true,
     alwaysOnTop: true,
@@ -570,10 +604,59 @@ const TITLEBAR_OVERLAY_SYMBOL_COLOR = '#e8e8f0'
 // 所以原生条带可能比 CSS 高度矮 1-2px，需目视确认是否可察觉
 const TITLEBAR_OVERLAY_HEIGHT = 25
 
+// 聊天窗口默认尺寸（此前是硬编码 390×700，从不查表，每次启动都会重置——现在改为
+// 启动时查表恢复）实际数值定义在 windowPositions.ts 的 DEFAULT_WINDOW_SIZE.chat 里，
+// 只在"该显示器第一次出现、表里还没有偏好记录"时才会被 computeSizeForDisplay 用到，
+// 见 resolveChatStartupBounds
+
+// 首次在某块显示器上打开聊天窗口时的默认位置：居中于该显示器的 workArea——用 workArea
+// 而不是 workAreaSize，理由跟 windowPositions.ts 里 computeDefaultBoundsForDisplay
+// 同一条注释：任务栏停靠在上边/左边时 workArea.x/y 不为 0，只用宽高算会跟任务栏厚度错位。
+// 宽高走 computeSizeForDisplay（跟悬浮窗、跳屏/归位共用同一个密度换算规则），只有"贴
+// workArea 右下角"换成"居中"这一点位置公式是聊天窗口自己的约定，两者不合并
+function computeDefaultChatBounds(display: Electron.Display, displays: Electron.Display[]): Bounds {
+  const { width, height } = computeSizeForDisplay(display, displays, DEFAULT_WINDOW_SIZE.chat)
+  const { x: workAreaX, y: workAreaY, width: workAreaWidth, height: workAreaHeight } = display.workArea
+  return {
+    width,
+    height,
+    x: Math.round(workAreaX + (workAreaWidth - width) / 2),
+    y: Math.round(workAreaY + (workAreaHeight - height) / 2),
+  }
+}
+
+// 启动时的显示器/边界解析：① 上次退出时在用的显示器仍连接着就用它，否则退回最大显示器
+// （resolveStartupDisplay，见 windowPositions.ts 注释）；② 该显示器有偏好记录就查表夹紧
+// 后使用，没有就居中算一次默认值并立刻存表——跟 windowBehavior.ts 里跳屏首次出现某块
+// 显示器时"查不到就算一次、立刻存表"的约定一致；③ 无论走哪条分支，都把这块显示器记成
+// "最近一次使用"，即使用户这次会话从未拖动/缩放过窗口，下次启动也能定位回同一块屏幕，
+// 不必依赖 handleWindowMoved 才能记录
+function resolveChatStartupBounds(): Bounds {
+  const displays = screen.getAllDisplays()
+  const targetDisplay = resolveStartupDisplay(displays, getLastDisplayId('chat'))
+  const stored = getPreferredBounds('chat', targetDisplay.id)
+  const bounds = stored ? clampBoundsToWorkArea(stored, targetDisplay.workArea) : computeDefaultChatBounds(targetDisplay, displays)
+  if (!stored) {
+    setPreferredBounds('chat', targetDisplay.id, bounds)
+  }
+  setLastDisplayId('chat', targetDisplay.id)
+  return bounds
+}
+
+// 聊天窗口 resize 事件的防抖间隔：拖拽缩放期间 'resize' 会连续触发，跟 'moved' 共用同一个
+// handleWindowMoved 落盘路径，但不做防抖会导致一次缩放动作触发几十次同步磁盘写入
+
 function createWindow() {
+  const { x, y, width, height } = resolveChatStartupBounds()
+
+  // 同 createOverlayWindow：构造即程序放置，先进冷却期再建窗口
+  markProgrammaticWindowPlacement()
+
   const win = new BrowserWindow({
-    width: 390,
-    height: 700,
+    x,
+    y,
+    width,
+    height,
     show: false,
     titleBarStyle: 'hidden',
     titleBarOverlay: {
@@ -609,6 +692,13 @@ function createWindow() {
   // 问题1（buzzing-frolicking-eich.md）：用户真实拖动聊天窗口时，把拖动后的位置写回
   // 持久化偏好表（见 windowBehavior.ts handleWindowMoved 的判定逻辑）
   win.on('moved', () => {
+    handleWindowMoved('chat', win)
+  })
+
+  // 拖拽缩放同样要写回持久化偏好表，与 'moved' 共用 handleWindowMoved。防抖、跳屏守卫、
+  // 窗口已销毁的判断全部收在该函数内部——两个监听在一次拖拽里都是逐帧连续触发的（从上边/
+  // 左边拖拽缩放时原点也在动，会一路发 move），闸门放在公共入口才不会只保护住其中一种
+  win.on('resize', () => {
     handleWindowMoved('chat', win)
   })
 
