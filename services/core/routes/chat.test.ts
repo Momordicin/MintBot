@@ -6,7 +6,7 @@ import { decrypt } from '../db/crypto.js'
 import { upsertPreset, getEmotionState } from '../session/queries.js'
 import * as queries from '../session/queries.js'
 import { loadSession, getHistory } from '../session/index.js'
-import { getLastAttentionAt, isExplicitSleep, markExplicitSleep } from '../session/attention.js'
+import { getLastAttentionAt, isExplicitSleep, markExplicitSleep, recordAttention } from '../session/attention.js'
 import { chatRoutes } from './chat.js'
 import * as ModelProviderModule from '../providers/ModelProvider.js'
 import * as BuildContextModule from '../context/buildContext.js'
@@ -349,7 +349,7 @@ describe('POST /chat', () => {
     expect(isExplicitSleep(session.sessionId)).toBe(false)
   })
 
-  it('发送用户消息即刷新 lastAttentionAt、清除显式睡着标记（TDD §3.7 附「搭理 bot」）', async () => {
+  it('本轮产出可用回复时才刷新 lastAttentionAt、清除显式睡着标记（TDD §3.7 附「搭理 bot」：计数器位，不是点击发送即算）', async () => {
     const { session } = loadSession('p1')
     markExplicitSleep(session.sessionId)
     expect(isExplicitSleep(session.sessionId)).toBe(true)
@@ -360,6 +360,42 @@ describe('POST /chat', () => {
 
     expect(getLastAttentionAt(session.sessionId)).toBeGreaterThanOrEqual(before)
     expect(isExplicitSleep(session.sessionId)).toBe(false)
+  })
+
+  it('reply 正文去掉首尾空白后为空（拦截类命中）时：不刷新 lastAttentionAt（TDD §3.7 附「搭理 bot」：产不出可用回复的这一轮不算数）', async () => {
+    const { session } = loadSession('p1')
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fixedPast = Date.now() - 1000 * 60 * 60
+    recordAttention(session.sessionId, fixedPast)
+
+    const { fastify } = await buildTestApp(JSON.stringify({ reply: '   ' }))
+    await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+
+    expect(getLastAttentionAt(session.sessionId)).toBe(fixedPast)
+    errorSpy.mockRestore()
+  })
+
+  it('模型调用抛错时：不刷新 lastAttentionAt（TDD §3.7 附「搭理 bot」：一次没有得到回复的对话不算搭理过）', async () => {
+    const { session } = loadSession('p1')
+    const fixedPast = Date.now() - 1000 * 60 * 60
+    recordAttention(session.sessionId, fixedPast)
+
+    const fastify = Fastify()
+    const throwingModelProvider = {
+      completeSync: async () => { throw new Error('model boom') },
+    }
+    const createSpy = vi.spyOn(ModelProviderModule, 'createModelProviderForPreset')
+      .mockReturnValue(throwingModelProvider as unknown as ModelProvider)
+    fastify.decorate('streamingEnabled', false)
+    fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
+    await fastify.register(chatRoutes)
+
+    try {
+      await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+      expect(getLastAttentionAt(session.sessionId)).toBe(fixedPast)
+    } finally {
+      createSpy.mockRestore()
+    }
   })
 
   it('reply 正文去掉首尾空白后为空时：不入库、不发 message_done，改发 system 事件（TDD §3.8「回复检查」拦截类）', async () => {
@@ -386,13 +422,18 @@ describe('POST /chat', () => {
 
   it('reply 正文命中困意检测规则时置显式睡着标记，且照常入库（TDD §3.8「回复检查」文本检测类，不依赖 emotion.label）', async () => {
     const { session } = loadSession('p1')
+    const before = Date.now()
     const { fastify } = await buildTestApp(JSON.stringify({ reply: '啊我好困呀' }))
 
     const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
     const events = parseSSE(response.payload)
 
     expect(events.find(e => e.event === 'message_done')).toBeDefined()
+    // 排序陷阱回归测试：recordAttention 必须先于 markExplicitSleep 执行——若顺序颠倒，
+    // recordAttention 会把本轮刚置上的显式睡着标记立刻清除，这里就会观察到 false
     expect(isExplicitSleep(session.sessionId)).toBe(true)
+    // 同一轮里 lastAttentionAt 也必须刷新（这是一次产出可用回复的成功轮次）
+    expect(getLastAttentionAt(session.sessionId)).toBeGreaterThanOrEqual(before)
   })
 
   it('情绪持久化失败时不影响本轮对话正常返回', async () => {

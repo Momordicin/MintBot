@@ -89,9 +89,6 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
       addMessage(sessionId, 'user', message, 'user')
 
-      // 三种"搭理 bot"交互之一（TDD §3.7 附「悬浮窗立绘状态模型」：点击发送即算，不等模型回复）
-      recordAttention(sessionId)
-
       // 按当前请求捕获的 preset 构建 provider，而不是用全局单例 fastify.modelProvider，
       // 保证并发切换 preset 时本次请求仍使用它开始时的模型配置
       const modelProviderConfig = getModelProviderConfig()
@@ -154,6 +151,12 @@ export async function chatRoutes(fastify: FastifyInstance) {
         }
 
         const messageId = addMessage(sessionId, 'assistant', replyText, 'user')
+
+        // 三种"搭理 bot"交互之一（TDD §3.7 附「悬浮窗立绘状态模型」）：只有产出可用回复的这
+        // 一轮才算数——上面 isEmptyReply 命中已经 return，模型抛错走的是下方 catch，都不会
+        // 走到这里。必须在 detectSleepiness/markExplicitSleep 之前调用：recordAttention 会
+        // 顺带清除显式睡着标记，晚于 markExplicitSleep 调用会把本轮刚置上的标记立刻擦掉
+        recordAttention(sessionId)
 
         // ─── 回复检查·文本检测类（TDD §3.8「回复检查」+ §3.9）：从解析后的 reply 正文（不是
         // 原始 JSON，否则会匹配到 JSON 字段值本身）里识别困意，命中即置显式睡着标记，供悬浮窗

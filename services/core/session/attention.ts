@@ -6,7 +6,10 @@ import { getMostRecentMessageTimeForSession } from './queries.js'
 const lastAttentionAt = new Map<string, number>()
 const explicitSleep = new Set<string>()
 
-// 三种"搭理 bot"交互之一（TDD「在聊天窗口发送消息」，点击发送即算）；悬浮窗侧的点击小人/
+// 三种"搭理 bot"交互之一。聊天那一条的判据是**本轮拿到了可用回复**，不是点击发送那一刻
+// （TDD §3.7 附「「搭理 bot」的三种交互」下方的已决策说明）——权威调用点在 chat.ts，那里
+// 还有一条必须保住的顺序约束：本函数会清除显式睡着标记，所以必须排在困意检测之前。
+// 悬浮窗侧的点击小人/
 // 拖拽结束上报另有交互上报端点消费，同样会调这个函数。刷新时刻的同时清除显式睡着标记——
 // 搭理即视为已醒，与 TDD「刷新『上次搭理时刻』只影响由该时刻派生出的值」一致
 export function recordAttention(sessionId: string, at: number = Date.now()): void {
