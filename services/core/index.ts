@@ -60,7 +60,8 @@ function readStreamingEnabled(): boolean {
   }
 }
 
-const fastify = Fastify({ logger: true })
+// 同一个 logger 实例的request.log.error/fastify.log.* 仍正常输出
+const fastify = Fastify({ logger: true, disableRequestLogging: true })
 
 fastify.get('/health', async () => ({ status: 'ok', uptime: process.uptime() }))
 
@@ -90,13 +91,10 @@ async function start() {
   const aiBaseUrl = getAiBaseUrl()
   fastify.decorate('embeddingProvider', new BGEProvider(aiBaseUrl))
   fastify.decorate('nerProvider', new Bert4NerProvider(aiBaseUrl))
-  // 非阻塞：不 await，不能延迟 fastify.listen()。ensureAiService 内部的健康检查轮询可能
-  // 耗时数秒到最多 90 秒（Python 侧 torch/模型库 import 比 Ollama 更重，且 tsx watch 热重载时
-  // 几乎每次都会触发一次冷启动），等它 resolve 后再发预热请求，保证预热发出时服务大概率
-  // 已经监听；两者失败都只记录日志，不影响功能（下一次真实 /embed 调用时 load_model()
-  // 会照常懒加载，只是错过了提前加载的时机）。
-  // ensureAiService 返回 false（生成失败/等待超时）时直接跳过预热请求——此时已经确定服务
-  // 没就绪，再发一次必然失败的 /embed 只会多打一条误导性的报错日志，不提供任何新信息
+  // ensureAiService 本地模型轮询 可能较长
+  // tsx watch 热重载时会触发冷启动
+  // 两者失败都只记录日志，只是错过了提前加载的时机，不影响功能
+  // ensureAiService 返回 false（生成失败/等待超时）时直接跳过预热请求 /embed
   ensureAiService(aiBaseUrl)
     .then(ready => {
       if (!ready) return
@@ -118,17 +116,15 @@ async function start() {
 
   organizeModeTask = startOrganizeModeScheduler(fastify)
 
-  // 全局配置或任意 preset 用 ollama，都需要确保 ollama 已启动（per-preset provider 构建
-  // 依赖 preset.modelType，而不仅仅是全局配置）
+  // 任意配置用 ollama，都需确保 ollama 已启动?
   const anyPresetUsesOllama = getAllPresets().some(p => p.modelType === 'ollama')
   const modelConfig = getModelProviderConfig()
   if (modelConfig.type === 'ollama' || anyPresetUsesOllama) {
     await ensureOllama(modelConfig.ollamaBaseUrl)
   }
 
-  // resolveStartupPresetId 处理"没有 persisted 值"（首次启动）与"persisted 值指向的
-  // preset 已不存在"两种降级情况，一律回退到最近更新的 preset；一个 preset 都没有时返回
-  // undefined，此时不加载任何 session（与迁移前 defaultPresetId 缺失的行为一致）
+  // 处理"没有 persisted 值"（首次启动）与 reset 已不存在两种降级情况
+  // 一律回退到最近更新的 preset；一个 preset 都没有时不加载任何 session
   const startupPresetId = resolveStartupPresetId(getDefaultPresetId())
   if (startupPresetId) {
     loadSession(startupPresetId)

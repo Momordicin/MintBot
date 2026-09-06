@@ -1,6 +1,30 @@
 import { spawn, ChildProcess } from 'child_process'
+import type { Readable } from 'stream'
 import fs from 'fs'
 import path from 'path'
+
+// 维护一个跨 chunk 的缓冲区，
+// 只在遇到 '\n' 时才把完整的一行交给onLine，
+// 未闭合的残余留到下一个 chunk 继续拼；
+// 'end' 时把缓冲区里剩下的残余（没有结尾换行的最后一行）冲出，避免丢失
+function forwardLines(stream: Readable | null | undefined, onLine: (line: string) => void): void {
+  if (!stream) return
+  let buffer = ''
+  stream.on('data', chunk => {
+    buffer += chunk.toString()
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    for (const line of lines) {
+      const trimmed = line.replace(/\r$/, '')
+      if (trimmed.length > 0) onLine(trimmed)
+    }
+  })
+  stream.on('end', () => {
+    const trimmed = buffer.replace(/\r$/, '')
+    if (trimmed.length > 0) onLine(trimmed)
+    buffer = ''
+  })
+}
 
 let aiProcess: ChildProcess | null = null
 let aiManagedByUs = false
@@ -19,10 +43,9 @@ export async function isAiServiceRunning(baseUrl: string): Promise<boolean> {
   }
 }
 
-// 30s 曾经是默认值，实测在冷缓存/系统负载较高时不够用——torch/transformers/FlagEmbedding
-// 这几个 import 本身（不是模型权重加载，是模块导入）在这种情况下就可能超过 30s，导致
-// Node 侧判定"启动超时"时，Python 进程其实还在正常导入，只是比平时慢，并非卡死或联网失败。
-// 90s 留出更宽松的余量；真的卡死的情况这个时间也足够暴露问题，不算无限等待
+// 冷缓存/系统负载较高时, 30s可能不够用——torch/transformers/FlagEmbedding
+// 从而导致Node 侧判定"启动超时"
+// 90s 留出更宽松的余量
 const AI_SERVICE_STARTUP_TIMEOUT_MS = 90000
 
 async function waitForAiService(baseUrl: string, timeoutMs = AI_SERVICE_STARTUP_TIMEOUT_MS): Promise<boolean> {
@@ -83,10 +106,19 @@ export async function ensureAiService(baseUrl: string): Promise<boolean> {
     // 两个变量当同一个开关的两种写法处理（互为 fallback，见 huggingface_hub/constants.py），
     // 两个都设置只是兼容万一装到某个 transformers 版本自己也单独检查这个变量的情况，
     // 不代表两边各有一套独立生效的离线开关
-    aiProcess = spawn(pythonPath, ['-m', 'uvicorn', 'main:app', '--port', port], {
+    // --no-access-log：屏蔽request log，避免刷屏
+    // uvicorn.error不受影响，照常输出
+
+    aiProcess = spawn(pythonPath, ['-m', 'uvicorn', 'main:app', '--port', port, '--no-access-log'], {
       cwd: path.resolve(process.cwd(), 'services/ai'),
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, PYTHONIOENCODING: 'utf-8', HF_HUB_OFFLINE: '1', TRANSFORMERS_OFFLINE: '1' },
+      env: {
+        ...process.env,
+        PYTHONIOENCODING: 'utf-8',
+        HF_HUB_OFFLINE: '1',
+        TRANSFORMERS_OFFLINE: '1',
+        HF_HUB_DISABLE_PROGRESS_BARS: '1', // BGEM3FlagModel 加载权重时的 tqdm 进度条, 在管道转发、多路复用的终端里可能变成乱码
+      },
     })
   } catch (err) {
     // spawn 同步抛出的场景（如 EMFILE），不能让它冒泡到 ensureAiService 的调用方——
@@ -97,12 +129,9 @@ export async function ensureAiService(baseUrl: string): Promise<boolean> {
 
   // 持续转发，不只在启动等待窗口内——加载可能发生在启动之后很久（RAG 召回/整理模式触发
   // 的懒加载），运行期间任何时候的输出/报错都要能看到，不能提前摘掉监听
-  aiProcess.stdout?.on('data', chunk => {
-    console.log(`[AiService] ${chunk.toString().trimEnd()}`)
-  })
-  aiProcess.stderr?.on('data', chunk => {
-    console.error(`[AiService] ${chunk.toString().trimEnd()}`)
-  })
+  // 按行转发而不是按 chunk 转发
+  forwardLines(aiProcess.stdout, line => console.log(`[AiService] ${line}`))
+  forwardLines(aiProcess.stderr, line => console.error(`[AiService] ${line}`))
 
   aiProcess.on('error', (err) => {
     console.error('[AiService] Failed to start:', err.message)
@@ -130,10 +159,8 @@ export async function stopAiServiceIfManaged(): Promise<void> {
   aiProcess = null
   aiManagedByUs = false
 
-  // 必须等到子进程真正退出（监听端口真正释放）才 resolve——这是 ensureAiService 里
-  // "已经在跑就不重复启动"这个检查能可靠区分"上一个实例还没死透"和"确实有人在跑"的前提，
-  // 否则调用方（SIGTERM 处理器）以为已经停好就继续往下走，下一个 core 实例可能在端口
-  // 还没释放的窗口内探测到"还在跑"，误判为不归自己管
+  // 必须等到子进程真正退出（监听端口真正释放）才 resolve
+  // ensureAiService "已经在跑就不重复启动"这个检查因此能可靠区分"上一个实例还没死透"和"确实有人在跑"
   await new Promise<void>(resolve => {
     const forceKillTimer = setTimeout(() => proc.kill('SIGKILL'), FORCE_KILL_TIMEOUT_MS)
     proc.once('exit', () => {
