@@ -450,6 +450,7 @@ function createSettingsWindow(): BrowserWindow {
     width: 760,
     height: 560,
     show: false,
+    parent: mainWindow ?? undefined,
     webPreferences: {
       preload: PRELOAD_PATH,
       sandbox: false
@@ -489,6 +490,8 @@ ipcMain.handle('open-settings-window', () => {
     return
   }
   settingsWindow = createSettingsWindow()
+  // applyIconFromCurrentPreset() 只在启动、preset-switched广播、SSE 重连时调用
+  applyIconFromCurrentPreset()
 })
 
 let overlayWindow: BrowserWindow | null = null
@@ -738,19 +741,19 @@ ipcMain.on('overlay:activate', () => {
   overlayWindow?.hide()
 })
 
-// 主题色变化时更新聊天窗口原生按钮条带（TDD §3.2.2「渲染层消费」路径 3、§3.7 附「聊天
-// 窗口 chrome 模型」）：渲染层用 src/chat/chromeColor.ts 的 deriveTitlebarOverlay 算好
+// 主题变化时更新聊天窗口原生按钮条带（TDD §3.2.2「渲染层消费」路径 3、§3.7 附「聊天
+// 窗口 chrome 模型」）：渲染层用 src/chat/themeVars.ts 的 titlebarOverlayFromTheme 算好
 // { color, symbolColor } 后单向下发，这里只负责转调 win.setTitleBarOverlay()，不做颜色
 // 计算。setTitleBarOverlay 只在构造时已启用 WCO（titleBarStyle: 'hidden' + 传了
 // titleBarOverlay）的窗口上生效，createWindow 里已满足这个前提。渲染层是本仓库唯一的
-// 调用方，值来自 chromeColor.ts 而非用户可任意输入的表单，这里只做类型层面的最小校验
+// 调用方，值来自 themeVars.ts 而非用户可任意输入的表单，这里只做类型层面的最小校验
 ipcMain.on('titlebar:set-overlay', (_event, overlay: { color?: unknown; symbolColor?: unknown }) => {
   // isDestroyed()：mainWindow 只在 'closed' 回调里被置 null，而那回调发生在原生窗口销毁**之后**，
   // 中间那段窗口非空但已销毁。与本文件其它跨异步使用窗口引用的地方同一守卫
   if (!mainWindow || mainWindow.isDestroyed()) return
   if (typeof overlay?.color !== 'string' || typeof overlay?.symbolColor !== 'string') return
   // setTitleBarOverlay 在颜色串格式非法、或窗口未启用 WCO 时会抛。当前唯一调用方是本仓库
-  // 渲染层、值来自 chromeColor.ts，格式可控；但这是个暴露给渲染层的通道，而 ipcMain.on 里的
+  // 渲染层、值来自 themeVars.ts，格式可控；但这是个暴露给渲染层的通道，而 ipcMain.on 里的
   // 同步抛出会变成主进程未捕获异常——不值得为一次配色更新冒这个险
   try {
     mainWindow.setTitleBarOverlay({ color: overlay.color, symbolColor: overlay.symbolColor })

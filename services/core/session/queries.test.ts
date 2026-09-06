@@ -125,7 +125,7 @@ describe('Preset', () => {
   })
 
   it('upsertPreset 传入 displayConfig 时按传入值写入', () => {
-    const displayConfig = { chatBgRgb: [1, 2, 3] as [number, number, number], chatBgOpacity: 0.2 }
+    const displayConfig = { ...DEFAULT_DISPLAY_CONFIG, chatBgRgb: [1, 2, 3] as [number, number, number], chatBgOpacity: 0.2 }
     upsertPreset({ presetId: 'p1', name: 'A', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: 'a', wallpaperPath: undefined, displayConfig })
     expect(getPresetById('p1')!.displayConfig).toEqual(displayConfig)
   })
@@ -141,7 +141,7 @@ describe('Preset', () => {
 
   it('updatePresetDisplayConfig 更新后能通过 getPresetById 读回，其余字段不受影响', () => {
     upsertPreset({ presetId: 'p1', name: 'A', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: 'a', wallpaperPath: undefined })
-    const displayConfig = { chatBgRgb: [100, 100, 100] as [number, number, number], chatBgOpacity: 0.1 }
+    const displayConfig = { ...DEFAULT_DISPLAY_CONFIG, chatBgRgb: [100, 100, 100] as [number, number, number], chatBgOpacity: 0.1 }
     updatePresetDisplayConfig('p1', displayConfig)
 
     const preset = getPresetById('p1')!

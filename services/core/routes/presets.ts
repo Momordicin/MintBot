@@ -5,7 +5,15 @@ import crypto from 'crypto'
 import { getAllPresets, getPresetById, createPreset, updatePresetWallpaper, updatePresetName, updatePresetDisplayConfig, updatePresetSystemPrompt, updatePresetModelConfig } from '../session/queries.js'
 import { switchPreset, refreshCurrentPresetIfActive } from '../session/index.js'
 import { buildStatePayload } from '../state.js'
-import { isValidChatBgRgb, isValidChatBgOpacity, DEFAULT_DISPLAY_CONFIG } from '../session/displayConfig.js'
+import {
+  isValidChatBgRgb,
+  isValidChatBgOpacity,
+  isValidThemeMode,
+  isValidAccentRgb,
+  isValidTintStrength,
+  clampTintStrength,
+  DEFAULT_DISPLAY_CONFIG,
+} from '../session/displayConfig.js'
 import type { PresetDisplayConfig } from '../../../shared/types/index.js'
 
 // 与 services/core/index.ts 里 @fastify/static 的 data/wallpapers 注册使用同一路径约定
@@ -187,13 +195,29 @@ export async function presetRoutes(fastify: FastifyInstance) {
       if (displayConfig.chatBgOpacity !== undefined && !isValidChatBgOpacity(displayConfig.chatBgOpacity)) {
         return reply.status(400).send({ error: 'chatBgOpacity must be a number in [0, 1]' })
       }
+      if (displayConfig.themeMode !== undefined && !isValidThemeMode(displayConfig.themeMode)) {
+        return reply.status(400).send({ error: 'themeMode must be one of day, night, auto' })
+      }
+      if (displayConfig.accentRgb !== undefined && !isValidAccentRgb(displayConfig.accentRgb)) {
+        return reply.status(400).send({ error: 'accentRgb must be an array of three integers in [0, 255]' })
+      }
+      // tintStrength 只要求是有限数字：越界值不拒绝，夹回 [0, 1] 后写入（与 clampTintStrength
+      // 的语义一致，见 session/displayConfig.ts 里的注释）
+      if (displayConfig.tintStrength !== undefined && !isValidTintStrength(displayConfig.tintStrength)) {
+        return reply.status(400).send({ error: 'tintStrength must be a finite number' })
+      }
 
       // 服务端合并：只改一个字段的调用方不必回传自己不拥有的字段，两个面板改不同字段也不会互相覆盖。
       // 逐字段挑选而不是整体展开 displayConfig——请求体里混进的未知字段不应该被原样存进
-      // 这个本该只有两个已知字段的 JSON blob
+      // 这个本该只有已知字段的 JSON blob
       updatePresetDisplayConfig(presetId, {
         chatBgRgb: displayConfig.chatBgRgb ?? preset.displayConfig.chatBgRgb,
         chatBgOpacity: displayConfig.chatBgOpacity ?? preset.displayConfig.chatBgOpacity,
+        themeMode: displayConfig.themeMode ?? preset.displayConfig.themeMode,
+        accentRgb: displayConfig.accentRgb ?? preset.displayConfig.accentRgb,
+        tintStrength: displayConfig.tintStrength !== undefined
+          ? clampTintStrength(displayConfig.tintStrength)
+          : preset.displayConfig.tintStrength,
       })
     }
 

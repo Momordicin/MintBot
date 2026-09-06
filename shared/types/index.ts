@@ -79,6 +79,11 @@ export interface Summary {
 export interface PresetDisplayConfig {
   chatBgRgb: [number, number, number]   // 0-255 整数，对应 CSS 变量 --chat-bg-rgb
   chatBgOpacity: number                 // 0-1，对应 CSS 变量 --chat-bg-opacity
+  // 以下三个字段服务于 src/chat/theme.ts 的参考实现结构化主题模型（day/night + 单一 accent +
+  // tint 旋钮），本层只存储与校验，派生消费不在这层的职责范围内：
+  themeMode: 'day' | 'night' | 'auto'   // 'auto' 解析成具体 'day'/'night' 是渲染层/主进程的职责，这一层原样存储
+  accentRgb: [number, number, number]   // 0-255 整数，用户选择的唯一 accent 色，对应 theme.ts ThemeInput.accentRgb
+  tintStrength: number                  // 0-1，0 = 纯参考发布值，对应 theme.ts ThemeInput.tintStrength
 }
 
 // Preset（可复用的配置模板，用户管理）

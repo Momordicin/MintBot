@@ -1,11 +1,25 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AppState, ModelConfig, PresetDisplayConfig, PresetSnapshot } from '../../shared/types/index.js'
+import { hexToRgb, percentToTintStrength, rgbToHex, tintStrengthToPercent } from './themeControls.js'
+import { deriveTheme } from '../chat/theme.js'
+import { resolveThemeMode, themeCssVars } from '../chat/themeVars.js'
+import { usePrefersDark } from '../usePrefersDark.js'
 import './settings.css'
 
 const CORE_URL = 'http://127.0.0.1:3000'
+// 与 ChatWindow.tsx 的同名常量保持一致——两边各自维护一份是有意的，同本文件其它渲染层
+// DTO 一样按渲染层自己的约定本地重复定义（见 DIV-009）。主题实时预览需要跟真实聊天窗口
+// 同一条壁纸解析规则（wallpaperUrlFor），否则预览会展示一张跟实际聊天窗口不一致的壁纸
+const DEFAULT_WALLPAPER_URL = `${CORE_URL}/wallpapers/bg.jpg`
 // 与 services/core/session/displayConfig.ts 的 DEFAULT_DISPLAY_CONFIG 保持一致，
 // 仅当 presetSnapshot.displayConfig 缺失（v7 之前创建的历史冻结快照）时用作控件初始值
-const DEFAULT_DISPLAY_CONFIG: PresetDisplayConfig = { chatBgRgb: [15, 15, 20], chatBgOpacity: 0.65 }
+const DEFAULT_DISPLAY_CONFIG: PresetDisplayConfig = {
+  chatBgRgb: [15, 15, 20],
+  chatBgOpacity: 0.65,
+  themeMode: 'auto',
+  accentRgb: [0, 122, 255],
+  tintStrength: 0,
+}
 const DISPLAY_CONFIG_DEBOUNCE_MS = 400
 
 interface PresetOption {
@@ -20,17 +34,6 @@ type SystemPromptStep = 'idle' | 'editing' | 'confirmingSave' | 'confirmingApply
 // 模型覆盖是"用哪个模型回答"的技术设置，不是"覆写人格"，因此比 SystemPromptStep 少一步：
 // 没有 systemPrompt 那种带文案的 confirmingSave 步骤，点"保存"直接进入立即应用/下次生效的选择
 type ModelOverrideStep = 'idle' | 'editing' | 'chooseApply' | 'saving'
-
-function rgbToHex([r, g, b]: [number, number, number]): string {
-  return `#${[r, g, b].map(n => n.toString(16).padStart(2, '0')).join('')}`
-}
-
-function hexToRgb(hex: string): [number, number, number] {
-  const r = parseInt(hex.slice(1, 3), 16)
-  const g = parseInt(hex.slice(3, 5), 16)
-  const b = parseInt(hex.slice(5, 7), 16)
-  return [r, g, b]
-}
 
 interface CharacterPanelProps {
   presetSnapshot: PresetSnapshot | null
@@ -133,8 +136,15 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
   const presetSnapshotRef = useRef<PresetSnapshot | null>(presetSnapshot)
   // 颜色/透明度这一组控件的本地实时值，随拖动/选色即时更新，独立于 presetSnapshot 的
   // 只读展示，通过下面的防抖 PATCH 落库
-  const [chatBgRgb, setChatBgRgb] = useState<[number, number, number]>(DEFAULT_DISPLAY_CONFIG.chatBgRgb)
   const [chatBgOpacity, setChatBgOpacity] = useState<number>(DEFAULT_DISPLAY_CONFIG.chatBgOpacity)
+  // 主题控件（src/chat/theme.ts 的参考实现结构化模型）：mode 是主轴，accent 是用户唯一选的
+  // 强调色，tint 是把 accent 往中性面上染多少的旋钮——三个字段同一组本地实时值，同样通过
+  // 下面的防抖 PATCH 落库。chatBgRgb 不在这里：它已经是 legacy 字段（按 services/core 的
+  // session/displayConfig.ts 里的旧背景色模型选值，不再是 accentRgb 的来源，见
+  // DEFAULT_DISPLAY_CONFIG 的取值与那边的注释），本面板不再渲染它的编辑控件
+  const [themeMode, setThemeMode] = useState<PresetDisplayConfig['themeMode']>(DEFAULT_DISPLAY_CONFIG.themeMode)
+  const [accentRgb, setAccentRgb] = useState<[number, number, number]>(DEFAULT_DISPLAY_CONFIG.accentRgb)
+  const [tintStrength, setTintStrength] = useState<number>(DEFAULT_DISPLAY_CONFIG.tintStrength)
   // 与改名/壁纸同款 abort-then-reissue，但颜色/透明度共用同一个 controller——两者都是
   // 同一个 PATCH /presets/:presetId 端点、同一类低风险外观偏好，没有必要分两个 controller
   const displayConfigControllerRef = useRef<AbortController | null>(null)
@@ -143,6 +153,28 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
   // 触发时才现读 presetSnapshotRef，如果这期间用户已经切换了 preset，会把这次编辑误发到
   // 新 preset 上；只发生变化的字段，不在这里补全另一个字段
   const pendingDisplayConfigRef = useRef<{ presetId: string; partial: Partial<PresetDisplayConfig> } | null>(null)
+
+  // 主题实时预览：PATCH /presets/:presetId 是防抖的，聊天窗口又只在重新聚焦时才重拉
+  // /state（见 ChatWindow.tsx 顶部说明），拖动滑块到看见效果之间有一段不可用的延迟——
+  // 这里直接吃上面几个控件的本地实时 state（而不是 presetSnapshot 里落盘的旧值），
+  // 每次渲染都用同一套 deriveTheme()+themeCssVars() 重新算一遍，用户拖动的同一 tick
+  // 就能看到结果，不等任何请求往返
+  const prefersDark = usePrefersDark()
+  const previewResolvedMode = resolveThemeMode(themeMode, prefersDark)
+  const previewTheme = useMemo(
+    () => deriveTheme({ accentRgb, mode: previewResolvedMode, tintStrength }),
+    [accentRgb, previewResolvedMode, tintStrength]
+  )
+  const previewVars = useMemo(
+    () => themeCssVars(previewTheme, chatBgOpacity),
+    [previewTheme, chatBgOpacity]
+  )
+  // 壁纸解析规则与 ChatWindow.tsx 的 wallpaperUrlFor 完全一致：当前 preset 自己的
+  // wallpaperPath（若已设置），否则退回默认壁纸——预览要展示的是"这个 preset 实际会
+  // 用哪张壁纸"，不是随便一张图
+  const previewWallpaperUrl = presetSnapshot?.wallpaperPath
+    ? `${CORE_URL}/wallpapers/${encodeURIComponent(presetSnapshot.wallpaperPath)}`
+    : DEFAULT_WALLPAPER_URL
 
   useEffect(() => {
     presetSnapshotRef.current = presetSnapshot
@@ -153,8 +185,10 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
   // 这里自己的显示设置 PATCH 成功后都会用一个新对象引用回调 onSwitched，但那些情况下
   // 并没有真的切换 preset，不应该打断另一个还没来得及发送的防抖编辑
   useEffect(() => {
-    setChatBgRgb(presetSnapshot?.displayConfig?.chatBgRgb ?? DEFAULT_DISPLAY_CONFIG.chatBgRgb)
     setChatBgOpacity(presetSnapshot?.displayConfig?.chatBgOpacity ?? DEFAULT_DISPLAY_CONFIG.chatBgOpacity)
+    setThemeMode(presetSnapshot?.displayConfig?.themeMode ?? DEFAULT_DISPLAY_CONFIG.themeMode)
+    setAccentRgb(presetSnapshot?.displayConfig?.accentRgb ?? DEFAULT_DISPLAY_CONFIG.accentRgb)
+    setTintStrength(presetSnapshot?.displayConfig?.tintStrength ?? DEFAULT_DISPLAY_CONFIG.tintStrength)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [presetSnapshot?.presetId])
 
@@ -863,12 +897,6 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
     displayConfigDebounceRef.current = setTimeout(flushPendingDisplayConfig, DISPLAY_CONFIG_DEBOUNCE_MS)
   }, [flushPendingDisplayConfig])
 
-  const handleColorChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const rgb = hexToRgb(e.target.value)
-    setChatBgRgb(rgb)
-    scheduleDisplayConfigChange({ chatBgRgb: rgb })
-  }, [scheduleDisplayConfigChange])
-
   const handleOpacityChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const opacity = Number(e.target.value)
     setChatBgOpacity(opacity)
@@ -880,6 +908,37 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
   const handleNoColorClick = useCallback(() => {
     setChatBgOpacity(0)
     scheduleDisplayConfigChange({ chatBgOpacity: 0 })
+  }, [scheduleDisplayConfigChange])
+
+  const handleThemeModeChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
+    // 下拉框选项是固定的三个值（day/night/auto），不需要在这里防御未知值——真正的校验
+    // 防线是 PATCH /presets/:presetId（services/core/session/displayConfig.ts 的
+    // isValidThemeMode），这里的值必然来自下面渲染的三个 <option> 之一
+    const mode = e.target.value as PresetDisplayConfig['themeMode']
+    setThemeMode(mode)
+    scheduleDisplayConfigChange({ themeMode: mode })
+  }, [scheduleDisplayConfigChange])
+
+  const handleAccentColorChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const rgb = hexToRgb(e.target.value)
+    setAccentRgb(rgb)
+    scheduleDisplayConfigChange({ accentRgb: rgb })
+  }, [scheduleDisplayConfigChange])
+
+  const handleTintChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const tint = percentToTintStrength(Number(e.target.value))
+    setTintStrength(tint)
+    scheduleDisplayConfigChange({ tintStrength: tint })
+  }, [scheduleDisplayConfigChange])
+
+  // 重置按钮只做一件事：把 tintStrength 写为 0。它之所以正确等价于"回到基准配色"，
+  // 完全是因为 src/chat/theme.ts 的 deriveTheme() 本身的不变量——tintStrength<=0 时每个
+  // 中性角色都直接短路返回 DAY_TABLE/NIGHT_TABLE 里的原始值，逐字节等于参考发布值
+  // （见 theme.ts 的 tintRole()）。这个按钮不需要、也不应该另起一段"把各个角色分别重置"
+  // 的逻辑——单值写入之外的任何额外步骤都会让正确性依赖这里的代码而不是 theme.ts 的不变量
+  const handleResetTint = useCallback(() => {
+    setTintStrength(0)
+    scheduleDisplayConfigChange({ tintStrength: 0 })
   }, [scheduleDisplayConfigChange])
 
   // 角色文件夹下拉框的选项：默认是 assets/characters/ 下已有文件夹；仅当处于"导入角色卡"
@@ -1010,15 +1069,6 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
       )}
       {presets.length > 0 && (
         <div className="character-panel__row">
-          <label className="character-panel__display-label" title="聊天区域背景叠色">
-            背景颜色
-            <input
-              className="character-panel__color-input"
-              type="color"
-              value={rgbToHex(chatBgRgb)}
-              onChange={handleColorChange}
-            />
-          </label>
           <button
             type="button"
             className={`character-panel__no-color-btn${chatBgOpacity === 0 ? ' character-panel__no-color-btn--active' : ''}`}
@@ -1039,6 +1089,94 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
               onChange={handleOpacityChange}
             />
           </label>
+        </div>
+      )}
+      {/* 主题控件：src/chat/theme.ts 的参考实现结构化模型（mode 为主轴 + 单一 accent +
+          tint 旋钮），见该文件顶部注释。chatBgRgb 已是 legacy 字段（旧背景色模型的遗留值，
+          不再是 accentRgb 的来源），本面板不再提供它的编辑控件 */}
+      {presets.length > 0 && (
+        <div className="character-panel__row">
+          <label className="character-panel__display-label" title="聊天窗口跟随日间/夜间，还是跟随系统外观">
+            模式
+            <select value={themeMode} onChange={handleThemeModeChange}>
+              <option value="day">日间</option>
+              <option value="night">夜间</option>
+              <option value="auto">跟随系统</option>
+            </select>
+          </label>
+          <label className="character-panel__display-label" title="主题强调色（唯一一个用户选的颜色，其余全部自动派生）">
+            强调色
+            <input
+              className="character-panel__color-input"
+              type="color"
+              value={rgbToHex(accentRgb)}
+              onChange={handleAccentColorChange}
+            />
+          </label>
+        </div>
+      )}
+      {presets.length > 0 && (
+        <div className="character-panel__row">
+          <label className="character-panel__display-label" title="强调色向中性表面/文字染色的强度，0 = 基准配色">
+            染色强度
+            <input
+              className="character-panel__opacity-input"
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              value={tintStrengthToPercent(tintStrength)}
+              onChange={handleTintChange}
+            />
+          </label>
+          <button
+            type="button"
+            className="rename-btn"
+            onClick={handleResetTint}
+            disabled={tintStrength === 0}
+            title="把染色强度重置为 0，恢复逐字节等于参考发布值的配色"
+          >
+            回到基准配色
+          </button>
+        </div>
+      )}
+      {/* 主题实时预览：当前 preset 的壁纸 + 一段假对话，颜色全部经上面 previewVars
+          （deriveTheme()+themeCssVars() 的直接产出）以 CSS 自定义属性下发，预览容器
+          之下的每个角色都消费同一批 var(--…) 名字——与 ChatWindow.tsx/chat.css 的真实
+          聊天窗口共用同一套派生结果，不在这里重新实现或硬编码任何一个颜色 */}
+      {presets.length > 0 && (
+        <div className="character-panel__theme-preview-wrap">
+          <div className="character-panel__theme-preview-label">
+            主题预览
+            {themeMode === 'auto' && (
+              <span className="character-panel__theme-preview-resolved">
+                （当前跟随系统解析为{previewResolvedMode === 'night' ? '夜间' : '日间'}）
+              </span>
+            )}
+          </div>
+          <div
+            className="character-panel__theme-preview"
+            style={{
+              backgroundImage: `url(${previewWallpaperUrl})`,
+              ...previewVars,
+            } as React.CSSProperties}
+          >
+            <div className="character-panel__theme-preview-titlebar">
+              {presetSnapshot?.name ?? '角色'}
+            </div>
+            <div className="character-panel__theme-preview-messages">
+              {/* 用户先说话（靠右），AI 再回（靠左）——顺序与归属都要跟真实对话一致，
+                  否则预览里「打招呼」出现在 AI 侧、「应答」出现在用户侧，看起来就是左右反了 */}
+              <div className="character-panel__theme-preview-bubble character-panel__theme-preview-bubble--user">
+                你好呀
+              </div>
+              <div className="character-panel__theme-preview-bubble character-panel__theme-preview-bubble--bot">
+                嗯，在的
+              </div>
+              <div className="character-panel__theme-preview-timestamp">14:32</div>
+            </div>
+            <div className="character-panel__theme-preview-input">输入消息…</div>
+          </div>
         </div>
       )}
       {presets.length > 0 && (

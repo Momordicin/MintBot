@@ -5,8 +5,8 @@
   flex-direction: column;
   width: 100%;
   height: 100%;
-  background-color: #0f0f14;
-  color: var(--input-text);
+  background-color: rgb(var(--window-bg-rgb));
+  color: var(--label);
   overflow: hidden;
 }
 
@@ -17,14 +17,93 @@
 }
 
 .settings-error-text {
-  color: var(--system-msg-text);
+  color: var(--label2);
   font-size: 13px;
 }
 
+/* ─── 控件表面三件套（角色化） ─────────────────────────────
+   surface=fill3 / text=label / border=separator，hover→fill2 / active→fill1 /
+   disabled→opacity .5 / placeholder→label3——这套配色原来在下面这些选择器里各自
+   重复写一遍字面量（rgba(0,0,0,.4) 背景、#fff 文字、rgba(255,255,255,.2) 边框，
+   外加 hover 用的 rgba(0,0,0,.55)），这里统一声明一次角色，各选择器自己的规则块
+   只保留形状/间距差异。
+   .window-behavior-panel__select 是本次新加的类名——WindowBehaviorPanel 的
+   pinMode <select> 原来不在 .character-panel 下，这组选择器永远匹配不到它，
+   一直是浏览器原生白底黑字的样子，补一个类名才够到这组规则 */
+.character-panel select,
+.character-panel .wallpaper-btn,
+.character-panel__rename-input,
+.character-panel .rename-btn,
+.character-panel__persona-textarea,
+.memory-toolbar select,
+.memory-btn,
+.forget-panel__field input[type='datetime-local'],
+.model-config-panel__field input,
+.model-config-panel__field select,
+.model-config-panel .rename-btn,
+.window-behavior-panel__select,
 .settings-retry-btn {
-  background: rgba(0, 0, 0, 0.4);
-  color: #fff;
+  background: var(--fill3);
+  color: var(--label);
   border: 1px solid var(--input-border);
+}
+
+.character-panel select:hover,
+.character-panel .wallpaper-btn:hover,
+.character-panel__rename-input:hover,
+.character-panel .rename-btn:hover,
+.character-panel__persona-textarea:hover,
+.memory-toolbar select:hover,
+.memory-btn:hover,
+.forget-panel__field input[type='datetime-local']:hover,
+.model-config-panel__field input:hover,
+.model-config-panel__field select:hover,
+.model-config-panel .rename-btn:hover,
+.window-behavior-panel__select:hover,
+.settings-retry-btn:hover {
+  background: var(--fill2);
+}
+
+.character-panel select:active,
+.character-panel .wallpaper-btn:active,
+.character-panel__rename-input:active,
+.character-panel .rename-btn:active,
+.character-panel__persona-textarea:active,
+.memory-toolbar select:active,
+.memory-btn:active,
+.forget-panel__field input[type='datetime-local']:active,
+.model-config-panel__field input:active,
+.model-config-panel__field select:active,
+.model-config-panel .rename-btn:active,
+.window-behavior-panel__select:active,
+.settings-retry-btn:active {
+  background: var(--fill1);
+}
+
+.character-panel select:disabled,
+.character-panel .wallpaper-btn:disabled,
+.character-panel__rename-input:disabled,
+.character-panel .rename-btn:disabled,
+.character-panel__persona-textarea:disabled,
+.memory-toolbar select:disabled,
+.memory-btn:disabled,
+.forget-panel__field input[type='datetime-local']:disabled,
+.model-config-panel__field input:disabled,
+.model-config-panel__field select:disabled,
+.model-config-panel .rename-btn:disabled,
+.window-behavior-panel__select:disabled,
+.settings-retry-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.character-panel__rename-input::placeholder,
+.character-panel__persona-textarea::placeholder,
+.model-config-panel__field input::placeholder {
+  color: var(--label3);
+}
+
+.settings-retry-btn {
   border-radius: 6px;
   padding: 6px 16px;
   font-size: 13px;
@@ -36,7 +115,7 @@
 .settings-current-preset {
   padding: 12px 16px;
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--label2);
   border-bottom: 1px solid var(--input-border);
 }
 
@@ -52,7 +131,7 @@
 .settings-tab {
   background: transparent;
   border: none;
-  color: var(--text-secondary);
+  color: var(--label2);
   padding: 8px 14px;
   font-size: 13px;
   font-family: var(--font);
@@ -60,9 +139,13 @@
   border-bottom: 2px solid transparent;
 }
 
+.settings-tab:hover {
+  background: var(--fill2);
+}
+
 .settings-tab--active {
-  color: var(--input-text);
-  border-bottom-color: rgba(120, 90, 180, 0.8);
+  color: var(--label);
+  border-bottom-color: rgba(var(--accent-rgb), 0.8);
 }
 
 /* ─── 内容面板 ─────────────────────────────────────────── */
@@ -89,58 +172,33 @@
 }
 
 .character-panel select {
-  background: rgba(0, 0, 0, 0.4);
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 6px;
   padding: 4px 8px;
   font-size: 12px;
 }
 
 .character-panel .wallpaper-btn {
-  background: rgba(0, 0, 0, 0.4);
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 6px;
   padding: 4px 8px;
   font-size: 12px;
   cursor: pointer;
 }
 
-.character-panel .wallpaper-btn:hover {
-  background: rgba(0, 0, 0, 0.55);
-}
-
 .character-panel__rename-input {
-  background: rgba(0, 0, 0, 0.4);
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 6px;
   padding: 4px 8px;
   font-size: 12px;
 }
 
 .character-panel .rename-btn {
-  background: rgba(0, 0, 0, 0.4);
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 6px;
   padding: 4px 8px;
   font-size: 12px;
   cursor: pointer;
 }
 
-.character-panel .rename-btn:hover {
-  background: rgba(0, 0, 0, 0.55);
-}
-
-.character-panel .rename-btn:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
 .character-panel__hint {
-  color: var(--text-secondary);
+  color: var(--label2);
   font-size: 12px;
 }
 
@@ -157,7 +215,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  color: var(--text-secondary);
+  color: var(--label2);
   font-size: 12px;
 }
 
@@ -165,7 +223,7 @@
   width: 28px;
   height: 22px;
   padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid var(--input-border);
   border-radius: 4px;
   background: transparent;
   cursor: pointer;
@@ -176,35 +234,147 @@
   cursor: pointer;
 }
 
-/* "无色"色块：棋盘格/斜杠图案，业界表示"透明"的通用画法，点击等价于把不透明度滑到 0 */
+/* "无色"色块：棋盘格/斜杠图案，业界表示"透明"的通用画法，点击等价于把不透明度滑到 0——
+   边框/底色/条纹三层分别对应 separator/bg2/label4 三个角色，不再是任何字面量 */
 
 .character-panel__no-color-btn {
   width: 22px;
   height: 22px;
   padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid var(--input-border);
   border-radius: 4px;
   cursor: pointer;
-  background-color: #1a1a1a;
+  background-color: rgb(var(--bg2-rgb));
   background-image:
-    linear-gradient(45deg, rgba(255, 255, 255, 0.3) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.3) 75%),
-    linear-gradient(45deg, rgba(255, 255, 255, 0.3) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.3) 75%);
+    linear-gradient(45deg, var(--label4) 25%, transparent 25%, transparent 75%, var(--label4) 75%),
+    linear-gradient(45deg, var(--label4) 25%, transparent 25%, transparent 75%, var(--label4) 75%);
   background-size: 8px 8px;
   background-position: 0 0, 4px 4px;
 }
 
 .character-panel__no-color-btn--active {
-  border-color: rgba(120, 90, 180, 0.9);
-  box-shadow: 0 0 0 2px rgba(120, 90, 180, 0.4);
+  border-color: rgba(var(--accent-rgb), 0.9);
+  box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.4);
 }
 
+/* 这里原来用 --system-msg-text（中性次级文字色），跟 .memory-btn--danger/
+   .forget-panel__confirm 那条"字面量红色"是两套并存、互不一致的"错误状态"表达方式——
+   这是真正的错误提示文案，统一到 M3 error 色板上；这条文字压在普通表面上而不是一块实心
+   error 填充上，用 --error（危险语义前景色），不是给实心底色配的 --on-error-container */
 .character-panel__error {
-  color: var(--system-msg-text);
+  color: var(--error);
   font-size: 12px;
 }
 
-.character-panel__notice {
+/* 主题实时预览：容器本身的内联样式携带 previewVars（deriveTheme()+themeCssVars() 的
+   直接产出）作为 CSS 自定义属性，这里的规则只负责消费同名 var(--…)，不再定义任何颜色
+   字面值——壁纸（backgroundImage，内联样式设置）+ --window-bg-rgb/--chat-bg-opacity 合成的
+   色纱 + chrome 层（--titlebar-bg/--input-bg，已经是与 CHROME_SURFACE_ALPHA 合成好的
+   rgba），三层堆叠顺序与 ChatWindow.tsx/chat.css 的真实聊天窗口一致。
+   本次改动之后 SettingsApp.tsx 也在 document.documentElement 上挂了同一批变量名，
+   但这个容器自己的内联 previewVars 优先级天然高于祖先，子树内的 var(--…) 依旧解析到
+   "正在预览的那个配置"而不是文档级别的"当前激活角色"，两者不会互相污染 */
+
+.character-panel__theme-preview-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.character-panel__theme-preview-label {
+  color: var(--label2);
+  font-size: 12px;
+}
+
+.character-panel__theme-preview-resolved {
+  opacity: 0.8;
+}
+
+.character-panel__theme-preview {
+  width: 260px;
+  /* 设置窗口没有设 resizable: false 也没有 minWidth，而 .settings-window 是 overflow:
+     hidden——固定宽度在窗口被拖窄时会被无声裁掉（没有滚动条、也不重排）。让它跟着缩，
+     窄窗口下略微变形也好过看不见 */
+  max-width: 100%;
+  height: 180px;
+  border-radius: 8px;
+  border: 1px solid var(--input-border);
+  overflow: hidden;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-color: rgb(var(--window-bg-rgb));
+  display: flex;
+  flex-direction: column;
+}
+
+.character-panel__theme-preview-titlebar {
+  flex-shrink: 0;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  font-size: 10px;
+  background: var(--titlebar-bg);
+  backdrop-filter: blur(8px);
+  color: var(--titlebar-text);
+}
+
+.character-panel__theme-preview-messages {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 4px;
+  padding: 8px;
+  overflow: hidden;
+  background: rgba(var(--window-bg-rgb), var(--chat-bg-opacity));
+}
+
+.character-panel__theme-preview-bubble {
+  align-self: flex-start;
+  max-width: 75%;
+  padding: 5px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  word-break: break-word;
+  /* 与 chat.css .msg-bubble 同一道投影，是常量、不随模式/accent 变化，不属于
+     previewVars（见 global.css --bubble-shadow 的说明）——预览要跟真实聊天窗口的气泡
+     长得一样，漏掉这条会让预览看起来比实际气泡更"平" */
+  box-shadow: var(--bubble-shadow);
+}
+
+.character-panel__theme-preview-bubble--bot {
+  background: var(--bubble-bot-bg);
+  color: var(--bubble-bot-text);
+}
+
+.character-panel__theme-preview-bubble--user {
+  align-self: flex-end;
+  background: var(--bubble-user-bg);
+  color: var(--bubble-user-text);
+}
+
+.character-panel__theme-preview-timestamp {
+  align-self: flex-end;
+  font-size: 9px;
   color: var(--text-secondary);
+}
+
+.character-panel__theme-preview-input {
+  flex-shrink: 0;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  font-size: 10px;
+  background: var(--input-bg);
+  border-top: 1px solid var(--input-border);
+  color: var(--input-placeholder);
+}
+
+.character-panel__notice {
+  color: var(--label2);
   font-size: 12px;
 }
 
@@ -218,21 +388,18 @@
 }
 
 .character-panel__persona-label {
-  color: var(--text-secondary);
+  color: var(--label2);
   font-size: 12px;
 }
 
 .character-panel__persona-text {
-  color: var(--input-text);
+  color: var(--label);
   font-size: 13px;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
 .character-panel__persona-textarea {
-  background: rgba(0, 0, 0, 0.4);
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 6px;
   padding: 6px 8px;
   font-size: 12px;
@@ -242,14 +409,14 @@
 }
 
 .character-panel__persona-confirm {
-  border: 1px solid rgba(120, 90, 180, 0.6);
+  border: 1px solid rgba(var(--accent-rgb), 0.6);
   border-radius: 6px;
   padding: 8px 10px;
   display: flex;
   flex-direction: column;
   gap: 8px;
   font-size: 12px;
-  color: var(--input-text);
+  color: var(--label);
 }
 
 /* 每 preset 模型覆盖区：与人设编辑区同款纵向 flex 布局，chooseApply/saving 步骤复用
@@ -262,12 +429,12 @@
 }
 
 .character-panel__model-label {
-  color: var(--text-secondary);
+  color: var(--label2);
   font-size: 12px;
 }
 
 .character-panel__model-text {
-  color: var(--input-text);
+  color: var(--label);
   font-size: 13px;
 }
 
@@ -276,7 +443,7 @@
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: var(--input-text);
+  color: var(--label);
 }
 
 /* ─── 记忆管理面板 ─────────────────────────────────────── */
@@ -293,7 +460,7 @@
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: var(--text-secondary);
+  color: var(--label2);
   font-size: 13px;
 }
 
@@ -302,7 +469,8 @@
   overflow-y: auto;
 }
 
-/* 二级 tab：比 .settings-tab 更小的胶囊样式，与顶层 tab 区分开 */
+/* 二级 tab：比 .settings-tab 更小的胶囊样式，与顶层 tab 区分开。
+   resting 态用 fill3 表面 + separator 边框 + label2 文字，active 态用 accent —— */
 
 .memory-subtabs {
   display: flex;
@@ -311,20 +479,24 @@
 }
 
 .memory-subtab {
-  background: rgba(0, 0, 0, 0.4);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: var(--fill3);
+  border: 1px solid var(--input-border);
   border-radius: 14px;
-  color: var(--text-secondary);
+  color: var(--label2);
   padding: 4px 12px;
   font-size: 12px;
   font-family: var(--font);
   cursor: pointer;
 }
 
+.memory-subtab:hover {
+  background: var(--fill2);
+}
+
 .memory-subtab--active {
-  color: var(--input-text);
-  border-color: rgba(120, 90, 180, 0.8);
-  background: rgba(120, 90, 180, 0.25);
+  color: var(--label);
+  border-color: rgba(var(--accent-rgb), 0.8);
+  background: rgba(var(--accent-rgb), 0.25);
 }
 
 /* 消息/实体/摘要/Embedding 状态子面板共用的列表布局 */
@@ -342,9 +514,6 @@
 }
 
 .memory-toolbar select {
-  background: rgba(0, 0, 0, 0.4);
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 6px;
   padding: 4px 8px;
   font-size: 12px;
@@ -363,12 +532,12 @@
   display: flex;
   gap: 10px;
   font-size: 11px;
-  color: var(--text-secondary);
+  color: var(--label2);
 }
 
 .memory-list-row__content {
   font-size: 13px;
-  color: var(--input-text);
+  color: var(--label);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -377,32 +546,20 @@
 .memory-loading,
 .memory-note {
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--label2);
 }
 
 .memory-btn {
   align-self: flex-start;
-  background: rgba(0, 0, 0, 0.4);
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 6px;
   padding: 4px 10px;
   font-size: 12px;
   cursor: pointer;
 }
 
-.memory-btn:hover {
-  background: rgba(0, 0, 0, 0.55);
-}
-
-.memory-btn:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
 .memory-btn--danger {
-  border-color: rgba(200, 80, 80, 0.6);
-  color: #ff9c9c;
+  border-color: var(--error);
+  color: var(--error);
 }
 
 /* 按时间段删除面板 */
@@ -418,13 +575,10 @@
   align-items: center;
   gap: 8px;
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--label2);
 }
 
 .forget-panel__field input[type='datetime-local'] {
-  background: rgba(0, 0, 0, 0.4);
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 6px;
   padding: 4px 8px;
   font-size: 12px;
@@ -435,7 +589,7 @@
   border-radius: 6px;
   padding: 8px 10px;
   font-size: 12px;
-  color: var(--input-text);
+  color: var(--label);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -446,18 +600,18 @@
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: var(--input-text);
+  color: var(--label);
 }
 
 .forget-panel__confirm {
-  border: 1px solid rgba(200, 80, 80, 0.6);
+  border: 1px solid var(--error);
   border-radius: 6px;
   padding: 8px 10px;
   display: flex;
   flex-direction: column;
   gap: 8px;
   font-size: 12px;
-  color: var(--input-text);
+  color: var(--label);
 }
 
 .forget-panel__confirm .memory-btn {
@@ -482,7 +636,7 @@
 }
 
 .model-config-panel__section-label {
-  color: var(--text-secondary);
+  color: var(--label2);
   font-size: 12px;
   font-weight: 600;
 }
@@ -492,7 +646,7 @@
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: var(--input-text);
+  color: var(--label);
 }
 
 .model-config-panel__field {
@@ -500,7 +654,7 @@
   align-items: center;
   gap: 8px;
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--label2);
 }
 
 .model-config-panel__field label {
@@ -510,35 +664,21 @@
 .model-config-panel__field input,
 .model-config-panel__field select {
   flex: 1;
-  background: rgba(0, 0, 0, 0.4);
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 6px;
   padding: 4px 8px;
   font-size: 12px;
 }
 
-/* 本面板不嵌套在 .character-panel 下，.rename-btn 本身的样式规则按祖先选择器限定作用域，
-   这里复用同一个类名、同一套视觉样式，补一份限定在本面板下的规则（同 .wallpaper-btn/
-   .memory-btn 的既有重复模式，不是发明新样式） */
+/* 本面板不嵌套在 .character-panel 下，.rename-btn 本身的颜色角色/状态由上面的控件表面
+   三件套共享选择器组负责（那组选择器里已经列了 .model-config-panel .rename-btn），这里
+   只补一份限定在本面板下的形状规则（同 .wallpaper-btn/.memory-btn 的既有重复模式，
+   不是发明新样式） */
 
 .model-config-panel .rename-btn {
-  background: rgba(0, 0, 0, 0.4);
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 6px;
   padding: 4px 8px;
   font-size: 12px;
   cursor: pointer;
-}
-
-.model-config-panel .rename-btn:hover {
-  background: rgba(0, 0, 0, 0.55);
-}
-
-.model-config-panel .rename-btn:disabled {
-  opacity: 0.5;
-  cursor: default;
 }
 
 /* ─── 窗口行为面板（置顶模式 + 全屏白名单/黑名单） ──────────── */
@@ -559,9 +699,15 @@
 }
 
 .window-behavior-panel__section-label {
-  color: var(--text-secondary);
+  color: var(--label2);
   font-size: 12px;
   font-weight: 600;
+}
+
+.window-behavior-panel__select {
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
 }
 
 .window-behavior-panel__list-row {
@@ -573,5 +719,5 @@
   justify-content: space-between;
   gap: 8px;
   font-size: 12px;
-  color: var(--input-text);
+  color: var(--label);
 }

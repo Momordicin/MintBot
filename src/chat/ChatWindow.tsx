@@ -1,10 +1,12 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { MessageList } from './MessageList'
 import { InputBar } from './InputBar'
 import { TitleBar } from './TitleBar'
 import { MessageData } from './MessageBubble'
 import { parseSSE } from './sse'
-import { deriveChromeVars, deriveTitlebarOverlay, DEFAULT_CHAT_BG_RGB } from './chromeColor.js'
+import { deriveTheme } from './theme.js'
+import { DEFAULT_CHAT_BG_OPACITY, DEFAULT_THEME_INPUT, resolveThemeMode, themeCssVars, titlebarOverlayFromTheme } from './themeVars.js'
+import { usePrefersDark } from '../usePrefersDark.js'
 import type { AppState, PresetSnapshot } from '../../shared/types/index.js'
 import './chat.css'
 
@@ -80,11 +82,17 @@ async function fetchUserAvatarUrl(characterId: string, signal?: AbortSignal): Pr
   }
 }
 
+// 'auto' 解析成具体 'day'/'night' 是渲染层的职责（theme.ts 明确不处理，见 themeVars.ts
+// resolveThemeMode 的注释）。usePrefersDark 本身抽到 src/usePrefersDark.ts——设置窗口的
+// 主题实时预览（settings/CharacterPanel.tsx）也需要同一份'auto'解析逻辑，不属于本窗口
+// 独有
+
 export function ChatWindow() {
   const hasFetched = useRef(false)
   const [messages, setMessages] = useState<MessageData[]>([])
   const [isReplying, setIsReplying] = useState(false)
   const [appState, setAppState] = useState<AppState | null>(null)
+  const prefersDark = usePrefersDark()
   // 保守默认值：挂载时的初始 /state 请求返回前，先当作"未就绪"处理（头像置灰），
   // 避免在真正尚未预热完成时短暂显示"已就绪"的误导状态
   const [embeddingReady, setEmbeddingReady] = useState<boolean>(false)
@@ -265,20 +273,51 @@ export function ChatWindow() {
     }
   }, [])
 
-  // 原生窗口按钮条带（Window Controls Overlay）不受 CSS 管辖，主题色变化时把算好的
+  const displayConfig = appState?.presetSnapshot?.displayConfig
+
+  // theme.ts 的主入口：displayConfig 缺失时（v7 之前创建的历史冻结快照）不能直接跳过——
+  // CSS 那半会自然降级到 global.css `:root` 里的默认主题色，而下面的原生按钮条带 IPC
+  // 没有等价降级，会停在上一个 preset 推下来的值，出现「两层各说各话」（同一个坑此前用
+  // DEFAULT_CHAT_BG_RGB 修过一次，见 chromeColor.ts 的历史注释）。这里同样落到一份固定
+  // 兜底输入（DEFAULT_THEME_INPUT），让两层永远收敛到同一个 theme
+  const resolvedMode = displayConfig ? resolveThemeMode(displayConfig.themeMode, prefersDark) : DEFAULT_THEME_INPUT.mode
+  const theme = useMemo(() => {
+    if (!displayConfig) return deriveTheme(DEFAULT_THEME_INPUT)
+    return deriveTheme({
+      accentRgb: displayConfig.accentRgb,
+      mode: resolvedMode,
+      tintStrength: displayConfig.tintStrength,
+    })
+  }, [displayConfig, resolvedMode])
+  const chatBgOpacity = displayConfig?.chatBgOpacity ?? DEFAULT_CHAT_BG_OPACITY
+
+  // 原生窗口按钮条带（Window Controls Overlay）不受 CSS 管辖，主题变化时把算好的
   // { color, symbolColor } 经单向 IPC 'titlebar:set-overlay' 下发给主进程，由它调用
   // win.setTitleBarOverlay() 应用（TDD §3.2.2「渲染层消费」路径 3、§3.7 附「聊天窗口
-  // chrome 模型」）。
-  //
-  // displayConfig 缺失时（v7 之前创建的历史冻结快照）**不能直接 return**：CSS 那半会自然
-  // 降级到 global.css `:root` 里的默认主题色，而原生条带没有等价降级——它会停在上一个
-  // preset 推下来的值。于是浅色主题切到旧会话时，自绘标题栏回到深色、按钮符号却还是黑的，
-  // 正是 §3.7 附警告过的「两层各说各话」，只是成因从双重叠加变成了残留。这里改为回落到与
-  // `:root` 同一份字面默认色，让两层始终收敛到同一个值
+  // chrome 模型」）
   useEffect(() => {
-    const chatBgRgb = appState?.presetSnapshot?.displayConfig?.chatBgRgb ?? DEFAULT_CHAT_BG_RGB
-    window.electronAPI.setTitlebarOverlay(deriveTitlebarOverlay(chatBgRgb))
-  }, [appState?.presetSnapshot?.displayConfig?.chatBgRgb])
+    window.electronAPI.setTitlebarOverlay(titlebarOverlayFromTheme(theme))
+  }, [theme])
+
+  // 主题 CSS 变量挂在 document.documentElement 上，而不是聊天窗口根 div 的内联 style——
+  // global.css 的 `html, body, #root { color: ... }` 是这个根 div 的**祖先**，内联样式
+  // 只会级联到该 div 自己的子树，永远到不了它的祖先，此前这条规则因此永远读的是
+  // global.css `:root` 里的静态占位值（day 模式下的实际主题色因此从未真正生效在
+  // html/body/#root 上——这是一个存在已久的 day 模式 bug）。挂到 documentElement 上，
+  // html/body/#root 与聊天窗口 div 就都是它的后代，同一份变量天然级联到两边，不需要
+  // 再各写一份。用 useLayoutEffect 而不是 useEffect：在浏览器画下一帧之前同步写入，
+  // 避免每次主题变化都闪一下 global.css 的占位色再跳到真正的主题色。
+  // color-scheme 顺带在这里跟着 resolvedMode 一起设置：原生控件（select 弹出层、
+  // checkbox、range 滑块、日期选择器）此前完全没有这个属性，一律按浏览器默认的浅色渲染，
+  // night 模式下会看到一圈突兀的白色原生控件
+  useLayoutEffect(() => {
+    const root = document.documentElement
+    const vars = themeCssVars(theme, chatBgOpacity)
+    for (const [name, value] of Object.entries(vars)) {
+      root.style.setProperty(name, value)
+    }
+    root.style.colorScheme = resolvedMode === 'day' ? 'light' : 'dark'
+  }, [theme, chatBgOpacity, resolvedMode])
 
   // 加载最近一页历史消息（挂载时的初始 /state 请求成功后、以及每次聚焦触发的 session 同步
   // 成功后各调用一次），接入调用方传入的 controller signal，与 fetchAvatarUrl 同款竞态保护
@@ -430,29 +469,11 @@ export function ChatWindow() {
   }, [])
 
   const displayName = appState?.presetSnapshot?.name ?? '角色'
-  const displayConfig = appState?.presetSnapshot?.displayConfig
-  // 装饰性部位（hover 纱、边框、滚动条 thumb）在 CSS 里用 color-mix 就地算出，只需要
-  // --chat-bg-rgb / --veil-color 两个输入；承载内容的表面（气泡底、标题栏底、输入栏底）
-  // 需要具体色值，在这里算好后同样作为 CSS 变量下发（TDD §3.2.2「渲染层消费」路径 1/2）
-  const chromeVars = displayConfig ? deriveChromeVars(displayConfig.chatBgRgb) : null
 
   return (
     <div
       className={`chat-window${embeddingReady ? '' : ' chat-window--embedding-not-ready'}`}
-      style={{
-        ...(wallpaperUrl ? { backgroundImage: `url(${wallpaperUrl})` } : {}),
-        // displayConfig 缺失时（v7 之前创建的历史冻结快照）不写这些变量，
-        // 让 global.css 里 :root 的默认值继续兜底，外观与现在完全一致
-        ...(displayConfig && chromeVars && {
-          '--chat-bg-rgb': displayConfig.chatBgRgb.join(', '),
-          '--chat-bg-opacity': String(displayConfig.chatBgOpacity),
-          '--veil-color': chromeVars.veilColor,
-          '--bubble-bot-bg': chromeVars.bubbleBotBg,
-          '--bubble-user-bg': chromeVars.bubbleUserBg,
-          '--titlebar-bg': chromeVars.titlebarBg,
-          '--input-bg': chromeVars.inputBg,
-        }),
-      } as React.CSSProperties}
+      style={wallpaperUrl ? { backgroundImage: `url(${wallpaperUrl})` } : undefined}
     >
       <TitleBar avatarUrl={avatarUrl} displayName={displayName} />
 

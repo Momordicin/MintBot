@@ -20,9 +20,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('overlay:drag-end', listener)
     return () => ipcRenderer.removeListener('overlay:drag-end', listener)
   },
-  // 聊天窗口原生按钮条带配色：渲染层用 src/chat/chromeColor.ts 算好 { color, symbolColor }
-  // 后单向下发，主进程据此调用 win.setTitleBarOverlay()（TDD §3.2.2「渲染层消费」路径 3、
-  // §3.7 附「聊天窗口 chrome 模型」）
+  // 聊天窗口原生按钮条带配色：渲染层用 src/chat/themeVars.ts titlebarOverlayFromTheme
+  // 算好 { color, symbolColor } 后单向下发，主进程据此调用 win.setTitleBarOverlay()
+  // （TDD §3.2.2「渲染层消费」路径 3、§3.7 附「聊天窗口 chrome 模型」）
   setTitlebarOverlay: (overlay: { color: string; symbolColor: string }) =>
     ipcRenderer.send('titlebar:set-overlay', overlay)
 })

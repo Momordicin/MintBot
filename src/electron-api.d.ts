@@ -17,8 +17,8 @@ export interface ElectronAPI {
   // 返回值是 unsubscribe 函数
   onOverlayDragStart: (callback: () => void) => () => void
   onOverlayDragEnd: (callback: () => void) => () => void
-  // 聊天窗口原生按钮条带配色，单向下发（无返回值），见 src/chat/chromeColor.ts
-  // deriveTitlebarOverlay 与 electron/main/index.ts 的 'titlebar:set-overlay' 处理器
+  // 聊天窗口原生按钮条带配色，单向下发（无返回值），见 src/chat/themeVars.ts
+  // titlebarOverlayFromTheme 与 electron/main/index.ts 的 'titlebar:set-overlay' 处理器
   setTitlebarOverlay: (overlay: { color: string; symbolColor: string }) => void
 }
 
