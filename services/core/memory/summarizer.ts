@@ -1,6 +1,6 @@
 import { getPendingSummaryMessages, insertSummaryAndMarkMessages } from '../session/queries.js'
 import type { Message, BuiltContext, CompletionOptions } from '../../../shared/types/index.js'
-import { getMemoryConfig } from '../config/index.js'
+import { getMemoryConfig, getBackgroundModelProviderConfig } from '../config/index.js'
 
 // 摘要触发规则 + 生成（TDD §3.8 摘要触发逻辑）。
 // shouldTriggerSummary 只负责布尔逻辑本身：lockScreenMinutes / isLowActivityWindow 目前没有
@@ -63,7 +63,10 @@ export async function generateSummary(
   // 生成失败时直接向上抛出，不标记任何消息为 summarized，由调用方决定重试策略
   // （与 embedQueue.ts 的失败补偿思路一致：失败的批次保持原状，等待下次重试）
   const context = buildSummaryContext(pending)
-  const content = await deps.model.completeSync(context, { maxTokens: 1000 })
+  // maxTokens 读自 backgroundModelProvider 配置（未单独配置时 getBackgroundModelProviderConfig()
+  // 自身会 fallback 到 modelProvider），而不是硬编码 1000——否则用户在设置面板调高这个值
+  // 对摘要请求完全不生效
+  const content = await deps.model.completeSync(context, { maxTokens: getBackgroundModelProviderConfig().maxTokens ?? 1000 })
 
   const fromMessageId = pending[0].id
   const toMessageId = pending[pending.length - 1].id

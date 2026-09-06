@@ -10,6 +10,7 @@ import { createModelProviderForPreset } from '../providers/ModelProvider.js'
 import { getModelProviderConfig } from '../config/index.js'
 import { isEmptyReply } from '../reply/interceptor.js'
 import { detectSleepiness } from '../reply/sleepDetector.js'
+import { parseJsonSalvage } from '../util/jsonSalvage.js'
 
 // ─── 回复队列（单会话场景下的串行化）──────────────────────
 // MintBot 同一时刻只有一个 SessionState（services/core/session/index.ts 的 current 是单例，
@@ -68,13 +69,21 @@ export async function chatRoutes(fastify: FastifyInstance) {
       let context
       try {
         context = await buildContext(message, { embedding: fastify.embeddingProvider, signal: abortController.signal })
-      } catch {
+      } catch (err) {
         // buildContext 内部的 embedding 调用现在会被客户端断连提前 abort（AbortError），
         // 这种情况下连接本来就已经死了，往一个已关闭/已结束的连接发 500 毫无意义——
         // 只有连接仍存活时才是真正需要告知客户端的 buildContext 失败
         if (reply.raw.destroyed || reply.raw.writableEnded || abortController.signal.aborted) {
           return
         }
+        // buildContext.ts 尾部的运行时断言（system prompt 必须含字面 "json"）一旦触发，
+        // 会走到这里——必须记录到服务端日志：这是一条纯粹的 regression tripwire（当前代码
+        // 没有任何路径能跳过 contractLines.push，理论上永远不该触发），一旦真的触发，说明
+        // 有人改动了 buildContext.ts 且破坏了这个不变式，静默返回通用 500 会让这个信号
+        // 完全找不到根因。断言本身仍然值得保留（比单元测试更早、更贴近真实请求路径拦截
+        // 住这类失误，而失误后果是 OpenAI 400 或 DeepSeek 空转耗尽 token 预算，代价足够高），
+        // 前提是这里把错误真正打出来，而不是像此前那样连 err 都不绑定
+        console.error('[Chat] buildContext failed:', err)
         return reply.status(500).send({ error: 'Failed to build context' })
       }
 
@@ -115,26 +124,35 @@ export async function chatRoutes(fastify: FastifyInstance) {
       try {
         let fullReply = ''
 
+        // maxTokens 来自本次请求捕获的全局 modelProvider 配置（config.json 的可配置入口，
+        // 缺省时各 ModelProvider 调用点自行回落到 1000，行为与迁移前一致）——不像 modelType/
+        // modelName 那样支持按 preset 覆盖：max_tokens 属于"调用参数"而非"选哪个模型"，
+        // 与 apiKey/baseUrl 同一层级，理由见 createModelProviderForPreset 上方注释
+        // jsonMode: true — 对话链路的输出契约要求模型必须回复 JSON（buildContext.ts 尾部
+        // 的输出契约块），openai/deepseek/ollama 分支据此开启 response_format: json_object。
+        // 只在这里（对话链路）传 true：buildContext.ts 保证 system 里始终含"json"字样这个
+        // 硬前置条件在这条链路上成立，summarizer.ts/entityExtractor.ts/characterImport.ts
+        // 等整理模式调用不满足该前置条件，不能一起打开（见 CompletionOptions.jsonMode 注释）
         if (streaming) {
           // ─── 流式模式：累积 chunk，Phase 4 开放逐句推送 ───────
-          for await (const chunk of modelProvider.complete(context, { signal: abortController.signal })) {
+          for await (const chunk of modelProvider.complete(context, { maxTokens: modelProviderConfig.maxTokens, signal: abortController.signal, jsonMode: true })) {
             fullReply += chunk
           }
         } else {
           // ─── 非流式模式 ──────────────────────────────────────
-          fullReply = await modelProvider.completeSync(context, { signal: abortController.signal })
+          fullReply = await modelProvider.completeSync(context, { maxTokens: modelProviderConfig.maxTokens, signal: abortController.signal, jsonMode: true })
         }
 
         // ─── 解析 JSON 回复，取出 reply 文本（emotion 解析见下方 parseSelfEmotion）───
         let replyText = fullReply
 
-        try {
-          const parsed = JSON.parse(fullReply)
-          replyText = parsed.reply ?? fullReply
-        } catch {
-          // 模型没有返回 JSON，直接用原文——§3.9 既有降级风格保持不变：拦截类只挡空正文，
-          // 不要求回复必须是合法 JSON（TDD §3.8「与 §3.9 降级风格的边界」）
-        }
+        // parseJsonSalvage 在直接 JSON.parse 失败时会再尝试代码块内容 / 贪婪花括号匹配兜底
+        // （见 util/jsonSalvage.ts，Ollama 本地模型/DeepSeek 常见的 ```json 围栏输出就靠这一步
+        // 救回来），全部失败时返回 undefined——降级行为与此前完全一致：直接用原文，§3.9 既有
+        // 降级风格不变，拦截类只挡空正文，不要求回复必须是合法 JSON
+        // （TDD §3.8「与 §3.9 降级风格的边界」）
+        const parsed = parseJsonSalvage(fullReply) as any
+        replyText = parsed?.reply ?? fullReply
 
         // ─── 回复检查·拦截类（TDD §3.8「回复检查」）：reply 正文去掉首尾空白后为空则不入库。
         // 命中时三件事一起做：console.error 定位是哪个模型哪次调用返的空、不 addMessage

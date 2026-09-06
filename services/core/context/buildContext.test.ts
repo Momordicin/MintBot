@@ -323,6 +323,13 @@ describe('buildContext — 输出契约块（Part C，TDD §3.9/§3.7）', () =>
     expect(ctx.system).toContain(JSON_CONTRACT_MARKER)
   })
 
+  // 硬前置条件（不是软性提示）：OpenAI/DeepSeek 的 response_format: json_object 
+  // 模式要求 assembled system prompt 里必须含有 json 字样（大小写不敏感），否则会报错
+  it('system 提示词必须包含 "json" 字样（大小写不敏感），这是 OpenAI/DeepSeek json_object 模式的硬前置条件', async () => {
+    const ctx = await buildContext('你好', { embedding: fakeEmbeddingProvider() })
+    expect(ctx.system).toMatch(/json/i)
+  })
+
   it('角色包无 manifest（char-001 无对应目录）时，不注入情绪标签/表情 tag 枚举行', async () => {
     const ctx = await buildContext('你好', { embedding: fakeEmbeddingProvider() })
     expect(ctx.system).not.toContain('可用的情绪标签')

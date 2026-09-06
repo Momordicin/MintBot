@@ -154,6 +154,41 @@ describe('extractEntities — 双时态实体变更（Layer 3）', () => {
     expect(result.inserted).toBe(1)
     expect(getCurrentEntities('s1')[0].value).toBe('工作单位:新公司')
   })
+
+  it('主模型回复被 ```json 代码块包裹时，仍能正确解析出变更（parseLayer3Response 通过共用的 parseJsonSalvage 兜底）', async () => {
+    const oldId = insertEntity({ messageId: 1, sessionId: 's1', type: 'other', value: '工作单位:旧公司', validFrom: 1000 })
+    const msg = addMessage('s1', '我现在在新公司工作了', 5000)
+
+    const fenced = '```json\n' + JSON.stringify({
+      changes: [{ messageId: msg.id, type: 'other', oldValue: '工作单位:旧公司', newValue: '工作单位:新公司' }],
+    }) + '\n```'
+
+    const result = await extractEntities([msg], { ner: emptyNer(), model: modelReturning(fenced) })
+
+    expect(result.closed).toBe(1)
+    expect(result.inserted).toBe(1)
+    const oldRow = db.prepare(`SELECT * FROM MessageEntities WHERE id = ?`).get(oldId) as any
+    expect(oldRow.validUntil).not.toBeNull()
+  })
+
+  it('主模型调用带上 maxTokens（读自 backgroundModelProvider 配置，未覆盖时回落到 1000），而不是被硬编码遗漏', async () => {
+    const msg = addMessage('s1', '普通消息', 5000)
+    let capturedOptions: { maxTokens?: number } | undefined
+    const capturingModel: EntityModelProvider = {
+      async completeSync(_context, options) {
+        capturedOptions = options
+        return '{"changes":[]}'
+      },
+    }
+
+    await extractEntities([msg], { ner: emptyNer(), model: capturingModel })
+
+    // 测试环境没有 mock ../config/index.js（真实读取仓库根目录 config.json，其中未配置
+    // backgroundModelProvider.maxTokens），因此这里断言的是 fallback 到默认值 1000 这条路径；
+    // “读到非默认配置值”这一半已经在 summarizer.test.ts / characterImport.test.ts 用
+    // mock 过的 getBackgroundModelProviderConfig() 覆盖过
+    expect(capturedOptions).toEqual({ maxTokens: 1000 })
+  })
 })
 
 describe('extractEntities — 分层容错（每层独立失败）', () => {

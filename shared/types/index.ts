@@ -12,6 +12,8 @@ export interface ModelConfig {
   ollamaBaseUrl?: string
   ollamaModel?: string
   modelName?: string
+  maxTokens?: number   // max_tokens 上限，对话和整理模式公用，空值默认各自落回1000
+  
 }
 
 export interface ToolSchema {
@@ -176,4 +178,9 @@ export interface CompletionOptions {
   maxTokens?: number
   temperature?: number
   signal?: AbortSignal  // 用于中断流式请求（Phase 6 预留）
+  // 向模型发信json格式化的显式开关 
+  // 对不满足格式条件的调用开启
+  // response_format: json_object 会导致 OpenAI 400 或 DeepSeek 输出空白直到耗尽 token 预算
+  // 因此只有 chat.ts 的对话链路显式传 true，其余调用方默认关闭
+  jsonMode?: boolean
 }

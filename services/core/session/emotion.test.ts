@@ -39,6 +39,14 @@ describe('parseSelfEmotion', () => {
     const raw = JSON.stringify({ reply: '你好', emotion: { self: { label: 'happy', intensity: '0.7' } } })
     expect(parseSelfEmotion(raw)).toBeNull()
   })
+
+  it('```json 代码块包裹：兜底解析出 self 情绪（本地模型/DeepSeek 常见输出形式）', () => {
+    const raw = '```json\n' + JSON.stringify({
+      reply: '今天怎么样？',
+      emotion: { self: { label: 'curious', intensity: 0.7 }, perceived_user: null },
+    }) + '\n```'
+    expect(parseSelfEmotion(raw)).toEqual({ label: 'curious', intensity: 0.7 })
+  })
 })
 
 describe('parseEmoteTag', () => {
@@ -61,5 +69,10 @@ describe('parseEmoteTag', () => {
 
   it('非 JSON：返回 null', () => {
     expect(parseEmoteTag('不是 JSON 的普通回复')).toBeNull()
+  })
+
+  it('```json 代码块包裹：兜底解析出 emote tag', () => {
+    const raw = '```json\n' + JSON.stringify({ reply: '好呀', emote: 'playful' }) + '\n```'
+    expect(parseEmoteTag(raw)).toBe('playful')
   })
 })

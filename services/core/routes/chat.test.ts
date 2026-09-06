@@ -11,6 +11,7 @@ import { chatRoutes } from './chat.js'
 import * as ModelProviderModule from '../providers/ModelProvider.js'
 import * as BuildContextModule from '../context/buildContext.js'
 import * as BroadcastModule from '../events/broadcast.js'
+import * as ConfigModule from '../config/index.js'
 import type { ModelProvider } from '../providers/ModelProvider.js'
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
 
@@ -837,6 +838,89 @@ describe('POST /chat', () => {
       { role: 'user', content: '第一条' },
       { role: 'assistant', content: '第一条回复' },
     ])
+  })
+})
+
+describe('POST /chat — max_tokens 配置入口（Fix 2）', () => {
+  it('modelProvider 配置里的 maxTokens 会透传给 completeSync/complete 的 options', async () => {
+    loadSession('p1')
+    const completeSyncMock = vi.fn(async () => JSON.stringify({ reply: '嗯嗯' }))
+    const createSpy = vi.spyOn(ModelProviderModule, 'createModelProviderForPreset')
+      .mockReturnValue({ completeSync: completeSyncMock } as unknown as ModelProvider)
+    vi.mocked(ConfigModule.getModelProviderConfig).mockReturnValueOnce({
+      type: 'ollama', ollamaModel: 'qwen3', maxTokens: 2000,
+    })
+
+    try {
+      const fastify = Fastify()
+      fastify.decorate('streamingEnabled', false)
+      fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
+      await fastify.register(chatRoutes)
+
+      await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+
+      expect(completeSyncMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ maxTokens: 2000 }),
+      )
+    } finally {
+      createSpy.mockRestore()
+    }
+  })
+
+  it('未配置 maxTokens 时，透传 undefined（各 ModelProvider 调用点自行回落到既有默认值 1000，行为不变）', async () => {
+    loadSession('p1')
+    const completeSyncMock = vi.fn(async () => JSON.stringify({ reply: '嗯嗯' }))
+    const createSpy = vi.spyOn(ModelProviderModule, 'createModelProviderForPreset')
+      .mockReturnValue({ completeSync: completeSyncMock } as unknown as ModelProvider)
+
+    try {
+      const fastify = Fastify()
+      fastify.decorate('streamingEnabled', false)
+      fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
+      await fastify.register(chatRoutes)
+
+      await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+
+      expect(completeSyncMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ maxTokens: undefined }),
+      )
+    } finally {
+      createSpy.mockRestore()
+    }
+  })
+})
+
+describe('POST /chat — JSON 解析兜底（parseJsonSalvage，本地模型/DeepSeek 常见的代码块包裹输出）', () => {
+  it('模型回复整体被 ```json 代码块包裹时，reply/emotion/emote 仍能正常解析出来，不再把整段 JSON 原文当成聊天气泡', async () => {
+    const { session } = loadSession('p1')
+    const fenced = '```json\n' + JSON.stringify({
+      reply: '你好呀',
+      emotion: { self: { label: 'happy', intensity: 0.8 } },
+      emote: 'playful',
+    }) + '\n```'
+    const { fastify } = await buildTestApp(fenced)
+
+    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+    const events = parseSSE(response.payload)
+    const messageDone = events.find(e => e.event === 'message_done')
+    const emotion = events.find(e => e.event === 'emotion')
+
+    expect(messageDone?.data.text).toBe('你好呀')
+    expect(emotion?.data).toMatchObject({
+      self: { label: 'happy', intensity: 0.8 },
+      sessionId: session.sessionId,
+    })
+  })
+
+  it('模型回复真的不是 JSON（无花括号）时，仍降级为原文兜底，不报错', async () => {
+    const { fastify } = await buildTestApp('这不是 JSON 的普通回复')
+
+    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+    const messageDone = parseSSE(response.payload).find(e => e.event === 'message_done')
+
+    expect(messageDone?.data.text).toBe('这不是 JSON 的普通回复')
   })
 })
 

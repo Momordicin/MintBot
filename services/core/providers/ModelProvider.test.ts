@@ -278,3 +278,120 @@ describe('deepseek 默认值', () => {
     expect(body.model).toBe('deepseek-v4-flash')
   })
 })
+
+// provider-capability 落地：response_format: json_object（openai/deepseek/ollama，jsonMode 开关）、
+// OpenAI 专属 max_completion_tokens 参数名、DeepSeek 专属 thinking: disabled
+// anthropic 分支开发中
+describe('provider 专属请求体覆盖（response_format / max_completion_tokens / thinking）', () => {
+  const context: BuiltContext = { system: '', messages: [{ role: 'user', content: 'hi' }] }
+
+  it('openai 分支：请求体用 max_completion_tokens，不再是 max_tokens（reasoning 系模型会拒绝后者）', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(fakeStreamResponse())
+    vi.stubGlobal('fetch', fetchSpy)
+    const provider = createModelProvider({ type: 'openai', modelName: 'gpt-4o-mini', openaiApiKey: 'key' })
+
+    for await (const _chunk of provider.complete(context, { maxTokens: 500 })) {
+      // 只需要触发 fetch 调用
+    }
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
+    expect(body.max_completion_tokens).toBe(500)
+    expect(body.max_tokens).toBeUndefined()
+  })
+
+  it('openai 分支：jsonMode 未传时请求体不带 response_format（避免误伤不支持 JSON 模式的旧模型/不需要 JSON 输出的调用）', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(fakeStreamResponse())
+    vi.stubGlobal('fetch', fetchSpy)
+    const provider = createModelProvider({ type: 'openai', modelName: 'gpt-4o-mini', openaiApiKey: 'key' })
+
+    for await (const _chunk of provider.complete(context)) {
+      // 只需要触发 fetch 调用
+    }
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
+    expect(body.response_format).toBeUndefined()
+  })
+
+  it('openai 分支：jsonMode 为 true 时请求体带 response_format: json_object', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(fakeStreamResponse())
+    vi.stubGlobal('fetch', fetchSpy)
+    const provider = createModelProvider({ type: 'openai', modelName: 'gpt-4o-mini', openaiApiKey: 'key' })
+
+    for await (const _chunk of provider.complete(context, { jsonMode: true })) {
+      // 只需要触发 fetch 调用
+    }
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
+    expect(body.response_format).toEqual({ type: 'json_object' })
+  })
+
+  it('deepseek 分支：请求体始终带 thinking: disabled（与 jsonMode 无关，V4 默认开启的推理必须显式关掉），max_tokens 参数名不变', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(fakeStreamResponse())
+    vi.stubGlobal('fetch', fetchSpy)
+    const provider = createModelProvider({ type: 'deepseek', deepseekApiKey: 'sk-deepseek' })
+
+    for await (const _chunk of provider.complete(context)) {
+      // 只需要触发 fetch 调用
+    }
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
+    expect(body.thinking).toEqual({ type: 'disabled' })
+    expect(body.max_tokens).toBe(1000)
+    expect(body.max_completion_tokens).toBeUndefined()
+    expect(body.response_format).toBeUndefined()
+  })
+
+  it('deepseek 分支：jsonMode 为 true 时额外带 response_format: json_object（thinking 仍然同时存在）', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(fakeStreamResponse())
+    vi.stubGlobal('fetch', fetchSpy)
+    const provider = createModelProvider({ type: 'deepseek', deepseekApiKey: 'sk-deepseek' })
+
+    for await (const _chunk of provider.complete(context, { jsonMode: true })) {
+      // 只需要触发 fetch 调用
+    }
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
+    expect(body.thinking).toEqual({ type: 'disabled' })
+    expect(body.response_format).toEqual({ type: 'json_object' })
+  })
+
+  it('ollama 分支：不带 thinking（DeepSeek 专属），max_tokens 参数名不变（/v1 兼容层只认这个旧名字），jsonMode 为 true 时带 response_format', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(fakeStreamResponse())
+    vi.stubGlobal('fetch', fetchSpy)
+    const provider = createModelProvider({ type: 'ollama', ollamaModel: 'qwen3' })
+
+    for await (const _chunk of provider.complete(context, { jsonMode: true })) {
+      // 只需要触发 fetch 调用
+    }
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
+    expect(body.thinking).toBeUndefined()
+    expect(body.max_tokens).toBe(1000)
+    expect(body.max_completion_tokens).toBeUndefined()
+    expect(body.response_format).toEqual({ type: 'json_object' })
+  })
+
+  it('completeSync（非流式）路径同样生效：openai 用 max_completion_tokens，jsonMode 为 true 带 response_format', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(fakeNonStreamResponse('reply'))
+    vi.stubGlobal('fetch', fetchSpy)
+    const provider = createModelProvider({ type: 'openai', modelName: 'o1', openaiApiKey: 'key' })
+
+    await provider.completeSync(context, { maxTokens: 200, jsonMode: true })
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
+    expect(body.max_completion_tokens).toBe(200)
+    expect(body.max_tokens).toBeUndefined()
+    expect(body.response_format).toEqual({ type: 'json_object' })
+  })
+
+  it('completeSync（非流式）路径同样生效：deepseek 始终带 thinking: disabled', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(fakeNonStreamResponse('reply'))
+    vi.stubGlobal('fetch', fetchSpy)
+    const provider = createModelProvider({ type: 'deepseek', deepseekApiKey: 'sk-deepseek' })
+
+    await provider.completeSync(context)
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
+    expect(body.thinking).toEqual({ type: 'disabled' })
+  })
+})

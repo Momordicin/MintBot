@@ -1,6 +1,14 @@
 import Anthropic from '@anthropic-ai/sdk'
 import type { ChatMessage, ModelConfig, CompletionOptions, BuiltContext, Preset } from '../../../shared/types/index.js'
 
+// callOpenAICompatible(Sync) 对三个 provider 类型（openai/deepseek/ollama）保持无差别的
+// 请求体构造，唯二真正因 provider 而异的两处（max_tokens 参数名、额外请求体字段）由
+// 各自的 xxxRequestOverrides 静态方法产出，通过这个结构体传入
+interface OpenAICompatibleOverrides {
+  maxTokensParam?: 'max_tokens' | 'max_completion_tokens'
+  extraBody?: Record<string, unknown>
+}
+
 export class ModelProvider {
   private config: ModelConfig
 
@@ -137,7 +145,8 @@ export class ModelProvider {
       this.config.openaiApiKey ?? 'no-key',
       this.config.modelName ?? 'gpt-4o',
       messages,
-      options
+      options,
+      ModelProvider.openAIRequestOverrides(options)
     )
   }
 
@@ -152,7 +161,8 @@ export class ModelProvider {
       this.config.deepseekApiKey ?? 'no-key',
       this.config.modelName ?? 'deepseek-v4-flash',
       messages,
-      options
+      options,
+      ModelProvider.deepSeekRequestOverrides(options)
     )
   }
 
@@ -167,7 +177,8 @@ export class ModelProvider {
       'ollama',
       this.config.ollamaModel ?? 'qwen3',
       messages,
-      options
+      options,
+      ModelProvider.ollamaRequestOverrides(options)
     )
   }
 
@@ -182,7 +193,8 @@ export class ModelProvider {
       this.config.openaiApiKey ?? 'no-key',
       this.config.modelName ?? 'gpt-4o',
       messages,
-      options
+      options,
+      ModelProvider.openAIRequestOverrides(options)
     )
   }
 
@@ -197,7 +209,8 @@ export class ModelProvider {
       this.config.deepseekApiKey ?? 'no-key',
       this.config.modelName ?? 'deepseek-v4-flash',
       messages,
-      options
+      options,
+      ModelProvider.deepSeekRequestOverrides(options)
     )
   }
 
@@ -212,8 +225,42 @@ export class ModelProvider {
       'ollama',
       this.config.ollamaModel ?? 'qwen3',
       messages,
-      options
+      options,
+      ModelProvider.ollamaRequestOverrides(options)
     )
+  }
+
+  // ─── OpenAI 兼容接口的按 provider 差异化请求覆盖项 ───────────────────
+  // callOpenAICompatible(Sync) 本身对三个 provider 类型保持无差别（这正是它存在的意义），
+  // 差异全部收在这三个静态方法里，以 { maxTokensParam, extraBody } 的形式传入，
+  // 而不是在共用函数内部 if-else 判断 provider 类型——这样共用函数完全不需要知道
+  // 调用方是谁，新增/调整某个 provider 的专属参数只需要改对应这一个方法
+
+  // OpenAI：reasoning 系模型（o-series）拒绝 max_tokens，新旧模型都认 max_completion_tokens
+  private static openAIRequestOverrides(options: CompletionOptions): OpenAICompatibleOverrides {
+    return {
+      maxTokensParam: 'max_completion_tokens',
+      extraBody: options.jsonMode ? { response_format: { type: 'json_object' } } : undefined,
+    }
+  }
+
+  // DeepSeek：V4 默认以 "high" effort 开启推理，显式关闭才是真正的轻量调用
+  // （用户原话「DeepSeek 用最轻的模型就行」，仅换轻量模型不够，还需要关掉默认开启的推理）；
+  // max_tokens 是 DeepSeek 文档唯一记载的参数名，不改
+  private static deepSeekRequestOverrides(options: CompletionOptions): OpenAICompatibleOverrides {
+    return {
+      extraBody: {
+        thinking: { type: 'disabled' },
+        ...(options.jsonMode ? { response_format: { type: 'json_object' } } : {}),
+      },
+    }
+  }
+
+  // Ollama：/v1 兼容层只翻译 max_tokens → num_predict，不认新参数名，不改
+  private static ollamaRequestOverrides(options: CompletionOptions): OpenAICompatibleOverrides {
+    return {
+      extraBody: options.jsonMode ? { response_format: { type: 'json_object' } } : undefined,
+    }
   }
 
   // OpenAI 兼容接口调用
@@ -223,8 +270,10 @@ export class ModelProvider {
     apiKey: string,
     model: string,
     messages: ChatMessage[],
-    options: CompletionOptions
+    options: CompletionOptions,
+    overrides: OpenAICompatibleOverrides = {}
   ): AsyncIterable<string> {
+    const maxTokensParam = overrides.maxTokensParam ?? 'max_tokens'
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -232,8 +281,13 @@ export class ModelProvider {
         'Authorization': `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
+        // extraBody 放在最前面展开，让下面这几个共用函数刻意设置的键（model/max_tokens 参数名/
+        // stream/messages）始终生效、不被 extraBody 意外覆盖——今天各 provider 的 extraBody
+        // （response_format、thinking）都不会撞这几个键名，但这只是现状，不是保证；调换成
+        // "共用键在后"是让这一点显式成为不变式，而不是靠"暂时没撞上"侥幸维持
+        ...overrides.extraBody,
         model,
-        max_tokens: options.maxTokens ?? 1000,
+        [maxTokensParam]: options.maxTokens ?? 1000,
         stream: true,
         messages: messages.map(m => ({
           role: m.role,
@@ -281,8 +335,10 @@ export class ModelProvider {
     apiKey: string,
     model: string,
     messages: ChatMessage[],
-    options: CompletionOptions
+    options: CompletionOptions,
+    overrides: OpenAICompatibleOverrides = {}
   ): Promise<string> {
+    const maxTokensParam = overrides.maxTokensParam ?? 'max_tokens'
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -290,8 +346,10 @@ export class ModelProvider {
         'Authorization': `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
+        // extraBody 放在最前面展开，理由同上面 callOpenAICompatible（流式）那份同款请求体构造
+        ...overrides.extraBody,
         model,
-        max_tokens: options.maxTokens ?? 1000,
+        [maxTokensParam]: options.maxTokens ?? 1000,
         stream: false,
         messages: messages.map(m => ({
           role: m.role,

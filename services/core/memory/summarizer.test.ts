@@ -6,6 +6,9 @@ import { shouldTriggerSummary, generateSummary, type SummaryModelProvider } from
 
 // lockScreenMinutes / messageCountThreshold 现在来自独立 config 模块，mock 成与迁移前硬编码
 // 常量完全一致的值（60 / 50），保证本文件已有的真值表断言继续成立
+// backgroundModelProviderMaxTokens：让下面「maxTokens 来自 backgroundModelProvider 配置」的
+// 用例能覆盖非默认值；其余用例不关心这个字段，undefined 时 generateSummary 自己回落到 1000
+let backgroundModelProviderMaxTokens: number | undefined
 vi.mock('../config/index.js', () => ({
   getMemoryConfig: () => ({
     recentTrackMaxMessages: 50,
@@ -15,11 +18,13 @@ vi.mock('../config/index.js', () => ({
     summaryTrigger: { pendingCountThreshold: 100, oldestPendingAgeMinutes: 120, messageCountThreshold: 50, lockScreenMinutes: 60, minMessagesForLockTrigger: 4 },
     contextBudget: { total: 8000, systemPrompt: 1000, summary: 1500, rag: 2000, recentMessages: 3000, responseReserve: 500 },
   }),
+  getBackgroundModelProviderConfig: () => ({ type: 'ollama', maxTokens: backgroundModelProviderMaxTokens }),
 }))
 
 initDb()
 beforeEach(() => {
   db.exec(`DELETE FROM Messages; DELETE FROM Summaries;`)
+  backgroundModelProviderMaxTokens = undefined
 })
 
 function addMessage(sessionId: string, content: string, createdAt: number): number {
@@ -35,6 +40,19 @@ function modelReturning(text: string): SummaryModelProvider {
 
 function throwingModel(): SummaryModelProvider {
   return { async completeSync() { throw new Error('model boom') } }
+}
+
+function modelCapturingOptions(): { model: SummaryModelProvider; options: Array<{ maxTokens?: number } | undefined> } {
+  const options: Array<{ maxTokens?: number } | undefined> = []
+  return {
+    model: {
+      async completeSync(_context, opts) {
+        options.push(opts)
+        return '摘要'
+      },
+    },
+    options,
+  }
 }
 
 describe('shouldTriggerSummary — 组合规则真值表', () => {
@@ -148,5 +166,26 @@ describe('generateSummary', () => {
     const messages = db.prepare(`SELECT * FROM Messages WHERE sessionId = ?`).all(sessionId) as any[]
     expect(messages.every(m => m.summarized === 0)).toBe(true)
     expect(db.prepare(`SELECT COUNT(*) as count FROM Summaries`).get() as any).toEqual({ count: 0 })
+  })
+
+  it('maxTokens 未配置 backgroundModelProvider 覆盖时，回落到默认值 1000', async () => {
+    const sessionId = 's1'
+    addMessage(sessionId, '我喜欢猫', 1000)
+    const { model, options } = modelCapturingOptions()
+
+    await generateSummary(sessionId, { model })
+
+    expect(options).toEqual([{ maxTokens: 1000 }])
+  })
+
+  it('maxTokens 读取 backgroundModelProvider 配置的值，而不是硬编码 1000', async () => {
+    backgroundModelProviderMaxTokens = 3000
+    const sessionId = 's1'
+    addMessage(sessionId, '我喜欢猫', 1000)
+    const { model, options } = modelCapturingOptions()
+
+    await generateSummary(sessionId, { model })
+
+    expect(options).toEqual([{ maxTokens: 3000 }])
   })
 })

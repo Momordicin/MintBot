@@ -4,6 +4,7 @@ import fs from 'fs'
 import crypto from 'crypto'
 import { parseCharacterCard } from '../characters/cardImport.js'
 import { CHARACTERS_ROOT } from '../characters/manifest.js'
+import { getBackgroundModelProviderConfig } from '../config/index.js'
 import type { BuiltContext, CompletionOptions } from '../../../shared/types/index.js'
 
 // 角色卡导入（docs/MintBot_TDD.md §3.7 附「角色卡导入」）的四个路由：
@@ -56,7 +57,9 @@ async function generateCardSystemPrompt(
   deps: { model: CardGenerationModelProvider }
 ): Promise<string> {
   const context = buildCardGenerationContext(fields)
-  return deps.model.completeSync(context, { maxTokens: 1000 })
+  // maxTokens 读自 backgroundModelProvider 配置（未单独配置时 getBackgroundModelProviderConfig()
+  // 自身会 fallback 到 modelProvider），而不是硬编码 1000——理由同 summarizer.ts generateSummary
+  return deps.model.completeSync(context, { maxTokens: getBackgroundModelProviderConfig().maxTokens ?? 1000 })
 }
 
 // config/index.ts 的 writeConfigSection 同款"读整份原始 JSON，只替换自己拥有的 key，

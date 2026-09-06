@@ -1,6 +1,8 @@
 import { insertEntity, getCurrentEntities, closeEntity } from '../session/queries.js'
 import type { NERProvider } from '../providers/NERProvider.js'
 import type { Message, MessageEntity, BuiltContext, CompletionOptions } from '../../../shared/types/index.js'
+import { parseJsonSalvage } from '../util/jsonSalvage.js'
+import { getBackgroundModelProviderConfig } from '../config/index.js'
 
 // 三层实体抽取（TDD §3.8 原子记忆提取 / §3.6 实体聚合结果加密）。
 // 只负责"给定一批消息 → 抽取实体 → 双时态落库"，不负责触发时机（整理模式调度、
@@ -220,15 +222,12 @@ function isValidChange(c: unknown): c is Layer3Change {
 }
 
 // 防御性解析：模型可能返回带 markdown 代码块包裹的 JSON，也可能返回完全畸形的内容。
-// 任何解析失败都会向上抛出，由调用方捕获后跳过整个 Layer 3。
+// 解析兜底逻辑集中在 util/jsonSalvage.ts（chat.ts / session/emotion.ts 共用同一份实现，
+// 不再各自维护一份贪婪花括号正则）。任何解析失败都会向上抛出，由调用方捕获后跳过整个 Layer 3。
 function parseLayer3Response(raw: string): { changes: Layer3Change[] } {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    const match = raw.match(/\{[\s\S]*\}/)
-    if (!match) throw new Error('[EntityExtractor] layer3 response contains no JSON object')
-    parsed = JSON.parse(match[0])
+  const parsed = parseJsonSalvage(raw)
+  if (parsed === undefined) {
+    throw new Error('[EntityExtractor] layer3 response contains no JSON object')
   }
 
   if (typeof parsed !== 'object' || parsed === null) {
@@ -319,7 +318,9 @@ export async function extractEntities(
   let changes: Layer3Change[] = []
   try {
     const context = buildLayer3Context(userMessages, selectLayer3Candidates(currentEntitiesForPrompt))
-    const raw = await deps.model.completeSync(context, { maxTokens: 1000 })
+    // maxTokens 读自 backgroundModelProvider 配置（未单独配置时 getBackgroundModelProviderConfig()
+    // 自身会 fallback 到 modelProvider），而不是硬编码 1000——理由同 summarizer.ts generateSummary
+    const raw = await deps.model.completeSync(context, { maxTokens: getBackgroundModelProviderConfig().maxTokens ?? 1000 })
     const parsed = parseLayer3Response(raw)
     changes = parsed.changes
   } catch (err) {

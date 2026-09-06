@@ -256,6 +256,45 @@ describe('PATCH /config/model — 校验', () => {
     expect(JSON.stringify(body)).not.toContain('sk-deepseek')
   })
 
+  it('maxTokens 非整数/超出 [1, 32000] 范围时返回 400', async () => {
+    getModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'qwen3' })
+    const fastify = await buildTestApp()
+
+    for (const badValue of [0, -5, 32001, 1.5]) {
+      const response = await fastify.inject({
+        method: 'PATCH',
+        url: '/config/model',
+        payload: { modelProvider: { maxTokens: badValue } },
+      })
+      expect(response.statusCode).toBe(400)
+    }
+    expect(updateModelProviderConfigMock).not.toHaveBeenCalled()
+  })
+
+  it('maxTokens 在合法范围内时通过校验、写入成功，且 GET/PATCH 响应里能读到写回的值（PATCH pick-list 陷阱的真实往返验证，而非只读代码列表）', async () => {
+    getModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'qwen3' })
+    updateModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'qwen3', maxTokens: 2000 })
+    const fastify = await buildTestApp()
+
+    const patchResponse = await fastify.inject({
+      method: 'PATCH',
+      url: '/config/model',
+      payload: { modelProvider: { maxTokens: 2000 } },
+    })
+    const patchBody = JSON.parse(patchResponse.payload)
+
+    expect(patchResponse.statusCode).toBe(200)
+    expect(updateModelProviderConfigMock).toHaveBeenCalledWith({ maxTokens: 2000 })
+    expect(patchBody.modelProvider.maxTokens).toBe(2000)
+
+    // 独立一次 GET，确认写回的值不是只在 PATCH 响应里昙花一现——toSummary 用 ...rest 展开，
+    // 不是逐字段挑选列表，因此 maxTokens 不需要额外加进哪个白名单就能原样透传
+    getModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'qwen3', maxTokens: 2000 })
+    const getResponse = await fastify.inject({ method: 'GET', url: '/config/model' })
+    const getBody = JSON.parse(getResponse.payload)
+    expect(getBody.modelProvider.maxTokens).toBe(2000)
+  })
+
   it('合并已存的当前配置后满足必填字段时通过校验（partial 本身不含 modelName，但已存配置里有）', async () => {
     getModelProviderConfigMock.mockReturnValue({ type: 'anthropic', anthropicApiKey: 'sk-old', modelName: 'claude-3' })
     updateModelProviderConfigMock.mockReturnValue({ type: 'anthropic', anthropicApiKey: 'sk-new', modelName: 'claude-3' })
