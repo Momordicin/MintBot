@@ -70,13 +70,6 @@ export function animateTo(win: BrowserWindow, target: Electron.Rectangle): () =>
     Math.abs(target.width - start.width) > SIZE_DRIFT_TOLERANCE_PX ||
     Math.abs(target.height - start.height) > SIZE_DRIFT_TOLERANCE_PX
 
-  // ─── DIAG TEMP, DO NOT COMMIT ─── 验证尺寸稳定性与归位动画，验完请删
-  console.log(
-    `[AnimDiag] ${start.width}x${start.height} @${start.x},${start.y}` +
-      ` -> ${target.width}x${target.height} @${target.x},${target.y}` +
-      ` | sameDisplay=${sameDisplay} sizeChanged=${sizeChanged} animate=${!(sameDisplay || sizeChanged)}`
-  )
-  // ─── DIAG TEMP END ───
 
   if (sameDisplay || sizeChanged) {
     win.setBounds(target)
@@ -170,23 +163,6 @@ export function animateTo(win: BrowserWindow, target: Electron.Rectangle): () =>
         // 可能出现一次可见的尺寸跳变。TDD §3.7 已声明不支持不同缩放的多显示器，这属于该
         // 未支持场景在动画下的表现形式，不是本次改动引入的新缺陷
         win.setBounds(target)
-        // ─── DIAG TEMP, DO NOT COMMIT ─── 分辨尺寸增长发生在 setBounds→getBounds 往返内
-        // 还是动画结束之后的异步事件，验完请删
-        {
-          const immediate = win.getBounds()
-          console.log(
-            `[AnimDiag] leg2 end: wrote ${target.width}x${target.height},` +
-              ` immediate readback ${immediate.width}x${immediate.height}`
-          )
-          setTimeout(() => {
-            if (win.isDestroyed()) return
-            const later = win.getBounds()
-            console.log(
-              `[AnimDiag] +500ms after: ${later.width}x${later.height}`
-            )
-          }, 500)
-        }
-        // ─── DIAG TEMP END ───
         if (timer) clearTimeout(timer)
         removeGuards()
         if (activeCancel === snap) activeCancel = null
