@@ -2,7 +2,6 @@ import { insertEntity, getCurrentEntities, closeEntity } from '../session/querie
 import type { NERProvider } from '../providers/NERProvider.js'
 import type { Message, MessageEntity, BuiltContext, CompletionOptions } from '../../../shared/types/index.js'
 import { parseJsonSalvage } from '../util/jsonSalvage.js'
-import { getBackgroundModelProviderConfig } from '../config/index.js'
 
 // 三层实体抽取（TDD §3.8 原子记忆提取 / §3.6 实体聚合结果加密）。
 // 只负责"给定一批消息 → 抽取实体 → 双时态落库"，不负责触发时机（整理模式调度、
@@ -318,9 +317,13 @@ export async function extractEntities(
   let changes: Layer3Change[] = []
   try {
     const context = buildLayer3Context(userMessages, selectLayer3Candidates(currentEntitiesForPrompt))
-    // maxTokens 读自 backgroundModelProvider 配置（未单独配置时 getBackgroundModelProviderConfig()
-    // 自身会 fallback 到 modelProvider），而不是硬编码 1000——理由同 summarizer.ts generateSummary
-    const raw = await deps.model.completeSync(context, { maxTokens: getBackgroundModelProviderConfig().maxTokens ?? 1000 })
+    // 不显式传 maxTokens：deps.model 在 index.ts 组装时已经用 backgroundModelProvider 配置
+    // 构造好了（ModelProvider.resolveMaxTokens 的三级 fallback），这里不传等价于沿用那份配置
+    // 里的 maxTokens——理由同 summarizer.ts generateSummary。此前这里显式读取
+    // getBackgroundModelProviderConfig() 还有个副作用：未配置模型时它会抛出，而这里的 try/catch
+    // 只是为了兜底"Layer 3 这一步可选失败"，会把"没配置模型"这种应当可见的状态误吞成
+    // 一次无声跳过——现在不再读取，这个误吞连带消失
+    const raw = await deps.model.completeSync(context)
     const parsed = parseLayer3Response(raw)
     changes = parsed.changes
   } catch (err) {
