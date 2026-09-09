@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { shouldSkipOverlayDodge, decideOverlayDodge } from './windowBehavior'
+import { shouldSkipOverlayDodge, decideOverlayDodge, decideOverlayDodgeClear } from './windowBehavior'
 
 // 只测 handleOverlayDodge 的前置守卫/决策（纯函数）。本模块其余部分依赖真实
 // BrowserWindow/screen/activeWindowMonitor 轮询状态，需要真实 Electron 运行时才能验证，
@@ -58,5 +58,20 @@ describe('decideOverlayDodge', () => {
     // 覆盖点 (5)：needsToDodge 为 false，或者前台程序在白名单里——都不该躲避
     expect(decideOverlayDodge(false, false, 1, 1)).toEqual({ action: 'none' })
     expect(decideOverlayDodge(true, true, 1, 1)).toEqual({ action: 'none' })
+  })
+})
+
+// decideOverlayDodgeClear 覆盖"这一 tick 报告不需要躲避时，该不该结束当前躲避 episode"
+// 这个判断。它只看"是否还欠着一次躲避账"，不做任何显示器比较——已删除的 问题1b 门槛
+// （info.displayId === overlayDodgeSourceDisplayId）在**签名层面**就没有落脚点：函数只收
+// 一个参数，要把那道比较加回来必须先给导出函数加参数，那是一次会连带改调用点的签名变更。
+// 因此这两条测试不负责拦回归（拦不住也不该由它拦），只钉住这个决策的真值表。
+describe('decideOverlayDodgeClear', () => {
+  it('clears whenever there is an active dodge to account for', () => {
+    expect(decideOverlayDodgeClear(1)).toBe(true)
+  })
+
+  it('does not clear when there is no active dodge to account for', () => {
+    expect(decideOverlayDodgeClear(null)).toBe(false)
   })
 })

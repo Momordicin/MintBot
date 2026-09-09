@@ -418,6 +418,26 @@ export function decideOverlayDodge(
   return { action: 'dodge', excludeDisplayId: conflictDisplayId }
 }
 
+// handleOverlayDodge 判断"这一 tick 报告的前台窗口不需要躲避时，该不该结束当前躲避
+// episode（清掉 overlayDodgeSourceDisplayId 追踪状态 + 把当前屏幕采纳为下次启动的家）"
+// 的纯函数部分，跟 shouldSkipOverlayDodge/decideOverlayDodge 同一个理由抽出来单测。
+//
+// 清账只由"是否还欠着一次躲避账"（trackedDisplayId !== null）单独决定，跟前台窗口此刻在
+// 哪块屏幕完全无关。旧代码在这里要求 info.displayId === overlayDodgeSourceDisplayId 才清账
+// （历史原因见 handleOverlayDodge 调用点上方的注释：清账当年会连带触发 restoreToDisplay
+// 把悬浮窗拖回"家"，需要"家已经空出来了"的证据，而"前台窗口此刻就落在家那块屏幕上"是唯一
+// 能拿到的证据）；restoreToDisplay 从这条路径移除之后，那道门槛的存在依据也随之消失。
+//
+// ⚠️ 本函数刻意只收一个参数，不接收前台窗口所在的显示器——这跟 decideOverlayDodge 刻意
+// 不收跟踪值是同一手法：让"把那道显示器比较加回来"在签名里没有落脚点。曾经试过反向做法
+// （多收一个用不到的 foregroundDisplayId 当钩子，靠单测拦），review 指出那是**更弱**的
+// 保护：参数在场时，加回比较只是同一签名下的一行函数体修改，签名不变、调用点不动，没有
+// 任何东西迫使人重新读一遍这段注释；参数不在场时，必须先给一个导出函数加参数，那是一次
+// 会连带改调用点、必然形成 diff hunk 的签名变更。因此不要为了"方便测回归"把它加回来
+export function decideOverlayDodgeClear(trackedDisplayId: number | null): boolean {
+  return trackedDisplayId !== null
+}
+
 // 悬浮窗躲避逻辑。activeWindowMonitor 直接回传前台冲突窗口所在的 displayId（该字段在
 // ActiveWindowInfo 非空时必已解析，见该文件类型定义处注释）——躲避判断以它为准：只有
 // 悬浮窗自己当前所在的显示器与这个冲突显示器一致时才算被遮挡，需要挪走；冲突发生在别的
@@ -471,9 +491,13 @@ function handleOverlayDodge(info: ActiveWindowInfo, overlayWindow: BrowserWindow
       // 每个 tick 都无条件同步成本 tick 的冲突显示器（decision.excludeDisplayId 恒等于
       // info.displayId，见 decideOverlayDodge）——不再只在 === null 时赋值一次，见上方
       // overlayDodgeSourceDisplayId 声明处"曾经的缺陷②"：冲突中途换屏时，旧的一次性赋值
-      // 会让排除项过期。让这个变量随每个 tick 刷新还有一个顺带的好处：下面"冲突已解除"
-      // 分支里 info.displayId === overlayDodgeSourceDisplayId 的比较，比较的对象因此变成
-      // "最新已知的冲突显示器"，而不是钉死在第一次躲避那一刻的旧值，判断更准确
+      // 会让排除项过期。
+      //
+      // 这个变量现在只有一个消费方——decideOverlayDodgeClear 判断"是否还欠着一次躲避账"
+      // （trackedDisplayId !== null），不再关心它具体记的是哪块显示器，因此"冲突中途换屏
+      // 导致这个值不再等于最初进入躲避那一刻的显示器"不会造成任何问题（历史上"冲突已解除"
+      // 分支曾经会拿它跟前台窗口所在的显示器比较，那道比较已经在本轮改动中移除，见该分支
+      // 注释）
       overlayDodgeSourceDisplayId = decision.excludeDisplayId
       // moveToNonFullscreenDisplay 现在完全自己查表/算默认值（见该函数注释），不再需要
       // 调用方传入现场读数当基准
@@ -500,20 +524,35 @@ function handleOverlayDodge(info: ActiveWindowInfo, overlayWindow: BrowserWindow
       }
     }
   } else {
-    // 问题1b：只有前台窗口确实落在"家"（进入躲避前所在）那块屏幕上，才认定冲突解除、可以
-    // 归位——否则保持当前已经躲避到的位置不变（既不归位，也不重新计算新的跳屏目标：已经
-    // 在一个安全的地方了，对"家"那块屏幕现状没有任何新信息之前不需要动）。
+    // 问题1b 的历史（记录，不是现行逻辑）：这道"前台窗口是否落在家那块屏幕上"的门槛曾经
+    // 存在，是因为当年清账会连带调用 restoreToDisplay，把悬浮窗拖回冲突前所在的"家"——那个
+    // 归位动作只有在"家"确实空出来了才安全，而"前台窗口此刻恰好落在家那块屏幕上"是唯一能
+    // 拿到的证据（activeWindowMonitor 一次只报告一个前台窗口）。restoreToDisplay 后来被
+    // 移除——清账现在只是原地不动 + 记账（见下面 setLastDisplayId 那两行），不再归位，这道
+    // 门槛的存在依据随之消失，它现在唯一还剩的效果是拖住/挡住清账本身。
     //
-    // 用户报告的缺陷：冲突解除后不再调用 restoreToDisplay 把悬浮窗拖回"家"（原来那块屏，
-    // 也正是刚刚全屏过的那块）。悬浮窗此刻已经稳定停在跳屏目标屏上——这本身就是一块没有
-    // 冲突的好屏幕，拖回去没有任何必要，只会制造一次可见的"飞回"。改为原地不动，只清掉
-    // 追踪状态；同时把当前所在的屏幕采纳为下次启动的"家"（setLastDisplayId），
-    // 而不是让 lastDisplayId 继续指向已经离开的那块屏——否则下次启动会把悬浮窗放回
-    // 用户已经主动"搬家"离开的位置
-    if (overlayDodgeSourceDisplayId !== null && info.displayId === overlayDodgeSourceDisplayId) {
-      setLastDisplayId('overlay', screen.getDisplayMatching(overlayWindow.getBounds()).id)
-      overlayDodgeSourceDisplayId = null
-    }
+    // 而且这道门槛在跨屏 episode 里已经不可能稳定命中：overlayDodgeSourceDisplayId 现在
+    // 每个 tick 都刷新成当前冲突所在的显示器（见该变量声明处"曾经的缺陷②"），若冲突在
+    // episode 中途换过屏、又在换到的新屏幕上解除，前台窗口这一刻大概率不在
+    // overlayDodgeSourceDisplayId 记的那块屏上——比较永远不命中：setLastDisplayId 被跳过
+    // （下次启动的"家"沿用一块用户早已离开的旧屏幕），overlayDodgeSourceDisplayId 也永远
+    // 清不掉（连带让 isDodgeParked('overlay') 卡在 true，永久压住悬浮窗位置持久化，见该
+    // 函数注释）。
+    //
+    // 现在的条件：走到这个 else 分支本身就已经意味着"这一 tick 不需要为当前前台窗口躲避"
+    // （要么不是全屏/黑名单，要么在白名单里）——这就是冲突解除的全部证据，不需要也不应该
+    // 再额外核对前台窗口在哪块屏幕。是否结束 episode 只取决于"此刻是否还欠着一次躲避账"
+    // （overlayDodgeSourceDisplayId !== null，语义见 shouldSkipOverlayDodge 注释）。抽成
+    // decideOverlayDodgeClear 纯函数并单测，钉住"不做显示器比较"这一点，防止这道门槛被
+    // 悄悄加回来（见该函数头注释）。
+    //
+    // 执行顺序也从"先清账、再兜底显示"改成"先兜底显示、再清账"：
+    // overlayDodgeSourceDisplayId !== null 的真正含义是"我因为躲避把这个悬浮窗藏起来/挪走
+    // 过，还欠它一次重新显示"（shouldSkipOverlayDodge 正是靠这个语义才能在"隐藏但仍在追踪"
+    // 时放行）——先兑现这笔债，再清掉记账，就不会存在"账已经清了、但还没补显示"的一 tick
+    // 空窗。showInactive() 不移动窗口，不影响下面 setLastDisplayId 要读的
+    // getBounds()，两步顺序对调是安全的。
+    //
     // 已核实 showInactive 走 ShowWindow(SW_SHOWNOACTIVATE)，不像 setAlwaysOnTop 那样必然
     // 带一次 SetWindowPos；但 ShowWindow 对"已经可见"的窗口是否触碰 z-order 微软文档未
     // 定义，不能假设它是安全的 no-op。这里每次 onChange 只要判定不需要躲避就会走到这一行，
@@ -526,10 +565,29 @@ function handleOverlayDodge(info: ActiveWindowInfo, overlayWindow: BrowserWindow
     // 只给它的 showInactive 加可见性守卫遮不住 setBounds，收益接近零。真要收敛那一支，
     // 该做的是给 moveToNonFullscreenDisplay 加位置幂等判断，那是另一件事。
     //
-    // chatFocused 守卫则两支都要加，同一个理由：冲突解除、归位完成的这一刻，如果聊天
-    // 窗口恰好持有焦点，仍然不能把悬浮窗重新显示出来（同函数头注释的 BLOCKER）
+    // chatFocused 守卫则两支都要加，同一个理由：冲突解除的这一刻，如果聊天窗口恰好持有
+    // 焦点，仍然不能把悬浮窗重新显示出来（同函数头注释的 BLOCKER）。
+    //
+    // 已知遗留（记录，不在本轮修复范围内）：如果 episode 恰好是在 chatFocused === true 时
+    // 解除的，上面这一步会跳过、悬浮窗保持隐藏，下面仍然照常清账——这是刻意的，此刻的可见性
+    // 归"聊天窗口持有焦点时收起悬浮窗"这条规则管，不是这次躲避欠的账。但如果用户之后把焦点
+    // 从聊天窗口移到某个第三方窗口、且没有先最小化/关闭聊天窗口，没有任何路径会重新显示
+    // 悬浮窗：账已经清空，下一次 tick 会在 shouldSkipOverlayDodge(false, null) 处直接短路
+    // 整个函数；而 index.ts 里聊天窗口只注册了 'focus'（隐藏悬浮窗）/'minimize'/'close'
+    // （显示悬浮窗）三个监听，没有 'blur' 去触发"重新评估悬浮窗是否还需要隐藏"。这是
+    // index.ts 现有监听集合本身的缺口，早于本次改动就存在，不是这里引入的回归，不在本轮
+    // 修复范围。
+    //
+    // ⚠️ 但要如实记一笔暴露面的变化：本轮之前，这条清账路径因为那道 问题1b 门槛在跨屏
+    // episode 里几乎命中不了（正是本轮修的 bug），所以上面这个组合在实际使用中很罕见；
+    // 本轮让清账变成每个 episode 都可靠触发，这个遗留因此变得明显更容易碰到。缺口本身
+    // 不是新的，可达性是新的——真要收口，该做的是给 index.ts 补 'blur' 监听，那是独立一件事
     if (!overlayWindow.isVisible() && !chatFocused) {
       overlayWindow.showInactive()
+    }
+    if (decideOverlayDodgeClear(overlayDodgeSourceDisplayId)) {
+      setLastDisplayId('overlay', screen.getDisplayMatching(overlayWindow.getBounds()).id)
+      overlayDodgeSourceDisplayId = null
     }
   }
 }
