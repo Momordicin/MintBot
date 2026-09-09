@@ -334,15 +334,33 @@ export function handleWindowMoved(windowKey: WindowKey, win: BrowserWindow): voi
   }, PERSIST_DEBOUNCE_MS))
 }
 
-// 悬浮窗躲避状态：只保留"进入躲避状态那一刻，悬浮窗当时所在的显示器 id"这一个整数，不再
-// 额外维护一份捕获的坐标（旧版本的 overlayHomeBounds）——查表设计下，跳屏目标与归位目标
-// 都改由 moveToNonFullscreenDisplay/restoreToDisplay 现查 windowPositions.ts 的持久化表，
-// 不需要在内存里另存一份"某一刻捕获的坐标"，也就没有它可能过期/漂移的问题。
+// 悬浮窗躲避状态：保留"当前这次躲避对应的冲突（全屏/黑名单前台窗口）所在的显示器 id"
+// 这一个整数，不再额外维护一份捕获的坐标（旧版本的 overlayHomeBounds）——查表设计下，
+// 跳屏目标与归位目标都改由 moveToNonFullscreenDisplay/restoreToDisplay 现查
+// windowPositions.ts 的持久化表，不需要在内存里另存一份"某一刻捕获的坐标"，也就没有它
+// 可能过期/漂移的问题。
 //
-// 之后每个 tick 只要仍需要躲避就复用这同一个 id 作为 moveToNonFullscreenDisplay 的排除项，
-// 不要每次都用悬浮窗"当前"所在显示器重新计算——悬浮窗已经跳到别的屏幕之后，"当前所在
-// 显示器"会变成刚跳过去的那块屏幕，若以它作排除项，双屏环境下会在两块屏幕之间每 500ms
-// 来回反复横跳（排除 B 找到 A，下一 tick 排除 A 又找回 B）
+// 曾经的缺陷①：这里错误地记录成"悬浮窗自己当时所在的显示器 id"
+// （screen.getDisplayMatching(overlayWindow.getBounds())），而不是冲突所在的显示器——两者
+// 只在第一次躲避那一刻恰好相等（悬浮窗还没挪走）。用户报告的两个现象都源于此：①悬浮窗
+// 所在屏幕之外发生全屏也会无差别跳屏；②第二次全屏冲突发生时，悬浮窗自己所在的显示器已经
+// 变成上一次跳去的目标屏，导致这次反而把悬浮窗排回冲突屏本身。现在改为直接采用
+// ActiveWindowInfo.displayId（前台冲突窗口所在的显示器，activeWindowMonitor 保证非空时
+// 必已解析），见 decideOverlayDodge。
+//
+// 曾经的缺陷②（review finding A，修复缺陷①时引入）：当时只在 `=== null` 时赋值一次
+// （"进入躲避状态那一刻的冲突显示器"，此后固定不变），冲突中途换屏时会失效——悬浮窗躲到
+// B 之后，若同一个冲突窗口被拖到 B（或另一个冲突恰好出现在 B），排除项仍是过期的 A，
+// displays.find(d => d.id !== A) 会解出 B——也就是悬浮窗当前已经在的、真正被遮挡的那块
+// 屏幕，跳屏变成 no-op，悬浮窗永久卡在冲突之上。现在改为每个 tick 都无条件用本 tick 的
+// info.displayId 覆盖，让它始终代表"最新已知的冲突显示器"，而不是"进入躲避那一刻"的快照。
+//
+// 下面这句针对的是另一种、更早就存在的误用，跟上面两条缺陷不是同一件事，仍然成立、
+// 不要跟"每 tick 刷新冲突显示器"混淆：不要用"悬浮窗自己当前所在的显示器"重新计算这个
+// 跟踪值——悬浮窗已经跳到别的屏幕之后，"当前所在显示器"会变成刚跳过去的那块屏幕，若以它
+// 作为跟踪值/排除项，双屏环境下会在两块屏幕之间每 500ms 来回反复横跳（排除 B 找到 A，
+// 下一 tick 排除 A 又找回 B）。每 tick 必须刷新的是 info.displayId（冲突所在的显示器），
+// 悬浮窗自己所在的显示器永远不能被当作排除项来源
 let overlayDodgeSourceDisplayId: number | null = null
 
 // handleOverlayDodge 的前置守卫，抽成纯函数供单测——本模块其余部分依赖真实 BrowserWindow
@@ -360,9 +378,50 @@ export function shouldSkipOverlayDodge(overlayVisible: boolean, dodgeSourceDispl
   return !overlayVisible && dodgeSourceDisplayId === null
 }
 
-// 悬浮窗躲避逻辑。activeWindowMonitor 只回传 isFullscreen/exeName/title/displayId，没有
-// 前台窗口的原始矩形，无法在这里反查它实际所在的显示器——按计划文档的简化，直接尝试把
-// 悬浮窗移到"它自己当前所在显示器"之外的某块屏幕，不去追踪前台全屏窗口本身在哪块屏幕
+// handleOverlayDodge 判断"这一 tick 该不该躲避、躲去哪块显示器"的纯函数部分，抽出来跟
+// shouldSkipOverlayDodge 同一个理由——只依赖几个显示器 id/布尔值，脱离真实
+// BrowserWindow.getBounds()/screen 也能验证。
+//
+// review finding E：这里刻意把"排除目标（excludeDisplayId）该取哪个值"也纳入这个纯函数的
+// 返回值，而不是只返回一个布尔值再让调用方自己决定传什么给 moveToNonFullscreenDisplay——
+// 之前的版本只测了等价于本函数内部比较的一个布尔判断，从未测过调用点实际传给
+// moveToNonFullscreenDisplay 的排除项，哪怕调用点整段被改回原始缺陷（比如排除项重新变成
+// 悬浮窗自己的显示器，或沿用过期的跟踪值），那批测试也不会失败。把排除目标的选择收进这个
+// 纯函数、调用方只管照办，回归才有可能在不启动真实 Electron 的情况下被单测拦住。
+//
+// 这是本次修复的核心：只有悬浮窗自己当前所在的显示器（overlayDisplayId）与冲突（全屏/
+// 黑名单前台窗口）所在的显示器（conflictDisplayId，来自 ActiveWindowInfo.displayId）
+// 一致时才算被遮挡，需要挪走；冲突发生在别的屏幕上跟悬浮窗毫无关系，不该动它。旧实现从
+// 未做这个比较——直接把"悬浮窗自己当前所在的显示器"当排除项传给
+// moveToNonFullscreenDisplay，等价于逢冲突必躲。用户报告的两个现象都源于此：①悬浮窗
+// 所在屏幕之外发生全屏也会无差别跳屏；②躲避一次之后悬浮窗自己所在的显示器已经变成跳去的
+// 目标屏，第二次冲突再发生时，旧逻辑重新拿它当基准，反而把悬浮窗排回冲突屏本身。
+//
+// 需要躲避时，排除目标恒等于本 tick 的 conflictDisplayId。
+//
+// ⚠️ 不要把调用方的 overlayDodgeSourceDisplayId（上一 tick 遗留的跟踪值）接进这个函数当
+// 参数、更不要拿它参与排除目标的计算（例如写成 trackedDisplayId ?? conflictDisplayId）——
+// 那正是 review finding A 的回归：冲突中途换屏后排除项过期，displays.find(d => d.id !==
+// 过期值) 会解回悬浮窗当前已在的那块屏，跳屏变成 no-op，悬浮窗永久卡在冲突之上。排除目标
+// 必须永远来自本 tick 最新的 conflictDisplayId。
+// 本函数刻意保持无状态、不接收任何跟踪值，正是为了让上面这种写法没有落脚点
+export type OverlayDodgeDecision = { action: 'dodge'; excludeDisplayId: number } | { action: 'none' }
+
+export function decideOverlayDodge(
+  needsToDodge: boolean,
+  isWhitelisted: boolean,
+  overlayDisplayId: number,
+  conflictDisplayId: number
+): OverlayDodgeDecision {
+  if (!needsToDodge || isWhitelisted) return { action: 'none' }
+  if (overlayDisplayId !== conflictDisplayId) return { action: 'none' }
+  return { action: 'dodge', excludeDisplayId: conflictDisplayId }
+}
+
+// 悬浮窗躲避逻辑。activeWindowMonitor 直接回传前台冲突窗口所在的 displayId（该字段在
+// ActiveWindowInfo 非空时必已解析，见该文件类型定义处注释）——躲避判断以它为准：只有
+// 悬浮窗自己当前所在的显示器与这个冲突显示器一致时才算被遮挡，需要挪走；冲突发生在别的
+// 屏幕上时悬浮窗原地不动，具体判断与排除目标的选择见 decideOverlayDodge
 //
 // review 发现的 BLOCKER：mainWindow 参数是补上的。之前 showInactive() 只看
 // needsToDodge/isWhitelisted，不看聊天窗口此刻是否持有焦点——TDD §2.3「焦点回到本应用时
@@ -391,12 +450,13 @@ function handleOverlayDodge(info: ActiveWindowInfo, overlayWindow: BrowserWindow
   if (shouldSkipOverlayDodge(overlayWindow.isVisible(), overlayDodgeSourceDisplayId)) return
 
   // 上一轮跳屏/归位动画还没结束时整体跳过这个 tick，不只是为了避免半路打断动画（那部分
-  // 交给 animateTo 自己的取消/重开逻辑处理，本来就是安全的）——更重要的是下面
-  // overlayDodgeSourceDisplayId === null 那次性判定"家是哪块屏幕"必须读到窗口真正静止
-  // 时的坐标，动画进行中读 getBounds() 可能读到半路的位置，把 screen.getDisplayMatching
-  // 判断成错误的显示器，之后归位就会归错地方。isAnimating(overlayWindow) 只查悬浮窗自己
-  // 是否在动画中——聊天窗口现在可能同一 tick 独立动画，不再是共享单飞状态，因此这里不会
-  // 因为聊天窗口在动而被连带跳过
+  // 交给 animateTo 自己的取消/重开逻辑处理，本来就是安全的）——更重要的是下面每个 tick
+  // 判断"悬浮窗是否被这次冲突遮挡"都要现读 screen.getDisplayMatching(overlayWindow
+  // .getBounds()) 拿悬浮窗当前所在的显示器，动画进行中读 getBounds() 可能读到半路的位置，
+  // 把 getDisplayMatching 判断成错误的显示器——可能误判成"没有遮挡"而漏挪，也可能误判成
+  // "被遮挡"而挪错方向。isAnimating(overlayWindow) 只查悬浮窗自己是否在动画中——聊天窗口
+  // 现在可能同一 tick 独立动画，不再是共享单飞状态，因此这里不会因为聊天窗口在动而被
+  // 连带跳过
   if (isAnimating(overlayWindow)) return
 
   // 黑名单单独也算"必须躲避"（不要求同时全屏）：黑名单的语义是"这个程序不全屏也不能被
@@ -405,22 +465,39 @@ function handleOverlayDodge(info: ActiveWindowInfo, overlayWindow: BrowserWindow
   const isWhitelisted = info.exeName !== null && includesIgnoreCase(cachedConfig.fullscreenWhitelist, info.exeName)
 
   if (needsToDodge && !isWhitelisted) {
-    if (overlayDodgeSourceDisplayId === null) {
-      overlayDodgeSourceDisplayId = screen.getDisplayMatching(overlayWindow.getBounds()).id
-    }
-    // moveToNonFullscreenDisplay 现在完全自己查表/算默认值（见该函数注释），不再需要
-    // 调用方传入现场读数当基准
-    const moved = moveToNonFullscreenDisplay(overlayWindow, 'overlay', overlayDodgeSourceDisplayId)
-    if (moved) {
-      // 只在聊天窗口此刻没有焦点时才显示——见函数头注释。永远不用 show()：这里从来
-      // 不该抢焦点，chatFocused 只决定"是否显示"，不改变 showInactive 本身
-      if (!chatFocused) {
-        overlayWindow.showInactive()
+    const overlayDisplayId = screen.getDisplayMatching(overlayWindow.getBounds()).id
+    const decision = decideOverlayDodge(needsToDodge, isWhitelisted, overlayDisplayId, info.displayId)
+    if (decision.action === 'dodge') {
+      // 每个 tick 都无条件同步成本 tick 的冲突显示器（decision.excludeDisplayId 恒等于
+      // info.displayId，见 decideOverlayDodge）——不再只在 === null 时赋值一次，见上方
+      // overlayDodgeSourceDisplayId 声明处"曾经的缺陷②"：冲突中途换屏时，旧的一次性赋值
+      // 会让排除项过期。让这个变量随每个 tick 刷新还有一个顺带的好处：下面"冲突已解除"
+      // 分支里 info.displayId === overlayDodgeSourceDisplayId 的比较，比较的对象因此变成
+      // "最新已知的冲突显示器"，而不是钉死在第一次躲避那一刻的旧值，判断更准确
+      overlayDodgeSourceDisplayId = decision.excludeDisplayId
+      // moveToNonFullscreenDisplay 现在完全自己查表/算默认值（见该函数注释），不再需要
+      // 调用方传入现场读数当基准
+      const moved = moveToNonFullscreenDisplay(overlayWindow, 'overlay', decision.excludeDisplayId)
+      if (moved) {
+        // 只在聊天窗口此刻没有焦点时才显示——见函数头注释。永远不用 show()：这里从来
+        // 不该抢焦点，chatFocused 只决定"是否显示"，不改变 showInactive 本身
+        if (!chatFocused) {
+          overlayWindow.showInactive()
+        }
+      } else {
+        // 没有别的屏幕可跳（单屏，或全部屏幕都是同一块）：直接隐藏，不能留在原地盖住全屏/
+        // 黑名单程序
+        overlayWindow.hide()
       }
     } else {
-      // 没有别的屏幕可跳（单屏，或全部屏幕都是同一块）：直接隐藏，不能留在原地盖住全屏/
-      // 黑名单程序
-      overlayWindow.hide()
+      // 冲突发生在悬浮窗所在屏幕之外——没有被这次冲突遮挡，这一 tick 不挪动位置（既不
+      // 跳屏，也不重新计算/覆盖 overlayDodgeSourceDisplayId：若正在追踪另一次躲避，保持
+      // 追踪值不变）。可见性仍按 chatFocused 门控兜底显示，理由跟下面"冲突已解除"分支
+      // 尾部的可见性守卫一致（同函数头注释的 BLOCKER）：聊天窗口失焦没有一次性事件通知
+      // 这里，需要每个 tick 都重新判断
+      if (!overlayWindow.isVisible() && !chatFocused) {
+        overlayWindow.showInactive()
+      }
     }
   } else {
     // 问题1b：只有前台窗口确实落在"家"（进入躲避前所在）那块屏幕上，才认定冲突解除、可以
