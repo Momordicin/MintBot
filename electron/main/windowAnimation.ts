@@ -61,8 +61,27 @@ export function isAnimating(win: BrowserWindow): boolean {
 // pickLargestDisplay/clampBoundsToWorkArea 等纯函数从依赖 app.getPath 的部分拆出来单测
 // 同一个约定）。
 //
-// 同屏移动做「飞出去再飞回来」没有意义，且 restoreHomeBoundsIfLeavingDodgeMode 与冲突
-// 解除归位都可能是同屏调用——这条守卫是必需的，不是可选优化。
+// 同屏移动做「飞出去再飞回来」没有意义，所以这条守卫保留——但要如实说明它现在的性质：
+// **按当前的调用链它不可达，是给未来调用方留的防御，不是在挡一个真实发生的场景。**
+//
+// 推导：animateTo 全仓库只有一个调用点 moveToNonFullscreenDisplay（windowBehavior.ts），
+// 后者又只有两个调用点（handleOverlayDodge / handlePinMode），都在 decision.action ===
+// 'dodge' 分支里传 decision.excludeDisplayId。而 decideDodge 只在
+// ownDisplayId === conflictDisplayId 时才返回 'dodge'，且 excludeDisplayId 恒等于
+// conflictDisplayId——也就是说 excludeDisplayId 必然等于窗口此刻所在的显示器，而
+// moveToNonFullscreenDisplay 取的 target 是 displays.find(d => d.id !== excludeDisplayId)，
+// 因此源屏与目标屏**在构造上永不相同**。窗口跳到目标屏之后，下一 tick 的 ownDisplayId 已
+// 经变成目标屏、不再等于冲突屏，决策直接是 'none'，不会再次调用。
+//
+// 它什么时候会重新变得可达：一旦有调用方传入"与窗口当前所在显示器不同"的
+// excludeDisplayId（例如将来出现"把窗口从指定显示器上挪开"这类需求），上面那条构造性保证
+// 就不再成立，这条守卫立刻回到有用状态。因此保留它是有价值的，只是不要误以为它在挡今天
+// 的某个 bug。
+//
+// 历史：这里曾经举过 restoreHomeBoundsIfLeavingDodgeMode 与"冲突解除归位"两个例子——两者
+// 都会把窗口飞回冲突前所在的屏幕、确实可能命中同屏。那两条归位路径后来都改成"原地不动 +
+// 记账"，承载归位的 restoreToDisplay 函数本身也已删除（见 windowBehavior.ts 的
+// endDodgeEpisodeIfLeavingDodgeMode 注释），所以这两个例子已不成立。
 //
 // 此前还有第二条守卫（尺寸变化容差 2px），是旧的"补间矩形"设计专用的：那个设计里补间过程
 // 会逐帧 setBounds 出中间尺寸，需要用容差区分"调用方真的要 resize"跟"WM_DPICHANGED 的

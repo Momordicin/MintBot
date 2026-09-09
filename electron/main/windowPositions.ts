@@ -192,9 +192,11 @@ export function computeSizeForDisplay(
 // 位置公式本来就分属两种不同的默认落点约定，不在这里合并
 //
 // windowKey 是可选的第四个参数（review 发现的问题1b）：聊天窗口首次启动走的是上面提到的
-// "居中"公式，不经过这里；但聊天窗口 dodge-fullscreen 跳屏/归位到一块从未去过的显示器时
-// 确实会经过这里（windowBehavior.ts 的 moveToNonFullscreenDisplay/restoreToDisplay 两个
-// 窗口共用同一个函数）。悬浮窗与聊天窗口现在各自独立判断是否需要跳屏（不再是 either/or），
+// "居中"公式，不经过这里；但聊天窗口 dodge-fullscreen 跳屏到一块从未去过的显示器时确实会
+// 经过这里（windowBehavior.ts 的 moveToNonFullscreenDisplay，悬浮窗与聊天窗口共用同一个
+// 函数；曾经归位到一块从未去过的显示器也会经过这里的 restoreToDisplay，该函数已随聊天
+// 窗口切走 dodge-fullscreen 模式时"原地不动、不再归位"的改动整体删除）。悬浮窗与聊天窗口
+// 现在各自独立判断是否需要跳屏（不再是 either/or），
 // 若两者在同一个 tick 都第一次落到同一块全新显示器上（常见于双屏、且两者跳屏前恰好都在
 // 同一块"家"屏幕），排除项相同、目标显示器也会算出相同结果——都贴同一个右下角的话，
 // 132×132 的悬浮窗会被 290×520 的聊天窗口默认落点完全包住（同一个角，悬浮窗几何上是
