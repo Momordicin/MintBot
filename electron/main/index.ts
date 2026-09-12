@@ -218,6 +218,7 @@ async function connectToCoreEvents(): Promise<boolean> {
 // initWindowBehaviorConfig 现在的实际触发频率等于"这条 SSE 连接
 // 真正重连的次数"：加入心跳（HEARTBEAT_INTERVAL_MS）与客户端看门狗
 // （EVENTS_CLIENT_TIMEOUT_MS）之后，意外掉线已经回落到接近"核心服务真的重启"的量级
+function converge(): void {
   initWindowBehaviorConfig(mainWindow)
   applyIconFromCurrentPreset()
   rebuildTrayMenu()
