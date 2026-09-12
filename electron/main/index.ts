@@ -5,6 +5,7 @@ import { is } from '@electron-toolkit/utils'
 import { startActiveWindowMonitor } from './activeWindowMonitor'
 import { startOverlayDragMonitor } from './overlayDragMonitor'
 import { nextReconnectDelayMs, RECONNECT_BACKOFF_FLOOR_MS } from './reconnectBackoff'
+import { EVENTS_CLIENT_TIMEOUT_MS } from './eventsGeneration'
 import {
   initWindowBehaviorConfig,
   updateCachedWindowBehaviorConfig,
@@ -30,11 +31,10 @@ import type { Bounds } from './windowPositions'
 // 启动/防重复停止的依据，不另设一个布尔标志
 let stopActiveWindowMonitor: (() => void) | null = null
 
-// 锁屏期间暂停 Win32 前台窗口轮询（TDD §2.3「Win32 前台窗口轮询在锁屏期间暂停」）：
-// lock-screen 停止、unlock-screen 重新拉起。两个函数都是幂等的——stopActiveWindowMonitor
-// 非空才代表"正在运行"，因此 lock/unlock 事件即使乱序或重复到达也不会出现重复启动
-// （再次调用 start 时若已在运行直接跳过）或重复停止（再次调用 stop 时 `?.()` 在 null
-// 上是无操作）。重启后 startActiveWindowMonitor 内部的 `previous` 是全新闭包（初值
+// 锁屏期间暂停 Win32 前台窗口轮询
+// lock-screen 停止、unlock-screen 重新拉起
+// stopActiveWindowMonitor非空代表运行中, 不会出现重复启动, 是幂等的
+// 重启后 startActiveWindowMonitor 内部的 `previous` 是全新闭包（初值
 // null），解锁后第一次 tick 因此会多触发一次 onChange——这是预期行为，不需要抑制
 function startActiveWindowMonitoring(): void {
   if (stopActiveWindowMonitor) return
@@ -46,8 +46,8 @@ function stopActiveWindowMonitoring(): void {
   stopActiveWindowMonitor = null
 }
 
-// 核心服务地址：与渲染层 ChatWindow.tsx 的 CORE_URL 各自独立定义（两边本来就是独立代码，
-// 不共享 shared/types，这里沿用既有约定）
+// 核心服务地址：与渲染层 ChatWindow.tsx 的 CORE_URL 各自独立定义
+// 不共享 shared/types
 const CORE_URL = 'http://127.0.0.1:3000'
 
 // 悬浮窗行为策略配置的主进程本地类型：跟 CORE_URL 同样的独立定义约定，不反向导入
@@ -143,14 +143,22 @@ async function applyIconFromCurrentPreset(): Promise<void> {
 // 整个进程剩余生命周期里失效，必须重启 Electron 应用才能恢复。retry 循环见
 // subscribeToCoreEvents；单次连接尝试见 connectToCoreEvents
 async function connectToCoreEvents(): Promise<boolean> {
-  // 记录"是否真正建立过这次连接"（拿到了 body reader），与"这次连接最终是怎么结束的"
-  // （正常 done 还是中途抛错）分开判断——tsx watch 保存触发核心服务重启时，Node 侧的
-  // TCP 连接通常是被对端直接重置，表现为 reader.read() 抛错而不是干净的 done:true，
-  // 会落进下面的 catch 分支。若只用"函数是否正常 return（没抛错）"当作退避重置的依据，
-  // 恰恰会把 tsx watch 重连这个最该重置退避的场景误判成"从未连接过"而不重置，
-  // 于是快速重连的效果只对几乎不会发生的"服务端优雅关闭连接"这种情形生效——
-  // 用这个独立的 didConnect 变量保证只要真正连过，不论后续以哪种方式断开都会返回 true
+  // 独立的 didConnect 变量保证只要真正连过，不论后续以哪种方式断开都会返回 true
   let didConnect = false
+  
+  // 存活看门狗：body 层面的超时，主动 abort交给外层 subscribeToCoreEvents 重连
+  // 核心服务每 HEARTBEAT_INTERVAL_MS 广播一次心跳，第三次也没等到才真正判定连接已死
+
+  // 没有用 undici 的 `dispatcher: new Agent({ bodyTimeout })` 
+  // 已知缺口，本次改动不处理：
+  // 需要一个独立于 body 看门狗的连接建立阶段超时
+  const abortController = new AbortController()
+  let watchdogTimer: ReturnType<typeof setTimeout> | undefined
+  const armWatchdog = () => {
+    if (watchdogTimer) clearTimeout(watchdogTimer)
+    watchdogTimer = setTimeout(() => abortController.abort(), EVENTS_CLIENT_TIMEOUT_MS)
+  }
+
   try {
     const response = await fetch(`${CORE_URL}/events`)
     const reader = response.body?.getReader()
@@ -210,7 +218,28 @@ async function connectToCoreEvents(): Promise<boolean> {
   } catch (err) {
     console.error('[Events] core event subscription failed:', err)
     return didConnect
+  } finally {
+    if (watchdogTimer) clearTimeout(watchdogTimer)
   }
+}
+
+// 幂等函数：
+// 悬浮窗行为策略配置（GET /config/window-behavior，含随之而来的置顶态校正/跳屏 episode
+// 收尾）、应用图标（间接读 GET /state）、托盘菜单勾选态（同样读 GET /config/window-behavior）。
+// 经由 coreEventsConsumer.ts 的 onConnected() 在每次连接建立（含每一次重连）都无条件调用
+// 一次——不挂在 hello/heartbeat 分支上、不依赖 generation 是否变化
+//
+// GET /state 是 session 维度的状态
+// GET /config/window-behavior 是与 session 无关的全局应用配置，
+// 两者语义不同、消费方也不同
+// "一次权威读"在这里落地成一个函数入口，而不是把两个端点合并成一个请求
+//
+// initWindowBehaviorConfig 现在的实际触发频率等于"这条 SSE 连接
+// 真正重连的次数"：加入心跳（HEARTBEAT_INTERVAL_MS）与客户端看门狗
+// （EVENTS_CLIENT_TIMEOUT_MS）之后，意外掉线已经回落到接近"核心服务真的重启"的量级
+  initWindowBehaviorConfig(mainWindow)
+  applyIconFromCurrentPreset()
+  rebuildTrayMenu()
 }
 
 // will-quit 里置位，阻止退出过程中还在跑的 subscribeToCoreEvents 循环发起新一轮连接/
@@ -232,10 +261,9 @@ function waitForCoreEventsReconnect(delayMs: number): Promise<void> {
   })
 }
 
-// 长连接重连循环：无限重试（这是常驻共享广播流，不是 aiService.ts waitForAiService 那种
-// 有界等待），指数退避封顶在 RECONNECT_BACKOFF_CAP_MS（见 reconnectBackoff.ts）。
-// 只有真正连接成功过（connectToCoreEvents 返回 true，哪怕之后是正常 done 还是读到一半
-// 出错）才把退避重置回下限 RECONNECT_BACKOFF_FLOOR_MS——tsx watch 保存触发的核心服务
+// 常驻共享广播流 长连接重连循环：无限重试
+// 指数退避封顶在 RECONNECT_BACKOFF_CAP_MS（见 reconnectBackoff.ts）
+// 只有真正连接成功过才把退避重置回下限 RECONNECT_BACKOFF_FLOOR_MS——tsx watch 保存触发的核心服务
 // 重启正是这种「连过、又断开」的模式，退避重置保证这类重载几乎感觉不到断线；只有从未连上过
 // （核心服务还没起来/整个不可达）才持续加倍退避，避免变成每次都立即重试的请求风暴
 async function subscribeToCoreEvents(): Promise<void> {

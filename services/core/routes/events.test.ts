@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import Fastify from 'fastify'
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { eventsRoutes } from './events.js'
-import { broadcastEvent } from '../events/broadcast.js'
+import { broadcastEvent, SERVER_GENERATION } from '../events/broadcast.js'
 
 // GET /events 是一条不会主动结束的长连接：fastify.inject() 的返回 promise 只有在响应
 // end() 之后才 resolve，这里跟 chat.test.ts 里"模拟客户端断连"的测试用同一手法——用
@@ -59,6 +59,38 @@ describe('GET /events', () => {
     )
 
     reply.raw.emit('close')
+    await injectPromise.catch(() => {})
+  })
+
+  it('连接建立后立即发送 hello 帧，携带服务器代次（TDD §3.3「hello / heartbeat」）', async () => {
+    const fastify = Fastify()
+    await fastify.register(eventsRoutes)
+
+    // 不能复用上面的 connect() 辅助函数：它在 handler 跑完之后才 spyOn(reply.raw, 'write')，
+    // 而 hello 帧正是在 handler 内部、registerEventsClient 之后立即写出的，必须在 onRequest
+    // 钩子里、handler 还没跑之前就把 spy 挂上去，否则这次写入根本不会被这个 spy 看到
+    let capturedReply: FastifyReply | undefined
+    let writeSpy: ReturnType<typeof vi.spyOn> | undefined
+    const onRequestPromise = new Promise<void>(resolve => {
+      fastify.addHook('onRequest', (_request, reply, done) => {
+        capturedReply = reply
+        writeSpy = vi.spyOn(reply.raw, 'write')
+        resolve()
+        done()
+      })
+    })
+
+    const injectPromise = fastify.inject({ method: 'GET', url: '/events' })
+    injectPromise.catch(() => {})
+
+    await onRequestPromise
+    await new Promise(resolve => setImmediate(resolve))
+
+    expect(writeSpy).toHaveBeenCalledWith(
+      `event: hello\ndata: ${JSON.stringify({ generation: SERVER_GENERATION })}\n\n`,
+    )
+
+    capturedReply!.raw.emit('close')
     await injectPromise.catch(() => {})
   })
 

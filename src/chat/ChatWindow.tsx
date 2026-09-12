@@ -7,6 +7,7 @@ import { parseSSE } from './sse'
 import { deriveTheme } from './theme.js'
 import { DEFAULT_CHAT_BG_OPACITY, DEFAULT_THEME_INPUT, resolveThemeMode, themeCssVars, titlebarOverlayFromTheme } from './themeVars.js'
 import { usePrefersDark } from '../usePrefersDark.js'
+import { createWatchdogEventSource } from '../eventsWatchdog.js'
 import type { AppState, PresetSnapshot } from '../../shared/types/index.js'
 import './chat.css'
 
@@ -258,18 +259,39 @@ export function ChatWindow() {
     window.addEventListener('focus', handler)
 
     // GET /events 共享广播流（与 src/overlay/OverlayApp.tsx 消费 emotion 事件同款写法：
-    // 原生 EventSource，按 event 名注册监听器）。preset-switched 走的是与聚焦处理函数完全
-    // 相同的代码路径，不重复实现一遍判断/重置逻辑
-    const eventSource = new EventSource(`${CORE_URL}/events`)
-    const onPresetSwitched = () => {
-      syncSessionOnFocus()
-    }
-    eventSource.addEventListener('preset-switched', onPresetSwitched)
+    // 原生 EventSource，按 event 名注册监听器，经由 src/eventsWatchdog.ts 统一包一层存活
+    // 看门狗）。preset-switched 走的是与聚焦处理函数完全相同的代码路径，不重复实现一遍
+    // 判断/重置逻辑。
+    //
+    // 存活看门狗（TDD §3.3「存活契约」）：任意一帧（hello/heartbeat/preset-switched 均算）
+    // 都会重置一次计时器，EVENTS_CLIENT_TIMEOUT_MS（3 倍心跳间隔）内什么都没收到就判定这条
+    // 连接已经僵死，主动关掉并重建一条新的——不再是"完全没有对应主进程看门狗的存活自检"（那
+    // 是本次改动之前的状态，已被推翻，见 shared/eventsLiveness.ts 顶部注释「反转记录」）。
+    // EventSource 自身的自动重连只在底层连接真正报错时触发，覆盖不了"对端卡死但 socket 未
+    // 关闭"这种僵尸连接，这正是新增看门狗要补上的那一半
+    const watchdog = createWatchdogEventSource({
+      url: `${CORE_URL}/events`,
+      listeners: {
+        'preset-switched': () => {
+          syncSessionOnFocus()
+        },
+      },
+      // 连接建立时（首次连接、EventSource 自身重连、看门狗触发的重建，三者都算）无条件同步
+      // 一次（TDD §3.3「hello / heartbeat」）：直接复用已有的 syncSessionOnFocus，不新建一条
+      // 独立的收敛路径。不按 hello/heartbeat 帧里的 generation 做网关：一个 generation 只能
+      // 告诉你"核心服务是否重启过"，告诉不了你"这条连接断线期间是否错过了一次广播"（比如核心
+      // 服务没重启、只是连接短暂掉线，期间设置窗口改了配置，广播帧就永远错过了）——这正是
+      // 本次改动修复的设计错误，见 electron/main/eventsGeneration.ts 顶部注释。
+      // syncSessionOnFocus 内部已经在 sessionId 未变化时提前返回（见函数体
+      // `if (state.sessionId === ...) return`），不会在这里被打断正在进行的请求/清空消息列表
+      onOpen: () => {
+        syncSessionOnFocus()
+      },
+    })
 
     return () => {
       window.removeEventListener('focus', handler)
-      eventSource.removeEventListener('preset-switched', onPresetSwitched)
-      eventSource.close()
+      watchdog.close()
     }
   }, [])
 

@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { createWatchdogEventSource } from '../eventsWatchdog.js'
 import type { AppState } from '../../shared/types/index.js'
 import './overlay.css'
 import {
@@ -522,10 +523,10 @@ export function OverlayApp() {
 
   // 情绪变化实时更新 + preset 切换感知：纯 GET 无 body，用浏览器原生 EventSource，不需要
   // 手写 fetch+reader 解析（那是 /chat 私有流因为要发 POST 带 body 才需要的方案）。两个事件
-  // 共用同一条连接（GET /events 是所有窗口共用的常驻连接，TDD §3.3）
+  // 共用同一条连接（GET /events 是所有窗口共用的常驻连接，TDD §3.3），经由
+  // src/eventsWatchdog.ts 统一包一层存活看门狗（见下方 useEffect 内的说明）
   useEffect(() => {
-    const source = new EventSource(`${CORE_URL}/events`)
-    source.addEventListener('emotion', (event: MessageEvent) => {
+    function handleEmotionEvent(event: MessageEvent) {
       try {
         const data: EmotionEventPayload = JSON.parse(event.data)
 
@@ -588,8 +589,9 @@ export function OverlayApp() {
       } catch {
         // 忽略解析失败的事件，保留当前已展示的立绘
       }
-    })
-    source.addEventListener('preset-switched', () => {
+    }
+
+    function handlePresetSwitchedEvent() {
       // 新角色的 manifest/立绘状态到达前先清空展示，避免新角色的情绪标签下短暂闪出
       // 旧角色的立绘（旧 file 对新角色的 emotions 词表大概率无意义，即使凑巧同名也是误导）。
       // 同时清掉旧 preset 的阈值定时器、转场分步定时器、转场进行中状态与交互锁，以及
@@ -626,9 +628,35 @@ export function OverlayApp() {
       ownSessionIdRef.current = null
       setFile(null)
       loadCharacterAndPortrait(false)
+    }
+
+    // 存活看门狗（TDD §3.3「存活契约」）：任意一帧（hello/heartbeat/emotion/preset-switched
+    // 均算）都会重置一次计时器，EVENTS_CLIENT_TIMEOUT_MS（3 倍心跳间隔）内什么都没收到就
+    // 判定这条连接已经僵死，主动关掉并重建一条新的——不再是"完全没有对应主进程看门狗的存活
+    // 自检"（那是本次改动之前的状态，已被推翻，见 shared/eventsLiveness.ts 顶部注释
+    // 「反转记录」）。EventSource 自身的自动重连只在底层连接真正报错时触发，覆盖不了"对端
+    // 卡死但 socket 未关闭"这种僵尸连接，这正是新增看门狗要补上的那一半
+    const watchdog = createWatchdogEventSource({
+      url: `${CORE_URL}/events`,
+      listeners: {
+        emotion: handleEmotionEvent,
+        'preset-switched': handlePresetSwitchedEvent,
+      },
+      // 连接建立时（首次连接、EventSource 自身重连、看门狗触发的重建，三者都算）无条件刷新
+      // 一次（TDD §3.3「hello / heartbeat」）：复用挂载时就有的 loadCharacterAndPortrait(false)
+      // （既有的 manifest/立绘状态刷新路径），不新建一条独立的收敛路径。不按 hello/heartbeat
+      // 帧里的 generation 做网关：一个 generation 只能告诉你"核心服务是否重启过"，告诉不了你
+      // "这条连接断线期间是否错过了一次广播"，这正是本次改动修复的设计错误（见
+      // electron/main/eventsGeneration.ts 顶部注释）。不清空/重置 preset-switched 分支里那
+      // 一整套转场/锁/定时器状态：核心服务重启、乃至这条连接自己重连（含看门狗触发的重建），
+      // 都不代表角色真的换了，没有理由像切换角色那样清场
+      onOpen: () => {
+        loadCharacterAndPortrait(false)
+      },
     })
+
     return () => {
-      source.close()
+      watchdog.close()
     }
   }, [])
 
