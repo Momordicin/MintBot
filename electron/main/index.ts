@@ -6,6 +6,7 @@ import { startActiveWindowMonitor } from './activeWindowMonitor'
 import { startOverlayDragMonitor } from './overlayDragMonitor'
 import { nextReconnectDelayMs, RECONNECT_BACKOFF_FLOOR_MS } from './reconnectBackoff'
 import { EVENTS_CLIENT_TIMEOUT_MS } from './eventsGeneration'
+import { createCoreEventsConsumer } from './coreEventsConsumer'
 import {
   initWindowBehaviorConfig,
   updateCachedWindowBehaviorConfig,
@@ -129,23 +130,41 @@ async function applyIconFromCurrentPreset(): Promise<void> {
   }
 }
 
+// 帧解析/分发 + "连接建立时收敛恰好一次"的编排抽在 coreEventsConsumer.ts（不 import
+// 'electron'，可单测；这里只注入真正依赖 Electron 运行时的副作用）。lastSeenCoreGeneration
+// 这个跨重连持久化的诊断状态现在也收进那个模块内部，不再是本文件的模块级变量——见该文件
+// 顶部注释「状态生命周期」。只创建这一个实例，贯穿整个 subscribeToCoreEvents 重连循环
+// （不是每次连接尝试各建一个），换图标/刷新托盘菜单勾选态这些副作用都通过下面这几个既有
+// 函数注入，不在 coreEventsConsumer.ts 里重新实现一遍
+const coreEventsConsumer = createCoreEventsConsumer({
+  converge,
+  onPresetSwitched: applyIconFromCurrentPreset,
+  onWindowBehaviorChanged: config => {
+    updateCachedWindowBehaviorConfig(config, mainWindow)
+    rebuildTrayMenu()
+  },
+  log: {
+    generationChanged: () =>
+      console.log('[Events] Core service generation changed — the core process restarted, this is not the same server process we were talking to before (diagnostic only, does not itself trigger a resync)'),
+    helloHeartbeatParseError: err => console.error('[Events] Failed to parse hello/heartbeat event:', err),
+    windowBehaviorParseError: err => console.error('[WindowBehavior] Failed to parse window-behavior-changed event:', err),
+  },
+})
+
 // 主进程第一次反过来订阅核心服务的 SSE 广播（GET /events，TDD §3.3）——此前主进程只会
 // 单向调用核心服务（见上方 notifySystemEvent）。收到 preset-switched 帧后重新解析头像并
-// 换图标；收到 window-behavior-changed 帧（子任务③新增）后更新 windowBehavior.ts 的内存
-// 缓存并刷新托盘菜单勾选态。两个事件类型共用同一个 frame reader（buffer/'\n\n' 拆帧循环
-// 只写一份），不为 window-behavior-changed 再单独开一个 /events 连接。
+// 换图标；收到 window-behavior-changed 帧后更新 windowBehavior.ts 的内存缓存并刷新托盘
+// 菜单勾选态；收到 hello/heartbeat 帧只做一件事——比较 generation 是否变化并打一行诊断
+// 日志，不触发任何收敛（收敛已经在连接建立时无条件跑过，见下面 coreEventsConsumer.onConnected()
+// 调用点）。四种事件类型共用同一个 frame reader（coreEventsConsumer.ts 内部的 buffer/'\n\n'
+// 拆帧循环只写一份），不为其中任何一个再单独开一条 /events 连接。
 //
-// 断线重连（此前这里写的是「不做自动重连，锦上添花，不值得引入重试逻辑」——那个判断
-// 已经不成立了）：这条连接现在同时是 windowBehavior.ts 缓存配置在冷启动之外唯一的
-// resync 时机（见下面 connectToCoreEvents 里紧跟 initWindowBehaviorConfig 的调用），
-// 断线不重连意味着核心服务一旦重启（`pnpm dev:core` 用 tsx watch，保存 services/core
-// 下任意文件就会重启一次；生产环境的 PM2 重启/崩溃同理），聊天窗口的置顶功能会在
-// 整个进程剩余生命周期里失效，必须重启 Electron 应用才能恢复。retry 循环见
-// subscribeToCoreEvents；单次连接尝试见 connectToCoreEvents
+// retry 循环见 subscribeToCoreEvents；单次连接尝试见 connectToCoreEvents
+// generation 不再影响任何行为, 现在只保留作为诊断信号：记录"核心服务是否换过一个新进程"，仅用于打日志排障，
 async function connectToCoreEvents(): Promise<boolean> {
   // 独立的 didConnect 变量保证只要真正连过，不论后续以哪种方式断开都会返回 true
   let didConnect = false
-  
+
   // 存活看门狗：body 层面的超时，主动 abort交给外层 subscribeToCoreEvents 重连
   // 核心服务每 HEARTBEAT_INTERVAL_MS 广播一次心跳，第三次也没等到才真正判定连接已死
 
@@ -160,59 +179,21 @@ async function connectToCoreEvents(): Promise<boolean> {
   }
 
   try {
-    const response = await fetch(`${CORE_URL}/events`)
+    const response = await fetch(`${CORE_URL}/events`, { signal: abortController.signal })
     const reader = response.body?.getReader()
     if (!reader) return false
     didConnect = true
+    armWatchdog()
 
-    // 连接（含拿到 body reader）成功即证明核心服务此刻可达——不管是冷启动的第一次连接
-    // 还是断线重连，都借这个信号 resync 一次悬浮窗行为策略配置并重新套用置顶态，覆盖
-    // 「核心服务在应用运行期间重启/崩溃恢复」这个 initWindowBehaviorConfig 冷启动一次性
-    // 调用覆盖不到的场景。刻意不在 initWindowBehaviorConfig 内部再加一层独立重试——
-    // 一个重试机制、一个地方维护，SSE 连接成功已经隐含了紧跟着的这次 config fetch
-    // 大概率也会成功。
-    //
-    // 托盘图标与托盘菜单同理：它们平时分别由 preset-switched / window-behavior-changed 两个
-    // 广播驱动，而断线期间到达的帧是**收不到也补不回来**的（SSE 没有重放，服务端也不记录
-    // 谁漏了什么）。断线期间换过角色或改过置顶模式，重连后图标和菜单会一直停在旧值，直到
-    // 下一次真的发生同类变更——而那可能很久都不会发生。这三件事共用同一条理由：**重连成功
-    // 是唯一能确定「我可能错过了东西」的时刻，也是唯一能补的时刻**，所以一并在这里重新拉取
-    // 一次当前真值。三者都是幂等的（重复套用同一张图标 / 重建同样的菜单 / 套用同一个置顶态
-    // 都不产生可见变化），冷启动第一次连接时跑一遍也只是与 whenReady 里的初始化重合，无害
-    initWindowBehaviorConfig(mainWindow)
-    applyIconFromCurrentPreset()
-    rebuildTrayMenu()
+    // 每次连接建立（含每一次重连）都无条件收敛一次
+    coreEventsConsumer.onConnected()
 
     const decoder = new TextDecoder()
-    let buffer = ''
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
-      buffer += decoder.decode(value, { stream: true })
-
-      let frameEnd = buffer.indexOf('\n\n')
-      while (frameEnd !== -1) {
-        const frame = buffer.slice(0, frameEnd)
-        buffer = buffer.slice(frameEnd + 2)
-        // 按行精确匹配 event 字段，不用整帧 substring 搜索——避免未来事件名共享前缀
-        // （如假设的 preset-switched-ack）或 data 载荷文本恰好包含这段字符串时误判
-        const lines = frame.split('\n')
-        if (lines.some(line => line === 'event: preset-switched')) {
-          applyIconFromCurrentPreset()
-        }
-        if (lines.some(line => line === 'event: window-behavior-changed')) {
-          const dataLine = lines.find(line => line.startsWith('data: '))
-          if (dataLine) {
-            try {
-              updateCachedWindowBehaviorConfig(JSON.parse(dataLine.slice('data: '.length)), mainWindow)
-              rebuildTrayMenu()
-            } catch (err) {
-              console.error('[WindowBehavior] Failed to parse window-behavior-changed event:', err)
-            }
-          }
-        }
-        frameEnd = buffer.indexOf('\n\n')
-      }
+      armWatchdog()
+      coreEventsConsumer.onChunk(decoder.decode(value, { stream: true }))
     }
     return true
   } catch (err) {
