@@ -2,7 +2,7 @@ module.exports = {
   apps: [
     {
       name: 'mintbot-core',
-      script: 'out/core/index.js',
+      script: 'out/core/services/core/index.js',
       interpreter: 'node',
       cwd: __dirname,
       watch: false,

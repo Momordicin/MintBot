@@ -142,7 +142,7 @@ pnpm setup:ai
 # Start the core service (Fastify, its own process)
 # Development: pnpm dev:core
 # Production: build first, then run persistently via pm2 (pnpm start:core just runs
-# `pm2 start ecosystem.config.cjs`, which depends on out/core/index.js — skipping build:core
+# `pm2 start ecosystem.config.cjs`, which depends on out/core/services/core/index.js — skipping build:core
 # will fail immediately with a missing-file error)
 # Production: on Windows, the first run needs administrator privileges; after that,
 # `pm2 stop mintbot-core; pm2 kill` and you can run it from a regular terminal going forward
