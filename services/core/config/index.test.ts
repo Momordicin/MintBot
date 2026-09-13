@@ -447,80 +447,226 @@ describe('config/index — updateBackgroundModelProviderConfig', () => {
   })
 })
 
-// ─── 悬浮窗行为策略（buzzing-frolicking-eich.md 计划子任务①）────────────
+// ─── 桌面呈现配置（chatPinMode / petAvoidanceEnabled / appRules）────────────
 describe('config/index — getWindowBehaviorConfig', () => {
-  it('config.json 不存在时，回退到默认值 { pinMode: off, 两个数组为空 }', async () => {
+  it('config.json 不存在时，回退到默认值 { chatPinMode: off, petAvoidanceEnabled: true, appRules: [] }', async () => {
     readFileSyncMock.mockImplementation(() => { throw new Error('ENOENT') })
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { startConfigWatcher, getWindowBehaviorConfig } = await import('./index.js')
 
     startConfigWatcher()
 
-    expect(getWindowBehaviorConfig()).toEqual({ pinMode: 'off', fullscreenWhitelist: [], blacklist: [] })
+    expect(getWindowBehaviorConfig()).toEqual({ chatPinMode: 'off', petAvoidanceEnabled: true, appRules: [] })
   })
 
   it('完整合法的 windowBehavior 按原样使用', async () => {
     readFileSyncMock.mockReturnValue(JSON.stringify({
-      windowBehavior: { pinMode: 'always-on-top', fullscreenWhitelist: ['chrome.exe'], blacklist: ['game.exe'] },
+      windowBehavior: {
+        chatPinMode: 'smart',
+        petAvoidanceEnabled: false,
+        appRules: [{ exeName: 'chrome.exe', effect: 'allow' }, { exeName: 'game.exe', effect: 'hard' }],
+      },
     }))
     const { startConfigWatcher, getWindowBehaviorConfig } = await import('./index.js')
 
     startConfigWatcher()
 
     expect(getWindowBehaviorConfig()).toEqual({
-      pinMode: 'always-on-top',
-      fullscreenWhitelist: ['chrome.exe'],
-      blacklist: ['game.exe'],
+      chatPinMode: 'smart',
+      petAvoidanceEnabled: false,
+      appRules: [{ exeName: 'chrome.exe', effect: 'allow' }, { exeName: 'game.exe', effect: 'hard' }],
     })
   })
 
-  it('pinMode 不是合法值时回退到 off 并 warn，不影响其它字段', async () => {
+  it('chatPinMode 不是合法值、也没有旧 pinMode 兜底时回退到 off 并 warn，不影响其它字段', async () => {
     readFileSyncMock.mockReturnValue(JSON.stringify({
-      windowBehavior: { pinMode: 'not-a-real-mode', fullscreenWhitelist: ['chrome.exe'] },
+      windowBehavior: { chatPinMode: 'not-a-real-mode', petAvoidanceEnabled: false, appRules: [] },
     }))
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { startConfigWatcher, getWindowBehaviorConfig } = await import('./index.js')
 
     startConfigWatcher()
 
-    expect(getWindowBehaviorConfig()).toEqual({ pinMode: 'off', fullscreenWhitelist: ['chrome.exe'], blacklist: [] })
+    expect(getWindowBehaviorConfig()).toEqual({ chatPinMode: 'off', petAvoidanceEnabled: false, appRules: [] })
     expect(warnSpy).toHaveBeenCalled()
   })
 
-  it('数组里的非字符串元素被过滤掉，不连累其它合法元素', async () => {
+  it('petAvoidanceEnabled 不是布尔值时回退到默认的 true——不把任意真值当成"已开启"', async () => {
     readFileSyncMock.mockReturnValue(JSON.stringify({
-      windowBehavior: { pinMode: 'off', fullscreenWhitelist: ['chrome.exe', 123, null], blacklist: [] },
+      windowBehavior: { chatPinMode: 'off', petAvoidanceEnabled: 'yes', appRules: [] },
     }))
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { startConfigWatcher, getWindowBehaviorConfig } = await import('./index.js')
 
     startConfigWatcher()
 
-    expect(getWindowBehaviorConfig().fullscreenWhitelist).toEqual(['chrome.exe'])
+    expect(getWindowBehaviorConfig().petAvoidanceEnabled).toBe(true)
   })
 
-  it('windowBehavior 整个字段缺失时全部回退默认值，不 warn 数组字段', async () => {
+  it('appRules 里不合法的条目被单独丢弃并 warn，不连累其它合法条目', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      windowBehavior: {
+        chatPinMode: 'off',
+        petAvoidanceEnabled: true,
+        appRules: [
+          { exeName: 'chrome.exe', effect: 'allow' },
+          { exeName: 'bad.exe', effect: 'not-an-effect' },
+          { exeName: '', effect: 'hard' },
+          { effect: 'soft' },
+          'game.exe',
+          { exeName: 'ok.exe', effect: 'soft' },
+        ],
+      },
+    }))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { startConfigWatcher, getWindowBehaviorConfig } = await import('./index.js')
+
+    startConfigWatcher()
+
+    expect(getWindowBehaviorConfig().appRules).toEqual([
+      { exeName: 'chrome.exe', effect: 'allow' },
+      { exeName: 'ok.exe', effect: 'soft' },
+    ])
+    expect(warnSpy).toHaveBeenCalled()
+  })
+
+  it('appRules 按 exeName 大小写不敏感去重，保留先出现的一条', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      windowBehavior: {
+        chatPinMode: 'off',
+        petAvoidanceEnabled: true,
+        appRules: [{ exeName: 'Game.exe', effect: 'soft' }, { exeName: 'game.EXE', effect: 'hard' }],
+      },
+    }))
+    const { startConfigWatcher, getWindowBehaviorConfig } = await import('./index.js')
+
+    startConfigWatcher()
+
+    expect(getWindowBehaviorConfig().appRules).toEqual([{ exeName: 'Game.exe', effect: 'soft' }])
+  })
+
+  it('windowBehavior 整个字段缺失时全部回退默认值', async () => {
     readFileSyncMock.mockReturnValue(JSON.stringify({ modelProvider: { type: 'ollama' } }))
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { startConfigWatcher, getWindowBehaviorConfig } = await import('./index.js')
 
     startConfigWatcher()
 
-    expect(getWindowBehaviorConfig()).toEqual({ pinMode: 'off', fullscreenWhitelist: [], blacklist: [] })
+    expect(getWindowBehaviorConfig()).toEqual({ chatPinMode: 'off', petAvoidanceEnabled: true, appRules: [] })
+  })
+})
+
+// 旧形状（pinMode + fullscreenWhitelist + blacklist）的读取期兼容。用户磁盘上现存的
+// config.json 就是这个形状——不读它等于在一次升级里静默丢掉用户已经设过的置顶模式与名单
+describe('config/index — getWindowBehaviorConfig 读取旧形状', () => {
+  it('旧 pinMode dodge-fullscreen 读成 chatPinMode smart，且不 warn（这不是异常情况）', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      windowBehavior: { pinMode: 'dodge-fullscreen', fullscreenWhitelist: [], blacklist: [] },
+    }))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // console.warn 上的 spy 在这个文件里跨用例复用同一个实例（调用记录会累积），先清空，
+    // 让下面的断言只看这一次 startConfigWatcher 产生的告警
+    warnSpy.mockClear()
+    const { startConfigWatcher, getWindowBehaviorConfig } = await import('./index.js')
+
+    startConfigWatcher()
+
+    expect(getWindowBehaviorConfig().chatPinMode).toBe('smart')
+    // 这份 config.json 缺 memory/modelProvider 等 section，那些字段各自会 warn——这里只断言
+    // 没有为 chatPinMode 本身 warn 过：旧形状被正常识别不是异常情况，不该提示用户
+    const chatPinModeWarnings = warnSpy.mock.calls.filter(([message]) => String(message).includes('chatPinMode'))
+    expect(chatPinModeWarnings).toEqual([])
+  })
+
+  it('旧 pinMode always-on-top 读成 always', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({ windowBehavior: { pinMode: 'always-on-top' } }))
+    const { startConfigWatcher, getWindowBehaviorConfig } = await import('./index.js')
+
+    startConfigWatcher()
+
+    expect(getWindowBehaviorConfig().chatPinMode).toBe('always')
+  })
+
+  it('旧 pinMode off 读成 off', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({ windowBehavior: { pinMode: 'off' } }))
+    const { startConfigWatcher, getWindowBehaviorConfig } = await import('./index.js')
+
+    startConfigWatcher()
+
+    expect(getWindowBehaviorConfig().chatPinMode).toBe('off')
+  })
+
+  it('旧白名单读成 allow 规则、旧黑名单读成 hard 规则', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      windowBehavior: { pinMode: 'off', fullscreenWhitelist: ['chrome.exe'], blacklist: ['game.exe'] },
+    }))
+    const { startConfigWatcher, getWindowBehaviorConfig } = await import('./index.js')
+
+    startConfigWatcher()
+
+    expect(getWindowBehaviorConfig().appRules).toEqual([
+      { exeName: 'chrome.exe', effect: 'allow' },
+      { exeName: 'game.exe', effect: 'hard' },
+    ])
+  })
+
+  it('同一个 exe 同时出现在旧的白名单与黑名单里时，allow 胜出——新形状不可能表达这种自相矛盾', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      windowBehavior: { pinMode: 'off', fullscreenWhitelist: ['game.exe'], blacklist: ['game.exe'] },
+    }))
+    const { startConfigWatcher, getWindowBehaviorConfig } = await import('./index.js')
+
+    startConfigWatcher()
+
+    expect(getWindowBehaviorConfig().appRules).toEqual([{ exeName: 'game.exe', effect: 'allow' }])
+  })
+
+  it('新的 appRules 存在时完全忽略旧名单——不把两者合并', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      windowBehavior: {
+        chatPinMode: 'off',
+        appRules: [{ exeName: 'new.exe', effect: 'soft' }],
+        fullscreenWhitelist: ['legacy.exe'],
+        blacklist: ['legacy2.exe'],
+      },
+    }))
+    const { startConfigWatcher, getWindowBehaviorConfig } = await import('./index.js')
+
+    startConfigWatcher()
+
+    expect(getWindowBehaviorConfig().appRules).toEqual([{ exeName: 'new.exe', effect: 'soft' }])
+  })
+
+  it('新 chatPinMode 存在时优先于旧 pinMode', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      windowBehavior: { chatPinMode: 'off', pinMode: 'always-on-top' },
+    }))
+    const { startConfigWatcher, getWindowBehaviorConfig } = await import('./index.js')
+
+    startConfigWatcher()
+
+    expect(getWindowBehaviorConfig().chatPinMode).toBe('off')
   })
 })
 
 describe('config/index — updateWindowBehaviorConfig', () => {
   it('合并 partial 到磁盘上已存的 windowBehavior，不 clobber 未提及字段，也不 clobber 其它顶层 key', async () => {
     readFileSyncMock.mockReturnValue(JSON.stringify({
-      windowBehavior: { pinMode: 'off', fullscreenWhitelist: ['chrome.exe'], blacklist: [] },
+      windowBehavior: {
+        chatPinMode: 'off',
+        petAvoidanceEnabled: false,
+        appRules: [{ exeName: 'chrome.exe', effect: 'allow' }],
+      },
       memory: { recentTrackMaxMessages: 200 },
     }))
     const { updateWindowBehaviorConfig, CONFIG_PATH } = await import('./index.js')
 
-    const result = updateWindowBehaviorConfig({ pinMode: 'dodge-fullscreen' })
+    const result = updateWindowBehaviorConfig({ chatPinMode: 'smart' })
 
-    expect(result).toEqual({ pinMode: 'dodge-fullscreen', fullscreenWhitelist: ['chrome.exe'], blacklist: [] })
+    expect(result).toEqual({
+      chatPinMode: 'smart',
+      petAvoidanceEnabled: false,
+      appRules: [{ exeName: 'chrome.exe', effect: 'allow' }],
+    })
 
     expect(writeFileSyncMock).toHaveBeenCalledTimes(1)
     const [tempPath, written] = writeFileSyncMock.mock.calls[0]
@@ -528,47 +674,77 @@ describe('config/index — updateWindowBehaviorConfig', () => {
     expect(renameSyncMock).toHaveBeenCalledWith(tempPath, CONFIG_PATH)
 
     const writtenJson = JSON.parse(written as string)
-    expect(writtenJson.windowBehavior).toEqual({ pinMode: 'dodge-fullscreen', fullscreenWhitelist: ['chrome.exe'], blacklist: [] })
+    expect(writtenJson.windowBehavior).toEqual({
+      chatPinMode: 'smart',
+      petAvoidanceEnabled: false,
+      appRules: [{ exeName: 'chrome.exe', effect: 'allow' }],
+    })
     expect(writtenJson.memory).toEqual({ recentTrackMaxMessages: 200 })
   })
 
   it('写入后 getWindowBehaviorConfig 立即反映新值，不依赖 chokidar 的异步 reload', async () => {
     readFileSyncMock.mockReturnValue(JSON.stringify({
-      windowBehavior: { pinMode: 'off', fullscreenWhitelist: [], blacklist: [] },
+      windowBehavior: { chatPinMode: 'off', petAvoidanceEnabled: true, appRules: [] },
     }))
     const onMock = vi.fn()
     watchMock.mockReturnValue({ on: onMock })
     const { startConfigWatcher, updateWindowBehaviorConfig, getWindowBehaviorConfig } = await import('./index.js')
 
     startConfigWatcher()
-    expect(getWindowBehaviorConfig().pinMode).toBe('off')
+    expect(getWindowBehaviorConfig().chatPinMode).toBe('off')
 
-    updateWindowBehaviorConfig({ pinMode: 'always-on-top' })
+    updateWindowBehaviorConfig({ chatPinMode: 'always' })
 
     // 故意不触发 chokidar 的 'change' 回调——同步更新内存态不能依赖它
-    expect(getWindowBehaviorConfig().pinMode).toBe('always-on-top')
+    expect(getWindowBehaviorConfig().chatPinMode).toBe('always')
   })
 
-  // 回归用例：磁盘上的 windowBehavior section 本身就残缺（只有 pinMode，缺
-  // fullscreenWhitelist/blacklist——例如手改 config.json 或旧版本写入的文件），此时 PATCH
-  // 单个字段不应该让返回值/写回内容丢失另外两个数组字段。合并起点若误用 readRawSection
+  it('写入时按 exeName 大小写不敏感去重 appRules——并发写入下这里是唯一权威的一道关卡', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({ windowBehavior: {} }))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { updateWindowBehaviorConfig } = await import('./index.js')
+
+    const result = updateWindowBehaviorConfig({
+      appRules: [
+        { exeName: 'Game.exe', effect: 'soft' },
+        { exeName: 'game.exe', effect: 'hard' },
+        { exeName: 'other.exe', effect: 'allow' },
+      ],
+    })
+
+    expect(result.appRules).toEqual([
+      { exeName: 'Game.exe', effect: 'soft' },
+      { exeName: 'other.exe', effect: 'allow' },
+    ])
+  })
+
+  // 回归用例：磁盘上的 windowBehavior section 本身就残缺（只有一个字段，或仍然是旧形状），
+  // 此时 PATCH 单个字段不应该让返回值/写回内容丢失其余字段。合并起点若误用 readRawSection
   // （磁盘原始内容，未补默认值）而非 getWindowBehaviorConfig()（已补默认值的当前配置），
-  // 这两个数组字段会从 merged 里消失，被写回磁盘并同步进内存缓存，广播出去后导致主进程
-  // fullscreenWhitelist.some(...) 在 undefined 上抛错
-  it('磁盘上的 windowBehavior 缺 fullscreenWhitelist/blacklist 时，PATCH pinMode 后返回值与写回内容仍补全两个数组字段', async () => {
+  // 缺的字段会从 merged 里消失，被写回磁盘并同步进内存缓存，广播出去后主进程整份替换缓存，
+  // 随后在 undefined 的 appRules 上调 find(...) 抛错
+  it('磁盘上的 windowBehavior 是旧形状时，PATCH 一个字段后返回值与写回内容都是补全的新形状', async () => {
     readFileSyncMock.mockReturnValue(JSON.stringify({
-      windowBehavior: { pinMode: 'dodge-fullscreen' },
+      windowBehavior: { pinMode: 'dodge-fullscreen', blacklist: ['game.exe'] },
     }))
     const { updateWindowBehaviorConfig, CONFIG_PATH } = await import('./index.js')
 
-    const result = updateWindowBehaviorConfig({ pinMode: 'always-on-top' })
+    const result = updateWindowBehaviorConfig({ petAvoidanceEnabled: false })
 
-    expect(result).toEqual({ pinMode: 'always-on-top', fullscreenWhitelist: [], blacklist: [] })
+    expect(result).toEqual({
+      chatPinMode: 'smart',
+      petAvoidanceEnabled: false,
+      appRules: [{ exeName: 'game.exe', effect: 'hard' }],
+    })
 
     const [tempPath, written] = writeFileSyncMock.mock.calls[0]
     expect(tempPath).not.toBe(CONFIG_PATH)
     const writtenJson = JSON.parse(written as string)
-    expect(writtenJson.windowBehavior).toEqual({ pinMode: 'always-on-top', fullscreenWhitelist: [], blacklist: [] })
+    expect(writtenJson.windowBehavior).toEqual({
+      chatPinMode: 'smart',
+      petAvoidanceEnabled: false,
+      appRules: [{ exeName: 'game.exe', effect: 'hard' }],
+    })
   })
 })
 

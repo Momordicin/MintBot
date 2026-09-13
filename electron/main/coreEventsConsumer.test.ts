@@ -69,7 +69,7 @@ describe('createCoreEventsConsumer', () => {
   it('window-behavior-changed 帧派发到 onWindowBehaviorChanged 且解析出正确的 payload', () => {
     const handlers = createHandlers()
     const consumer = createCoreEventsConsumer(handlers)
-    const config = { pinMode: 'dodge-fullscreen' as const, fullscreenWhitelist: ['a.exe'], blacklist: ['b.exe'] }
+    const config = { chatPinMode: 'smart' as const, petAvoidanceEnabled: true, appRules: [{ exeName: 'a.exe', effect: 'allow' as const }] }
 
     consumer.onChunk(frame('window-behavior-changed', config))
 
@@ -124,7 +124,7 @@ describe('createCoreEventsConsumer', () => {
     // 新连接建立：重连触发的收敛 + 缓冲重置
     consumer.onConnected()
     // 新连接自己发来的第一帧
-    consumer.onChunk(frame('window-behavior-changed', { pinMode: 'off', fullscreenWhitelist: [], blacklist: [] }))
+    consumer.onChunk(frame('window-behavior-changed', { chatPinMode: 'off', petAvoidanceEnabled: true, appRules: [] }))
 
     expect(handlers.onPresetSwitched).not.toHaveBeenCalled()
     expect(handlers.onWindowBehaviorChanged).toHaveBeenCalledTimes(1)

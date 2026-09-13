@@ -3,23 +3,39 @@ import { join, basename } from 'path'
 import { readFile, stat } from 'fs/promises'
 import { is } from '@electron-toolkit/utils'
 import { startActiveWindowMonitor } from './activeWindowMonitor'
-import { startOverlayDragMonitor } from './overlayDragMonitor'
+import { startWindowDragMonitor } from './windowDragMonitor'
+import { noteDragStart, noteDragEnd, clearDragState } from './dragActivity'
 import { nextReconnectDelayMs, RECONNECT_BACKOFF_FLOOR_MS } from './reconnectBackoff'
 import { EVENTS_CLIENT_TIMEOUT_MS } from './eventsGeneration'
 import { createCoreEventsConsumer } from './coreEventsConsumer'
 import {
   initWindowBehaviorConfig,
   updateCachedWindowBehaviorConfig,
-  handleActiveWindowChange,
+  evaluateDesktopPresence,
   handleWindowMoved,
-  markProgrammaticWindowPlacement
+  markProgrammaticWindowPlacement,
+  closeStartupGate,
+  openStartupGate,
+  invalidateStaleAppliedDisplayIds,
+  markTopologySettle,
+  requestOverlayEdgeHover,
+  sendCurrentPetPresenceOnReady,
+  cancelProgrammaticMoveOnDragStart
 } from './windowBehavior'
+import {
+  queryUserNotificationState,
+  shouldDistrustHomeAtStartup,
+  STARTUP_GATE_TIMEOUT_MS
+} from './startupGate'
+import {
+  updateDisplayStateMap,
+  startBlockerValidationLoop,
+  revalidateBlockersNow
+} from './foregroundWorldModel'
 import {
   getPreferredBounds,
   setPreferredBounds,
-  getLastDisplayId,
-  setLastDisplayId,
-  resolveStartupDisplay,
+  getEffectiveHomeDisplay,
   clampBoundsToWorkArea,
   computeSizeForDisplay,
   computeDefaultBoundsForDisplay,
@@ -31,6 +47,36 @@ import type { Bounds } from './windowPositions'
 // 这个判断本身就是下方 startActiveWindowMonitoring/stopActiveWindowMonitoring 防重复
 // 启动/防重复停止的依据，不另设一个布尔标志
 let stopActiveWindowMonitor: (() => void) | null = null
+// Stage 1 新增的低频校验循环（electron/main/foregroundWorldModel.ts）清理函数，跟上面
+// stopActiveWindowMonitor 同一套幂等约定、同一套锁屏生命周期——两者配对启停，不单独暴露
+// 给别的调用点
+let stopBlockerValidation: (() => void) | null = null
+
+// Finding D（Stage 1 review）：display-topology 监听器（screen.on('display-added' 等）是
+// "两个循环、同一套生命周期"这条既有约定的一个刻意例外——见下方 app.whenReady() 里注册处的
+// 注释与 docs/MintBot_TDD.md §3.7 附「桌面呈现状态机」"锁屏与解锁"一节那条 blockquote。
+// 注册与注销都必须用同一个具名函数引用（screen.removeListener 依赖引用相等），因此提到
+// 模块作用域，不能像别处一样用内联箭头函数注册后就不管。
+//
+// Stage 2：拓扑变化重新归属 blocker 之后，desired 状态可能已经变了（例如刚刚被拔掉的显示器
+// 曾经是 Pet/Chat 的落点），紧跟着调一次 evaluateDesktopPresence 兜底，不等下一次前台
+// 变化/1500ms 校验
+//
+// Fix C（second rework pass）：invalidateStaleAppliedDisplayIds 在 evaluateDesktopPresence 之前
+// 显式调用一次，而不是指望 evaluatePetPresence/evaluateChatPresence 内部的 appliedDisplayIdFor
+// 读取顺便发现并清掉——拔掉一块屏之后，OS 会自己重新摆放窗口并发一次原生 'moved'，跟 Electron
+// 的 display-removed 分发之间没有顺序保证；若那次 'moved' 先到，纠正不能只靠"下一次 evaluate
+// 恰好读到了 appliedDisplayId"，见 windowBehavior.ts invalidateStaleAppliedDisplayIds 定义处
+// 注释
+const handleDisplayTopologyChange = (): void => {
+  // 必须排在最前：拔掉显示器时 Windows 会自己把窗口重新摆到别的屏并发原生 'moved'，该事件
+  // 与用户拖拽无法区分。先开静默窗口，才能保证那个事件走不到 persistBoundsNow——见
+  // windowBehavior.ts markTopologySettle 的注释
+  markTopologySettle()
+  revalidateBlockersNow()
+  invalidateStaleAppliedDisplayIds()
+  evaluateDesktopPresence(mainWindow, overlayWindow)
+}
 
 // 锁屏期间暂停 Win32 前台窗口轮询
 // lock-screen 停止、unlock-screen 重新拉起
@@ -39,12 +85,28 @@ let stopActiveWindowMonitor: (() => void) | null = null
 // null），解锁后第一次 tick 因此会多触发一次 onChange——这是预期行为，不需要抑制
 function startActiveWindowMonitoring(): void {
   if (stopActiveWindowMonitor) return
-  stopActiveWindowMonitor = startActiveWindowMonitor(info => handleActiveWindowChange(info, mainWindow, overlayWindow))
+  // 每次观察先喂给世界模型（建立/刷新 DisplayStateMap），再无条件重新 evaluate 一次
+  // 桌面呈现——resolver + diff 本身保证了 desired 状态不变时不产生任何 Electron 调用
+  // （见 windowBehavior.ts evaluateDesktopPresence 头部注释），不需要在这里先判断"这次
+  // 观察值不值得处理"。openStartupGate 只在这一 tick 确实是 external 观察时才可能真正
+  // 打开门控（该函数本身是幂等的，门控已经开着时调用是 no-op）——self/unavailable 不满足
+  // "首次 external 观测到达"这个开门条件，见 electron/main/startupGate.ts 头部注释
+  stopActiveWindowMonitor = startActiveWindowMonitor(observation => {
+    updateDisplayStateMap(observation)
+    if (observation.kind === 'external') openStartupGate()
+    evaluateDesktopPresence(mainWindow, overlayWindow)
+  })
+  // onValidated：每完成一轮 blocker 复查（含首次立即执行的那一轮）都重新 evaluate 一次——
+  // 覆盖"blocker 消失但没有伴随新的前台观测"的情形（例如挡路的窗口被直接关闭），见
+  // foregroundWorldModel.ts startBlockerValidationLoop 头注释
+  stopBlockerValidation = startBlockerValidationLoop(() => evaluateDesktopPresence(mainWindow, overlayWindow))
 }
 
 function stopActiveWindowMonitoring(): void {
   stopActiveWindowMonitor?.()
   stopActiveWindowMonitor = null
+  stopBlockerValidation?.()
+  stopBlockerValidation = null
 }
 
 // 核心服务地址：与渲染层 ChatWindow.tsx 的 CORE_URL 各自独立定义
@@ -53,15 +115,19 @@ const CORE_URL = 'http://127.0.0.1:3000'
 
 // 悬浮窗行为策略配置的主进程本地类型：跟 CORE_URL 同样的独立定义约定，不反向导入
 // services/core/config/index.ts（主进程只通过 HTTP 与核心服务交互，见 notifySystemEvent）。
-// 这里的类型只服务于托盘菜单骨架本身（知道当前 pinMode 用于勾选态）；真正的置顶/躲避逻辑
-// 在 electron/main/windowBehavior.ts 里（该文件按同样的独立定义约定维护自己的一份副本，
-// 两者不互相 import）
-type PinMode = 'off' | 'dodge-fullscreen' | 'always-on-top'
+// 这里的类型只服务于托盘菜单骨架本身（知道当前 chatPinMode/petAvoidanceEnabled 用于勾选态）；
+// 真正的置顶/躲避逻辑在 electron/main/windowBehavior.ts 里（该文件按同样的独立定义约定维护
+// 自己的一份副本，两者不互相 import）。
+//
+// Stage 4（docs/MintBot_TDD.md §3.7 附「桌面呈现状态机」"配置模型拆分：pinMode 不再是全局概念
+// （阶段④）"）：旧的三选一 pinMode 被拆成两个独立概念，见 windowBehavior.ts 同名类型定义处的
+// 注释——这里只保留托盘菜单需要的字段形状，appRules 的具体规则内容托盘菜单不需要展示
+type ChatPinMode = 'always' | 'smart' | 'off'
 
 interface WindowBehaviorConfig {
-  pinMode: PinMode
-  fullscreenWhitelist: string[]
-  blacklist: string[]
+  chatPinMode: ChatPinMode
+  petAvoidanceEnabled: boolean
+  appRules: Array<{ exeName: string; effect: 'allow' | 'soft' | 'hard' }>
 }
 
 let tray: Tray | null = null
@@ -140,7 +206,7 @@ const coreEventsConsumer = createCoreEventsConsumer({
   converge,
   onPresetSwitched: applyIconFromCurrentPreset,
   onWindowBehaviorChanged: config => {
-    updateCachedWindowBehaviorConfig(config, mainWindow)
+    updateCachedWindowBehaviorConfig(config, mainWindow, overlayWindow)
     rebuildTrayMenu()
   },
   log: {
@@ -219,7 +285,7 @@ async function connectToCoreEvents(): Promise<boolean> {
 // 真正重连的次数"：加入心跳（HEARTBEAT_INTERVAL_MS）与客户端看门狗
 // （EVENTS_CLIENT_TIMEOUT_MS）之后，意外掉线已经回落到接近"核心服务真的重启"的量级
 function converge(): void {
-  initWindowBehaviorConfig(mainWindow)
+  initWindowBehaviorConfig(mainWindow, overlayWindow)
   applyIconFromCurrentPreset()
   rebuildTrayMenu()
 }
@@ -271,8 +337,10 @@ async function subscribeToCoreEvents(): Promise<void> {
   }
 }
 
-// 读当前悬浮窗行为策略配置，只用于构建托盘菜单的勾选态——失败时按 pinMode: 'off' 兜底，
-// 跟 notifySystemEvent/applyIconFromCurrentPreset 一样的降级风格，不影响主进程本身
+// 读当前悬浮窗行为策略配置，只用于构建托盘菜单的勾选态——失败时按 chatPinMode: 'off' /
+// petAvoidanceEnabled: true 兜底（后者与 windowBehavior.ts DEFAULT_CONFIG 的默认值一致，
+// 保持"配置取不到时维持现状行为"这条既有约定），跟 notifySystemEvent/
+// applyIconFromCurrentPreset 一样的降级风格，不影响主进程本身
 async function fetchWindowBehaviorConfig(): Promise<WindowBehaviorConfig | null> {
   try {
     const response = await fetch(`${CORE_URL}/config/window-behavior`)
@@ -283,49 +351,60 @@ async function fetchWindowBehaviorConfig(): Promise<WindowBehaviorConfig | null>
   }
 }
 
-async function patchPinMode(pinMode: PinMode): Promise<void> {
+async function patchWindowBehavior(partial: Partial<WindowBehaviorConfig>): Promise<void> {
   try {
     await fetch(`${CORE_URL}/config/window-behavior`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pinMode }),
+      body: JSON.stringify(partial),
     })
   } catch (err) {
-    console.error('[Tray] Failed to patch pinMode:', err)
+    console.error('[Tray] Failed to patch window behavior config:', err)
   }
 }
 
 // 重建托盘右键菜单：点击菜单项时改配置、菜单勾选态跟着变；外部配置变化（设置页 PATCH
 // 或另一次托盘点击广播的 SSE window-behavior-changed）也会重新调这个函数刷新勾选态，
-// 见 subscribeToCoreEvents 里的 window-behavior-changed 分支
+// 见 subscribeToCoreEvents 里的 window-behavior-changed 分支。
+//
+// Stage 4（docs/MintBot_TDD.md §3.7 附「桌面呈现状态机」"配置模型拆分"一节，"托盘菜单"要求）：
+// 拆成两个独立菜单项，不再是一个会被读成"全局置顶模式"的三选一——"聊天窗口置顶"只管聊天窗，
+// "桌宠智能避让"是一个独立的勾选项，只管桌宠是否自动让路
 async function rebuildTrayMenu(): Promise<void> {
   if (!tray) return
   const config = await fetchWindowBehaviorConfig()
-  const currentPinMode: PinMode = config?.pinMode ?? 'off'
+  const currentChatPinMode: ChatPinMode = config?.chatPinMode ?? 'off'
+  const petAvoidanceEnabled = config?.petAvoidanceEnabled ?? true
 
   const menu = Menu.buildFromTemplate([
     {
-      label: '置顶',
+      label: '聊天窗口置顶',
       submenu: [
+        {
+          label: '始终',
+          type: 'radio',
+          checked: currentChatPinMode === 'always',
+          click: () => handleChatPinModeClick('always'),
+        },
+        {
+          label: '智能',
+          type: 'radio',
+          checked: currentChatPinMode === 'smart',
+          click: () => handleChatPinModeClick('smart'),
+        },
         {
           label: '关闭',
           type: 'radio',
-          checked: currentPinMode === 'off',
-          click: () => handlePinModeClick('off'),
-        },
-        {
-          label: '全屏时跳非全屏屏幕置顶',
-          type: 'radio',
-          checked: currentPinMode === 'dodge-fullscreen',
-          click: () => handlePinModeClick('dodge-fullscreen'),
-        },
-        {
-          label: '绝对置顶',
-          type: 'radio',
-          checked: currentPinMode === 'always-on-top',
-          click: () => handlePinModeClick('always-on-top'),
+          checked: currentChatPinMode === 'off',
+          click: () => handleChatPinModeClick('off'),
         },
       ],
+    },
+    {
+      label: '桌宠智能避让',
+      type: 'checkbox',
+      checked: petAvoidanceEnabled,
+      click: () => handlePetAvoidanceClick(!petAvoidanceEnabled),
     },
     {
       label: '打开聊天窗口',
@@ -345,8 +424,13 @@ async function rebuildTrayMenu(): Promise<void> {
   tray.setContextMenu(menu)
 }
 
-async function handlePinModeClick(pinMode: PinMode): Promise<void> {
-  await patchPinMode(pinMode)
+async function handleChatPinModeClick(chatPinMode: ChatPinMode): Promise<void> {
+  await patchWindowBehavior({ chatPinMode })
+  await rebuildTrayMenu()
+}
+
+async function handlePetAvoidanceClick(petAvoidanceEnabled: boolean): Promise<void> {
+  await patchWindowBehavior({ petAvoidanceEnabled })
   await rebuildTrayMenu()
 }
 
@@ -514,11 +598,18 @@ let overlayWindow: BrowserWindow | null = null
 //
 // 启动恢复现在信任表里存的宽高（不再像旧版本那样恒用固定常量覆盖）：这块屏第一次出现时，
 // computeDefaultBoundsForDisplay 算出的就是"这块屏该有的悬浮窗尺寸"这个唯一答案，
-// 跳屏/归位/启动恢复三处都经过同一个函数，不会再出现"表里存的是跳屏换算出来的临时值"
-// 这种需要不信任的情况（见该函数注释）
+// relocate/启动恢复都经过同一个函数，不会再出现"表里存的是临时值"这种需要不信任的情况
+// （见该函数注释）。
+//
+// Stage 2：不再调用 setLastDisplayId/setPreferredDisplayId——preferredDisplayId 现在是
+// 用户真正选择的 home（只由真实拖拽写入，见 windowBehavior.ts persistBoundsNow），
+// resolveStartupDisplay 在这里查到 null（还没有任何偏好记录，或记录的显示器已经不存在）
+// 时退回最大显示器，只是这一次启动的落点决定，不代表"以后就把这块屏当成家"，因此不写回。
+// windowBehavior.ts 的 evaluatePetPresence 用同一个 resolveStartupDisplay 调用，保证跟这里
+// 算出的落点一致，见该函数内注释
 function resolveOverlayStartupBounds(): Bounds {
   const displays = screen.getAllDisplays()
-  const targetDisplay = resolveStartupDisplay(displays, getLastDisplayId('overlay'))
+  const targetDisplay = getEffectiveHomeDisplay(displays, 'overlay')
   const stored = getPreferredBounds('overlay', targetDisplay.id)
   const bounds = stored
     ? clampBoundsToWorkArea(stored, targetDisplay.workArea)
@@ -526,7 +617,6 @@ function resolveOverlayStartupBounds(): Bounds {
   if (!stored) {
     setPreferredBounds('overlay', targetDisplay.id, bounds)
   }
-  setLastDisplayId('overlay', targetDisplay.id)
   return bounds
 }
 
@@ -562,25 +652,26 @@ function createOverlayWindow(): BrowserWindow {
     }
   })
 
-  win.on('ready-to-show', () => {
-    // 两个窗口的加载都是异步的，谁先 ready-to-show 没有先后保证——如果聊天窗口已经先一步
-    // 拿到焦点（它自己的 focus 监听已经把悬浮窗隐藏过一次，但那次悬浮窗还没显示，等于白隐藏），
-    // 这里再无条件 showInactive() 会让悬浮窗显示出来之后再也没有下一次 focus 事件去收起它，
-    // 一直卡在"启动后应该隐藏却显示着"的状态，直到用户手动切走再切回聊天窗口
-    if (!mainWindow?.isFocused()) {
-      win.showInactive()
-    }
-  })
+  // Stage 2：不再在 ready-to-show 里硬编码一次 showInactive()——悬浮窗的初始可见性完全交给
+  // windowBehavior.ts 的 evaluatePetPresence（resolver + diff）决定，跟它此后每一次的显隐
+  // 判断走同一条路径，不再有"启动这一刻单独摆一次"的特例。这也是启动门控
+  // （electron/main/startupGate.ts）能够生效的前提——如果这里仍然无条件显示一次，门控会被
+  // 这个硬编码调用绕过。第一次真正的 evaluateDesktopPresence 调用见 app.whenReady() 末尾
+  // 与 startBlockerValidationLoop 的 onValidated 回调（foregroundWorldModel.ts）
 
   win.on('closed', () => {
     overlayWindow = null
+    // Fix 2（second rework pass）：窗口被销毁是 dragActivity.ts 有界恢复要覆盖的三条中断路径
+    // 之一——若销毁发生在拖拽中途（WM_EXITSIZEMOVE 因此永远不会到达），不清理会让 'overlay'
+    // 的拖拽状态卡在 isDragging = true 直到 MAX_DRAG_DURATION_MS 上限自愈，这里直接精确清掉
+    clearDragState('overlay')
   })
 
   // 问题1（buzzing-frolicking-eich.md）：用户真实拖动悬浮窗时，把拖动后的位置写回持久化
   // 偏好表（见 windowBehavior.ts handleWindowMoved 的判定逻辑）。悬浮窗当前 resizable:
   // false 且没有暴露拖动交互，这个监听器目前"装着但触发不到"，以后支持拖动直接生效
   win.on('moved', () => {
-    handleWindowMoved('overlay', win)
+    handleWindowMoved('overlay', win, mainWindow, overlayWindow)
   })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
@@ -649,28 +740,32 @@ function computeDefaultChatBounds(display: Electron.Display, displays: Electron.
   }
 }
 
-// 启动时的显示器/边界解析：① 上次退出时在用的显示器仍连接着就用它，否则退回最大显示器
+// 启动时的显示器/边界解析：① home（preferredDisplayId）仍连接着就用它，否则退回最大显示器
 // （resolveStartupDisplay，见 windowPositions.ts 注释）；② 该显示器有偏好记录就查表夹紧
-// 后使用，没有就居中算一次默认值并立刻存表——跟 windowBehavior.ts 里跳屏首次出现某块
-// 显示器时"查不到就算一次、立刻存表"的约定一致；③ 无论走哪条分支，都把这块显示器记成
-// "最近一次使用"，即使用户这次会话从未拖动/缩放过窗口，下次启动也能定位回同一块屏幕，
-// 不必依赖 handleWindowMoved 才能记录
+// 后使用，没有就居中算一次默认值并立刻存表——跟 windowBehavior.ts 里 relocate 首次落到某块
+// 显示器时"查不到就算一次、立刻存表"的约定一致。
+//
+// Stage 2：不再调用 setLastDisplayId/setPreferredDisplayId 把这块显示器"记成最近一次使用"
+// ——这块属于 preferredDisplayId 的语义已经收窄成"用户真正选择的 home，只由真实拖拽写入"
+// （见 windowPositions.ts WindowPositionsStore.lastDisplayId 字段注释），这里的
+// resolveStartupDisplay 落到最大显示器只是这一次的启动决定，不构成用户选择，因此不写回。
+// windowBehavior.ts 的 evaluateChatPresence 用同一个 resolveStartupDisplay 调用，保证跟这里
+// 算出的落点一致，见该函数内注释
 function resolveChatStartupBounds(): Bounds {
   const displays = screen.getAllDisplays()
-  const targetDisplay = resolveStartupDisplay(displays, getLastDisplayId('chat'))
+  const targetDisplay = getEffectiveHomeDisplay(displays, 'chat')
   const stored = getPreferredBounds('chat', targetDisplay.id)
   const bounds = stored ? clampBoundsToWorkArea(stored, targetDisplay.workArea) : computeDefaultChatBounds(targetDisplay, displays)
   if (!stored) {
     setPreferredBounds('chat', targetDisplay.id, bounds)
   }
-  setLastDisplayId('chat', targetDisplay.id)
   return bounds
 }
 
 // 聊天窗口 resize 事件的防抖间隔：拖拽缩放期间 'resize' 会连续触发，跟 'moved' 共用同一个
 // handleWindowMoved 落盘路径，但不做防抖会导致一次缩放动作触发几十次同步磁盘写入
 
-function createWindow() {
+function createWindow(): BrowserWindow {
   const { x, y, width, height } = resolveChatStartupBounds()
 
   // 同 createOverlayWindow：构造即程序放置，先进冷却期再建窗口
@@ -703,6 +798,11 @@ function createWindow() {
 
   win.on('closed', () => {
     mainWindow = null
+    // Fix 2（second rework pass）：同 createOverlayWindow 的 'closed' 处理，见该处注释——
+    // 聊天窗口在当前 Windows 运行时下实际不会走到这条销毁路径（close 只隐藏，
+    // window-all-closed 直接 app.quit()），但 FIX 5 之后 app.on('activate') 确实可能重建它，
+    // 精确清理不依赖"这条路径今天走不走得到"这个前提
+    clearDragState('chat')
   })
 
   win.on('minimize', () => {
@@ -716,14 +816,14 @@ function createWindow() {
   // 问题1（buzzing-frolicking-eich.md）：用户真实拖动聊天窗口时，把拖动后的位置写回
   // 持久化偏好表（见 windowBehavior.ts handleWindowMoved 的判定逻辑）
   win.on('moved', () => {
-    handleWindowMoved('chat', win)
+    handleWindowMoved('chat', win, mainWindow, overlayWindow)
   })
 
   // 拖拽缩放同样要写回持久化偏好表，与 'moved' 共用 handleWindowMoved。防抖、跳屏守卫、
   // 窗口已销毁的判断全部收在该函数内部——两个监听在一次拖拽里都是逐帧连续触发的（从上边/
   // 左边拖拽缩放时原点也在动，会一路发 move），闸门放在公共入口才不会只保护住其中一种
   win.on('resize', () => {
-    handleWindowMoved('chat', win)
+    handleWindowMoved('chat', win, mainWindow, overlayWindow)
   })
 
   // 关闭按钮不再销毁窗口：跟托盘"退出"区分开（isQuitting），聊天窗口关闭跟最小化一样
@@ -742,6 +842,8 @@ function createWindow() {
   } else {
     win.loadFile(join(__dirname, '../renderer/index.html'))
   }
+
+  return win
 }
 
 // 悬浮窗侧点击恢复聊天窗口：单向通知，不需要返回值，用 ipcMain.on 而非 handle
@@ -749,6 +851,23 @@ ipcMain.on('overlay:activate', () => {
   mainWindow?.show()
   mainWindow?.focus()
   overlayWindow?.hide()
+})
+
+// Stage 3 part 2（docs/MintBot_TDD.md §3.7 附「桌面呈现状态机」"鼠标 hover Edge 可让角色
+// 临时展开"）：渲染层只上报"现在算不算 hover"，真正决定要不要移动窗口、移到哪由
+// windowBehavior.ts 的 requestOverlayEdgeHover 决定（含"不是 EDGE 时忽略"这条守卫），这里
+// 只做类型层面的最小校验再转发——同 'titlebar:set-overlay' 处理器的既有风格，不让渲染层传来
+// 的非法值在 ipcMain.on 的同步回调里引发未捕获异常
+ipcMain.on('overlay:edge-hover', (_event, hovered: unknown) => {
+  requestOverlayEdgeHover(overlayWindow, mainWindow, hovered === true)
+})
+
+// 悬浮窗渲染层挂载完成（含重载后重新挂载）、且已经注册好 'desktop-presence:changed' 监听
+// 之后发这条信号，换回一次当前 presence——见 windowBehavior.ts
+// sendCurrentPetPresenceOnReady 头注释里完整的安全性论证（含 Fix 2：为什么必须传 mainWindow，
+// 渲染层重新挂载会强制清空 overlayEdgeHovered 并重新求值一次）
+ipcMain.on('overlay:presence-ready', () => {
+  sendCurrentPetPresenceOnReady(overlayWindow, mainWindow)
 })
 
 // 主题变化时更新聊天窗口原生按钮条带（TDD §3.2.2「渲染层消费」路径 3、§3.7 附「聊天
@@ -773,19 +892,69 @@ ipcMain.on('titlebar:set-overlay', (_event, overlay: { color?: unknown; symbolCo
 })
 
 app.whenReady().then(() => {
+  // 启动门控（docs/MintBot_TDD.md §3.7 附「桌面呈现状态机」"启动门控"一节，阶段②）：
+  // DisplayStateMap 不跨应用重启存活，preferredDisplayId 却跨存活——重启这一刻世界模型是
+  // 空的、home 却是确定的，若 home 屏上此刻正跑着一个"当前不是前台"的全屏程序，小人会
+  // 直接落在它上面。SHQueryUserNotificationState 是全局查询，只在这里调用一次；
+  // shouldDistrustHomeAtStartup 命中时关闭门控，evaluatePetPresence（windowBehavior.ts）
+  // 会在门控重新打开之前跳过 Pet 的落点/显示——只影响 Pet，Chat 窗口的初始显示不受此约束
+  // （见该函数头注释）。门控由两者之一重新打开：下面 startActiveWindowMonitoring 里第一次
+  // external 观测到达，或此处设置的有界超时（STARTUP_GATE_TIMEOUT_MS，理由见
+  // electron/main/startupGate.ts）
+  if (shouldDistrustHomeAtStartup(queryUserNotificationState())) {
+    closeStartupGate()
+    setTimeout(() => {
+      openStartupGate()
+      evaluateDesktopPresence(mainWindow, overlayWindow)
+    }, STARTUP_GATE_TIMEOUT_MS)
+  }
+
   Menu.setApplicationMenu(null)
-  createWindow()
+  const chatWindow = createWindow()
   // 悬浮窗跟随聊天窗口的最小化/焦点/关闭状态显隐（见上方 createWindow 内的
   // minimize/focus/close 监听）
   overlayWindow = createOverlayWindow()
-  // 拖拽起止信号直传悬浮窗渲染层（IPC，不经核心服务，见 docs/MintBot_TDD.md §3.7 附
-  // 「拖拽的实现方式」）：这是窗口本地的展示事件，走 HTTP→SSE 既慢又会把 core 拖进一件
-  // 与它无关的事情；转场锁、no-drag 切换等判断全部留给渲染层，主进程只转发。悬浮窗这轮
-  // 只在启动时创建一次（没有像聊天窗口那样的重建路径），因此不保留返回的 unhook 函数
-  startOverlayDragMonitor(
+  // 拖拽起止信号（Stage 3 起两个窗口都挂钩，见 electron/main/windowDragMonitor.ts 头注释）：
+  // 悬浮窗这一路除了驱动 electron/main/dragActivity.ts（供 resolver/校验模式使用），还要直传
+  // 悬浮窗渲染层（IPC，不经核心服务，见 docs/MintBot_TDD.md §3.7 附「拖拽的实现方式」）——这是
+  // 窗口本地的展示事件，走 HTTP→SSE 既慢又会把 core 拖进一件与它无关的事情；转场锁、no-drag
+  // 切换等判断全部留给渲染层，主进程只转发，渲染层这条 IPC 契约本身不变。悬浮窗这轮只在启动时
+  // 创建一次（没有像聊天窗口那样的重建路径），因此不保留返回的 unhook 函数
+  // Fix 1（second rework pass）：noteDragStart/noteDragEnd 现在按窗口分开记（见
+  // electron/main/dragActivity.ts 头部注释），因此两个调用点必须各自传入自己的 windowKey——
+  // 悬浮窗传 'overlay'，聊天窗口传 'chat'。IPC 转发（overlay:drag-start/-end）保持字节不变，
+  // 只是额外挂了这一个 windowKey 参数，不影响渲染层
+  //
+  // Fix 2（third rework pass，windowBehavior.ts）：onDragStart 现在还额外调用
+  // cancelProgrammaticMoveOnDragStart(windowKey)——用户抓住窗口这一刻就是权威的，必须立刻结束
+  // 任何仍在给这个窗口 setBounds 的程序化动画，见该函数与 windowAnimation.ts onInterrupt 定义处
+  // 关于这次改动的说明。放在 noteDragStart 之后调用：两者是独立状态，顺序不影响正确性，这里
+  // 遵循"先记录拖拽状态、再处理副作用"的既有顺序
+  startWindowDragMonitor(
     overlayWindow,
-    () => overlayWindow?.webContents.send('overlay:drag-start'),
-    () => overlayWindow?.webContents.send('overlay:drag-end')
+    () => {
+      noteDragStart('overlay')
+      cancelProgrammaticMoveOnDragStart('overlay')
+      overlayWindow?.webContents.send('overlay:drag-start')
+    },
+    () => {
+      noteDragEnd('overlay')
+      // 主动收敛不挂在这里：此刻最后一次 'moved' 与 300ms 落盘防抖都还没跑完，落点尚未确定。
+      // 它挂在 windowBehavior.ts 的 persistBoundsNow 三条终点上，见 reconcileAfterDragPlacement
+      overlayWindow?.webContents.send('overlay:drag-end')
+    }
+  )
+  // 聊天窗口这一路只驱动 dragActivity.ts——聊天窗口没有悬浮窗那套立绘/转场状态机，不需要把
+  // 起止信号转发给它的渲染层；持久化偏好表的拖拽合法性校验（persistBoundsNow/
+  // resolveDragOutcome）与聊天窗口一样要经过 isWindowDragInProgress('chat')，见
+  // windowBehavior.ts
+  startWindowDragMonitor(
+    chatWindow,
+    () => {
+      noteDragStart('chat')
+      cancelProgrammaticMoveOnDragStart('chat')
+    },
+    () => noteDragEnd('chat')
   )
   // 托盘骨架先于 applyIconFromCurrentPreset 创建，保证该函数末尾的 tray?.setImage 生效时
   // tray 已存在（createTray 内部第一行同步执行 new Tray(...)，之后才有异步的菜单构建）
@@ -795,7 +964,7 @@ app.whenReady().then(() => {
   // preset 切换 / window-behavior-changed 事件（fire-and-forget，不阻塞启动；三者内部都已
   // try/catch，失败只 console.error）
   applyIconFromCurrentPreset()
-  initWindowBehaviorConfig(mainWindow)
+  initWindowBehaviorConfig(mainWindow, overlayWindow)
   subscribeToCoreEvents()
 
   globalShortcut.register('CommandOrControl+Shift+I', () => {
@@ -805,20 +974,65 @@ app.whenReady().then(() => {
   powerMonitor.on('lock-screen', () => {
     notifySystemEvent('lock-screen')
     stopActiveWindowMonitoring()
+    // Fix 2（second rework pass）：锁屏是 dragActivity.ts 有界恢复要覆盖的三条中断路径之一——
+    // Windows 的模态移动/缩放循环可能被锁屏切换打断而收不到 WM_EXITSIZEMOVE，锁屏这一刻本身
+    // 也没有任何"用户仍在拖拽"的意义可言，清掉两个窗口的拖拽状态是精确、廉价的
+    clearDragState('overlay')
+    clearDragState('chat')
   })
   powerMonitor.on('unlock-screen', () => {
     notifySystemEvent('unlock-screen')
     startActiveWindowMonitoring()
+    // Fix 2：解锁同理——即使锁屏时漏清（例如信号本身没送达），解锁这一刻也不该再相信一段
+    // 跨越了整次锁屏的"拖拽仍在进行中"
+    clearDragState('overlay')
+    clearDragState('chat')
   })
 
-  // 真正的跳屏/隐藏/置顶/白名单黑名单逻辑见 electron/main/windowBehavior.ts
-  // （buzzing-frolicking-eich.md 计划子任务③）。mainWindow/overlayWindow 在闭包里按引用
-  // 读取，每次 tick 拿到的都是调用时刻的当前值，不会因为窗口重建/置空而脱节
+  // Stage 1 世界模型（docs/MintBot_TDD.md §3.7 附「桌面呈现状态机（Desktop Presence，四阶段
+  // 重设计）」"锁屏与解锁"一节）：显示器拓扑变化（插拔/分辨率变化）时立即补一次
+  // DisplayStateMap 校验，不必等下一次 1500ms 轮询——见 foregroundWorldModel.ts
+  // revalidateBlockersNow 头部注释，拓扑变化的"重新归属/丢弃已不存在的显示器"由校验循环
+  // 内部 screen.getDisplayMatching 现查的性质自然覆盖，这里只负责触发时机。
+  //
+  // ⚠️ 有意的例外，不要"修好"：这三个监听器不跟着 startActiveWindowMonitoring/
+  // stopActiveWindowMonitoring 的锁屏生命周期走（不在 lock-screen 时暂停），TDD 原文——
+  // "显示器拓扑变化…触发的复查是有意不受锁屏门控的例外：拓扑变了就该立刻重新归属 blocker，
+  // 与锁没锁屏无关，代价只是对少数已知 blocker 各探一次"。但同一段话后半句"监听器必须在
+  // 应用退出时注销，避免在 screen 模块拆除过程中仍然探测"要求它们仍然跟着应用的生命周期
+  // 走（will-quit 时注销），见下方 app.on('will-quit', ...) 里的 screen.removeListener
+  screen.on('display-added', handleDisplayTopologyChange)
+  screen.on('display-removed', handleDisplayTopologyChange)
+  screen.on('display-metrics-changed', handleDisplayTopologyChange)
+
+  // 真正的 relocate/隐藏/置顶/白名单黑名单逻辑见 electron/main/windowBehavior.ts
+  // （buzzing-frolicking-eich.md 计划子任务③，Stage 2 起改为 resolver + diff）。
+  // mainWindow/overlayWindow 在闭包里按引用读取，每次 tick 拿到的都是调用时刻的当前值，
+  // 不会因为窗口重建/置空而脱节
   startActiveWindowMonitoring()
+
+  // 启动时无条件求一次桌面呈现——startBlockerValidationLoop 的 onValidated 回调已经在
+  // Windows 上做了同一件事（见 foregroundWorldModel.ts 该函数头注释），但那条循环在非
+  // Windows 平台上是纯 no-op（不调用 onValidated），这里的显式调用保证所有平台都至少有一次
+  // 启动求值——门控关闭时这次调用对 Pet 是 no-op（见 evaluatePetPresence），不会绕过门控
+  evaluateDesktopPresence(mainWindow, overlayWindow)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow()
+      // Fix 5（second rework pass）：这是 createWindow() 的第二个调用点（见
+      // windowDragMonitor.ts 头部注释的更正）——此前没有挂拖拽钩子，重建出的聊天窗口拖拽起止
+      // 信号会静默收不到。不可达路径 ≠ 不存在的调用点：非 darwin 上 window-all-closed 直接
+      // app.quit()，这条分支今天走不到，但一旦那条前提改变，这里必须已经是对的，而不是留一个
+      // 只是"目前没人踩到"的坑
+      const reopenedChatWindow = createWindow()
+      startWindowDragMonitor(
+        reopenedChatWindow,
+        () => {
+          noteDragStart('chat')
+          cancelProgrammaticMoveOnDragStart('chat')
+        },
+        () => noteDragEnd('chat')
+      )
     }
   })
 })
@@ -826,6 +1040,12 @@ app.whenReady().then(() => {
 app.on('will-quit', () => {
   globalShortcut.unregisterAll()
   stopActiveWindowMonitoring()
+  // Finding D（Stage 1 review）：display-topology 监听器不跟着 stopActiveWindowMonitoring
+  // 的锁屏生命周期走（见上方注册处的注释），但仍必须在应用真正退出时注销，避免 will-quit
+  // 之后、进程实际退出之前 screen 模块可能正在拆除的这段时间里还有探测触发
+  screen.removeListener('display-added', handleDisplayTopologyChange)
+  screen.removeListener('display-removed', handleDisplayTopologyChange)
+  screen.removeListener('display-metrics-changed', handleDisplayTopologyChange)
   // 停止 subscribeToCoreEvents 的重连循环：置位阻止发起新一轮连接尝试，并清掉可能正在
   // 等待中的退避定时器——不清掉的话，退出时若循环恰好处于等待退避的阶段，这个 setTimeout
   // 会继续持有事件循环的引用（进程不能真正退出）并在到期后触发一次没有意义的重连

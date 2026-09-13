@@ -9,9 +9,10 @@ import {
 } from './windowPositions'
 
 // 只测新增的纯函数（显示器挑选 + bounds 夹紧）。getPreferredBounds/setPreferredBounds/
-// getLastDisplayId/setLastDisplayId 依赖 electron 的 app.getPath，需要真实 Electron
-// 运行时才能验证磁盘读写，这里不测（见任务说明：需要真实 BrowserWindow/screen 的部分
-// 不在这个测试文件覆盖范围内）
+// getPreferredDisplayId/commitUserChosenHomeDisplay 依赖 electron 的 app.getPath，需要真实
+// Electron 运行时才能验证磁盘读写，这里不测（见任务说明：需要真实 BrowserWindow/screen
+// 的部分不在这个测试文件覆盖范围内）。commitUserChosenHomeDisplay 的 import 边界守卫见
+// windowPositionsCommitGuard.test.ts
 
 function makeDisplay(
   id: number,

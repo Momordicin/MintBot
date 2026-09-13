@@ -39,12 +39,25 @@ export interface MemoryConfig {
   contextBudget: ContextBudgetConfig
 }
 
-// 悬浮窗行为策略（置顶模式 + 全屏白名单/黑名单），见 buzzing-frolicking-eich.md 计划子任务①。
-// fullscreenWhitelist/blacklist 存 exe 文件名（如 "chrome.exe"），不含路径
+// 桌面呈现配置。chatPinMode 与 petAvoidanceEnabled 是两个正交维度，各自只管一个窗口：
+//   chatPinMode         只管聊天窗口：'always' 始终置顶 / 'smart' 按 blocker 自动让路 /
+//                       'off' 普通窗口。悬浮窗不读这个字段。
+//   petAvoidanceEnabled 只管桌宠是否智能避让。
+//   appRules            每个应用一条规则，exeName 存文件名（如 "chrome.exe"），不含路径。
+//                       'allow' 不产生任何 blocker（即使它此刻确实全屏）；'soft' 桌宠贴边、
+//                       聊天窗取消置顶；'hard' 桌宠隐藏、聊天窗 suppress。
+export type ChatPinMode = 'always' | 'smart' | 'off'
+export type AppRuleEffect = 'allow' | 'soft' | 'hard'
+
+export interface AppRule {
+  exeName: string
+  effect: AppRuleEffect
+}
+
 export interface WindowBehaviorConfig {
-  pinMode: 'off' | 'dodge-fullscreen' | 'always-on-top'
-  fullscreenWhitelist: string[]
-  blacklist: string[]
+  chatPinMode: ChatPinMode
+  petAvoidanceEnabled: boolean
+  appRules: AppRule[]
 }
 
 export const CONFIG_PATH = path.resolve(process.cwd(), 'config.json')
@@ -73,13 +86,16 @@ const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
   },
 }
 
+// 必须与 electron/main/windowBehavior.ts 的 DEFAULT_CONFIG 一致：主进程在拿到这份配置之前
+// 用它自己那份默认值兜底，两边不一致会让"配置还没拉到"与"配置拉到了"表现出不同的行为
 const DEFAULT_WINDOW_BEHAVIOR_CONFIG: WindowBehaviorConfig = {
-  pinMode: 'off',
-  fullscreenWhitelist: [],
-  blacklist: [],
+  chatPinMode: 'off',
+  petAvoidanceEnabled: true,
+  appRules: [],
 }
 
-const VALID_PIN_MODES: readonly string[] = ['off', 'dodge-fullscreen', 'always-on-top']
+export const VALID_CHAT_PIN_MODES: readonly ChatPinMode[] = ['always', 'smart', 'off']
+export const VALID_APP_RULE_EFFECTS: readonly AppRuleEffect[] = ['allow', 'soft', 'hard']
 
 let currentMemoryConfig: MemoryConfig = DEFAULT_MEMORY_CONFIG
 let currentModelProviderConfig: ModelConfig | undefined
@@ -137,23 +153,83 @@ function mergeStringArrayField(source: unknown, field: string, label: string): s
   return filtered
 }
 
+// 旧形状（pinMode + fullscreenWhitelist + blacklist）→ 新形状的读取期兼容。旧 pinMode 只映射
+// chatPinMode，不顺带推导 petAvoidanceEnabled——没有旧字段与后者对应，一律取默认值。
+// 用户下一次改动任何字段时 updateWindowBehaviorConfig 会把新形状整段写回磁盘，旧字段自然退场
+const LEGACY_PIN_MODE_TO_CHAT_PIN_MODE: Record<string, ChatPinMode> = {
+  'always-on-top': 'always',
+  'dodge-fullscreen': 'smart',
+  off: 'off',
+}
+
+// 旧白名单/黑名单 → appRules。白名单语义"这些程序全屏时悬浮窗仍显示在最上层"即新的
+// 'allow'（不产生任何 blocker）；黑名单语义"这些程序即使不全屏，悬浮窗也不会盖在它上面"即
+// 新的 'hard'。同一个 exe 曾经可以同时出现在两份名单里（旧形状允许这种自相矛盾的配置），
+// 这里让先写入的 allow 胜出——Map 的 set 顺序保证 blacklist 不会覆盖已存在的同名 allow。
+function migrateLegacyAppRules(windowBehavior: unknown): AppRule[] {
+  const whitelist = mergeStringArrayField(windowBehavior, 'fullscreenWhitelist', 'windowBehavior.fullscreenWhitelist')
+  const blacklist = mergeStringArrayField(windowBehavior, 'blacklist', 'windowBehavior.blacklist')
+  const byExeName = new Map<string, AppRule>()
+  for (const exeName of whitelist) byExeName.set(exeName.toLowerCase(), { exeName, effect: 'allow' })
+  for (const exeName of blacklist) {
+    if (byExeName.has(exeName.toLowerCase())) continue
+    byExeName.set(exeName.toLowerCase(), { exeName, effect: 'hard' })
+  }
+  return [...byExeName.values()]
+}
+
+// 逐条校验 appRules：非法条目被单独丢弃，不连累其它条目——跟 mergeNumberField/
+// mergeStringArrayField"按字段回退，不是整体回退"同一个口径。按 exeName 大小写不敏感去重
+// （Windows 文件名本身不区分大小写），重复时保留先出现的一条
+function mergeAppRules(windowBehavior: unknown): AppRule[] {
+  const value = (windowBehavior as Record<string, unknown> | undefined)?.appRules
+  if (!Array.isArray(value)) return migrateLegacyAppRules(windowBehavior)
+
+  const byExeName = new Map<string, AppRule>()
+  let dropped = 0
+  for (const item of value) {
+    const rule = item as Record<string, unknown> | null
+    const exeName = rule?.exeName
+    const effect = rule?.effect
+    if (typeof exeName !== 'string' || exeName === '' || typeof effect !== 'string' || !VALID_APP_RULE_EFFECTS.includes(effect as AppRuleEffect)) {
+      dropped += 1
+      continue
+    }
+    const key = exeName.toLowerCase()
+    if (byExeName.has(key)) continue
+    byExeName.set(key, { exeName, effect: effect as AppRuleEffect })
+  }
+  if (dropped > 0) {
+    console.warn(`[Config] windowBehavior.appRules 存在 ${dropped} 条不合法规则，已丢弃`)
+  }
+  return [...byExeName.values()]
+}
+
 function mergeWindowBehaviorConfig(raw: unknown): WindowBehaviorConfig {
   const windowBehavior = (raw as Record<string, unknown> | undefined)?.windowBehavior
-  const pinModeValue = (windowBehavior as Record<string, unknown> | undefined)?.pinMode
+  const section = windowBehavior as Record<string, unknown> | undefined
 
-  let pinMode: WindowBehaviorConfig['pinMode']
-  if (typeof pinModeValue === 'string' && VALID_PIN_MODES.includes(pinModeValue)) {
-    pinMode = pinModeValue as WindowBehaviorConfig['pinMode']
+  const chatPinModeValue = section?.chatPinMode
+  let chatPinMode: ChatPinMode
+  if (typeof chatPinModeValue === 'string' && VALID_CHAT_PIN_MODES.includes(chatPinModeValue as ChatPinMode)) {
+    chatPinMode = chatPinModeValue as ChatPinMode
   } else {
-    console.warn(`[Config] windowBehavior.pinMode 缺失或不合法，使用默认值 'off'`)
-    pinMode = 'off'
+    // 缺失时先看旧 pinMode（见 LEGACY_PIN_MODE_TO_CHAT_PIN_MODE），旧字段也没有/不合法才
+    // 退到默认值。只有"两个字段都没能给出答案"时才 warn——旧配置被正常识别不是异常情况
+    const legacy = typeof section?.pinMode === 'string' ? LEGACY_PIN_MODE_TO_CHAT_PIN_MODE[section.pinMode] : undefined
+    if (legacy !== undefined) {
+      chatPinMode = legacy
+    } else {
+      console.warn(`[Config] windowBehavior.chatPinMode 缺失或不合法，使用默认值 '${DEFAULT_WINDOW_BEHAVIOR_CONFIG.chatPinMode}'`)
+      chatPinMode = DEFAULT_WINDOW_BEHAVIOR_CONFIG.chatPinMode
+    }
   }
 
-  return {
-    pinMode,
-    fullscreenWhitelist: mergeStringArrayField(windowBehavior, 'fullscreenWhitelist', 'windowBehavior.fullscreenWhitelist'),
-    blacklist: mergeStringArrayField(windowBehavior, 'blacklist', 'windowBehavior.blacklist'),
-  }
+  const petAvoidanceValue = section?.petAvoidanceEnabled
+  const petAvoidanceEnabled =
+    typeof petAvoidanceValue === 'boolean' ? petAvoidanceValue : DEFAULT_WINDOW_BEHAVIOR_CONFIG.petAvoidanceEnabled
+
+  return { chatPinMode, petAvoidanceEnabled, appRules: mergeAppRules(windowBehavior) }
 }
 
 // 加载 + 校验 + 合并一次，返回这次加载本身是否成功读到并解析了 config.json（不代表每个
@@ -363,18 +439,24 @@ export function updateBackgroundModelProviderConfig(partial: Partial<ModelConfig
 // 合并起点必须用 getWindowBehaviorConfig()（已经过 mergeWindowBehaviorConfig 补齐默认值的
 // 当前配置），不能像 updateModelProviderConfig 那样直接用 readRawSection('windowBehavior')——
 // modelProvider 没有字段级默认值合并逻辑，磁盘原始内容本身就是权威态；但 windowBehavior 的
-// 读取路径会给 pinMode/fullscreenWhitelist/blacklist 各自补默认值，磁盘上的 section 可能
-// 残缺（例如手改/旧版本只留了 pinMode）。若合并起点用 readRawSection，残缺字段会直接从
-// merged 里消失，被写回磁盘、同步进 currentWindowBehaviorConfig，再经 broadcastEvent 发给
-// 主进程，导致 electron/main/windowBehavior.ts 里 fullscreenWhitelist.some(...) 拿到
-// undefined 而抛出 uncaughtException（设置页白屏的直接原因）
+// 读取路径会给 chatPinMode/petAvoidanceEnabled/appRules 各自补默认值（并顺带读旧形状，见
+// mergeWindowBehaviorConfig），磁盘上的 section 可能残缺（手改，或仍然是旧形状）。若合并
+// 起点用 readRawSection，残缺字段会直接从 merged 里消失，被写回磁盘、同步进
+// currentWindowBehaviorConfig，再经 broadcastEvent 发给主进程——而主进程
+// （electron/main/windowBehavior.ts）整份替换缓存后会拿着 undefined 的 appRules 去
+// find(...)，在 500ms 前台轮询里持续抛 uncaughtException
 export function updateWindowBehaviorConfig(partial: Partial<WindowBehaviorConfig>): WindowBehaviorConfig {
   const merged = { ...getWindowBehaviorConfig(), ...partial } as WindowBehaviorConfig
-  // 后端兜底去重：渲染层的"添加"流程虽然已经检查过 includes()，但这是并发写入下唯一
-  // 真正权威的一道关卡——写入的数组里如果混进重复文件名，React 列表按值当 key 会撞车，
-  // 删除操作也会一次性把重复项全部删掉而不是删单条，在这里去重从根源上杜绝这种情况
-  if (merged.fullscreenWhitelist) merged.fullscreenWhitelist = [...new Set(merged.fullscreenWhitelist)]
-  if (merged.blacklist) merged.blacklist = [...new Set(merged.blacklist)]
+  // 后端兜底去重：渲染层的"添加"流程虽然已经检查过同名规则，但这是并发写入下唯一真正权威的
+  // 一道关卡——写入的数组里如果混进同名规则，React 列表按 exeName 当 key 会撞车，删除操作也
+  // 会一次性把重复项全部删掉而不是删单条。大小写不敏感，与 mergeAppRules 同一个理由
+  if (Array.isArray(merged.appRules)) {
+    const byExeName = new Map<string, AppRule>()
+    for (const rule of merged.appRules) {
+      if (!byExeName.has(rule.exeName.toLowerCase())) byExeName.set(rule.exeName.toLowerCase(), rule)
+    }
+    merged.appRules = [...byExeName.values()]
+  }
   writeConfigSection('windowBehavior', merged)
   currentWindowBehaviorConfig = merged
   loaded = true

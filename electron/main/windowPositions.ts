@@ -6,7 +6,8 @@ import crypto from 'crypto'
 // 问题1（buzzing-frolicking-eich.md）：跳屏尺寸/位置持久化查表，取代"临时算出来"的跳屏
 // 目标。每块显示器上每个窗口的位置/尺寸是一份持久化的、只由用户拖动才会更新的偏好记录——
 // 跳屏时只是查表，查到的值恒定不变，不管跳多少次、跳多快，都不会累积漂移（根因见
-// windowBehavior.ts 里 moveToNonFullscreenDisplay 的调用点注释）。
+// windowBehavior.ts 里 moveToDisplay 的调用点注释——Stage 2 起改名，见该函数头注释：
+// 选目标显示器现在是 resolver 的职责，这个函数只负责移动到调用方给定的目标）。
 //
 // 纯 Electron 主进程自己的窗口摆放缓存，跟核心服务的 config.json/设置页毫无关系，不走
 // HTTP，不复用 services/core/config/index.ts 的 WindowBehaviorConfig——这里独立维护一份
@@ -14,6 +15,14 @@ import crypto from 'crypto'
 // WindowBehaviorConfig 同样的"两边本就该各自独立"的约定。
 
 export type WindowKey = 'chat' | 'overlay'
+
+// Fix 4（second rework pass）：单一权威定义，供 windowBehavior.ts（落盘防抖）与
+// dragActivity.ts（推导 DRAG_END_TAIL_MS）共用——此前两个文件各自维护一份数值必须一致的
+// 常量，靠注释手动钉住"改一处记得改另一处"，是本项目一直在清理的那类漂移。放在这里而不是
+// 两者之一，是因为本文件已经是两者共同的、无循环 import 风险的叶子模块（只 import
+// electron/fs/path/crypto），跟 DEFAULT_WINDOW_SIZE 是同一个先例——那个常量同样由 index.ts
+// 与 windowBehavior.ts 共用，同样放在这里
+export const PERSIST_DEBOUNCE_MS = 300
 
 export interface Bounds {
   x: number
@@ -36,11 +45,21 @@ export const DEFAULT_WINDOW_SIZE: Record<WindowKey, { width: number; height: num
 interface WindowPositionsStore {
   chat: Record<string, Bounds>
   overlay: Record<string, Bounds>
-  // 「最近一次用过哪块显示器」——纯运行时缓存字段（同文件头部约定：无迁移机制，陌生/
-  // 缺失形状一律退化成默认值，不抛错）。跟 chat/overlay 两张 Bounds 表分开维护：那两张表
-  // 回答的是「这块显示器上偏好的位置/尺寸是多少」，这个字段回答的是另一个问题——
-  // 「上次退出时窗口停在哪块显示器上」，首次启动 / 记录的显示器已经不存在时由调用方退回
-  // 最大显示器（见 pickLargestDisplay/resolveStartupDisplay）
+  // Stage 2（docs/MintBot_TDD.md §3.7 附「桌面呈现状态机」"Placement：用户的「家」与自动
+  // 避让的位置彻底分离"一节）：这个字段现在是 preferredDisplayId——用户真正选择的 home
+  // display，只由真实拖拽写入（见 getPreferredDisplayId/commitUserChosenHomeDisplay 与
+  // electron/main/desktopPresence.ts 的 resolveDragOutcome），自动避让/跳屏/归位一律不写。
+  // 磁盘字段名沿用旧名 lastDisplayId 不改——本文件开头已声明这是一份无迁移机制的纯运行时
+  // 缓存，形状陌生/缺失时直接退化成默认值（首次启动退回最大显示器，见
+  // pickLargestDisplay/resolveStartupDisplay），改字段名不会导致任何数据损坏或需要迁移，
+  // 只是老用户的这一份记忆在这次升级后重新从"最大显示器"起步，可以接受。
+  //
+  // 语义变化（取代旧的"上次退出时窗口停在哪块显示器上，冲突解除时把当前屏采纳为下次启动
+  // 的家"）：旧模型用 setLastDisplayId 在冲突解除时"猜"新家，是本次重设计明确取消的行为
+  // （TDD 原文："旧实现用 setLastDisplayId 在冲突解除时「把当前所在屏采纳为下次启动的家」，
+  // 是在猜，本设计取消这一猜测"）。现在只有 handleWindowMoved 里跑过
+  // resolveDragOutcome 的真实拖拽（且拖拽发生在"待在家"状态下、落到了另一块屏）才会写这
+  // 个字段，见 windowBehavior.ts persistBoundsNow
   lastDisplayId: { chat: number | null; overlay: number | null }
 }
 
@@ -105,20 +124,52 @@ export function setPreferredBounds(windowKey: WindowKey, displayId: number, boun
   persist(store)
 }
 
-// 「上次退出时在用哪块显示器」的读写：跟 getPreferredBounds/setPreferredBounds 分开维护
-// （见 WindowPositionsStore.lastDisplayId 字段注释）。写入时机见 electron/main/index.ts
-// 里 createWindow/createOverlayWindow 启动时的一次性记录，以及 windowBehavior.ts
-// handleWindowMoved 在用户真实拖动/缩放时的持续更新——不在跳屏/归位路径上调用，
-// 避免把 dodge-fullscreen 的临时躲避目的地误记成"上次退出时的位置"
-export function getLastDisplayId(windowKey: WindowKey): number | null {
+// 原始读取，刻意不导出——理由跟下面 writeHomeDisplayId 不导出是对称的一条，只是方向相反。
+// 这个值在用户从未真正拖动过窗口时是 null，而"这个窗口此刻的家是哪块屏"这个问题**永远有
+// 答案**（没有记录就退回最大显示器）。两者曾经同时可见，于是调用点各自拼装
+// `resolveStartupDisplay(displays, getPreferredDisplayId(key))` 这个两步算式——一共拼了五遍，
+// 其中一遍漏了，直接产出过一个真实缺陷：新档案上 getPreferredDisplayId 恒为 null，
+// persistBoundsNow 据此把 temporaryRelocation 算成 false，于是"自动避让期间的拖拽"被当成
+// "在家拖拽"，把一块临时屏提交成了持久化的家——正好绕过 commitUserChosenHomeDisplay 这道门
+// 存在的全部理由（门管住了"谁能写"，管不住"决定要不要写的那个判断本身是错的"）。
+// 现在模块外只剩 getEffectiveHomeDisplay 一个读法，那个算式无处可拼
+function getPreferredDisplayId(windowKey: WindowKey): number | null {
   const store = load()
   return store.lastDisplayId[windowKey]
 }
 
-export function setLastDisplayId(windowKey: WindowKey, displayId: number): void {
+// 「这个窗口此刻的家是哪块屏」——唯一对外的 home 读取口，恒有答案，不可能为 null。
+// electron/main/index.ts 的启动恢复与 windowBehavior.ts 的 evaluatePetPresence /
+// evaluateChatPresence / persistBoundsNow / notePlacement 全部经这里，因此它们对"家"的定义
+// 按构造就是同一个，不再是五份各自维护、迟早漂移的等价算式
+export function getEffectiveHomeDisplay(displays: Electron.Display[], windowKey: WindowKey): Electron.Display {
+  return resolveStartupDisplay(displays, getPreferredDisplayId(windowKey))
+}
+
+// 原始写入，刻意不导出：模块之外没有任何路径能绕过 commitUserChosenHomeDisplay 直接改这
+// 个字段，把"只能从一个门进来"变成编译期事实，而不是靠命名/注释这类约定
+function writeHomeDisplayId(windowKey: WindowKey, displayId: number): void {
   const store = load()
   store.lastDisplayId[windowKey] = displayId
   persist(store)
+}
+
+// docs/MintBot_TDD.md §3.7 附「桌面呈现状态机」"Placement：用户的「家」与自动避让的位置彻底
+// 分离"一节的核心不变量："自动避让只修改 currentDisplayId 并置 temporaryRelocation = true，
+// 永远不写入任何偏好——不会把自动避难屏偷偷记成新家"。这是磁盘上 preferredDisplayId
+// 唯一允许的写入口。
+//
+// 不叫 setPreferredDisplayId：那个名字读起来跟 setPreferredBounds（例行的、每次落点都可能
+// 触发的坐标更新）没有区别，会让"从自动路径调它"显得平平无奇——本函数的名字必须读成"正在
+// 提交一次用户认定的长期家"，让下一个读到调用点的人在被诱惑之前先意识到这不是一次普通赋值。
+//
+// 唯一合法调用方是 electron/main/homeDisplayCommit.ts 的
+// commitHomeDisplayFromDragOutcome（真实拖拽 → resolveDragOutcome 判定"待在家时拖到另一块
+// 屏"才会调用，见该文件与 windowBehavior.ts persistBoundsNow）。这条约束由
+// windowPositionsCommitGuard.test.ts 的 import 边界检查守卫——见该文件头注释里对"抓得住/
+// 抓不住什么"的诚实说明
+export function commitUserChosenHomeDisplay(windowKey: WindowKey, displayId: number): void {
+  writeHomeDisplayId(windowKey, displayId)
 }
 
 // 首次在某块屏幕出现时的默认值：只算这一次，调用方算完立刻 setPreferredBounds 存表，
@@ -192,11 +243,11 @@ export function computeSizeForDisplay(
 // 位置公式本来就分属两种不同的默认落点约定，不在这里合并
 //
 // windowKey 是可选的第四个参数（review 发现的问题1b）：聊天窗口首次启动走的是上面提到的
-// "居中"公式，不经过这里；但聊天窗口 dodge-fullscreen 跳屏到一块从未去过的显示器时确实会
-// 经过这里（windowBehavior.ts 的 moveToNonFullscreenDisplay，悬浮窗与聊天窗口共用同一个
-// 函数；曾经归位到一块从未去过的显示器也会经过这里的 restoreToDisplay，该函数已随聊天
-// 窗口切走 dodge-fullscreen 模式时"原地不动、不再归位"的改动整体删除）。悬浮窗与聊天窗口
-// 现在各自独立判断是否需要跳屏（不再是 either/or），
+// "居中"公式，不经过这里；但聊天窗口的 Desktop Presence resolver（Stage 2 起取代
+// dodge-fullscreen 分支的实现，见 windowBehavior.ts evaluateChatPresence）relocate 到一块
+// 从未去过的显示器时确实会经过这里（windowBehavior.ts 的 moveToDisplay，悬浮窗与聊天窗口
+// 共用同一个函数）。悬浮窗与聊天窗口各自独立的 resolver 判断是否需要 relocate（不是
+// either/or），
 // 若两者在同一个 tick 都第一次落到同一块全新显示器上（常见于双屏、且两者跳屏前恰好都在
 // 同一块"家"屏幕），排除项相同、目标显示器也会算出相同结果——都贴同一个右下角的话，
 // 132×132 的悬浮窗会被 290×520 的聊天窗口默认落点完全包住（同一个角，悬浮窗几何上是
@@ -239,13 +290,13 @@ export function pickLargestDisplay(displays: Electron.Display[]): Electron.Displ
   })
 }
 
-// 首次启动（lastDisplayId 为 null）或上次所在的显示器已经不在当前连接的显示器列表里
-// （拔掉了显示器 / 两次会话之间 id 变了）时，退回最大显示器；否则用回上次那块
+// 首次启动（preferredDisplayId 为 null）或 home 显示器已经不在当前连接的显示器列表里
+// （拔掉了显示器 / 两次会话之间 id 变了）时，退回最大显示器；否则用回 home
 export function resolveStartupDisplay(
   displays: Electron.Display[],
-  lastDisplayId: number | null
+  preferredDisplayId: number | null
 ): Electron.Display {
-  const remembered = lastDisplayId !== null ? displays.find(display => display.id === lastDisplayId) : undefined
+  const remembered = preferredDisplayId !== null ? displays.find(display => display.id === preferredDisplayId) : undefined
   return remembered ?? pickLargestDisplay(displays)
 }
 

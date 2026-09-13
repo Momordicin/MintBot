@@ -25,11 +25,15 @@
 import { hasServerRestarted } from './eventsGeneration'
 
 // 主进程本地类型：跟 index.ts/windowBehavior.ts 同样的独立定义约定（各自维护一份，不互相
-// import），理由见 index.ts 顶部 WindowBehaviorConfig 处的注释
+// import），理由见 index.ts 顶部 WindowBehaviorConfig 处的注释。
+//
+// Stage 4（docs/MintBot_TDD.md §3.7 附「桌面呈现状态机」"配置模型拆分"一节）：pinMode 拆成
+// chatPinMode/petAvoidanceEnabled 两个独立概念，fullscreenWhitelist/blacklist 合并成一张
+// 每应用一条规则的 appRules 表，见 windowBehavior.ts/displayStateMap.ts 同名类型定义处的注释
 export interface WindowBehaviorConfig {
-  pinMode: 'off' | 'dodge-fullscreen' | 'always-on-top'
-  fullscreenWhitelist: string[]
-  blacklist: string[]
+  chatPinMode: 'always' | 'smart' | 'off'
+  petAvoidanceEnabled: boolean
+  appRules: Array<{ exeName: string; effect: 'allow' | 'soft' | 'hard' }>
 }
 
 export interface CoreEventsConsumerHandlers {

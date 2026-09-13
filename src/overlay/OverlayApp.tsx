@@ -18,6 +18,17 @@ import {
   shouldPlayFallAsleep,
   transitionEndInstant,
 } from './transitionState.js'
+import {
+  type EdgeHoverState,
+  INITIAL_EDGE_HOVER_STATE,
+  EDGE_HOVER_LEAVE_DEBOUNCE_MS,
+  onEdgeHoverEnter,
+  onEdgeHoverLeave,
+  onEdgeHoverDebounceElapsed,
+  resetEdgeHoverOnPresenceLeftEdge,
+  edgeHoverExpandedChanged,
+  isDragHandleSuppressedByEdge,
+} from './edgeHoverState.js'
 
 const CORE_URL = 'http://127.0.0.1:3000'
 
@@ -41,6 +52,20 @@ interface EmotionEventPayload {
   perceived_user?: unknown
   sessionId: string
   explicitSleep: boolean
+}
+
+// 主进程 'desktop-presence:changed' 广播的负载（Stage 3 part 2，见
+// electron/main/windowBehavior.ts broadcastPetPresenceIfChanged、src/electron-api.d.ts
+// onDesktopPresenceChanged）。本地按实际运行时形状定义，不跨进程共享类型——与本文件
+// EmotionEventPayload 同一约定。handleSuppressed 是 Resolver/Controller 边界修正新增的字段
+// （见 electron/main/desktopPresence.ts computeHandleSuppressed 定义处注释）：主进程同时读
+// latestDesired 与 applied 算出的安全门，本文件只服从它，不再自己用 presence === 'EDGE' 推导
+// ——见 edgeHoverState.ts isDragHandleSuppressedByEdge 定义处注释
+type PetPresence = 'ACTIVE' | 'AMBIENT' | 'EDGE' | 'HIDDEN'
+interface DesktopPresencePayload {
+  presence: PetPresence
+  edgeSide: 'left' | 'right' | null
+  handleSuppressed: boolean
 }
 
 // manifest 里的路径相对角色包根目录，可能带子目录（如 "gifs/idle1.gif"）——逐段
@@ -125,10 +150,77 @@ export function OverlayApp() {
   // 驱动，不能指望 CSS :hover——手柄声明 -webkit-app-region: drag 后，:hover 命中会在到达
   // DOM 之前就被 WM_NCHITTEST 拦成 HTCAPTION（electron#13534），只有 class 驱动不受影响
   const [isHandleVisible, setIsHandleVisible] = useState(false)
+  // 贴边未展开时强制抑制手柄（第二次 rework FIX 1，纯判断见 src/overlay/edgeHoverState.ts
+  // isDragHandleSuppressedByEdge 定义处注释：手柄固定在右上角，正好落在贴边可视条带里，
+  // 挡住了 hover 展开唯一的触发方向）。必须是 state 而不是内联判断——presence
+  // （presenceRef）与 hover 展开态（edgeHoverStateRef）都只用 ref 存，改变时没有对应的重渲染
+  // 路径，若不落一个 state 出来，这里读到的永远是挂载时的旧值。两个写入点：presence 广播
+  // 到达时（下方 handleDesktopPresenceChanged）与 hover 展开态翻转时（applyEdgeHoverState），
+  // 两者是唯二能改变这个判断结果的输入
+  const [isDragHandleSuppressed, setIsDragHandleSuppressed] = useState(false)
   // 立绘 mouseLeave 后延迟隐藏手柄的一次性定时器：光标从立绘移到手柄本身也会先经过立绘的
   // mouseLeave，立即隐藏会让手柄在光标够到之前就消失，因此要等 400ms。卸载与 preset-switched
   // 都需要清掉，避免旧 preset 的隐藏定时器在新 preset 上触发
   const handleHideTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+
+  // EDGE hover 展开（Stage 3 part 2，docs/MintBot_TDD.md §3.7 附「桌面呈现状态机」"鼠标
+  // hover Edge 可让角色临时展开"，纯逻辑见 src/overlay/edgeHoverState.ts）。presenceRef 是
+  // 主进程 'desktop-presence:changed' 广播的最新值，只在 presence === 'EDGE' 时 hover 才有
+  // 意义；edgeHoverStateRef 是本地的展开/收起 + 排队中收起时刻；edgeHoverTimerRef 是那份
+  // 排队收起对应的一次性定时器，跟 handleHideTimerRef 同一套写法（不用 state，因为这里不需要
+  // 驱动任何重渲染——展开与否完全由主进程移动窗口体现，渲染层没有对应的 DOM/CSS 要跟着变）
+  const presenceRef = useRef<DesktopPresencePayload>({ presence: 'AMBIENT', edgeSide: null, handleSuppressed: false })
+  const edgeHoverStateRef = useRef<EdgeHoverState>(INITIAL_EDGE_HOVER_STATE)
+  const edgeHoverTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+
+  // 把新的 hover 状态落地：只在"逻辑上的展开态"真的翻转时才向主进程发一次请求
+  // （edgeHoverExpandedChanged，见该函数注释——挡的是"光标掠过贴边条带产生一连串请求"）
+  function applyEdgeHoverState(next: EdgeHoverState) {
+    const previous = edgeHoverStateRef.current
+    edgeHoverStateRef.current = next
+    if (edgeHoverExpandedChanged(previous, next)) {
+      window.electronAPI.requestOverlayEdgeHover(next.expanded)
+    }
+    // FIX 1：hover 展开态每次变化都要重算一次手柄抑制——即使 expanded 没变
+    // （edgeHoverExpandedChanged 为假）也无所谓,这里只是把 state 设成同一个值,不会产生额外
+    // 重渲染之外的副作用。第三次 rework：第一个参数改读主进程算好的 handleSuppressed，不再
+    // 自己用 presence 推导，见 isDragHandleSuppressedByEdge 定义处注释
+    setIsDragHandleSuppressed(isDragHandleSuppressedByEdge(presenceRef.current.handleSuppressed, next.expanded))
+  }
+
+  // 排队中的收起到点时的检查（同 scheduleThresholdCheck/scheduleHandleHide 到点时的写法）：
+  // 到点不代表一定要收起——如果期间又发生过一次进入，onEdgeHoverDebounceElapsed 会发现
+  // pendingCollapseAt 已经被清成 null，原样返回，这里因此是安全的 no-op
+  function scheduleEdgeHoverCollapse(collapseAt: number) {
+    if (edgeHoverTimerRef.current !== undefined) {
+      clearTimeout(edgeHoverTimerRef.current)
+    }
+    edgeHoverTimerRef.current = setTimeout(() => {
+      edgeHoverTimerRef.current = undefined
+      applyEdgeHoverState(onEdgeHoverDebounceElapsed(edgeHoverStateRef.current, Date.now()))
+    }, Math.max(0, collapseAt - Date.now()))
+  }
+
+  // 只在 presence 真的是 EDGE 时才响应——不是 EDGE 时这两个函数是 no-op，不会向主进程发
+  // 任何请求（守卫同时也存在于主进程一侧，见 requestOverlayEdgeHover 头注释："Ignore hover
+  // requests when the pet is not EDGE. Make this a guard in main, not an assumption about
+  // renderer behaviour"——这里的判断是第一道、不是唯一一道）
+  function handleEdgeHoverEnter() {
+    if (presenceRef.current.presence !== 'EDGE') return
+    if (edgeHoverTimerRef.current !== undefined) {
+      clearTimeout(edgeHoverTimerRef.current)
+      edgeHoverTimerRef.current = undefined
+    }
+    applyEdgeHoverState(onEdgeHoverEnter(edgeHoverStateRef.current))
+  }
+
+  function handleEdgeHoverLeave() {
+    if (presenceRef.current.presence !== 'EDGE') return
+    if (!edgeHoverStateRef.current.expanded) return // 没展开过，没有要撤销的东西
+    const next = onEdgeHoverLeave(edgeHoverStateRef.current, Date.now(), EDGE_HOVER_LEAVE_DEBOUNCE_MS)
+    edgeHoverStateRef.current = next // expanded 不变，只是排队收起，不经过 applyEdgeHoverState
+    scheduleEdgeHoverCollapse(next.pendingCollapseAt!)
+  }
 
   // 按下一个阈值的绝对时刻调度一次性定时器（TDD「阈值表」运行期部分）。定时器到点后重新
   // 拉取 GET /state 再重算 y，而不是本地推算：它天然纠正「悬浮窗错过的用户消息」——刷新
@@ -327,10 +419,14 @@ export function OverlayApp() {
       handleHideTimerRef.current = undefined
     }
     setIsHandleVisible(true)
+    // EDGE hover 展开复用同一个 mouseEnter（贴边时可视区域本来就只剩这一小条立绘，物理上
+    // 也没有别的 DOM 元素能收到这个事件），见 handleEdgeHoverEnter 定义处注释
+    handleEdgeHoverEnter()
   }
 
   function handlePortraitMouseLeave() {
     scheduleHandleHide()
+    handleEdgeHoverLeave()
   }
 
   function handleMouseDown(event: React.MouseEvent) {
@@ -494,6 +590,14 @@ export function OverlayApp() {
       const wasDragging = isDraggingRef.current
       isDraggingRef.current = false
       dragStartYRef.current = null
+      // Fix（本轮 sweep 发现，跟 EDGE 重构本身无关，同一类过去出过事的形状）：scheduleHandleHide
+      // 的到点检查在 isDraggingRef 为真时会提前 return、消费掉这一轮定时器却不隐藏（见该函数
+      // 定义处注释"拖拽进行中，抑制隐藏，交由 handleDragEnd 重新起计时"）——也就是说手柄隐藏
+      // 定时器一旦在拖拽期间到点，就必须由某个"拖拽结束"路径重新起一轮，否则手柄永远停在放大
+      // 态。handleDragEnd 会重新起（松手是主路径）；这里是松手信号丢失后的兜底路径，此前只清了
+      // isDraggingRef，没有重新起这一轮 400ms，手柄因此可能永久停在放大态——跟 handleDragEnd
+      // 补同一次 scheduleHandleHide()
+      if (wasDragging) scheduleHandleHide()
       if (transitionInProgressRef.current !== null) {
         endTransition()
       } else if (wasDragging) {
@@ -518,6 +622,47 @@ export function OverlayApp() {
     return () => {
       unsubscribeStart()
       unsubscribeEnd()
+    }
+  }, [])
+
+  // Presence 广播的订阅（Stage 3 part 2 Task 1）+ EDGE hover 的 presence-changed 复位
+  // （Task 3："presence changed away from EDGE" forcing a reset）。只在挂载时注册一次，
+  // 理由同上——回调只通过 ref 读写状态
+  useEffect(() => {
+    function handleDesktopPresenceChanged(payload: DesktopPresencePayload) {
+      presenceRef.current = payload
+      if (payload.presence !== 'EDGE') {
+        // presence 离开 EDGE：这份 transient hover 状态立刻强制复位（TDD「EDGE_HOVERED 不
+        // 进入桌面呈现状态机」的隐含要求，见 resetEdgeHoverOnPresenceLeftEdge 定义处注释）。
+        // 不经过 applyEdgeHoverState 再发一次 IPC——主进程自己在 presence 离开 EDGE 时就会
+        // 把 overlayEdgeHovered 清掉（见 windowBehavior.ts runPetEdgeController 的
+        // `!== 'EDGE'` 分支），这里只需要让渲染层自己这份状态同步复位，避免下一次重新进入
+        // EDGE 时带着上一个 episode 遗留的展开态
+        if (edgeHoverTimerRef.current !== undefined) {
+          clearTimeout(edgeHoverTimerRef.current)
+          edgeHoverTimerRef.current = undefined
+        }
+        edgeHoverStateRef.current = resetEdgeHoverOnPresenceLeftEdge()
+      }
+      // FIX 1：presence 广播是另一个能改变"该不该抑制手柄"结论的输入（进入/离开 EDGE 本身），
+      // 不只是上面 hover 展开态翻转那一条——两处都要重算，见 isDragHandleSuppressed 声明处注释。
+      // 第三次 rework：读 payload.handleSuppressed（主进程算好的安全门），不再自己用
+      // payload.presence 推导
+      setIsDragHandleSuppressed(isDragHandleSuppressedByEdge(payload.handleSuppressed, edgeHoverStateRef.current.expanded))
+    }
+
+    const unsubscribe = window.electronAPI.onDesktopPresenceChanged(handleDesktopPresenceChanged)
+    // 必须先完成上面的订阅，再发 ready——保证主进程收到 ready 之后回发的当前值不会抢在这个
+    // 监听注册之前到达。这两行本身在渲染进程内同步执行，订阅是本进程内的 EventEmitter
+    // 注册（不经过 IPC），因此这里的调用顺序就是实际生效顺序；完整的竞态论证见
+    // electron/main/windowBehavior.ts sendCurrentPetPresenceOnReady 头注释
+    window.electronAPI.notifyOverlayReady()
+
+    return () => {
+      unsubscribe()
+      if (edgeHoverTimerRef.current !== undefined) {
+        clearTimeout(edgeHoverTimerRef.current)
+      }
     }
   }, [])
 
@@ -685,9 +830,19 @@ export function OverlayApp() {
           近方形立绘吃满 max-width/height 100% 时，root 上没被立绘盖住的可拖区域宽度为 0，
           唯一还留着的可拖区就是这个固定 20px 圆形角标。始终挂载在 DOM 里（只用 opacity 切换
           可见度），不透明度不影响命中区——手柄淡出后原地仍可拖，可见度只是提示不是开关。
-          .overlay-root--locked 时被下面 CSS 覆盖为 no-drag，见 overlay.css 顶部注释 */}
+          .overlay-root--locked 时被下面 CSS 覆盖为 no-drag，见 overlay.css 顶部注释。
+          FIX 1：贴边未展开时（isDragHandleSuppressed，见该 state 声明处 + edgeHoverState.ts
+          isDragHandleSuppressedByEdge 注释）二选一改挂 --edge-suppressed 而不是 --visible——
+          手柄本身压在贴边可视条带里，堵死了 hover 展开唯一的触发方向，此时必须隐藏 + no-drag，
+          与 isHandleVisible 的基线状态互斥，不会同时出现在同一个元素上 */}
       <div
-        className={`overlay-drag-handle${isHandleVisible ? ' overlay-drag-handle--visible' : ''}`}
+        className={`overlay-drag-handle${
+          isDragHandleSuppressed
+            ? ' overlay-drag-handle--edge-suppressed'
+            : isHandleVisible
+              ? ' overlay-drag-handle--visible'
+              : ''
+        }`}
       />
     </div>
   )

@@ -1,24 +1,35 @@
 import type { FastifyInstance } from 'fastify'
-import { getWindowBehaviorConfig, updateWindowBehaviorConfig, type WindowBehaviorConfig } from '../config/index.js'
+import {
+  getWindowBehaviorConfig,
+  updateWindowBehaviorConfig,
+  VALID_CHAT_PIN_MODES,
+  VALID_APP_RULE_EFFECTS,
+  type AppRule,
+  type WindowBehaviorConfig,
+} from '../config/index.js'
 import { broadcastEvent } from '../events/broadcast.js'
-
-const VALID_PIN_MODES: readonly string[] = ['off', 'dodge-fullscreen', 'always-on-top']
 
 // 校验通过返回 null，失败返回错误信息（供 400 响应使用）——同 routes/config.ts 的
 // validateModelConfigPartial 风格：用户主动发起的请求，无效输入直接 400 拒绝整个请求，
 // 不做被动文件热重载那套"单字段告警回退"
 function validateWindowBehaviorPartial(partial: Partial<WindowBehaviorConfig>): string | null {
-  if (partial.pinMode !== undefined && !VALID_PIN_MODES.includes(partial.pinMode)) {
-    return 'pinMode must be one of off, dodge-fullscreen, always-on-top'
+  if (partial.chatPinMode !== undefined && !VALID_CHAT_PIN_MODES.includes(partial.chatPinMode)) {
+    return `chatPinMode must be one of ${VALID_CHAT_PIN_MODES.join(', ')}`
   }
-  if (partial.fullscreenWhitelist !== undefined) {
-    if (!Array.isArray(partial.fullscreenWhitelist) || partial.fullscreenWhitelist.some(item => typeof item !== 'string')) {
-      return 'fullscreenWhitelist must be an array of strings'
+  if (partial.petAvoidanceEnabled !== undefined && typeof partial.petAvoidanceEnabled !== 'boolean') {
+    return 'petAvoidanceEnabled must be a boolean'
+  }
+  if (partial.appRules !== undefined) {
+    if (!Array.isArray(partial.appRules)) {
+      return 'appRules must be an array'
     }
-  }
-  if (partial.blacklist !== undefined) {
-    if (!Array.isArray(partial.blacklist) || partial.blacklist.some(item => typeof item !== 'string')) {
-      return 'blacklist must be an array of strings'
+    for (const rule of partial.appRules as AppRule[]) {
+      if (typeof rule?.exeName !== 'string' || rule.exeName === '') {
+        return 'each appRules entry must have a non-empty string exeName'
+      }
+      if (!VALID_APP_RULE_EFFECTS.includes(rule.effect)) {
+        return `each appRules entry must have an effect of ${VALID_APP_RULE_EFFECTS.join(', ')}`
+      }
     }
   }
   return null
