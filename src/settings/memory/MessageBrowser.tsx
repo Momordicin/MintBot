@@ -3,8 +3,6 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 const CORE_URL = 'http://127.0.0.1:3000'
 const PAGE_SIZE = 20
 
-// GET /messages 返回的历史消息 shape，渲染层按自己的展示需要本地重复定义，
-// 不引入 shared/types 依赖（同 ChatWindow.tsx 里 HistoryMessage 的约定）
 interface HistoryMessage {
   id: number
   role: 'user' | 'assistant' | 'system'
@@ -33,8 +31,6 @@ export function MessageBrowser({ sessionId }: MessageBrowserProps) {
   const [isLoading, setIsLoading] = useState(false)
   const [isLoadingMore, setIsLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // sessionId 切换时中断上一个 session 仍在途的初始加载请求，避免它晚到后把
-  // 已经属于新 session 的空列表状态覆盖掉
   const controllerRef = useRef<AbortController | null>(null)
 
   const loadInitial = useCallback((sid: string) => {
@@ -74,9 +70,6 @@ export function MessageBrowser({ sessionId }: MessageBrowserProps) {
   const loadMore = useCallback(async () => {
     if (!hasMore || isLoadingMore || messages.length === 0) return
     const beforeId = messages[0].id
-    // 和 loadInitial 共用同一个 controllerRef：sessionId 切换时 useEffect 的 cleanup 会
-    // abort 它，避免这次"加载更多"晚于切换才返回，把旧 session 的消息错误地 prepend 进新
-    // session 已经加载好的列表里
     controllerRef.current?.abort()
     const controller = new AbortController()
     controllerRef.current = controller

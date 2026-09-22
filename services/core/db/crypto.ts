@@ -5,9 +5,6 @@ const ALGORITHM = 'aes-256-gcm'
 const IV_LENGTH = 12
 const TAG_LENGTH = 16
 
-// 注意：切换 encryptSensitiveFields 开关不支持对已有数据重新加密/解密迁移（超出本次范围）。
-// 某一模式下写入的数据必须以同一模式读回，中途切换会导致已写入数据无法正确解密/显示为密文。
-
 function getKey(): Buffer {
   const key = process.env.DB_ENCRYPTION_KEY
   if (!key) throw new Error('[Crypto] DB_ENCRYPTION_KEY is not set')

@@ -36,7 +36,7 @@ const DEMO_SENTENCES: DemoSentence[] = [
 const DEMO_QUERIES = [
   '喜欢', // 2 字词
   '猫', // 单字
-  '原神', // 专有名词
+  '鸣潮', // 专有名词
   '张三', // 人名
   '欢猫', // 跨"喜欢"/"猫"两个词边界的子串，不是真实存在的词
   'ChatGPT', // 英文整词

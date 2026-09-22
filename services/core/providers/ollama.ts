@@ -18,9 +18,6 @@ export async function isOllamaRunning(baseUrl: string): Promise<boolean> {
   }
 }
 
-// 供设置页"模型名下拉框"（CharacterPanel.tsx）使用：列出本机 Ollama 已拉取的模型名。
-// 与 isOllamaRunning 同款降级风格——Ollama 未运行/请求失败/响应形状不对都不抛错，
-// 直接返回空数组，交给调用方（GET /models）决定如何展示空列表
 export async function listOllamaModels(baseUrl: string): Promise<string[]> {
   try {
     const response = await fetch(`${baseUrl}/api/tags`, {
@@ -46,9 +43,6 @@ async function waitForOllama(baseUrl: string, timeoutMs = 30000): Promise<void> 
   throw new Error('[Ollama] Timed out waiting for Ollama to start')
 }
 
-// 启动失败（spawn 报错 / 等待超时）不向调用方抛出——TDD Phase 1 checklist 要求的"未运行时
-// 明确 UI 提示"由 state.ts 的 buildStatePayload 每次重新调用 isOllamaRunning 独立承担，不依赖
-// 这里启动时这一次检测是否成功；这里失败只需 console.error 记录，让核心服务继续启动
 export async function ensureOllama(ollamaBaseUrl?: string): Promise<void> {
   const baseUrl = getOllamaBaseUrl(ollamaBaseUrl)
 
@@ -65,7 +59,6 @@ export async function ensureOllama(ollamaBaseUrl?: string): Promise<void> {
       stdio: 'ignore',
     })
   } catch (err) {
-    // spawn 同步抛出的场景（如 EMFILE），不能让它冒泡到调用方导致核心服务启动整体失败退出
     console.error('[Ollama] Failed to spawn:', err instanceof Error ? err.message : err)
     return
   }

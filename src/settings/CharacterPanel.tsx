@@ -7,12 +7,7 @@ import { usePrefersDark } from '../usePrefersDark.js'
 import './settings.css'
 
 const CORE_URL = 'http://127.0.0.1:3000'
-// 与 ChatWindow.tsx 的同名常量保持一致——两边各自维护一份是有意的，同本文件其它渲染层
-// DTO 一样按渲染层自己的约定本地重复定义（见 DIV-009）。主题实时预览需要跟真实聊天窗口
-// 同一条壁纸解析规则（wallpaperUrlFor），否则预览会展示一张跟实际聊天窗口不一致的壁纸
 const DEFAULT_WALLPAPER_URL = `${CORE_URL}/wallpapers/bg.jpg`
-// 与 services/core/session/displayConfig.ts 的 DEFAULT_DISPLAY_CONFIG 保持一致，
-// 仅当 presetSnapshot.displayConfig 缺失（v7 之前创建的历史冻结快照）时用作控件初始值
 const DEFAULT_DISPLAY_CONFIG: PresetDisplayConfig = {
   chatBgRgb: [15, 15, 20],
   chatBgOpacity: 0.65,
@@ -27,12 +22,8 @@ interface PresetOption {
   name: string
 }
 
-// 人设编辑的完整流程有且只有一个当前所在的步骤，用一个判别式联合表达，避免用一组独立
-// 布尔值时出现"同时为 true"的不可能状态
 type SystemPromptStep = 'idle' | 'editing' | 'confirmingSave' | 'confirmingApply' | 'saving'
 
-// 模型覆盖是"用哪个模型回答"的技术设置，不是"覆写人格"，因此比 SystemPromptStep 少一步：
-// 没有 systemPrompt 那种带文案的 confirmingSave 步骤，点"保存"直接进入立即应用/下次生效的选择
 type ModelOverrideStep = 'idle' | 'editing' | 'chooseApply' | 'saving'
 
 interface CharacterPanelProps {
@@ -42,23 +33,17 @@ interface CharacterPanelProps {
 
 export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelProps) {
   const [presets, setPresets] = useState<PresetOption[]>([])
-  // 角色文件夹下拉框（createCharacterId 的选项来源）：assets/characters/ 下已有的角色包
-  // 子目录名，挂载时拉取一次——同 presets 列表一样不需要之后自动刷新
   const [characterIds, setCharacterIds] = useState<string[]>([])
   const [isUploadingWallpaper, setIsUploadingWallpaper] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [isRenaming, setIsRenaming] = useState(false)
   const [renameValue, setRenameValue] = useState('')
   const [isSavingRename, setIsSavingRename] = useState(false)
-  // 创建入口：低风险单步动作（同改名），不需要人设编辑那套两段确认——填表单/提交/完成
   const [isCreating, setIsCreating] = useState(false)
   const [createName, setCreateName] = useState('')
   const [createCharacterId, setCreateCharacterId] = useState('')
   const [createSystemPrompt, setCreateSystemPrompt] = useState('')
   const [isSavingCreate, setIsSavingCreate] = useState(false)
-  // 角色卡导入：复用上面同一套创建表单/handleCreateSave，只是把"用户逐字段填"换成
-  // "从卡片解析结果预填"。这两块状态只在导入流程里被赋值，手动创建（handleCreateStart）
-  // 全程不碰它们，值恒为 null
   const [isImportingCard, setIsImportingCard] = useState(false)
   const [isGeneratingSystemPrompt, setIsGeneratingSystemPrompt] = useState(false)
   const [importedCardFields, setImportedCardFields] = useState<{
@@ -68,97 +53,43 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
     mesExample: string
     systemPromptRaw: string
   } | null>(null)
-  // 仅当解析出的卡片是 PNG 内嵌（hasEmbeddedAvatar）时才有值；创建成功后用它触发一次
-  // 尽力而为的头像上传（POST /characters/:characterId/avatar），失败不影响 preset 本身
   const [importedAvatarFile, setImportedAvatarFile] = useState<{ data: Uint8Array<ArrayBuffer>; filename: string } | null>(null)
-  // tags/creator/creatorNotes/characterVersion 只写入角色包 manifest.json，不进 systemPrompt
-  // （TDD §3.7 附「角色卡导入」字段映射表），因此单独一份状态、不与 importedCardFields
-  // 合并——后者是要发给 /characters/import/generate 重新改写的结构化字段，这四个字段跟
-  // "改写" 无关。JSON 卡片与 PNG 卡片都可能带有这四个字段，因此不像 importedAvatarFile
-  // 那样只在 hasEmbeddedAvatar 时才有值
   const [importedMetadataFields, setImportedMetadataFields] = useState<{
     tags: string[]
     creator: string
     creatorNotes: string
     characterVersion: string
   } | null>(null)
-  // 人设编辑：五个互斥步骤中始终只有一个在生效，见上方 SystemPromptStep 类型注释
   const [systemPromptStep, setSystemPromptStep] = useState<SystemPromptStep>('idle')
   const [systemPromptValue, setSystemPromptValue] = useState('')
-  // "下次生效"保存成功后的一次性提示，跟 errorMessage 共用同一块内联展示位置（渲染处见下方）
   const [systemPromptNotice, setSystemPromptNotice] = useState<string | null>(null)
-  // 模型覆盖：四个互斥步骤中始终只有一个在生效，见上方 ModelOverrideStep 类型注释
   const [modelOverrideStep, setModelOverrideStep] = useState<ModelOverrideStep>('idle')
   const [useGlobalModel, setUseGlobalModel] = useState(true)
   const [overrideModelType, setOverrideModelType] = useState<ModelConfig['type']>('anthropic')
   const [overrideModelName, setOverrideModelName] = useState('')
-  // overrideModelName 下拉框的选项来源：随 overrideModelType 变化重新拉取（ollama 走真实
-  // 已拉取模型名，anthropic/openai 走后端静态列表），与 useGlobalModel/编辑态与否无关——
-  // 见下方对应的 useEffect
   const [modelNameOptions, setModelNameOptions] = useState<string[]>([])
-  // 区分"还在拉取中"和"拉取完成但列表确实是空的"（如 Ollama 没运行）——空数组本身
-  // 无法区分这两种状态，缺了这个 flag 会导致加载中的一瞬间也显示"未运行"的错误提示
   const [isLoadingModelNames, setIsLoadingModelNames] = useState(false)
-  // 同 systemPromptNotice 的"下次生效"一次性提示，各自独立不共用，避免两个不相关的动作
-  // 互相覆盖对方的提示文案
   const [modelOverrideNotice, setModelOverrideNotice] = useState<string | null>(null)
-  // 快速连续切换 preset 时，上一次切换还在途中的请求必须被中断，否则哪个请求先返回不确定
   const switchPresetControllerRef = useRef<AbortController | null>(null)
-  // 壁纸上传自己独立的 controller，不与 switchPresetControllerRef 共用：两者取消方向不对称——
-  // 切换 preset 应该能中断一次仍在进行中的壁纸上传，但反过来一次壁纸上传不应该去中断
-  // "正在进行中的 preset 切换"本身
   const wallpaperControllerRef = useRef<AbortController | null>(null)
-  // 改名是独立于切换/上传的动作，不需要与它们互相中断（不像 wallpaper↔switch 那组不对称关系）——
-  // 仅在组件卸载时随其它两个 controller 一起被 abort
   const renameControllerRef = useRef<AbortController | null>(null)
-  // 创建同样独立于其它动作，仅在组件卸载时随其余 controller 一起被 abort
   const createControllerRef = useRef<AbortController | null>(null)
-  // 角色卡导入的解析请求与"模型辅助改写"请求各自独立，互不中断，仅在组件卸载时一起 abort
-  // （与 createControllerRef 同样的独立性考量：这两步都没有防抖/自动重发概念）
   const importControllerRef = useRef<AbortController | null>(null)
   const generateControllerRef = useRef<AbortController | null>(null)
-  // 头像上传与元数据合并都是创建成功后的尽力而为后续步骤（fire-and-forget，不 await、
-  // 不阻塞/回滚已经成功的创建），但同其它请求一样仍需要在卸载时被 abort，避免残留请求
-  // 在组件已卸载后继续跑——各自独立的 ref，不与上面几个互相中断，同 createControllerRef
-  // 等的独立性考量
   const avatarUploadControllerRef = useRef<AbortController | null>(null)
   const metadataMergeControllerRef = useRef<AbortController | null>(null)
-  // 人设编辑没有防抖/自动保存概念（每次发送都是用户显式点过两段确认之后的结果），
-  // 因此只需要 abort-then-reissue + 卸载时 abort，不需要 displayConfig 那套"卸载时补发"逻辑
   const systemPromptControllerRef = useRef<AbortController | null>(null)
-  // 模型覆盖同样没有防抖概念，独立于 systemPromptControllerRef——两个编辑区块互不中断对方
   const modelOverrideControllerRef = useRef<AbortController | null>(null)
-  // 模型名下拉框选项的拉取请求：overrideModelType 快速切换时，旧请求的响应可能比新请求
-  // 更晚返回，abort-then-reissue 避免用旧 type 的结果覆盖新 type 已经拉到的列表
   const modelNameOptionsControllerRef = useRef<AbortController | null>(null)
-  // 让 handleWallpaperPick 在系统文件选择框（非模态，用户可在此期间继续切换 preset）关闭后，
-  // 能读到"点击选图按钮那一刻之后是否发生过 preset 切换"的最新值，而不是闭包捕获的旧 prop
   const presetSnapshotRef = useRef<PresetSnapshot | null>(presetSnapshot)
-  // 颜色/透明度这一组控件的本地实时值，随拖动/选色即时更新，独立于 presetSnapshot 的
-  // 只读展示，通过下面的防抖 PATCH 落库
   const [chatBgOpacity, setChatBgOpacity] = useState<number>(DEFAULT_DISPLAY_CONFIG.chatBgOpacity)
-  // 主题控件（src/chat/theme.ts 的参考实现结构化模型）：mode 是主轴，accent 是用户唯一选的
-  // 强调色，tint 是把 accent 往中性面上染多少的旋钮——三个字段同一组本地实时值，同样通过
-  // 下面的防抖 PATCH 落库。chatBgRgb 不在这里：它已经是 legacy 字段（按 services/core 的
-  // session/displayConfig.ts 里的旧背景色模型选值，不再是 accentRgb 的来源，见
-  // DEFAULT_DISPLAY_CONFIG 的取值与那边的注释），本面板不再渲染它的编辑控件
   const [themeMode, setThemeMode] = useState<PresetDisplayConfig['themeMode']>(DEFAULT_DISPLAY_CONFIG.themeMode)
   const [accentRgb, setAccentRgb] = useState<[number, number, number]>(DEFAULT_DISPLAY_CONFIG.accentRgb)
   const [tintStrength, setTintStrength] = useState<number>(DEFAULT_DISPLAY_CONFIG.tintStrength)
-  // 与改名/壁纸同款 abort-then-reissue，但颜色/透明度共用同一个 controller——两者都是
-  // 同一个 PATCH /presets/:presetId 端点、同一类低风险外观偏好，没有必要分两个 controller
   const displayConfigControllerRef = useRef<AbortController | null>(null)
   const displayConfigDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // 防抖期间累积的待发送增量，连同发起编辑那一刻所在的 presetId 一起保存——避免定时器
-  // 触发时才现读 presetSnapshotRef，如果这期间用户已经切换了 preset，会把这次编辑误发到
-  // 新 preset 上；只发生变化的字段，不在这里补全另一个字段
   const pendingDisplayConfigRef = useRef<{ presetId: string; partial: Partial<PresetDisplayConfig> } | null>(null)
 
-  // 主题实时预览：PATCH /presets/:presetId 是防抖的，聊天窗口又只在重新聚焦时才重拉
-  // /state（见 ChatWindow.tsx 顶部说明），拖动滑块到看见效果之间有一段不可用的延迟——
-  // 这里直接吃上面几个控件的本地实时 state（而不是 presetSnapshot 里落盘的旧值），
-  // 每次渲染都用同一套 deriveTheme()+themeCssVars() 重新算一遍，用户拖动的同一 tick
-  // 就能看到结果，不等任何请求往返
   const prefersDark = usePrefersDark()
   const previewResolvedMode = resolveThemeMode(themeMode, prefersDark)
   const previewTheme = useMemo(
@@ -169,9 +100,6 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
     () => themeCssVars(previewTheme, chatBgOpacity),
     [previewTheme, chatBgOpacity]
   )
-  // 壁纸解析规则与 ChatWindow.tsx 的 wallpaperUrlFor 完全一致：当前 preset 自己的
-  // wallpaperPath（若已设置），否则退回默认壁纸——预览要展示的是"这个 preset 实际会
-  // 用哪张壁纸"，不是随便一张图
   const previewWallpaperUrl = presetSnapshot?.wallpaperPath
     ? `${CORE_URL}/wallpapers/${encodeURIComponent(presetSnapshot.wallpaperPath)}`
     : DEFAULT_WALLPAPER_URL
@@ -180,10 +108,6 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
     presetSnapshotRef.current = presetSnapshot
   }, [presetSnapshot])
 
-  // 切换到不同 preset 时，用新 preset 的存量值重新初始化控件，不带着上一个 preset 的
-  // 编辑中的值——按 presetId（而非整个 presetSnapshot 对象引用）判断，因为改名/换壁纸/
-  // 这里自己的显示设置 PATCH 成功后都会用一个新对象引用回调 onSwitched，但那些情况下
-  // 并没有真的切换 preset，不应该打断另一个还没来得及发送的防抖编辑
   useEffect(() => {
     setChatBgOpacity(presetSnapshot?.displayConfig?.chatBgOpacity ?? DEFAULT_DISPLAY_CONFIG.chatBgOpacity)
     setThemeMode(presetSnapshot?.displayConfig?.themeMode ?? DEFAULT_DISPLAY_CONFIG.themeMode)
@@ -192,16 +116,10 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [presetSnapshot?.presetId])
 
-  // 同上一个 effect 的理由：按 presetId（而非整个对象引用）判断，因为这个功能自己的保存
-  // 成功后也会用新对象引用回调 onSwitched，但那不是真的切换了 preset，不应该打断确认流程；
-  // 真的切换 preset 时则无条件放弃当前所在的任何步骤，回到 idle 并用新 preset 的
-  // systemPrompt 重新填充只读展示
   useEffect(() => {
     setSystemPromptStep('idle')
     setSystemPromptValue(presetSnapshot?.systemPrompt ?? '')
     setSystemPromptNotice(null)
-    // 模型覆盖区块跟人设区块同款理由：真的切换 preset 时无条件放弃当前步骤，回到 idle
-    // 并用新 preset 的 modelType/modelName 重新填充只读展示/编辑态初始值
     setModelOverrideStep('idle')
     setUseGlobalModel(presetSnapshot?.modelType === null)
     setOverrideModelType(presetSnapshot?.modelType ?? 'anthropic')
@@ -210,9 +128,6 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [presetSnapshot?.presetId])
 
-  // 这个面板会随设置窗口的 tab 切换被卸载/重新挂载（不像原来常驻的聊天窗口）——卸载时若
-  // 有仍在进行中的切换/上传，必须主动 abort，否则重新挂载后的新实例拿到的是全新的、值为
-  // null 的 ref，无法感知/中断旧实例遗留的在途请求，导致"哪个响应生效"重新变得不确定
   useEffect(() => {
     return () => {
       switchPresetControllerRef.current?.abort()
@@ -228,8 +143,6 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
       avatarUploadControllerRef.current?.abort()
       metadataMergeControllerRef.current?.abort()
 
-      // 防抖定时器还没到、组件就被卸载：待发的最后一次颜色/透明度编辑不能被静默丢弃，
-      // 在这里同步补发一次。组件已经卸载，不需要等待响应也不需要 onSwitched
       if (displayConfigDebounceRef.current) {
         clearTimeout(displayConfigDebounceRef.current)
         displayConfigDebounceRef.current = null
@@ -242,7 +155,6 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ displayConfig: pending.partial }),
         }).catch(() => {
-          // fire-and-forget：组件已卸载，失败无处展示，也没有重试的必要
         })
       }
     }
@@ -253,7 +165,6 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
       .then(r => r.json())
       .then((list: PresetOption[]) => setPresets(list))
       .catch(() => {
-        // preset 列表拉取失败不影响本面板其它功能，静默忽略即可
       })
   }, [])
 
@@ -265,14 +176,10 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
       })
       .then((body: { characterIds: string[] }) => setCharacterIds(body.characterIds))
       .catch(() => {
-        // 跟旧版自由输入框不同：下拉框选项完全来自这次拉取，拉取失败会让创建入口的
-        // 下拉框永久空着且不可选——必须显式提示，不能静默吞掉让用户以为自己操作有误
         setErrorMessage('角色文件夹列表加载失败，无法创建新角色，请检查核心服务后重试')
       })
   }, [])
 
-  // overrideModelType 变化时重新拉取模型名下拉框的选项——不限定在 modelOverrideStep
-  // === 'editing' 时才拉取，保持逻辑简单：即使当前不在编辑态，下次进入编辑态时选项也已就位
   useEffect(() => {
     modelNameOptionsControllerRef.current?.abort()
     const controller = new AbortController()
@@ -292,14 +199,12 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
       })
       .catch(err => {
         if (err instanceof DOMException && err.name === 'AbortError') return
-        // 模型名列表拉取失败（如后端不可达）不阻塞其它功能，下拉框走"空列表占位"分支即可
         setIsLoadingModelNames(false)
       })
   }, [overrideModelType])
 
   const switchPreset = useCallback(async (presetId: string) => {
     switchPresetControllerRef.current?.abort()
-    // 切换 preset 使任何仍绑定在旧 preset 上下文里的壁纸上传失效——见 wallpaperControllerRef 声明处注释
     wallpaperControllerRef.current?.abort()
     const controller = new AbortController()
     switchPresetControllerRef.current = controller
@@ -322,7 +227,6 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
 
       onSwitched(state)
     } catch (err) {
-      // AbortError 是被更新的一次切换取消掉的，不算切换失败，不展示错误提示
       if (!(err instanceof DOMException && err.name === 'AbortError')) {
         setErrorMessage('切换角色失败，请稍后重试')
       }
@@ -332,20 +236,14 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
   const handleWallpaperPick = useCallback(async () => {
     const presetId = presetSnapshotRef.current?.presetId
     if (!presetId) return
-    // 系统文件选择框非模态，按钮本身又没有 disabled 态，连点会并发打开多个 dialog；
-    // 用这个标记防止重入，配合下面按钮的 disabled 属性一起生效
     if (isUploadingWallpaper) return
 
     setIsUploadingWallpaper(true)
     setErrorMessage(null)
     try {
-      // 这里捕获的 presetId 只代表点击那一刻的当前 preset，dialog resolve 之后必须
-      // 重新核对（见下方 presetSnapshotRef 检查）
       const result = await window.electronAPI.selectWallpaperFile()
       if (!result) return
 
-      // dialog 打开期间用户已经切换到了别的 preset：这次上传的上下文已经过期，
-      // 静默放弃即可——用户当前实际所在的 preset 完全没受影响，不算失败
       if (presetSnapshotRef.current?.presetId !== presetId) return
 
       wallpaperControllerRef.current?.abort()
@@ -372,9 +270,6 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
       onSwitched(state)
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
-      // Electron 的 ipcMain.handle 抛错经 IPC 传回渲染层时，message 可能被包一层前缀
-      // （如 "Error invoking remote method ...: Error: file-too-large"），用 includes
-      // 而非严格相等匹配，避免因包装格式而漏判
       if (err instanceof Error && err.message.includes('file-too-large')) {
         setErrorMessage('图片文件过大，请选择小于 10MB 的图片')
         return
@@ -402,7 +297,6 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
 
     const trimmedName = renameValue.trim()
     if (!trimmedName) {
-      // 客户端校验，不发请求
       setErrorMessage('名称不能为空')
       return
     }
@@ -428,23 +322,13 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
       const state: AppState = await response.json()
       if (controller.signal.aborted) return
 
-      // 改名请求和切换 preset 是两个独立的、互不 abort 的请求（见上方设计说明），意味着
-      // 这次改名的响应可能在用户已经切到别的 preset 之后才姗姗来迟地返回——这次响应里的
-      // presetSnapshot 是发起改名那一刻、旧 preset 的状态，如果这时候直接 onSwitched(state)，
-      // 会把已经切换过去的新 preset 界面悄悄冲回旧的。只有当前仍然停留在被改名的这个 preset
-      // 上时，才应用这次响应
       if (state.presetSnapshot?.presetId === presetSnapshotRef.current?.presetId) {
         onSwitched(state)
       }
-      // GET /presets 只在挂载时拉取一次，之后不会被任何东西自动刷新，这里本地 patch 一下
-      // 让下拉框的选项文字立即同步，不必等一次全量重新拉取——这一步跟上面是否切换过 preset
-      // 无关，改名操作本身对目标 preset 是有效的，下拉框里那一项的名字理应更新
       setPresets(prev => prev.map(p => (p.presetId === presetId ? { ...p, name: trimmedName } : p)))
       setIsRenaming(false)
     } catch (err) {
-      // AbortError 由更晚一次的改名请求触发，不算失败，不展示错误提示
       if (err instanceof DOMException && err.name === 'AbortError') return
-      // 保留输入内容、停留在编辑态，让用户可以直接重试而不用重新输入
       setErrorMessage('重命名失败，请稍后重试')
     } finally {
       setIsSavingRename(false)
@@ -453,12 +337,8 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
 
   const handleCreateStart = useCallback(() => {
     setCreateName('')
-    // 手动创建只能从已有文件夹里选（不保留自由输入路径），默认选中第一个已有文件夹；
-    // characterIds 尚未拉取到时退化为空字符串，与之前的行为一致，不阻塞创建入口本身
     setCreateCharacterId(characterIds[0] ?? '')
     setCreateSystemPrompt('')
-    // 手动创建与导入流程共用同一张表单：显式清空上一次可能残留的导入态，
-    // 避免手动创建误触发"模型辅助改写"按钮或误上传上一次导入的头像
     setImportedCardFields(null)
     setImportedAvatarFile(null)
     setImportedMetadataFields(null)
@@ -475,16 +355,13 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
   }, [])
 
   const handleImportCardPick = useCallback(async () => {
-    // 系统文件选择框非模态，按钮本身又没有 disabled 态之外的重入防护，用这个标记防重入。
-    // 同一个标记也用来在此期间禁用"创建角色"入口（见渲染处 disabled={isImportingCard}），
-    // 防止用户在解析结果返回前开始手动创建、随后被这里姗姗来迟地覆盖已手打的表单内容
     if (isImportingCard) return
 
     setIsImportingCard(true)
     setErrorMessage(null)
     try {
       const result = await window.electronAPI.selectCharacterCardFile()
-      if (!result) return // 用户取消选择，不算失败
+      if (!result) return 
 
       importControllerRef.current?.abort()
       const controller = new AbortController()
@@ -508,7 +385,6 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
       const parsed = await response.json()
       if (controller.signal.aborted) return
 
-      // 预填同一张创建表单，用户接下来的编辑/提交路径与手动创建完全一致（handleCreateSave）
       setCreateName(parsed.name)
       setCreateCharacterId(parsed.suggestedCharacterId)
       setCreateSystemPrompt(parsed.systemPrompt)
@@ -519,10 +395,7 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
         mesExample: parsed.mesExample,
         systemPromptRaw: parsed.systemPromptRaw,
       })
-      // 只有 PNG 内嵌卡片才带头像候选；非 PNG 来源（V1/V2 纯 JSON）没有可保存的图片
       setImportedAvatarFile(parsed.hasEmbeddedAvatar ? result : null)
-      // tags/creator/creatorNotes/characterVersion：JSON 卡片与 PNG 卡片都可能带有，
-      // 不像头像候选那样只在 PNG 来源时才有值
       setImportedMetadataFields({
         tags: parsed.tags,
         creator: parsed.creator,
@@ -566,11 +439,9 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
       const { systemPrompt }: { systemPrompt: string } = await response.json()
       if (controller.signal.aborted) return
 
-      // 简单的可撤销文本替换：直接覆盖文本框当前内容，不是新增一步确认
       setCreateSystemPrompt(systemPrompt)
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
-      // 失败时保留文本框里已有的内容（手工模板结果或上一次改写结果），不清空、不阻塞创建
       setErrorMessage('模型辅助改写失败，请稍后重试')
     } finally {
       setIsGeneratingSystemPrompt(false)
@@ -581,8 +452,6 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
     const trimmedName = createName.trim()
     const trimmedCharacterId = createCharacterId.trim()
     const trimmedSystemPrompt = createSystemPrompt.trim()
-    // 客户端校验，不发请求——与后端 POST /presets 的校验顺序/规则一致，避免为客户端能
-    // 拦下的错误多绕一次网络往返
     if (!trimmedName) {
       setErrorMessage('名称不能为空')
       return
@@ -617,14 +486,9 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
       const { presetId, name }: { presetId: string; name: string } = await response.json()
       if (controller.signal.aborted) return
 
-      // 与 handleRenameSave 同款本地 patch：下拉框选项立即出现新创建的角色，不必等一次
-      // 全量重新拉取 GET /presets
       setPresets(prev => [...prev, { presetId, name }])
       setIsCreating(false)
 
-      // 角色卡导入的可选后续步骤：仅当解析出的卡片带头像候选（PNG 内嵌）时才触发，
-      // 尽力而为、fire-and-forget——失败不影响已经创建成功的 preset 本身，不重试不提示，
-      // 因此故意不 await 这次 fetch
       if (importedAvatarFile) {
         avatarUploadControllerRef.current?.abort()
         const avatarController = new AbortController()
@@ -638,12 +502,8 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
           body: importedAvatarFile.data,
           signal: avatarController.signal,
         }).catch(() => {
-          // 同上：preset 已创建成功，头像保存失败无处展示，也没有重试的必要
         })
       }
-      // 同上：角色卡导入的另一个可选后续步骤，每次导入创建都触发（不像头像候选那样只在
-      // PNG 来源时才有值）——tags/creator/creatorNotes/characterVersion 写入 manifest.json，
-      // 失败同样不影响已经创建成功的 preset 本身
       if (importedMetadataFields) {
         metadataMergeControllerRef.current?.abort()
         const metadataController = new AbortController()
@@ -654,19 +514,15 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
           body: JSON.stringify(importedMetadataFields),
           signal: metadataController.signal,
         }).catch(() => {
-          // 同上：preset 已创建成功，元数据保存失败无处展示，也没有重试的必要
         })
       }
       setImportedCardFields(null)
       setImportedAvatarFile(null)
       setImportedMetadataFields(null)
 
-      // 复用既有的完整切换流程（含 onSwitched 回调），不重复实现同一套逻辑
       void switchPreset(presetId)
     } catch (err) {
-      // AbortError 由更晚一次创建请求（理论上不会发生，创建没有防抖/自动重发）或组件卸载触发
       if (err instanceof DOMException && err.name === 'AbortError') return
-      // 保留输入内容、停留在表单里，让用户可以直接重试而不用重新输入（同 handleRenameSave 的失败处理）
       setErrorMessage('创建角色失败，请稍后重试')
     } finally {
       setIsSavingCreate(false)
@@ -681,14 +537,12 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
   }, [])
 
   const handleSystemPromptEditCancel = useCallback(() => {
-    // 丢弃这次输入，回 idle——下次点"编辑"会重新从 presetSnapshotRef 填充
     setSystemPromptStep('idle')
     setErrorMessage(null)
   }, [])
 
   const handleSystemPromptSaveClick = useCallback(() => {
     if (!systemPromptValue.trim()) {
-      // 客户端校验，不进入确认流程，不发请求
       setErrorMessage('人设内容不能为空')
       return
     }
@@ -713,7 +567,7 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
     if (!presetId) return
 
     const trimmedValue = systemPromptValue.trim()
-    if (!trimmedValue) return // 已经在 handleSystemPromptSaveClick 校验过，这里不应该发生
+    if (!trimmedValue) return 
 
     systemPromptControllerRef.current?.abort()
     const controller = new AbortController()
@@ -736,9 +590,6 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
       const state: AppState = await response.json()
       if (controller.signal.aborted) return
 
-      // 同 handleRenameSave 的一致性检查：响应姗姗来迟、期间用户已经切换到别的 preset 时，
-      // 不应用这次响应，也不展示属于旧 preset 的一次性提示（切换本身已经由上面的 reseed
-      // effect 把这个面板重置回 idle 了）
       if (state.presetSnapshot?.presetId === presetSnapshotRef.current?.presetId) {
         onSwitched(state)
         if (!applyNow) {
@@ -747,14 +598,8 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
         setSystemPromptStep('idle')
       }
     } catch (err) {
-      // AbortError 由更晚一次的保存请求触发，不算失败，不展示错误提示
       if (err instanceof DOMException && err.name === 'AbortError') return
-      // 同上面成功分支一致的一致性检查：请求失败姗姗来迟、期间用户已经切换到别的 preset 时，
-      // 这个错误跟当前显示的 preset 无关（reseed effect 早已把面板重置到新 preset 的状态），
-      // 不应该把面板从新 preset 的状态里拽回 editing
       if (presetId !== presetSnapshotRef.current?.presetId) return
-      // 保留输入内容、回到 editing（不是 confirmingSave/confirmingApply）——不记住之前
-      // 选过哪个确认，重试要重新走一遍两段确认，同 handleRenameSave 的失败处理
       setErrorMessage('保存人设失败，请稍后重试')
       setSystemPromptStep('editing')
     }
@@ -770,14 +615,12 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
   }, [])
 
   const handleModelOverrideEditCancel = useCallback(() => {
-    // 丢弃这次输入，回 idle——下次点"编辑"会重新从 presetSnapshotRef 填充
     setModelOverrideStep('idle')
     setErrorMessage(null)
   }, [])
 
   const handleModelOverrideSaveClick = useCallback(() => {
     if (!useGlobalModel && !overrideModelName.trim()) {
-      // 客户端校验，不进入立即应用/下次生效的选择，不发请求
       setErrorMessage('模型名称不能为空')
       return
     }
@@ -795,7 +638,7 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
 
     const modelType = useGlobalModel ? null : overrideModelType
     const trimmedModelName = useGlobalModel ? null : overrideModelName.trim()
-    if (!useGlobalModel && !trimmedModelName) return // 已经在 handleModelOverrideSaveClick 校验过，这里不应该发生
+    if (!useGlobalModel && !trimmedModelName) return 
 
     modelOverrideControllerRef.current?.abort()
     const controller = new AbortController()
@@ -818,8 +661,6 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
       const state: AppState = await response.json()
       if (controller.signal.aborted) return
 
-      // 同 handleRenameSave/handleSystemPromptSend 的一致性检查：响应姗姗来迟、期间用户
-      // 已经切换到别的 preset 时，不应用这次响应
       if (state.presetSnapshot?.presetId === presetSnapshotRef.current?.presetId) {
         onSwitched(state)
         if (!applyNow) {
@@ -828,12 +669,8 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
         setModelOverrideStep('idle')
       }
     } catch (err) {
-      // AbortError 由更晚一次的保存请求触发，不算失败，不展示错误提示
       if (err instanceof DOMException && err.name === 'AbortError') return
-      // 同上面成功分支一致的一致性检查：请求失败姗姗来迟、期间用户已经切换到别的 preset 时，
-      // 这个错误跟当前显示的 preset 无关，不应该把面板从新 preset 的状态里拽回 editing
       if (presetId !== presetSnapshotRef.current?.presetId) return
-      // 保留输入内容、回到 editing（不是 chooseApply）——重试要重新选一次立即应用/下次生效
       setErrorMessage('保存模型设置失败，请稍后重试')
       setModelOverrideStep('editing')
     }
@@ -856,8 +693,6 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
       })
       .then(state => {
         if (controller.signal.aborted) return
-        // 同 handleRenameSave 那类竞态（防抖保存的响应可能在用户已经切到别的 preset
-        // 之后才姗姗来迟地返回），只有仍停留在被改的这个 preset 上时才应用
         if (state.presetSnapshot?.presetId === presetSnapshotRef.current?.presetId) {
           onSwitched(state)
         }
@@ -884,9 +719,6 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
     const presetId = presetSnapshotRef.current?.presetId
     if (!presetId) return
 
-    // 同一防抖窗口内先后改了颜色又改透明度（或反过来）时合并成一次 PATCH；presetId 不同
-    // 说明上一个待发变更属于另一个 preset（理论上不该发生，因为下面的重新初始化 effect
-    // 已经按 presetId 切换过控件了），保险起见不跨 preset 合并
     const prevPending = pendingDisplayConfigRef.current
     pendingDisplayConfigRef.current = {
       presetId,
@@ -903,17 +735,12 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
     scheduleDisplayConfigChange({ chatBgOpacity: opacity })
   }, [scheduleDisplayConfigChange])
 
-  // "无色"色块：复用 handleOpacityChange 同一条防抖保存链路，只是把值固定为 0，
-  // 不新增任何 state——chatBgOpacity === 0 本身就是"无色正在生效"的完整信号
   const handleNoColorClick = useCallback(() => {
     setChatBgOpacity(0)
     scheduleDisplayConfigChange({ chatBgOpacity: 0 })
   }, [scheduleDisplayConfigChange])
 
   const handleThemeModeChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-    // 下拉框选项是固定的三个值（day/night/auto），不需要在这里防御未知值——真正的校验
-    // 防线是 PATCH /presets/:presetId（services/core/session/displayConfig.ts 的
-    // isValidThemeMode），这里的值必然来自下面渲染的三个 <option> 之一
     const mode = e.target.value as PresetDisplayConfig['themeMode']
     setThemeMode(mode)
     scheduleDisplayConfigChange({ themeMode: mode })
@@ -931,36 +758,21 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
     scheduleDisplayConfigChange({ tintStrength: tint })
   }, [scheduleDisplayConfigChange])
 
-  // 重置按钮只做一件事：把 tintStrength 写为 0。它之所以正确等价于"回到基准配色"，
-  // 完全是因为 src/chat/theme.ts 的 deriveTheme() 本身的不变量——tintStrength<=0 时每个
-  // 中性角色都直接短路返回 DAY_TABLE/NIGHT_TABLE 里的原始值，逐字节等于参考发布值
-  // （见 theme.ts 的 tintRole()）。这个按钮不需要、也不应该另起一段"把各个角色分别重置"
-  // 的逻辑——单值写入之外的任何额外步骤都会让正确性依赖这里的代码而不是 theme.ts 的不变量
   const handleResetTint = useCallback(() => {
     setTintStrength(0)
     scheduleDisplayConfigChange({ tintStrength: 0 })
   }, [scheduleDisplayConfigChange])
 
-  // 角色文件夹下拉框的选项：默认是 assets/characters/ 下已有文件夹；仅当处于"导入角色卡"
-  // 流程（importedCardFields 非空，只在这条路径被赋值）且 suggestedCharacterId 不在已有
-  // 文件夹列表里时，额外在顶部插入一个预选中的合成选项——手动创建（importedCardFields 恒为
-  // null）没有这条合成选项，只能从已有文件夹里选
   const characterIdOptions = importedCardFields && createCharacterId && !characterIds.includes(createCharacterId)
     ? [{ value: createCharacterId, label: `（新导入）${createCharacterId}` }, ...characterIds.map(id => ({ value: id, label: id }))]
     : characterIds.map(id => ({ value: id, label: id }))
 
-  // 模型名下拉框的选项：默认是 modelNameOptions（随 overrideModelType 拉取）；若当前值
-  // （如某个 preset 早先保存的自定义模型名）恰好不在这份列表里，补一项指向它自己，避免
-  // 打开编辑态时下拉框视觉上"看起来选中了别的模型"——与角色文件夹下拉框的合成选项同一顾虑
   const overrideModelNameOptions = overrideModelName && !modelNameOptions.includes(overrideModelName)
     ? [overrideModelName, ...modelNameOptions]
     : modelNameOptions
 
   return (
     <div className="character-panel">
-      {/* 创建入口：不像下面几块一样套 presets.length > 0 的门——preset 列表为空（全新安装，
-          或本功能本身让这个状态首次可达）时，这一行连同下方的空态提示是本面板唯一渲染的内容，
-          用户必须能从这里创建出第一个 preset */}
       <div className="character-panel__row">
         {presets.length > 0 && (
           <select
@@ -1005,9 +817,6 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
           </button>
         )}
         {!isCreating && (
-          // 文件选择框（导入角色卡）非模态，disabled 防止用户在解析结果尚未返回时开始手动
-          // 创建、随后被姗姗来迟的解析结果覆盖已经手打的表单内容——见 handleImportCardPick
-          // 顶部注释与 isImportingCard 声明处注释
           <button className="rename-btn" onClick={handleCreateStart} disabled={isImportingCard} title="创建新角色">
             创建角色
           </button>
@@ -1046,7 +855,6 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
             placeholder="人设正文"
             disabled={isSavingCreate}
           />
-          {/* 仅导入流程可见：手动创建没有可供模型改写的结构化字段来源 */}
           {importedCardFields && (
             <button
               className="rename-btn"
@@ -1091,9 +899,6 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
           </label>
         </div>
       )}
-      {/* 主题控件：src/chat/theme.ts 的参考实现结构化模型（mode 为主轴 + 单一 accent +
-          tint 旋钮），见该文件顶部注释。chatBgRgb 已是 legacy 字段（旧背景色模型的遗留值，
-          不再是 accentRgb 的来源），本面板不再提供它的编辑控件 */}
       {presets.length > 0 && (
         <div className="character-panel__row">
           <label className="character-panel__display-label" title="聊天窗口跟随日间/夜间，还是跟随系统外观">
@@ -1140,10 +945,6 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
           </button>
         </div>
       )}
-      {/* 主题实时预览：当前 preset 的壁纸 + 一段假对话，颜色全部经上面 previewVars
-          （deriveTheme()+themeCssVars() 的直接产出）以 CSS 自定义属性下发，预览容器
-          之下的每个角色都消费同一批 var(--…) 名字——与 ChatWindow.tsx/chat.css 的真实
-          聊天窗口共用同一套派生结果，不在这里重新实现或硬编码任何一个颜色 */}
       {presets.length > 0 && (
         <div className="character-panel__theme-preview-wrap">
           <div className="character-panel__theme-preview-label">
@@ -1165,8 +966,6 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
               {presetSnapshot?.name ?? '角色'}
             </div>
             <div className="character-panel__theme-preview-messages">
-              {/* 用户先说话（靠右），AI 再回（靠左）——顺序与归属都要跟真实对话一致，
-                  否则预览里「打招呼」出现在 AI 侧、「应答」出现在用户侧，看起来就是左右反了 */}
               <div className="character-panel__theme-preview-bubble character-panel__theme-preview-bubble--user">
                 你好呀
               </div>
@@ -1257,10 +1056,6 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
                   <select
                     value={overrideModelType}
                     onChange={e => {
-                      // 切换 provider 类型时必须清空已选模型名，否则上一个 provider 的模型名
-                      // 会被 overrideModelNameOptions 的合成选项逻辑当作"新 provider 下的
-                      // 有效选项"重新展示出来，用户不点这个下拉框也不会注意到这个不匹配，
-                      // 结果保存下一个 provider/上一个模型名 的错配组合
                       setOverrideModelType(e.target.value as ModelConfig['type'])
                       setOverrideModelName('')
                     }}

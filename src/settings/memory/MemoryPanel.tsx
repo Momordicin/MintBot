@@ -11,8 +11,6 @@ interface MemoryPanelProps {
   sessionId: string | null
 }
 
-// 设置窗口固定尺寸较小，5 个子视图放不下同时展示，用二级 tab 切换；只挂载当前激活的
-// 子面板（不是全部挂载靠 CSS 隐藏），避免一次性触发 5 组 fetch
 const SUB_TABS: Array<{ key: SubTab; label: string }> = [
   { key: 'messages', label: '消息浏览' },
   { key: 'entities', label: '实体列表' },

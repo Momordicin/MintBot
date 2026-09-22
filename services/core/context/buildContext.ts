@@ -5,14 +5,6 @@ import { getEmotionState, getSummaries, getCurrentEntities, getSupersededMessage
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
 import { getMemoryConfig } from '../config/index.js'
 
-// 双轨记忆边界（TDD §3.8）：近期轨道 = 最近 N 条 **且** 最近 M 分钟内的消息，取交集
-// （数量和时间哪个先截断就停在那），不在近期轨道内的历史交给 retrieveMemories 走 RAG 召回。
-// N / M 两个值以及下面的 token（字符数近似）预算均来自独立 config 模块（config/index.js），
-// 每次调用现取，不在模块顶层缓存，保证热更新生效。
-
-// 三段可裁剪内容（近期消息 / 历史摘要 / RAG 片段）共用的预算裁剪逻辑：字符数作为 token 数的
-// 廉价近似（不引入分词/tokenizer 依赖）。超出预算时按 dropFrom 指定的一端逐条丢弃，直到
-// 总字符数不超预算，或者只剩最后一条为止（至少保留 1 条，不裁剪到空）。
 function truncateToCharBudget<T>(
   items: T[],
   budget: number,
@@ -28,7 +20,6 @@ function truncateToCharBudget<T>(
   return result
 }
 
-// 实体分组注入用：中文标签 + 固定展示顺序
 const ENTITY_TYPE_LABELS: Record<MessageEntity['type'], string> = {
   person: '人物',
   event: '事件',
@@ -45,9 +36,6 @@ export async function buildContext(
   const { session, preset, manifest } = requireCurrentState()
   const memoryConfig = getMemoryConfig()
 
-  // getHistory 已按时间升序返回最近 N 条，30 分钟窗口过滤掉的必然是数组前缀，
-  // 过滤后剩下的就是"最近 N 条 且 最近 M 分钟内"的交集；再按 contextBudget.recentMessages
-  // 字符预算从最旧一端继续裁剪（不会裁到 0 条）
   const history = truncateToCharBudget(
     getHistory(memoryConfig.recentTrackMaxMessages)
       .filter(m => m.createdAt >= Date.now() - memoryConfig.recentTrackMaxMinutes * 60_000),
@@ -61,21 +49,13 @@ export async function buildContext(
     { role: 'user' as const, content: userInput },
   ]
 
-  let system = preset.systemPrompt  // Phase 2：在这里拼入摘要、RAG召回、情绪状态等
+  let system = preset.systemPrompt  
 
-  // 情绪状态注入（TDD §3.9）：self 情绪驱动回复风格，维持语气连贯性。
-  // 本地同步查询，无外部调用开销，不需要像 RAG 召回那样加触发门槛，每次都尝试注入。
-  // perceived_user 在 Phase 2 阶段恒为 null，不处理。
   const emotion = getEmotionState(session.sessionId)
   if (emotion) {
     system = `${system}\n\n你当前的情绪状态是「${emotion.self.label}」，强度为 ${emotion.self.intensity}，请让回复的语气与这一情绪保持连贯。`
   }
 
-  // 实体上下文注入（TDD §3.8"实体聚合"）：TDD 原文"实体聚合→情绪状态"描述的是 RAG 检索内部
-  // 流程顺序，不是这里 system 字符串拼接顺序的强制要求；本次实现选择的拼接顺序是
-  // 情绪→实体→摘要→RAG。本地同步查询，无外部调用开销，与情绪状态注入同样不加触发门槛，每次都尝试注入。
-  // 当前先注入全部当前有效实体，不限制数量、不做裁剪——实体数量长期增长后可能需要限制/裁剪，
-  // 是已知的后续风险，Phase 2 现阶段先不做。
   const entities = getCurrentEntities(session.sessionId)
   if (entities.length > 0) {
     const grouped = new Map<MessageEntity['type'], string[]>()
@@ -90,10 +70,6 @@ export async function buildContext(
     system = `${system}\n\n以下是已知的用户信息：\n${lines.join('\n')}`
   }
 
-  // 历史摘要注入（TDD §3.8 双轨记忆方案）：与情绪状态/RAG 召回同样的机制，追加到 system
-  // 字符串而不放进 messages[]（Anthropic 分支会过滤掉 messages[] 里的 system 角色）。
-  // getSummaries 按 createdAt 升序返回（最旧的在前），超出 contextBudget.summary 字符预算时
-  // 从最旧一端裁剪
   const summaries = truncateToCharBudget(getSummaries(session.sessionId), memoryConfig.contextBudget.summary, s => s.content, 'oldest')
   if (summaries.length > 0) {
     const summaryText = summaries.map(s => s.content).join('\n')
@@ -101,8 +77,6 @@ export async function buildContext(
   }
 
   if (shouldTriggerRetrieval(userInput)) {
-    // retrieveMemories 已按 RRF 分数从高到低排好序（最相关的在前），超出 contextBudget.rag
-    // 字符预算时从末尾（排名最低）一端裁剪
     const memories = truncateToCharBudget(
       await retrieveMemories(session.sessionId, userInput, { embedding: deps.embedding }, 5, deps.signal),
       memoryConfig.contextBudget.rag,
@@ -110,9 +84,6 @@ export async function buildContext(
       'lowest-ranked'
     )
     if (memories.length > 0) {
-      // 标注"可能已过时"：消息关联的实体若已被 closeEntity 关闭，说明消息里提到的信息后来被
-      // 更新过。不剔除消息本身（可能还包含其它仍然有效的内容），只在拼进 prompt 时加提示前缀，
-      // 让模型自己判断权重。查询失败时降级为"视为没有过时的"，不影响本轮召回结果正常注入
       let supersededIds = new Set<number>()
       try {
         supersededIds = getSupersededMessageIds(memories.map(m => m.id))
@@ -124,14 +95,6 @@ export async function buildContext(
     }
   }
 
-  // 输出契约块注入（TDD §3.9「情绪标签词表的归属：角色包 manifest，注入上下文」）：情绪标签/
-  // 表情 tag 全集从会话缓存的角色包 manifest 读取（Part A，零磁盘 I/O），称呼候选从
-  // preset.addressForms 读取，连同 JSON 输出格式要求一并追加到 system 末尾，取代此前硬写在
-  // 各 preset systemPrompt 里的同一段文字（见 services/core/db/seed.ts）。
-  // JSON 格式说明本身与词表是否存在无关，因此始终注入；情绪标签/表情 tag/称呼候选三行则只在
-  // 对应词表非空时才出现——角色包缺失或未声明词表（Part A 的 null manifest 降级路径）时，
-  // 跳过对应行，不注入"可用标签：（无）"这类空列表提示。这是一条软指令，不是模型输出的硬性
-  // 前置条件：chat.ts 现有的 JSON-parse-or-fallback-to-raw-text 降级逻辑不受影响。
   const contractLines: string[] = []
   if (manifest && manifest.emotionVocabulary.length > 0) {
     contractLines.push(`可用的情绪标签（emotion.self.label 只能从中选择一个）：${manifest.emotionVocabulary.join('、')}`)
@@ -145,8 +108,6 @@ export async function buildContext(
   contractLines.push('请严格用以下 JSON 格式回复，不要输出任何其他内容：\n{"reply": "你的回复内容", "emotion": {"self": {"label": "情绪标签", "intensity": 0.7}, "perceived_user": null}, "emote": "表情 tag（可选，不附表情时省略该字段）"}')
   system = `${system}\n\n${contractLines.join('\n')}`
 
-  // 显式断言，处理硬前置条件（不是软性提示）：chat.ts 对 OpenAI/DeepSeek 都要求 messages 里出现字面的 "json"——
-  // 缺失时 OpenAI 直接 400，DeepSeek 官方文档警告会输出空白直到耗尽 token 预算
   if (!/json/i.test(system)) {
     throw new Error('[BuildContext] system prompt must contain the literal word "json" (required by OpenAI/DeepSeek json_object mode)')
   }

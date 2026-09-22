@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 
 const CORE_URL = 'http://127.0.0.1:3000'
 
-// GET /embedding-queue-status 是全局统计，不接受 sessionId，本组件也不接收 sessionId prop
 interface EmbeddingQueueStatusData {
   pendingCount: number
   oldestPendingAge: number
@@ -18,8 +17,6 @@ export function EmbeddingQueueStatusView() {
   const [status, setStatus] = useState<EmbeddingQueueStatusData | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // 切到别的二级 tab 时本组件会被卸载——请求还没返回就卸载的话，不能再对已经卸载的组件调用
-  // setState
   const mountedRef = useRef(true)
 
   const load = useCallback(() => {
@@ -42,10 +39,6 @@ export function EmbeddingQueueStatusView() {
   }, [])
 
   useEffect(() => {
-    // StrictMode 开发模式下会先跑一遍 effect 再立刻跑一次 cleanup、然后重新跑一遍 effect
-    // （模拟卸载再重新挂载），必须在这里重新置回 true——否则第一次的 cleanup 把它设成
-    // false 之后，真正生效的第二次 load() 请求也会被 if (mountedRef.current) 永久挡住，
-    // isLoading 从此再也没有机会被置回 false，表现成"一直在加载中"
     mountedRef.current = true
     load()
     return () => {

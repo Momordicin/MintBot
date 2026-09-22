@@ -21,16 +21,10 @@ interface SessionState {
 
 let current: SessionState | null = null
 
-// ─── 加载或新建 session ────────────────────────────────────
-
 export function loadSession(presetId: string): SessionState {
   const preset = getPresetById(presetId)
   if (!preset) throw new Error(`[Session] Preset not found: ${presetId}`)
 
-  // 兑现原 TODO Phase 3「加载 preset 后需验证 characterId 对应的角色包是否存在」：
-  // manifest 在这里读一次并常驻内存（TDD §3.7「加载与缓存」），不在每轮对话时读盘。
-  // 角色包缺失/manifest.json 解析失败时 loadCharacterManifest 返回 null——这不阻塞
-  // session 加载，buildContext.ts 按空词表降级处理（TDD §3.9「情绪标签词表的归属」）
   const manifest = loadCharacterManifest(preset.characterId)
 
   let session = getLatestSessionByPreset(presetId)
@@ -64,59 +58,29 @@ export function loadSession(presetId: string): SessionState {
   return current
 }
 
-// ─── 切换角色 ──────────────────────────────────────────────
-
 export function switchPreset(presetId: string): SessionState {
   console.log(`[Session] Switching to preset ${presetId}`)
   current = null
   const state = loadSession(presetId)
 
-  // 持久化"当前激活 preset"（config.json 的 defaultPresetId 字段，见 config/index.ts），
-  // 供重启后 services/core/index.ts 启动时恢复。写在切换成功之后（loadSession 没有抛错），
-  // 且只写在真正的切换路径里，不写在进程退出时——退出路径（尤其 Windows 上）不可靠，
-  // 只有"切换发生的当下"才是保证会执行到的时机。同样不放进 loadSession 本身（服务启动时
-  // 调用一次没有必要往回写同一个值）
   setDefaultPresetId(presetId)
 
-  // 广播真正的"切换"发生（GET /events，TDD §3.3「SSE 事件类型规范」）：其它窗口（聊天窗口、
-  // 悬浮窗）借此感知 session/preset 已变，自己去重新 fetch GET /state。只放最小 payload，
-  // 不带完整 state——与 chat.ts 里 emotion 广播同一约定。只从这里广播，不放进 loadSession
-  // 本身（loadSession 在核心服务启动时也会被调用一次，那时没有任何订阅方在听，广播毫无意义），
-  // 也不放进 refreshCurrentPresetIfActive（那是刻意窄范围的"设置立即生效"，不改变 session/
-  // characterId，不是真正的切换，广播会造成误判的 abort/refetch）
   broadcastEvent('preset-switched', { sessionId: state.session.sessionId, presetId: state.session.presetId })
 
   return state
 }
 
-// 启动时应加载哪个 preset：persisted 的 defaultPresetId（config.json，见 setDefaultPresetId）
-// 若指向仍然存在的 preset 直接用；首次启动（尚无 persisted 值）或该 preset 已不存在
-// （比如未来支持删除角色后用户删掉了它）时，回退到最近更新过的一个 preset
-// （getAllPresets() 本身按 updatedAt DESC 排序，见 queries.ts）。一个 preset 都没有时返回
-// undefined，调用方（services/core/index.ts）据此跳过 loadSession——不崩溃、也不建一个
-// 指向不存在角色的空壳 session，与 defaultPresetId 缺失时的既有行为一致
 export function resolveStartupPresetId(persistedPresetId: string | undefined): string | undefined {
   if (persistedPresetId && getPresetById(persistedPresetId)) return persistedPresetId
   return getAllPresets()[0]?.presetId
 }
 
-// 设置页编辑 systemPrompt 后"立即生效"用：只替换内存缓存的 preset 对象本身，不碰 session
-// （这是与 switchPreset 真正的区别所在——switchPreset 会通过 loadSession 换一个新的
-// session）。编辑的 preset 若当前不是激活状态则是 no-op，等它真正被切换到时自然读到新值。
-// 竞态安全：buildContext.ts 的 requireCurrentState() 是同步执行、之前没有 await，
-// 在途 /chat 请求早已把 preset 复制进局部变量，这里换掉 current.preset 不影响它
-// （与 chat.ts 里 sessionId "dispatch 时刻捕获" 同一安全模式）。
-// 不重新读取 manifest：这里能触发刷新的字段（systemPrompt/modelType/modelName 等，见
-// routes/presets.ts 的 PATCH /presets/:presetId）都不会改变 characterId，缓存的 manifest
-// 因此始终仍然有效——重新读盘不会得到不同结果，只是白白多一次文件 I/O。
 export function refreshCurrentPresetIfActive(presetId: string): void {
   if (current?.session.presetId !== presetId) return
   const preset = getPresetById(presetId)
   if (!preset) return
   current = { ...current, preset }
 }
-
-// ─── 读取当前状态 ──────────────────────────────────────────
 
 export function getCurrentState(): SessionState | null {
   return current
@@ -127,16 +91,11 @@ export function requireCurrentState(): SessionState {
   return current
 }
 
-// ─── 消息操作 ──────────────────────────────────────────────
-
 export function getHistory(limit = 50): Message[] {
   const { session } = requireCurrentState()
   return getRecentMessages(session.sessionId, limit)
 }
 
-// sessionId 必须由调用方显式传入（请求开始时捕获的 session），不回退读全局"当前 session"。
-// 原因：调用方（如 chat.ts）可能在 await 模型回复期间被 preset 切换请求打断，
-// 若在此处重新读取全局状态，消息会被错误地记到切换后的新 session 上。
 export function addMessage(
   sessionId: string,
   role: Message['role'],
