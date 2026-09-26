@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { BGEProvider } from './EmbeddingProvider.js'
 import { getLastActivityAt } from './aiActivity.js'
+import { AI_URL } from '../config/ports.js'
 
 // BGEProvider.embedBatch 的 signal 合并逻辑（AbortSignal.any([callerSignal, 5s超时])）
 // 是这次修复的核心：调用方（/chat 请求）传入自己的 signal 时，外部 abort 应该立刻
@@ -100,7 +101,7 @@ describe('BGEProvider.unload', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://localhost:8765/embed/unload')
+    expect(url).toBe(`${AI_URL}/embed/unload`)
     expect(init.method).toBe('POST')
     expect(init.signal).toBeInstanceOf(AbortSignal)
     expect(result).toBe(true)

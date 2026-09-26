@@ -26,13 +26,14 @@ import { ensureAiService, stopAiServiceIfManaged } from './providers/aiService.j
 import { startOrganizeModeScheduler } from './memory/orchestrator.js'
 import { buildStatePayload } from './state.js'
 import { CHARACTERS_ROOT } from './characters/manifest.js'
+import { CORE_PORT, RENDERER_ORIGINS } from './config/ports.js'
 import fastifyStatic from '@fastify/static'
 import fastifyCors from '@fastify/cors'
 
 
 dotenv.config({ quiet: true })
 
-const PORT = parseInt(process.env.CORE_PORT ?? '3000')
+const PORT = CORE_PORT
 const CONFIG_PATH = path.resolve(process.cwd(), 'config.json')
 
 declare module 'fastify' {
@@ -116,7 +117,7 @@ async function start() {
   }
 
   await fastify.register(fastifyCors, {
-  origin: ['http://localhost:5173', 'http://127.0.0.1:5173'],
+  origin: [...RENDERER_ORIGINS],
   methods: ['GET', 'HEAD', 'POST', 'PATCH'],
   })
 

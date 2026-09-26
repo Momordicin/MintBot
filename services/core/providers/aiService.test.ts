@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { EventEmitter } from 'events'
-import { isAiServiceRunning } from './aiService.js'
+import { isAiServiceRunning, AI_SERVICE_IDENTITY } from './aiService.js'
 
 // ensureAiService/stopAiServiceIfManaged 用例需要 mock child_process.spawn 与 fs.existsSync——
 // mock 函数用 vi.hoisted 声明，保证各用例内 vi.resetModules() 重新 import 被测模块时，
@@ -23,30 +23,64 @@ function makeFakeChild() {
   return child
 }
 
-// isAiServiceRunning 只判断进程本身是否在跑（HTTP 是否可连、状态码是否 ok），
-// 与 EmbeddingProvider.ts 的 isEmbeddingReady（判断模型是否已加载）是两回事，
-// 这里只覆盖它自己的三种结果：成功、非 ok 响应、请求异常（含超时）
+function oursResponse() {
+  return { ok: true, json: async () => ({ status: 'ok', service: AI_SERVICE_IDENTITY, embedding_loaded: false, ner_loaded: false }) }
+}
+function foreignJsonResponse() {
+  return { ok: true, json: async () => ({ apiVersion: 'AnkiConnect v.6' }) }
+}
+function foreignInvalidJsonResponse() {
+  return { ok: true, json: async () => { throw new Error('invalid json') } }
+}
+function legacyResponse() {
+  return { ok: true, json: async () => ({ status: 'ok', embedding_loaded: false, ner_loaded: false }) }
+}
+
 describe('isAiServiceRunning', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  it('响应 ok 时返回 true', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }))
+  it('响应 ok 且 body.service 匹配身份标识时返回 true', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(oursResponse()))
 
-    expect(await isAiServiceRunning('http://localhost:8765')).toBe(true)
+    expect(await isAiServiceRunning('http://localhost:18765')).toBe(true)
+  })
+
+  it('回归用例：响应 HTTP 200 但 body 是无关服务（如 AnkiConnect）时返回 false', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(foreignJsonResponse()))
+
+    expect(await isAiServiceRunning('http://localhost:18765')).toBe(false)
+  })
+
+  it('body 符合旧版 /health 结构但缺少 service 字段时返回 false', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(legacyResponse()))
+
+    expect(await isAiServiceRunning('http://localhost:18765')).toBe(false)
   })
 
   it('响应非 ok 时返回 false', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503 }))
 
-    expect(await isAiServiceRunning('http://localhost:8765')).toBe(false)
+    expect(await isAiServiceRunning('http://localhost:18765')).toBe(false)
+  })
+
+  it('body 不是合法 JSON 时返回 false', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(foreignInvalidJsonResponse()))
+
+    expect(await isAiServiceRunning('http://localhost:18765')).toBe(false)
+  })
+
+  it('body.service 字段缺失时返回 false', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'ok' }) }))
+
+    expect(await isAiServiceRunning('http://localhost:18765')).toBe(false)
   })
 
   it('fetch 抛出异常（如超时）时返回 false，不向上抛出', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('timeout')))
 
-    expect(await isAiServiceRunning('http://localhost:8765')).toBe(false)
+    expect(await isAiServiceRunning('http://localhost:18765')).toBe(false)
   })
 })
 
@@ -54,7 +88,7 @@ describe('isAiServiceRunning', () => {
 // （aiProcess/aiManagedByUs）不会在两次调用之间自动清空——每个用例都用
 // vi.resetModules() + 动态 import 拿到一个全新的模块实例，避免用例之间相互依赖执行顺序
 describe('ensureAiService', () => {
-  const baseUrl = 'http://localhost:8765'
+  const baseUrl = 'http://localhost:18765'
 
   beforeEach(() => {
     vi.resetModules()
@@ -68,8 +102,8 @@ describe('ensureAiService', () => {
     vi.useRealTimers()
   })
 
-  it('初次检查已在跑，500ms 后二次确认仍在跑：判定为别人管的，不会 spawn', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true })
+  it('初次检查已是我们的服务，500ms 后二次确认仍是：判定为别人管的实例，不会 spawn', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(oursResponse())
     vi.stubGlobal('fetch', fetchMock)
     const { ensureAiService } = await import('./aiService.js')
 
@@ -85,11 +119,11 @@ describe('ensureAiService', () => {
     await expect(promise).resolves.toBe(true)
   })
 
-  it('初次检查已在跑，500ms 后二次确认已不在跑：判定为误判，走 spawn 路径并等到就绪', async () => {
+  it('初次检查是我们的服务，500ms 后二次确认已连不上：判定为误判，走 spawn 路径并等到就绪', async () => {
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce({ ok: true }) // 初次检查
-      .mockResolvedValueOnce({ ok: false }) // 500ms 后二次确认
-      .mockResolvedValue({ ok: true }) // waitForAiService 轮询
+      .mockResolvedValueOnce(oursResponse()) // 初次检查
+      .mockRejectedValueOnce(new Error('ECONNREFUSED')) // 500ms 后二次确认：连不上了
+      .mockResolvedValue(oursResponse()) // waitForAiService 轮询
     vi.stubGlobal('fetch', fetchMock)
     existsSyncMock.mockReturnValue(true)
     spawnMock.mockReturnValue(makeFakeChild())
@@ -108,19 +142,115 @@ describe('ensureAiService', () => {
     await expect(promise).resolves.toBe(true)
   })
 
-  it('spawn 后一直等不到 /health 就绪，超时后返回 false（供调用方跳过预热请求）', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: false })
+  it('初次检查是我们的服务，500ms 后二次确认变成旧版：不 spawn，提示重启', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(oursResponse())
+      .mockResolvedValueOnce(legacyResponse())
+    vi.stubGlobal('fetch', fetchMock)
+    existsSyncMock.mockReturnValue(true)
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { ensureAiService } = await import('./aiService.js')
+
+    const promise = ensureAiService(baseUrl)
+    await vi.advanceTimersByTimeAsync(500)
+
+    await expect(promise).resolves.toBe(false)
+    expect(spawnMock).not.toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const loggedMessages = consoleErrorSpy.mock.calls.map(call => String(call[0]))
+    expect(loggedMessages.some(msg => msg.includes('旧版'))).toBe(true)
+    consoleErrorSpy.mockRestore()
+  })
+
+  it('端口上没有任何东西响应：直接进入 spawn 路径，无需先走 500ms 二次确认窗口', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error('ECONNREFUSED'))
     vi.stubGlobal('fetch', fetchMock)
     existsSyncMock.mockReturnValue(true)
     spawnMock.mockReturnValue(makeFakeChild())
     const { ensureAiService } = await import('./aiService.js')
 
     const promise = ensureAiService(baseUrl)
-    // 初次检查已在跑分支：一次 /health 检查即判定不在跑，直接进入 spawn 路径，
+    await vi.advanceTimersByTimeAsync(90000)
+
+    expect(spawnMock).toHaveBeenCalledTimes(1)
+    await expect(promise).resolves.toBe(false)
+  })
+
+  it('spawn 后一直等不到 /health 就绪，超时后返回 false（供调用方跳过预热请求）', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error('ECONNREFUSED'))
+    vi.stubGlobal('fetch', fetchMock)
+    existsSyncMock.mockReturnValue(true)
+    spawnMock.mockReturnValue(makeFakeChild())
+    const { ensureAiService } = await import('./aiService.js')
+
+    const promise = ensureAiService(baseUrl)
     // 无需先推进 500ms 二次确认窗口
     await vi.advanceTimersByTimeAsync(90000)
 
     await expect(promise).resolves.toBe(false)
+  })
+
+  it('端口被外来服务占用（AnkiConnect 场景）：立即返回 false，不 spawn，不进入 90 秒等待', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(foreignJsonResponse())
+    vi.stubGlobal('fetch', fetchMock)
+    const { ensureAiService } = await import('./aiService.js')
+
+    const result = await ensureAiService(baseUrl)
+
+    expect(result).toBe(false)
+    expect(spawnMock).not.toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('端口被外来服务占用时打印可定位问题的错误日志（端口号 + 期望身份）', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(foreignJsonResponse())
+    vi.stubGlobal('fetch', fetchMock)
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { ensureAiService } = await import('./aiService.js')
+
+    await ensureAiService(baseUrl)
+
+    const loggedMessages = consoleErrorSpy.mock.calls.map(call => String(call[0]))
+    expect(loggedMessages.some(msg => msg.includes('18765') && msg.includes(AI_SERVICE_IDENTITY))).toBe(true)
+    consoleErrorSpy.mockRestore()
+  })
+
+  it('端口上是旧版 MintBot AI service：立即返回 false，不 spawn', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(legacyResponse())
+    vi.stubGlobal('fetch', fetchMock)
+    const { ensureAiService } = await import('./aiService.js')
+
+    const result = await ensureAiService(baseUrl)
+
+    expect(result).toBe(false)
+    expect(spawnMock).not.toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('旧版 AI service 提示重启，而不是提示端口被占用', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(legacyResponse()))
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { ensureAiService } = await import('./aiService.js')
+
+    await ensureAiService(baseUrl)
+
+    const loggedMessages = consoleErrorSpy.mock.calls.map(call => String(call[0]))
+    expect(loggedMessages.some(msg => msg.includes('18765') && msg.includes('旧版'))).toBe(true)
+    expect(loggedMessages.some(msg => msg.includes('occupied by another service'))).toBe(false)
+    consoleErrorSpy.mockRestore()
+  })
+
+  it('回归用例：AnkiConnect 响应不得被误判为旧版 AI service', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(foreignJsonResponse()))
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { ensureAiService } = await import('./aiService.js')
+
+    await ensureAiService(baseUrl)
+
+    const loggedMessages = consoleErrorSpy.mock.calls.map(call => String(call[0]))
+    expect(loggedMessages.some(msg => msg.includes('occupied by another service'))).toBe(true)
+    expect(loggedMessages.some(msg => msg.includes('旧版'))).toBe(false)
+    consoleErrorSpy.mockRestore()
   })
 })
 
@@ -128,7 +258,7 @@ describe('ensureAiService', () => {
 // ensureAiService 的 spawn 路径，把模块内部状态推进到 aiManagedByUs=true/aiProcess=fakeChild，
 // 再验证停止逻辑本身
 describe('stopAiServiceIfManaged', () => {
-  const baseUrl = 'http://localhost:8765'
+  const baseUrl = 'http://localhost:18765'
   const FORCE_KILL_TIMEOUT_MS = 3000 // 与 aiService.ts 内部私有常量保持一致
 
   beforeEach(() => {
@@ -146,9 +276,9 @@ describe('stopAiServiceIfManaged', () => {
   // 让被测模块进入"已 spawn 且由自己管理"的状态，返回拿到的 fakeChild 和待测函数
   async function setUpManagedRunningService() {
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValue({ ok: true })
+      .mockResolvedValueOnce(oursResponse())
+      .mockRejectedValueOnce(new Error('ECONNREFUSED'))
+      .mockResolvedValue(oursResponse())
     vi.stubGlobal('fetch', fetchMock)
     existsSyncMock.mockReturnValue(true)
     const fakeChild = makeFakeChild()

@@ -1,5 +1,6 @@
 import type { NerEntity } from '../../../shared/types/index.js'
 import { recordActivity } from './aiActivity.js'
+import { AI_URL } from '../config/ports.js'
 
 export interface NERProvider {
   extract(text: string): Promise<NerEntity[]>
@@ -10,7 +11,7 @@ export interface NERProvider {
 export class Bert4NerProvider implements NERProvider {
   private baseUrl: string
 
-  constructor(baseUrl = 'http://localhost:8765') {
+  constructor(baseUrl = AI_URL) {
     this.baseUrl = baseUrl
   }
 

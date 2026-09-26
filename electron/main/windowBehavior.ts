@@ -33,6 +33,7 @@ import {
 } from './desktopPresence'
 import type { EdgeSide, DesiredPetState, PetPresence, PetPresencePayload } from './desktopPresence'
 import { isWindowDragInProgress, endDragTail } from './dragActivity'
+import { CORE_URL } from './coreUrl'
 
 type ChatPinMode = 'always' | 'smart' | 'off'
 
@@ -41,8 +42,6 @@ interface WindowBehaviorConfig {
   petAvoidanceEnabled: boolean
   appRules: AppRule[]
 }
-
-const CORE_URL = 'http://127.0.0.1:3000'
 
 const PIN_LEVEL: NonNullable<Parameters<BrowserWindow['setAlwaysOnTop']>[1]> = 'screen-saver'
 

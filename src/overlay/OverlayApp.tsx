@@ -30,7 +30,7 @@ import {
   isDragHandleSuppressedByEdge,
 } from './edgeHoverState.js'
 
-const CORE_URL = 'http://127.0.0.1:3000'
+import { CORE_URL } from '../coreUrl.js'
 
 const CLICK_DISPLACEMENT_THRESHOLD_PX = 5
 

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 
-const CORE_URL = 'http://127.0.0.1:3000'
+import { CORE_URL } from '../../coreUrl.js'
 
 interface EmbeddingQueueStatusData {
   pendingCount: number

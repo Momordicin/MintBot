@@ -8,6 +8,7 @@ import { noteDragStart, noteDragEnd, clearDragState } from './dragActivity'
 import { nextReconnectDelayMs, RECONNECT_BACKOFF_FLOOR_MS } from './reconnectBackoff'
 import { EVENTS_CLIENT_TIMEOUT_MS } from './eventsGeneration'
 import { createCoreEventsConsumer } from './coreEventsConsumer'
+import { CORE_URL } from './coreUrl'
 import {
   initWindowBehaviorConfig,
   updateCachedWindowBehaviorConfig,
@@ -69,8 +70,6 @@ function stopActiveWindowMonitoring(): void {
   stopBlockerValidation?.()
   stopBlockerValidation = null
 }
-
-const CORE_URL = 'http://127.0.0.1:3000'
 
 type ChatPinMode = 'always' | 'smart' | 'off'
 

@@ -3,6 +3,7 @@ import Fastify from 'fastify'
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { eventsRoutes } from './events.js'
 import { broadcastEvent, SERVER_GENERATION } from '../events/broadcast.js'
+import { RENDERER_ORIGIN } from '../config/ports.js'
 
 // GET /events 是一条不会主动结束的长连接：fastify.inject() 的返回 promise 只有在响应
 // end() 之后才 resolve，这里跟 chat.test.ts 里"模拟客户端断连"的测试用同一手法——用
@@ -36,7 +37,7 @@ describe('GET /events', () => {
 
     const { reply, injectPromise } = await connect(fastify)
 
-    expect(reply.raw.getHeader('Access-Control-Allow-Origin')).toBe('http://localhost:5173')
+    expect(reply.raw.getHeader('Access-Control-Allow-Origin')).toBe(RENDERER_ORIGIN)
     expect(reply.raw.getHeader('Content-Type')).toBe('text/event-stream')
     expect(reply.raw.getHeader('Cache-Control')).toBe('no-cache')
     expect(reply.raw.getHeader('Connection')).toBe('keep-alive')

@@ -11,7 +11,7 @@ import { createWatchdogEventSource } from '../eventsWatchdog.js'
 import type { AppState, PresetSnapshot } from '../../shared/types/index.js'
 import './chat.css'
 
-const CORE_URL = 'http://127.0.0.1:3000'
+import { CORE_URL } from '../coreUrl.js'
 const DEFAULT_WALLPAPER_URL = `${CORE_URL}/wallpapers/bg.jpg`
 const INITIAL_HISTORY_LIMIT = 3
 const LOAD_MORE_HISTORY_LIMIT = 20

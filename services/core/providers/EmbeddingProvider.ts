@@ -1,4 +1,6 @@
 import { recordActivity } from './aiActivity.js'
+import { AI_URL } from '../config/ports.js'
+import { AI_SERVICE_IDENTITY } from './aiService.js'
 
 export interface EmbeddingProvider {
   embed(text: string, signal?: AbortSignal, timeoutMs?: number): Promise<number[]>
@@ -9,7 +11,7 @@ export interface EmbeddingProvider {
 export class BGEProvider implements EmbeddingProvider {
   private baseUrl: string
 
-  constructor(baseUrl = 'http://localhost:8765') {
+  constructor(baseUrl = AI_URL) {
     this.baseUrl = baseUrl
   }
 
@@ -50,15 +52,16 @@ export class BGEProvider implements EmbeddingProvider {
 }
 
 export function getAiBaseUrl(): string {
-  return `http://localhost:${process.env.AI_PORT ?? '8765'}`
+  return AI_URL
 }
 
 export async function isEmbeddingReady(baseUrl: string): Promise<boolean> {
   try {
     const response = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(3000) })
     if (!response.ok) return false
-    const { embedding_loaded } = await response.json() as { embedding_loaded: boolean }
-    return embedding_loaded
+    const body = await response.json() as { service?: string; embedding_loaded?: boolean }
+    if (body.service !== AI_SERVICE_IDENTITY) return false
+    return body.embedding_loaded === true
   } catch {
     return false
   }

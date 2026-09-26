@@ -25,15 +25,41 @@ function forwardLines(stream: Readable | null | undefined, onLine: (line: string
 let aiProcess: ChildProcess | null = null
 let aiManagedByUs = false
 
-export async function isAiServiceRunning(baseUrl: string): Promise<boolean> {
+export const AI_SERVICE_IDENTITY = 'mintbot-ai'
+
+type AiServiceProbeResult = 'ours' | 'legacy' | 'foreign' | 'unreachable'
+
+function looksLikeLegacyHealth(body: Record<string, unknown>): boolean {
+  return body.service === undefined
+    && body.status === 'ok'
+    && typeof body.embedding_loaded === 'boolean'
+    && typeof body.ner_loaded === 'boolean'
+}
+
+async function probeAiService(baseUrl: string): Promise<AiServiceProbeResult> {
+  let response: Response
   try {
-    const response = await fetch(`${baseUrl}/health`, {
+    response = await fetch(`${baseUrl}/health`, {
       signal: AbortSignal.timeout(3000),
     })
-    return response.ok
   } catch {
-    return false
+    return 'unreachable'
   }
+
+  if (!response.ok) return 'foreign'
+
+  try {
+    const body = await response.json() as Record<string, unknown>
+    if (body.service === AI_SERVICE_IDENTITY) return 'ours'
+    if (looksLikeLegacyHealth(body)) return 'legacy'
+    return 'foreign'
+  } catch {
+    return 'foreign'
+  }
+}
+
+export async function isAiServiceRunning(baseUrl: string): Promise<boolean> {
+  return (await probeAiService(baseUrl)) === 'ours'
 }
 
 const AI_SERVICE_STARTUP_TIMEOUT_MS = 90000
@@ -48,12 +74,43 @@ async function waitForAiService(baseUrl: string, timeoutMs = AI_SERVICE_STARTUP_
 }
 
 export async function ensureAiService(baseUrl: string): Promise<boolean> {
-  if (await isAiServiceRunning(baseUrl)) {
+  const port = new URL(baseUrl).port || '80'
+
+  const reportPortConflict = () => {
+    console.error(`[AiService] Port ${port} is occupied by another service (identity mismatch on /health, expected '${AI_SERVICE_IDENTITY}') — 请修改 .env 中的 AI_PORT 或停止占用该端口的进程`)
+  }
+
+  const reportLegacyService = () => {
+    console.error(`[AiService] Port ${port} 上是一个旧版 MintBot AI service（/health 结构符合旧版但缺少 '${AI_SERVICE_IDENTITY}' 身份字段）— 请重启它以加载最新的 services/ai 代码`)
+  }
+
+  const initialProbe = await probeAiService(baseUrl)
+
+  if (initialProbe === 'legacy') {
+    reportLegacyService()
+    return false
+  }
+
+  if (initialProbe === 'foreign') {
+    reportPortConflict()
+    return false
+  }
+
+  if (initialProbe === 'ours') {
     await new Promise(r => setTimeout(r, 500))
-    if (await isAiServiceRunning(baseUrl)) {
+    const confirmProbe = await probeAiService(baseUrl)
+    if (confirmProbe === 'ours') {
       console.log('[AiService] Already running, not managed by MintBot')
       aiManagedByUs = false
       return true
+    }
+    if (confirmProbe === 'legacy') {
+      reportLegacyService()
+      return false
+    }
+    if (confirmProbe === 'foreign') {
+      reportPortConflict()
+      return false
     }
   }
 
@@ -63,7 +120,6 @@ export async function ensureAiService(baseUrl: string): Promise<boolean> {
     return false
   }
 
-  const port = new URL(baseUrl).port || '80'
   console.log('[AiService] Not running, starting...')
 
   try {

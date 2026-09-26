@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { Bert4NerProvider } from './NERProvider.js'
 import { getLastActivityAt } from './aiActivity.js'
+import { AI_URL } from '../config/ports.js'
 
 describe('Bert4NerProvider', () => {
   afterEach(() => {
@@ -23,7 +24,7 @@ describe('Bert4NerProvider', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://localhost:8765/ner')
+    expect(url).toBe(`${AI_URL}/ner`)
     expect(init.method).toBe('POST')
     expect(JSON.parse(init.body)).toEqual({ texts: ['北京欢迎你', '今天天气不错'] })
     expect(out).toEqual(results)
@@ -102,7 +103,7 @@ describe('Bert4NerProvider.unload', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://localhost:8765/ner/unload')
+    expect(url).toBe(`${AI_URL}/ner/unload`)
     expect(init.method).toBe('POST')
     expect(init.signal).toBeInstanceOf(AbortSignal)
     expect(result).toBe(true)

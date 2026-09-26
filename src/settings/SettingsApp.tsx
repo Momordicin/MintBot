@@ -9,7 +9,7 @@ import { ModelConfigPanel } from './ModelConfigPanel'
 import { WindowBehaviorPanel } from './WindowBehaviorPanel'
 import './settings.css'
 
-const CORE_URL = 'http://127.0.0.1:3000'
+import { CORE_URL } from '../coreUrl.js'
 
 type Tab = 'character' | 'memory' | 'model' | 'window'
 

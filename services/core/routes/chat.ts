@@ -11,6 +11,7 @@ import { getModelProviderConfig } from '../config/index.js'
 import { isEmptyReply } from '../reply/interceptor.js'
 import { detectSleepiness } from '../reply/sleepDetector.js'
 import { parseJsonSalvage } from '../util/jsonSalvage.js'
+import { RENDERER_ORIGIN } from '../config/ports.js'
 
 let queueTail: Promise<void> = Promise.resolve()
 
@@ -68,7 +69,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
       const modelProvider = createModelProviderForPreset(state.preset, modelProviderConfig)
       const modelType = state.preset.modelType ?? modelProviderConfig.type
 
-      reply.raw.setHeader('Access-Control-Allow-Origin', 'http://localhost:5173')
+      reply.raw.setHeader('Access-Control-Allow-Origin', RENDERER_ORIGIN)
       reply.raw.setHeader('Content-Type', 'text/event-stream')
       reply.raw.setHeader('Cache-Control', 'no-cache')
       reply.raw.setHeader('Connection', 'keep-alive')

@@ -6,7 +6,7 @@ import { resolveThemeMode, themeCssVars } from '../chat/themeVars.js'
 import { usePrefersDark } from '../usePrefersDark.js'
 import './settings.css'
 
-const CORE_URL = 'http://127.0.0.1:3000'
+import { CORE_URL } from '../coreUrl.js'
 const DEFAULT_WALLPAPER_URL = `${CORE_URL}/wallpapers/bg.jpg`
 const DEFAULT_DISPLAY_CONFIG: PresetDisplayConfig = {
   chatBgRgb: [15, 15, 20],
