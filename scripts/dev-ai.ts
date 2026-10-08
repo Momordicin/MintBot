@@ -5,11 +5,11 @@
 
 import { spawn } from 'child_process'
 import path from 'path'
-import { AI_PORT } from '../services/core/config/ports'
+import { AI_PORT, LOOPBACK_HOST } from '../services/core/config/ports'
 
 const VENV_PYTHON = path.resolve(process.cwd(), '.venv', 'Scripts', 'python.exe')
 
-const child = spawn(VENV_PYTHON, ['-m', 'uvicorn', 'main:app', '--reload', '--port', String(AI_PORT)], {
+const child = spawn(VENV_PYTHON, ['-m', 'uvicorn', 'main:app', '--reload', '--host', LOOPBACK_HOST, '--port', String(AI_PORT)], {
   cwd: path.resolve(process.cwd(), 'services/ai'),
   stdio: 'inherit',
 })

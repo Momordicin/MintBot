@@ -1,7 +1,7 @@
 import { defineConfig } from 'electron-vite'
 import { resolve } from 'path'
 import react from '@vitejs/plugin-react'
-import { CORE_URL, RENDERER_PORT } from './services/core/config/ports'
+import { CORE_URL, RENDERER_HOST, RENDERER_PORT } from './services/core/config/ports'
 
 export default defineConfig({
   main: {
@@ -34,6 +34,7 @@ export default defineConfig({
     },
     plugins: [react()],
     server: {
+      host: RENDERER_HOST,
       port: RENDERER_PORT,
       strictPort: true
     },

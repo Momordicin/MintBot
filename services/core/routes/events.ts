@@ -1,13 +1,16 @@
 import type { FastifyInstance } from 'fastify'
+import type { OutgoingHttpHeaders } from 'node:http'
 import { registerEventsClient, sendHello } from '../events/broadcast.js'
-import { RENDERER_ORIGIN } from '../config/ports.js'
 
 export async function eventsRoutes(fastify: FastifyInstance) {
   fastify.get('/events', async (_request, reply) => {
-    reply.raw.setHeader('Access-Control-Allow-Origin', RENDERER_ORIGIN)
-    reply.raw.setHeader('Content-Type', 'text/event-stream')
-    reply.raw.setHeader('Cache-Control', 'no-cache')
-    reply.raw.setHeader('Connection', 'keep-alive')
+    reply.hijack()
+    reply.raw.writeHead(200, {
+      ...(reply.getHeaders() as OutgoingHttpHeaders),
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    })
     reply.raw.flushHeaders()
 
     registerEventsClient(reply)

@@ -26,7 +26,7 @@ import { ensureAiService, stopAiServiceIfManaged } from './providers/aiService.j
 import { startOrganizeModeScheduler } from './memory/orchestrator.js'
 import { buildStatePayload } from './state.js'
 import { CHARACTERS_ROOT } from './characters/manifest.js'
-import { CORE_PORT, RENDERER_ORIGINS } from './config/ports.js'
+import { LOOPBACK_HOST, CORE_PORT, RENDERER_ORIGINS } from './config/ports.js'
 import fastifyStatic from '@fastify/static'
 import fastifyCors from '@fastify/cors'
 
@@ -144,7 +144,7 @@ async function start() {
   await fastify.register(memoryRoutes)
   await fastify.register(configRoutes)
   await fastify.register(windowBehaviorRoutes)
-  await fastify.listen({ port: PORT, host: '127.0.0.1' })
+  await fastify.listen({ port: PORT, host: LOOPBACK_HOST })
   console.log(`[Core] Running on port ${PORT}`)
 
 }

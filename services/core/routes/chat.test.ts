@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import Fastify from 'fastify'
+import fastifyCors from '@fastify/cors'
 import type { FastifyReply } from 'fastify'
 import { initDb, db } from '../db/index.js'
 import { decrypt } from '../db/crypto.js'
@@ -14,6 +15,7 @@ import * as BroadcastModule from '../events/broadcast.js'
 import * as ConfigModule from '../config/index.js'
 import type { ModelProvider } from '../providers/ModelProvider.js'
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
+import { RENDERER_ORIGINS } from '../config/ports.js'
 
 // emotion 双发（TDD §3.3）：私有流照常发送，broadcastEvent 只是额外调用，本文件不关心
 // broadcast.ts 自己的注册表/写入机制（那是 broadcast.test.ts 的职责），这里只验证 chat.ts
@@ -838,6 +840,29 @@ describe('POST /chat', () => {
       { role: 'user', content: '第一条' },
       { role: 'assistant', content: '第一条回复' },
     ])
+  })
+})
+
+describe('POST /chat — CORS 头由 @fastify/cors 插件唯一决定', () => {
+  async function chatWithOrigin(origin: string) {
+    loadSession('p1')
+    const { fastify } = await buildTestApp(JSON.stringify({ reply: '你好呀' }))
+    await fastify.register(fastifyCors, { origin: [...RENDERER_ORIGINS], methods: ['GET', 'HEAD', 'POST', 'PATCH'] })
+    return fastify.inject({ method: 'POST', url: '/chat', headers: { origin }, payload: { message: '你好' } })
+  }
+
+  it.each(RENDERER_ORIGINS)('允许的 origin %s：流式响应的 Access-Control-Allow-Origin 回显自身，Vary 含 Origin', async origin => {
+    const response = await chatWithOrigin(origin)
+
+    expect(response.headers['content-type']).toBe('text/event-stream')
+    expect(response.headers['access-control-allow-origin']).toBe(origin)
+    expect(String(response.headers['vary'])).toMatch(/Origin/i)
+  })
+
+  it('不在白名单内的 origin：流式响应不带 Access-Control-Allow-Origin', async () => {
+    const response = await chatWithOrigin('http://evil.example')
+
+    expect(response.headers['access-control-allow-origin']).toBeUndefined()
   })
 })
 

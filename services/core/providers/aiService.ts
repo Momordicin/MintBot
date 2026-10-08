@@ -2,6 +2,7 @@ import { spawn, ChildProcess } from 'child_process'
 import type { Readable } from 'stream'
 import fs from 'fs'
 import path from 'path'
+import { LOOPBACK_HOST } from '../config/ports.js'
 
 function forwardLines(stream: Readable | null | undefined, onLine: (line: string) => void): void {
   if (!stream) return
@@ -124,7 +125,7 @@ export async function ensureAiService(baseUrl: string): Promise<boolean> {
 
   try {
 
-    aiProcess = spawn(pythonPath, ['-m', 'uvicorn', 'main:app', '--port', port, '--no-access-log'], {
+    aiProcess = spawn(pythonPath, ['-m', 'uvicorn', 'main:app', '--host', LOOPBACK_HOST, '--port', port, '--no-access-log'], {
       cwd: path.resolve(process.cwd(), 'services/ai'),
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {

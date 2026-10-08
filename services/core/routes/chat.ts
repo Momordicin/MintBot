@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import type { OutgoingHttpHeaders } from 'node:http'
 import { requireCurrentState, addMessage } from '../session/index.js'
 import { buildContext } from '../context/buildContext.js'
 import { parseSelfEmotion, parseEmoteTag } from '../session/emotion.js'
@@ -11,7 +12,6 @@ import { getModelProviderConfig } from '../config/index.js'
 import { isEmptyReply } from '../reply/interceptor.js'
 import { detectSleepiness } from '../reply/sleepDetector.js'
 import { parseJsonSalvage } from '../util/jsonSalvage.js'
-import { RENDERER_ORIGIN } from '../config/ports.js'
 
 let queueTail: Promise<void> = Promise.resolve()
 
@@ -69,10 +69,13 @@ export async function chatRoutes(fastify: FastifyInstance) {
       const modelProvider = createModelProviderForPreset(state.preset, modelProviderConfig)
       const modelType = state.preset.modelType ?? modelProviderConfig.type
 
-      reply.raw.setHeader('Access-Control-Allow-Origin', RENDERER_ORIGIN)
-      reply.raw.setHeader('Content-Type', 'text/event-stream')
-      reply.raw.setHeader('Cache-Control', 'no-cache')
-      reply.raw.setHeader('Connection', 'keep-alive')
+      reply.hijack()
+      reply.raw.writeHead(200, {
+        ...(reply.getHeaders() as OutgoingHttpHeaders),
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+      })
       reply.raw.flushHeaders()
 
       const send = (event: string, data: unknown) => {

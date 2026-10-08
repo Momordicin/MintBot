@@ -137,6 +137,7 @@ describe('ensureAiService', () => {
     const [pythonPath, args, options] = spawnMock.mock.calls[0]
     expect(pythonPath).toContain('python')
     expect(args).toEqual(expect.arrayContaining(['-m', 'uvicorn']))
+    expect(args).toEqual(expect.arrayContaining(['--host', '127.0.0.1']))
     // 防止日后误删/打错这两个环境变量——它们是本地模型加载不该发起联网请求的唯一保障
     expect(options.env).toMatchObject({ HF_HUB_OFFLINE: '1', TRANSFORMERS_OFFLINE: '1' })
     await expect(promise).resolves.toBe(true)

@@ -3,7 +3,10 @@ import Fastify from 'fastify'
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { eventsRoutes } from './events.js'
 import { broadcastEvent, SERVER_GENERATION } from '../events/broadcast.js'
-import { RENDERER_ORIGIN } from '../config/ports.js'
+import fastifyCors from '@fastify/cors'
+import http from 'node:http'
+import type { AddressInfo } from 'node:net'
+import { RENDERER_ORIGIN, RENDERER_ORIGINS } from '../config/ports.js'
 
 // GET /events 是一条不会主动结束的长连接：fastify.inject() 的返回 promise 只有在响应
 // end() 之后才 resolve，这里跟 chat.test.ts 里"模拟客户端断连"的测试用同一手法——用
@@ -30,20 +33,59 @@ async function connect(fastify: FastifyInstance) {
   return { reply: capturedReply!, injectPromise }
 }
 
+// SSE 长连接不会结束，inject() 会一直挂起：这里真实 listen 在临时端口上，用 http.request 读到响应头后
+// 立即销毁 socket 并关闭服务。注册与 index.ts 相同的 @fastify/cors 配置，验证 CORS 头只由插件决定
+async function buildCorsApp() {
+  const fastify = Fastify()
+  await fastify.register(fastifyCors, {
+    origin: [...RENDERER_ORIGINS],
+    methods: ['GET', 'HEAD', 'POST', 'PATCH'],
+  })
+  await fastify.register(eventsRoutes)
+  return fastify
+}
+
+async function openEventStream(fastify: FastifyInstance, origin: string) {
+  await fastify.listen({ port: 0, host: '127.0.0.1' })
+  const { port } = fastify.server.address() as AddressInfo
+  try {
+    return await new Promise<{ headers: http.IncomingHttpHeaders }>((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port, path: '/events', headers: { Origin: origin } }, res => {
+        resolve({ headers: res.headers })
+        res.destroy()
+      })
+      req.on('error', reject)
+      req.end()
+    })
+  } finally {
+    fastify.server.closeAllConnections()
+    await fastify.close()
+  }
+}
+
 describe('GET /events', () => {
-  it('设置与 chat.ts 一致的 SSE 响应头', async () => {
-    const fastify = Fastify()
-    await fastify.register(eventsRoutes)
+  it('SSE 响应头：Content-Type/Cache-Control/Connection 正确，CORS 头由 @fastify/cors 插件唯一决定', async () => {
+    const fastify = await buildCorsApp()
+    const { headers } = await openEventStream(fastify, RENDERER_ORIGIN)
 
-    const { reply, injectPromise } = await connect(fastify)
+    expect(headers['content-type']).toBe('text/event-stream')
+    expect(headers['cache-control']).toBe('no-cache')
+    expect(headers['connection']).toBe('keep-alive')
+  })
 
-    expect(reply.raw.getHeader('Access-Control-Allow-Origin')).toBe(RENDERER_ORIGIN)
-    expect(reply.raw.getHeader('Content-Type')).toBe('text/event-stream')
-    expect(reply.raw.getHeader('Cache-Control')).toBe('no-cache')
-    expect(reply.raw.getHeader('Connection')).toBe('keep-alive')
+  it.each(RENDERER_ORIGINS)('允许的 origin %s：Access-Control-Allow-Origin 回显自身，Vary 含 Origin', async origin => {
+    const fastify = await buildCorsApp()
+    const { headers } = await openEventStream(fastify, origin)
 
-    reply.raw.emit('close')
-    await injectPromise.catch(() => {})
+    expect(headers['access-control-allow-origin']).toBe(origin)
+    expect(String(headers['vary'])).toMatch(/Origin/i)
+  })
+
+  it('不在白名单内的 origin：响应不带 Access-Control-Allow-Origin', async () => {
+    const fastify = await buildCorsApp()
+    const { headers } = await openEventStream(fastify, 'http://evil.example')
+
+    expect(headers['access-control-allow-origin']).toBeUndefined()
   })
 
   it('连接建立后注册为广播客户端：broadcastEvent 触发的写入会到达这条连接', async () => {

@@ -34,7 +34,7 @@ describe('ports.ts', () => {
     expect(AI_PORT).toBe(18765)
     expect(RENDERER_PORT).toBe(18173)
     expect(CORE_URL).toBe('http://127.0.0.1:18300')
-    expect(AI_URL).toBe('http://localhost:18765')
+    expect(AI_URL).toBe('http://127.0.0.1:18765')
     expect(RENDERER_ORIGIN).toBe('http://localhost:18173')
     expect(RENDERER_ORIGINS).toEqual(['http://localhost:18173', 'http://127.0.0.1:18173'])
   })
@@ -50,7 +50,7 @@ describe('ports.ts', () => {
     expect(AI_PORT).toBe(19001)
     expect(RENDERER_PORT).toBe(19002)
     expect(CORE_URL).toBe('http://127.0.0.1:19000')
-    expect(AI_URL).toBe('http://localhost:19001')
+    expect(AI_URL).toBe('http://127.0.0.1:19001')
   })
 
   it('非法端口值回落到默认值，并各 warn 一次', async () => {
