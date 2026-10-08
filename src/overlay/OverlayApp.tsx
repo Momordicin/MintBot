@@ -30,7 +30,7 @@ import {
   isDragHandleSuppressedByEdge,
 } from './edgeHoverState.js'
 
-import { CORE_URL } from '../coreUrl.js'
+import { CORE_URL, resolveAssetUrl } from '../coreUrl.js'
 
 const CLICK_DISPLACEMENT_THRESHOLD_PX = 5
 
@@ -46,11 +46,6 @@ interface DesktopPresencePayload {
   presence: PetPresence
   edgeSide: 'left' | 'right' | null
   handleSuppressed: boolean
-}
-
-function resolveAssetUrl(characterId: string, relativePath: string): string {
-  const encodedPath = relativePath.split('/').map(encodeURIComponent).join('/')
-  return `${CORE_URL}/characters/${encodeURIComponent(characterId)}/${encodedPath}`
 }
 
 export function OverlayApp() {
