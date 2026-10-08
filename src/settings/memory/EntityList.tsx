@@ -1,12 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 
-const CORE_URL = 'http://127.0.0.1:3000'
+import { CORE_URL } from '../../coreUrl.js'
 const PAGE_SIZE = 20
 
 type EntityType = 'person' | 'event' | 'preference' | 'place' | 'other'
 
-// GET /entities 返回的实体 shape，只取本面板展示需要的字段（不含 messageId/sessionId/
-// validUntil——这个端点只返回当前有效实体，validUntil 恒为 null，见任务说明）
 interface EntityRow {
   id: number
   type: EntityType
@@ -67,7 +65,6 @@ export function EntityList({ sessionId }: EntityListProps) {
       })
   }, [])
 
-  // type 切换和 sessionId 切换一样都要重置分页并从最新一页重新拉取
   useEffect(() => {
     setEntities([])
     setHasMore(false)
@@ -79,9 +76,6 @@ export function EntityList({ sessionId }: EntityListProps) {
   const loadMore = useCallback(async () => {
     if (!hasMore || isLoadingMore || entities.length === 0) return
     const beforeId = entities[0].id
-    // 和 loadInitial 共用同一个 controllerRef：sessionId/type 切换时 useEffect 的 cleanup
-    // 会 abort 它，避免这次"加载更多"晚于切换才返回，把旧 session/筛选条件下的实体错误地
-    // prepend 进新状态已经加载好的列表里
     controllerRef.current?.abort()
     const controller = new AbortController()
     controllerRef.current = controller

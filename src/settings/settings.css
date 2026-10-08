@@ -681,7 +681,7 @@
   cursor: pointer;
 }
 
-/* ─── 窗口行为面板（置顶模式 + 全屏白名单/黑名单） ──────────── */
+/* ─── 窗口行为面板（聊天窗置顶 + 智能避让 + 应用规则） ──────────── */
 
 .window-behavior-panel {
   display: flex;
@@ -720,4 +720,24 @@
   gap: 8px;
   font-size: 12px;
   color: var(--label);
+}
+
+/* 单选/复选一行——跟 .forget-panel__checkbox / .model-config-panel__checkbox 同一套写法，
+   单独一个类名而不是复用它们：那两个属于各自的面板，跨面板复用会让日后改其中一个面板的
+   勾选样式时意外牵动另一个 */
+.window-behavior-panel__choice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--label);
+  cursor: pointer;
+}
+
+/* 规则行右侧的「避让方式下拉 + 删除」一组，避免下拉框被 list-row 的 space-between
+   推到离删除按钮很远的地方 */
+.window-behavior-panel__list-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }

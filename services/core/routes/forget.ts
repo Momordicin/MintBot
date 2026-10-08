@@ -11,7 +11,6 @@ interface ForgetBody extends ForgetCheckBody {
   alsoDeleteAffectedSummaries?: boolean
 }
 
-// 校验通过返回 null，失败返回错误信息（供 400 响应使用）
 function validateTimeRange(body: ForgetCheckBody): string | null {
   if (!body.sessionId?.trim()) {
     return 'sessionId is required'
@@ -47,8 +46,6 @@ export async function forgetRoutes(fastify: FastifyInstance) {
 
     const { sessionId, fromTime, toTime, alsoDeleteAffectedSummaries } = request.body as Required<ForgetCheckBody> & ForgetBody
 
-    // 有摘要重叠但调用方没有明确确认时，forgetTimeRange 会抛 ForgetConflictError，
-    // 直接带着 ForgetImpact——不在这里再单独调一次 checkForgetImpact 重复查一遍
     try {
       return forgetTimeRange(sessionId, fromTime, toTime, {
         alsoDeleteAffectedSummaries: alsoDeleteAffectedSummaries === true,

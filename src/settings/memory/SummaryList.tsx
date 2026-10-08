@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 
-const CORE_URL = 'http://127.0.0.1:3000'
+import { CORE_URL } from '../../coreUrl.js'
 
-// GET /summaries 一次性返回全部，不分页，本面板只取展示需要的字段
 interface SummaryRow {
   id: number
   content: string

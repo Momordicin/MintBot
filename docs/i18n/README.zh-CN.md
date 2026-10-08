@@ -135,7 +135,7 @@ pnpm setup:ai
 # 启动核心服务（Fastify，独立进程）
 # 开发阶段：pnpm dev:core
 # 生产环境：先编译再用 pm2 常驻（pnpm start:core 就是 pm2 start ecosystem.config.cjs，
-# 依赖 out/core/index.js，跳过 build:core 会直接报错找不到文件）
+# 依赖 out/core/services/core/index.js，跳过 build:core 会直接报错找不到文件）
 # 生产环境：Windows 用户首次运行需要管理员权限，之后 pm2 stop mintbot-core; pm2 kill; 最后就可以在普通终端运行了
 pnpm build:core
 pnpm start:core

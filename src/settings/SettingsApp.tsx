@@ -9,7 +9,7 @@ import { ModelConfigPanel } from './ModelConfigPanel'
 import { WindowBehaviorPanel } from './WindowBehaviorPanel'
 import './settings.css'
 
-const CORE_URL = 'http://127.0.0.1:3000'
+import { CORE_URL } from '../coreUrl.js'
 
 type Tab = 'character' | 'memory' | 'model' | 'window'
 
@@ -40,14 +40,6 @@ export function SettingsApp() {
     loadState()
   }, [loadState])
 
-  // 把设置窗口也接到主题上：用的是"当前激活角色"（appState.presetSnapshot.displayConfig，
-  // 与 GET /state 返给聊天窗口的是同一份快照），不是 CharacterPanel 里用户正在浏览/编辑的
-  // 那个 preset——两者可能是不同的 preset（浏览别的角色的设置，不该重绘整个窗口），
-  // CharacterPanel 自己另开一份 previewTheme 只作用于 .character-panel__theme-preview
-  // 这个子树，见该文件与 settings.css 里的说明。
-  // 下面这段与 ChatWindow.tsx 的同名 effect 逐行同构（同一套 deriveTheme/themeCssVars/
-  // resolveThemeMode/DEFAULT_THEME_INPUT 兜底值），不是另起的变体：两个窗口要看起来一样，
-  // 就不能各自独立实现一遍"要不要染色/兜底成什么"这些判断
   const prefersDark = usePrefersDark()
   const displayConfig = appState?.presetSnapshot?.displayConfig
   const resolvedMode = displayConfig ? resolveThemeMode(displayConfig.themeMode, prefersDark) : DEFAULT_THEME_INPUT.mode
@@ -61,11 +53,6 @@ export function SettingsApp() {
   }, [displayConfig, resolvedMode])
   const chatBgOpacity = displayConfig?.chatBgOpacity ?? DEFAULT_CHAT_BG_OPACITY
 
-  // 挂在 document.documentElement 上而不是 .settings-window 根 div 的内联 style——原因与
-  // ChatWindow.tsx 完全一致：global.css 的 `html, body, #root { color: ... }` 是这个根 div
-  // 的祖先，内联样式到不了祖先。用 useLayoutEffect 避免每次主题变化都闪一下 global.css 的
-  // 占位色。error 分支（无法连接核心服务、appState 仍是 null）也要吃到这份兜底主题——
-  // displayConfig 缺失时 deriveTheme(DEFAULT_THEME_INPUT) 与 ChatWindow.tsx 同一条兜底路径
   useLayoutEffect(() => {
     const root = document.documentElement
     const vars = themeCssVars(theme, chatBgOpacity)

@@ -6,11 +6,12 @@
   "scripts": {
     "dev": "electron-vite dev",
     "dev:core": "tsx watch services/core/index.ts",
-    "dev:ai": "cd services/ai && uvicorn main:app --reload --port 8765",
-    "dev:all": "concurrently -k -n core,app -c cyan,green \"pnpm exec tsx services/core/index.ts\" \"wait-on -l -t 120s http-get://127.0.0.1:3000/health && pnpm dev\"",
+    "dev:ai": "tsx scripts/dev-ai.ts",
+    "dev:all": "concurrently -k -n core,app -c cyan,green \"pnpm exec tsx services/core/index.ts\" \"pnpm exec tsx scripts/wait-core.ts && pnpm dev\"",
     "start:core": "pm2 start ecosystem.config.cjs",
     "build": "electron-vite build",
-    "build:core": "pnpm exec tsc -p shared/tsconfig.json && pnpm exec tsc -p services/core/tsconfig.json",
+    "build:core": "pnpm exec tsc -p shared/tsconfig.json && pnpm exec tsc -p services/core/tsconfig.json && pnpm run verify:core-build",
+    "verify:core-build": "node scripts/verify-core-build.mjs",
     "preview": "electron-vite preview",
     "seed": "tsx services/core/db/seed.ts",
     "setup:vendor": "tsx scripts/setup-vendor.ts",
@@ -22,7 +23,7 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "AGPL-3.0-only",
   "devEngines": {
     "packageManager": {
       "name": "pnpm",

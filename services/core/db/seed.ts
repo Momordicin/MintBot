@@ -18,7 +18,7 @@ console.log('[Seed] preset-001 inserted')
 upsertPreset({
   presetId: 'preset-002',
   name: '测试角色二',
-  characterId: 'char-002', // TODO Phase 3：需与 assets/characters/ 下的真实角色包目录名对应
+  characterId: 'char-002', 
   modelType: 'ollama',
   modelName: 'llama3',
   wallpaperPath: 'preset-002-bg.jpg',

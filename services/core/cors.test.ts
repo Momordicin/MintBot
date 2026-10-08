@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import Fastify from 'fastify'
 import fastifyCors from '@fastify/cors'
+import { RENDERER_ORIGIN, RENDERER_ORIGINS } from './config/ports.js'
 
 // 与 index.ts 里 @fastify/cors 的注册配置保持一致（index.ts 未导出可复用的 build-app
 // 工厂，这里按 static.test.ts 的既有约定在测试里复制同一份配置，而不是重新 new 一个
@@ -11,7 +12,7 @@ import fastifyCors from '@fastify/cors'
 async function buildTestApp() {
   const fastify = Fastify()
   await fastify.register(fastifyCors, {
-    origin: ['http://localhost:5173', 'http://127.0.0.1:5173'],
+    origin: [...RENDERER_ORIGINS],
     methods: ['GET', 'HEAD', 'POST', 'PATCH'],
   })
   fastify.patch('/presets/:presetId', async () => ({ ok: true }))
@@ -26,7 +27,7 @@ describe('CORS 预检 (OPTIONS)', () => {
       method: 'OPTIONS',
       url: '/presets/p1',
       headers: {
-        origin: 'http://localhost:5173',
+        origin: RENDERER_ORIGIN,
         'access-control-request-method': 'PATCH',
       },
     })

@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from 'react'
 
-const CORE_URL = 'http://127.0.0.1:3000'
+import { CORE_URL } from '../../coreUrl.js'
 
-// 只取本面板展示需要的字段，本地重复定义（同其它 memory 子面板的约定）
 interface SummaryRow {
   id: number
   fromMessageId: number
@@ -31,8 +30,6 @@ interface ForgetRangePanelProps {
   sessionId: string
 }
 
-// datetime-local 的 value 格式固定为 "YYYY-MM-DDTHH:mm"，new Date() 按本机时区解析，
-// 输入框的原始字符串本身已经是可回显的格式，不需要额外的 epoch -> 字符串转换
 function datetimeLocalToEpoch(value: string): number | null {
   if (!value) return null
   const ms = new Date(value).getTime()
@@ -53,8 +50,6 @@ export function ForgetRangePanel({ sessionId }: ForgetRangePanelProps) {
   const [deleteResult, setDeleteResult] = useState<ForgetResult | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  // session 切换：整段检查/确认流程失效，回到初始输入态；日期输入框保留原值即可，
-  // 不是这次切换要处理的东西
   useEffect(() => {
     setValidationError(null)
     setCheckResult(null)
@@ -68,8 +63,6 @@ export function ForgetRangePanel({ sessionId }: ForgetRangePanelProps) {
 
   const fromTime = datetimeLocalToEpoch(fromValue)
   const toTime = datetimeLocalToEpoch(toValue)
-  // 用户在检查完之后又编辑了日期输入框：checkedRange 记录的是"检查那一刻"的时间段，
-  // 与当前输入不再一致就说明检查结果已经过期，删除按钮必须重新禁用，直到重新点一次检查
   const isStale = checkedRange === null || fromTime !== checkedRange.fromTime || toTime !== checkedRange.toTime
 
   async function handleCheck() {
@@ -107,9 +100,6 @@ export function ForgetRangePanel({ sessionId }: ForgetRangePanelProps) {
   }
 
   async function handleConfirmDelete() {
-    // 故意用 checkedRange（检查那一刻的时间段），不用 fromTime/toTime（输入框当前值）——
-    // 确认弹窗展示的影响范围是基于 checkedRange 算出来的，真正发起删除也必须用同一个范围，
-    // 否则如果用户在弹窗打开后又偷偷改了输入框，会删掉一个和弹窗文案不一致的范围
     if (checkedRange === null) return
     const { fromTime: rangeFrom, toTime: rangeTo } = checkedRange
     setIsDeleting(true)
@@ -122,8 +112,6 @@ export function ForgetRangePanel({ sessionId }: ForgetRangePanelProps) {
       })
 
       if (response.status === 409) {
-        // 409 响应体本身就是一份新鲜的 ForgetImpact，等同于重新检查了一次——直接复用，
-        // 不用再额外调一次 /forget/check
         const impact: ForgetImpact = await response.json()
         setCheckResult(impact)
         setCheckedRange({ fromTime: rangeFrom, toTime: rangeTo })
@@ -135,7 +123,6 @@ export function ForgetRangePanel({ sessionId }: ForgetRangePanelProps) {
 
       const result: ForgetResult = await response.json()
       setDeleteResult(result)
-      // 删除已完成，这段时间范围不再存在，检查结果清空，面板回到初始输入态
       setCheckResult(null)
       setCheckedRange(null)
       setConfirmStep(false)

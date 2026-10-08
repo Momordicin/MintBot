@@ -2,11 +2,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { ModelConfig } from '../../shared/types/index.js'
 import './settings.css'
 
-const CORE_URL = 'http://127.0.0.1:3000'
+import { CORE_URL } from '../coreUrl.js'
 
-// GET/PATCH /config/model 的响应类型：只取本面板展示需要的字段，本地重复定义
-// （同 memory 子面板对 ForgetImpact/ForgetResult 等后端响应类型的约定），不从
-// services/core 反向导入路由文件里的类型
 interface ModelConfigSummary {
   type: 'anthropic' | 'openai' | 'ollama' | 'deepseek'
   hasAnthropicApiKey: boolean
@@ -20,9 +17,6 @@ interface ModelConfigSummary {
   maxTokens?: number
 }
 
-// max_tokens 输入框边界：与 services/core/routes/config.ts 的 MIN_MAX_TOKENS/MAX_MAX_TOKENS
-// 保持一致（下限 1、上限 32000）——前端这里只做输入体验层面的即时提示，真正拒绝非法值的
-// 权威校验在服务端 PATCH /config/model
 const MIN_MAX_TOKENS = 1
 const MAX_MAX_TOKENS = 32000
 
@@ -31,8 +25,6 @@ interface ConfigModelResponse {
   backgroundModelProvider: ModelConfigSummary | null
 }
 
-// 表单本地编辑状态：apiKey 永远不从服务端响应回填（决定 B——服务端从不回传明文 key），
-// 空字符串代表"用户没有输入新值"，保存时据此决定要不要把这个字段带进 PATCH body
 interface ModelFormState {
   type: 'anthropic' | 'openai' | 'ollama' | 'deepseek'
   apiKey: string
@@ -41,7 +33,7 @@ interface ModelFormState {
   deepseekBaseUrl: string
   ollamaBaseUrl: string
   ollamaModel: string
-  maxTokens: string   // 数字输入框的原始文本值，跟 apiKey 等字段一样用字符串承载表单状态
+  maxTokens: string   
 }
 
 const BLANK_FORM: ModelFormState = {
@@ -69,9 +61,6 @@ function summaryToFormState(summary: ModelConfigSummary | null): ModelFormState 
   }
 }
 
-// 把表单值转成 PATCH body 里的 Partial<ModelConfig>：modelName/openaiBaseUrl/ollamaBaseUrl/
-// ollamaModel 都是从 GET 响应直接回填的明文字段（非密钥），按表单当前值原样带上；只有
-// apiKey 是决定 B 特殊处理的字段——留空代表未修改，不进入 body，避免覆盖已存的 key
 function buildPartialConfig(form: ModelFormState): Partial<ModelConfig> {
   const partial: Partial<ModelConfig> = { type: form.type }
   const trimmedApiKey = form.apiKey.trim()
@@ -91,10 +80,6 @@ function buildPartialConfig(form: ModelFormState): Partial<ModelConfig> {
     partial.ollamaModel = form.ollamaModel.trim()
   }
 
-  // maxTokens 是跟 type 无关的字段：留空代表"不改动"，不进入 body（同 apiKey 的留空语义）；
-  // 非整数（如用户手改出 "12.5"）同样不进入 body，交由用户已存的旧值继续生效，不把明显
-  // 有问题的值硬塞给服务端换一个 400——真正的范围校验（[1, 32000]）仍在服务端 PATCH /config/model，
-  // 这里只做"看起来像个合法整数才带上"的最低限度前端把关
   const trimmedMaxTokens = form.maxTokens.trim()
   if (trimmedMaxTokens) {
     const parsedMaxTokens = Number(trimmedMaxTokens)
@@ -127,9 +112,6 @@ function ModelFormFields({ form, onChange, summary }: ModelFormFieldsProps) {
           onChange={e => onChange({
             ...form,
             type: e.target.value as ModelFormState['type'],
-            // 切换供应商类型时清空 apiKey/modelName——否则用户在切换前已经输入的一个
-            // provider 的密钥/模型名会被原样带到另一个 provider 下提交，buildPartialConfig
-            // 无法区分"这个值是特意为新 type 填的"还是"切换前遗留下来的"
             apiKey: '',
             modelName: '',
           })}
@@ -212,16 +194,12 @@ function ModelFormFields({ form, onChange, summary }: ModelFormFieldsProps) {
   )
 }
 
-// 全局单例配置面板：不像 CharacterPanel 那样存在"切换 preset 导致响应姗姗来迟"的竞态
-// （没有别的东西能并发地把这份配置"切换走"），因此只需要一个 AbortController 供卸载时
-// abort 在途的 PATCH，不需要 presetSnapshotRef 那类一致性检查
 export function ModelConfigPanel() {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [chatSummary, setChatSummary] = useState<ModelConfigSummary | null>(null)
   const [backgroundSummary, setBackgroundSummary] = useState<ModelConfigSummary | null>(null)
   const [chatForm, setChatForm] = useState<ModelFormState>(BLANK_FORM)
-  // 摘要模型响应为 null 就代表"没有配置覆盖，跟随对话模型"——勾选框的初始状态直接映射这个原始值
   const [sameAsChatModel, setSameAsChatModel] = useState(true)
   const [summaryForm, setSummaryForm] = useState<ModelFormState>(BLANK_FORM)
   const [isSaving, setIsSaving] = useState(false)
@@ -276,7 +254,6 @@ export function ModelConfigPanel() {
       })
 
       if (!response.ok) {
-        // 400 校验错误体是 { error: string }，把具体原因展示给用户而不是一个笼统的 HTTP 状态码
         const payload = await response.json().catch(() => null)
         throw new Error(typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`)
       }

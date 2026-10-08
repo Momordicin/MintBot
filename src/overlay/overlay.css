@@ -75,3 +75,16 @@
 .overlay-root.overlay-root--locked .overlay-drag-handle {
   -webkit-app-region: no-drag;
 }
+
+/* 贴边未展开时抑制手柄（第二次 rework FIX 1，纯判断见 src/overlay/edgeHoverState.ts
+   isDragHandleSuppressedByEdge 定义处注释）：手柄固定在右上角 20×20px，几乎整个手柄都落在
+   贴边可视条带（EDGE_VISIBLE_SLIVER_PX，40px）内——用户从贴边条带的自然方向（顶部，正是
+   手柄占据的方向）靠近时，手柄的 drag 区在 WM_NCHITTEST 层面吞掉指针事件（electron#13534），
+   hover 展开永远触发不了。由 OverlayApp.tsx 按 isDragHandleSuppressedByEdge 的结果二选一挂上
+   这个 class 或 --visible（两者互斥，不会同时出现在同一个元素上），因此这里不需要跟
+   --visible 比谁的优先级更高。一旦 hover 展开或彻底离开 EDGE，OverlayApp.tsx 会摘掉这个
+   class，手柄恢复正常行为——用户仍可以先 hover 展开、再拖走 */
+.overlay-drag-handle.overlay-drag-handle--edge-suppressed {
+  opacity: 0;
+  -webkit-app-region: no-drag;
+}

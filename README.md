@@ -142,7 +142,7 @@ pnpm setup:ai
 # Start the core service (Fastify, its own process)
 # Development: pnpm dev:core
 # Production: build first, then run persistently via pm2 (pnpm start:core just runs
-# `pm2 start ecosystem.config.cjs`, which depends on out/core/index.js — skipping build:core
+# `pm2 start ecosystem.config.cjs`, which depends on out/core/services/core/index.js — skipping build:core
 # will fail immediately with a missing-file error)
 # Production: on Windows, the first run needs administrator privileges; after that,
 # `pm2 stop mintbot-core; pm2 kill` and you can run it from a regular terminal going forward
@@ -153,7 +153,7 @@ pnpm start:core
 pnpm dev
 ```
 
-The Python AI service (services/ai — local ASR / TTS / Embedding model services) is started and stopped automatically by the core service: when `pnpm start:core` / `pnpm dev:core` starts the core service, if it detects the AI service isn't already running, it automatically spins up the corresponding process from `.venv`, and stops that instance when the core service exits — you don't need to run `pnpm dev:ai` manually. `pnpm dev:ai` still exists for cases where you want to manually start it for hot-reload debugging of the Python code — the core service will detect it's already running and won't start a duplicate, but it also won't stop that manually-started instance for you on exit (you'll need to Ctrl+C it yourself). This "already running" detection relies on both sides using the same port: `pnpm dev:ai` currently hardcodes `--port 8765` and doesn't read `AI_PORT` from `.env`. If you've changed `AI_PORT` and still want to use `dev:ai` for hot-reload debugging, you'll need to manually align the ports, or the core service will think nothing is running and start a second instance.
+The Python AI service (services/ai — local ASR / TTS / Embedding model services) is started and stopped automatically by the core service: when `pnpm start:core` / `pnpm dev:core` starts the core service, if it detects the AI service isn't already running, it automatically spins up the corresponding process from `.venv`, and stops that instance when the core service exits — you don't need to run `pnpm dev:ai` manually. `pnpm dev:ai` still exists for cases where you want to manually start it for hot-reload debugging of the Python code — the core service will detect it's already running and won't start a duplicate, but it also won't stop that manually-started instance for you on exit (you'll need to Ctrl+C it yourself). This "already running" detection relies on both sides using the same port; `pnpm dev:ai` reads `AI_PORT` from `.env` the same way the core service does, so they stay aligned.
 
 ---
 

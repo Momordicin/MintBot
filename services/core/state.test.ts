@@ -23,7 +23,7 @@ describe('buildStatePayload — embeddingReady', () => {
   it('AI 服务健康检查返回 embedding_loaded=true 时，embeddingReady 为 true', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ status: 'ok', embedding_loaded: true, ner_loaded: false }),
+      json: async () => ({ status: 'ok', service: 'mintbot-ai', embedding_loaded: true, ner_loaded: false }),
     }))
 
     const payload = await buildStatePayload()
@@ -34,7 +34,7 @@ describe('buildStatePayload — embeddingReady', () => {
   it('AI 服务健康检查返回 embedding_loaded=false 时，embeddingReady 为 false', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ status: 'ok', embedding_loaded: false, ner_loaded: false }),
+      json: async () => ({ status: 'ok', service: 'mintbot-ai', embedding_loaded: false, ner_loaded: false }),
     }))
 
     const payload = await buildStatePayload()

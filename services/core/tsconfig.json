@@ -8,10 +8,8 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "composite": true,
+    "rootDir": "../..",
     "outDir": "../../out/core"
   },
-  "include": ["./**/*"],
-  "references": [
-    { "path": "../../shared" }
-  ]
+  "include": ["./**/*", "../../shared/**/*"]
 }

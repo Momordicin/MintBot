@@ -1,5 +1,6 @@
 import type { NerEntity } from '../../../shared/types/index.js'
 import { recordActivity } from './aiActivity.js'
+import { AI_URL } from '../config/ports.js'
 
 export interface NERProvider {
   extract(text: string): Promise<NerEntity[]>
@@ -10,7 +11,7 @@ export interface NERProvider {
 export class Bert4NerProvider implements NERProvider {
   private baseUrl: string
 
-  constructor(baseUrl = 'http://localhost:8765') {
+  constructor(baseUrl = AI_URL) {
     this.baseUrl = baseUrl
   }
 
@@ -26,8 +27,6 @@ export class Bert4NerProvider implements NERProvider {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ texts }),
-      // NER 模型懒加载，首次调用需现场加载 shibing624/bert4ner-base-chinese（冷启动耗时数秒），
-      // 比 EmbeddingProvider 的 5000ms 更宽松，以避免冷启动首次请求超时失败
       signal: AbortSignal.timeout(15000),
     })
 

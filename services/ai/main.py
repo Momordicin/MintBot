@@ -12,6 +12,8 @@ from ner.model import (
 
 app = FastAPI()
 
+AI_SERVICE_IDENTITY = 'mintbot-ai'
+
 class EmbedRequest(BaseModel):
     texts: list[str]
 
@@ -35,7 +37,7 @@ class NerResponse(BaseModel):
 
 @app.get('/health')
 def health():
-    return {'status': 'ok', 'embedding_loaded': is_loaded(), 'ner_loaded': is_ner_loaded()}
+    return {'status': 'ok', 'service': AI_SERVICE_IDENTITY, 'embedding_loaded': is_loaded(), 'ner_loaded': is_ner_loaded()}
 
 @app.post('/embed', response_model=EmbedResponse)
 def embed(req: EmbedRequest):
