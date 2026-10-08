@@ -11,7 +11,7 @@ import { createWatchdogEventSource } from '../eventsWatchdog.js'
 import type { AppState, PresetSnapshot } from '../../shared/types/index.js'
 import './chat.css'
 
-import { CORE_URL } from '../coreUrl.js'
+import { CORE_URL, resolveAssetUrl } from '../coreUrl.js'
 const DEFAULT_WALLPAPER_URL = `${CORE_URL}/wallpapers/bg.jpg`
 const INITIAL_HISTORY_LIMIT = 3
 const LOAD_MORE_HISTORY_LIMIT = 20
@@ -45,31 +45,23 @@ function fetchEmbeddingReady(): Promise<boolean | undefined> {
     .catch(() => undefined)
 }
 
-async function fetchAvatarUrl(characterId: string, signal?: AbortSignal): Promise<string | undefined> {
-  try {
-    const res = await fetch(`${CORE_URL}/characters/${encodeURIComponent(characterId)}/manifest.json`, { signal })
-    if (!res.ok) return undefined
-
-    const manifest: { avatar?: string } = await res.json()
-    if (!manifest.avatar) return undefined
-
-    return `${CORE_URL}/characters/${encodeURIComponent(characterId)}/${encodeURIComponent(manifest.avatar)}`
-  } catch {
-    return undefined
-  }
+interface AvatarUrls {
+  avatarUrl?: string
+  userAvatarUrl?: string
 }
 
-async function fetchUserAvatarUrl(characterId: string, signal?: AbortSignal): Promise<string | undefined> {
+async function fetchAvatarUrls(characterId: string, signal?: AbortSignal): Promise<AvatarUrls> {
   try {
     const res = await fetch(`${CORE_URL}/characters/${encodeURIComponent(characterId)}/manifest.json`, { signal })
-    if (!res.ok) return undefined
+    if (!res.ok) return {}
 
-    const manifest: { userAvatar?: string } = await res.json()
-    if (!manifest.userAvatar) return undefined
-
-    return `${CORE_URL}/characters/${encodeURIComponent(characterId)}/${encodeURIComponent(manifest.userAvatar)}`
+    const manifest: { avatar?: string; userAvatar?: string } = await res.json()
+    return {
+      avatarUrl: manifest.avatar ? resolveAssetUrl(characterId, manifest.avatar) : undefined,
+      userAvatarUrl: manifest.userAvatar ? resolveAssetUrl(characterId, manifest.userAvatar) : undefined
+    }
   } catch {
-    return undefined
+    return {}
   }
 }
 
@@ -111,13 +103,10 @@ export function ChatWindow() {
         setEmbeddingReady(state.embeddingReady)
         setWallpaperUrl(wallpaperUrlFor(state.presetSnapshot))
         if (state.presetSnapshot?.characterId) {
-          fetchAvatarUrl(state.presetSnapshot.characterId, controller.signal).then(url => {
+          fetchAvatarUrls(state.presetSnapshot.characterId, controller.signal).then(urls => {
             if (controller.signal.aborted) return
-            setAvatarUrl(url)
-          })
-          fetchUserAvatarUrl(state.presetSnapshot.characterId, controller.signal).then(url => {
-            if (controller.signal.aborted) return
-            setUserAvatarUrl(url)
+            setAvatarUrl(urls.avatarUrl)
+            setUserAvatarUrl(urls.userAvatarUrl)
           })
         }
         if (state.sessionId) {
@@ -173,15 +162,12 @@ export function ChatWindow() {
           loadInitialMessages(state.sessionId, controller.signal)
         }
 
-        const nextAvatarUrl = state.presetSnapshot?.characterId
-          ? await fetchAvatarUrl(state.presetSnapshot.characterId, controller.signal)
-          : undefined
-        const nextUserAvatarUrl = state.presetSnapshot?.characterId
-          ? await fetchUserAvatarUrl(state.presetSnapshot.characterId, controller.signal)
-          : undefined
+        const nextUrls: AvatarUrls = state.presetSnapshot?.characterId
+          ? await fetchAvatarUrls(state.presetSnapshot.characterId, controller.signal)
+          : {}
         if (controller.signal.aborted) return
-        setAvatarUrl(nextAvatarUrl)
-        setUserAvatarUrl(nextUserAvatarUrl)
+        setAvatarUrl(nextUrls.avatarUrl)
+        setUserAvatarUrl(nextUrls.userAvatarUrl)
       } catch {
       }
     }
