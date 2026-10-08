@@ -314,10 +314,12 @@ const WALLPAPER_MAX_BYTES = 10 * 1024 * 1024
 
 const CHARACTER_CARD_MAX_BYTES = 5 * 1024 * 1024
 
-const PRELOAD_PATH = join(__dirname, '../preload/index.mjs')
+const PRELOAD_PATH = join(__dirname, '../preload/index.cjs')
 
-ipcMain.handle('select-wallpaper-file', async () => {
-  const result = await dialog.showOpenDialog({
+ipcMain.handle('select-wallpaper-file', async (event) => {
+  const owner = BrowserWindow.fromWebContents(event.sender)
+  if (!owner) return null
+  const result = await dialog.showOpenDialog(owner, {
     properties: ['openFile'],
     filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }]
   })
@@ -333,8 +335,10 @@ ipcMain.handle('select-wallpaper-file', async () => {
   return { data: new Uint8Array(buffer), filename: basename(filePath) }
 })
 
-ipcMain.handle('select-character-card-file', async () => {
-  const result = await dialog.showOpenDialog({
+ipcMain.handle('select-character-card-file', async (event) => {
+  const owner = BrowserWindow.fromWebContents(event.sender)
+  if (!owner) return null
+  const result = await dialog.showOpenDialog(owner, {
     properties: ['openFile'],
     filters: [{ name: 'Character Cards', extensions: ['json', 'png'] }]
   })
@@ -350,8 +354,10 @@ ipcMain.handle('select-character-card-file', async () => {
   return { data: new Uint8Array(buffer), filename: basename(filePath) }
 })
 
-ipcMain.handle('select-exe-file', async () => {
-  const result = await dialog.showOpenDialog({
+ipcMain.handle('select-exe-file', async (event) => {
+  const owner = BrowserWindow.fromWebContents(event.sender)
+  if (!owner) return null
+  const result = await dialog.showOpenDialog(owner, {
     properties: ['openFile'],
     filters: [{ name: 'Executable', extensions: ['exe'] }]
   })
@@ -381,8 +387,7 @@ function createSettingsWindow(): BrowserWindow {
     show: false,
     parent: mainWindow ?? undefined,
     webPreferences: {
-      preload: PRELOAD_PATH,
-      sandbox: false
+      preload: PRELOAD_PATH
     }
   })
 
@@ -453,8 +458,7 @@ function createOverlayWindow(): BrowserWindow {
     focusable: false,
     show: false,
     webPreferences: {
-      preload: PRELOAD_PATH,
-      sandbox: false
+      preload: PRELOAD_PATH
     }
   })
 
@@ -523,8 +527,7 @@ function createWindow(): BrowserWindow {
     },
     maximizable: false,
     webPreferences: {
-      preload: PRELOAD_PATH,
-      sandbox: false
+      preload: PRELOAD_PATH
     }
   })
 
@@ -539,14 +542,6 @@ function createWindow(): BrowserWindow {
     clearDragState('chat')
   })
 
-  win.on('minimize', () => {
-    overlayWindow?.showInactive()
-  })
-
-  win.on('focus', () => {
-    overlayWindow?.hide()
-  })
-
   win.on('moved', () => {
     handleWindowMoved('chat', win, mainWindow, overlayWindow)
   })
@@ -559,7 +554,6 @@ function createWindow(): BrowserWindow {
     if (!isQuitting) {
       event.preventDefault()
       win.hide()
-      overlayWindow?.showInactive()
     }
   })
 
@@ -575,15 +569,14 @@ function createWindow(): BrowserWindow {
 ipcMain.on('overlay:activate', () => {
   mainWindow?.show()
   mainWindow?.focus()
-  overlayWindow?.hide()
 })
 
 ipcMain.on('overlay:edge-hover', (_event, hovered: unknown) => {
-  requestOverlayEdgeHover(overlayWindow, mainWindow, hovered === true)
+  requestOverlayEdgeHover(overlayWindow, hovered === true)
 })
 
 ipcMain.on('overlay:presence-ready', () => {
-  sendCurrentPetPresenceOnReady(overlayWindow, mainWindow)
+  sendCurrentPetPresenceOnReady(overlayWindow)
 })
 
 ipcMain.on('titlebar:set-overlay', (_event, overlay: { color?: unknown; symbolColor?: unknown }) => {

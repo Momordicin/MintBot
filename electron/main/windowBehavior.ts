@@ -223,7 +223,6 @@ function computeEdgeFullBounds(
 
 function runPetEdgeController(
   overlayWindow: BrowserWindow,
-  mainWindow: BrowserWindow | null,
   desired: DesiredPetState,
   isInteracting: boolean
 ): void {
@@ -232,7 +231,7 @@ function runPetEdgeController(
 
     if (appliedPetPresence !== 'EDGE' || isInteracting) {
       if (appliedPetPresence !== desired.presence) {
-        settlePetPresence(overlayWindow, mainWindow, desired.presence, null, false)
+        settlePetPresence(overlayWindow, desired.presence, null, false)
       }
       return
     }
@@ -247,13 +246,13 @@ function runPetEdgeController(
     const restoredBounds = computeEdgeFullBounds(target, displays, currentBounds)
 
     if (boundsEqual(currentBounds, restoredBounds)) {
-      settlePetPresence(overlayWindow, mainWindow, desired.presence, null, false)
+      settlePetPresence(overlayWindow, desired.presence, null, false)
       return
     }
 
     const { generation, onComplete } = beginProgrammaticMove('overlay')
     const cancel = animateTo(overlayWindow, restoredBounds, () => {
-      if (onComplete()) settlePetPresence(overlayWindow, mainWindow, desired.presence, null, true)
+      if (onComplete()) settlePetPresence(overlayWindow, desired.presence, null, true)
     })
     setActiveAnimationCancelIfCurrent('overlay', generation, cancel)
     return
@@ -277,20 +276,19 @@ function runPetEdgeController(
 
   const desiredBounds = resolveEdgeHoverBounds(edgeBounds, fullBoundsSameGeometry, overlayEdgeHovered)
   if (boundsEqual(currentBounds, desiredBounds)) {
-    settlePetPresence(overlayWindow, mainWindow, 'EDGE', stableSide, false)
+    settlePetPresence(overlayWindow, 'EDGE', stableSide, false)
     return
   }
 
   const { generation, onComplete } = beginProgrammaticMove('overlay')
   const cancel = animateTo(overlayWindow, desiredBounds, () => {
-    if (onComplete()) settlePetPresence(overlayWindow, mainWindow, 'EDGE', stableSide, true)
+    if (onComplete()) settlePetPresence(overlayWindow, 'EDGE', stableSide, true)
   })
   setActiveAnimationCancelIfCurrent('overlay', generation, cancel)
 }
 
 function settlePetPresence(
   overlayWindow: BrowserWindow,
-  mainWindow: BrowserWindow | null,
   presence: PetPresence,
   edgeSide: EdgeSide | null,
   reevaluate: boolean
@@ -298,19 +296,18 @@ function settlePetPresence(
   appliedPetPresence = presence
   appliedPetEdgeSide = edgeSide
   maybeBroadcastPetPresence(overlayWindow)
-  if (reevaluate) evaluatePetPresence(overlayWindow, mainWindow)
+  if (reevaluate) evaluatePetPresence(overlayWindow)
 }
 
 export function requestOverlayEdgeHover(
   overlayWindow: BrowserWindow | null,
-  mainWindow: BrowserWindow | null,
   hovered: boolean
 ): void {
   if (!overlayWindow || overlayWindow.isDestroyed()) return
   if (appliedPetPresence !== 'EDGE') return
 
   overlayEdgeHovered = hovered
-  evaluatePetPresence(overlayWindow, mainWindow)
+  evaluatePetPresence(overlayWindow)
 }
 
 let lastBroadcastPetPresence: PetPresencePayload | null = null
@@ -336,11 +333,11 @@ function maybeBroadcastPetPresence(overlayWindow: BrowserWindow): void {
   broadcastPetPresenceIfChanged(overlayWindow, currentPetPresencePayload())
 }
 
-export function sendCurrentPetPresenceOnReady(overlayWindow: BrowserWindow | null, mainWindow: BrowserWindow | null): void {
+export function sendCurrentPetPresenceOnReady(overlayWindow: BrowserWindow | null): void {
   if (!overlayWindow || overlayWindow.isDestroyed()) return
 
   overlayEdgeHovered = false
-  evaluatePetPresence(overlayWindow, mainWindow)
+  evaluatePetPresence(overlayWindow)
 
   if (lastBroadcastPetPresence === null) return
   overlayWindow.webContents.send(PET_PRESENCE_CHANGED_CHANNEL, lastBroadcastPetPresence)
@@ -458,7 +455,7 @@ function applyPetVisibility(overlayWindow: BrowserWindow, visibility: 'show' | '
   }
 }
 
-function evaluatePetPresence(overlayWindow: BrowserWindow | null, mainWindow: BrowserWindow | null): void {
+function evaluatePetPresence(overlayWindow: BrowserWindow | null): void {
   if (!overlayWindow || overlayWindow.isDestroyed()) return
   if (!startupGateOpen) return
 
@@ -480,19 +477,18 @@ function evaluatePetPresence(overlayWindow: BrowserWindow | null, mainWindow: Br
 
   maybeBroadcastPetPresence(overlayWindow)
 
-  const chatFocused = mainWindow !== null && !mainWindow.isDestroyed() && mainWindow.isFocused()
-  const transition = diffPetState(desired, appliedDisplayIdFor('overlay'), overlayWindow.isVisible(), chatFocused)
+  const transition = diffPetState(desired, appliedDisplayIdFor('overlay'), overlayWindow.isVisible())
   applyPetVisibility(overlayWindow, transition.visibility)
 
   applyAlwaysOnTop(overlayWindow, 'overlay', desired.alwaysOnTop)
 
   if (transition.move !== null && !isInteracting) {
     appliedPetDisplayId = transition.move
-    moveToDisplay(overlayWindow, 'overlay', transition.move, () => evaluatePetPresence(overlayWindow, mainWindow))
+    moveToDisplay(overlayWindow, 'overlay', transition.move, () => evaluatePetPresence(overlayWindow))
     return
   }
 
-  runPetEdgeController(overlayWindow, mainWindow, desired, isInteracting)
+  runPetEdgeController(overlayWindow, desired, isInteracting)
 }
 
 function evaluateChatPresence(mainWindow: BrowserWindow | null): void {
@@ -528,6 +524,6 @@ function evaluateChatPresence(mainWindow: BrowserWindow | null): void {
 }
 
 export function evaluateDesktopPresence(mainWindow: BrowserWindow | null, overlayWindow: BrowserWindow | null): void {
-  evaluatePetPresence(overlayWindow, mainWindow)
+  evaluatePetPresence(overlayWindow)
   evaluateChatPresence(mainWindow)
 }

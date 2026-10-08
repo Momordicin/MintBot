@@ -244,7 +244,7 @@ describe('sendCurrentPetPresenceOnReady (Stage 3 part 2, FIX 2/FIX 3)', () => {
 
     const win = makeFakeOverlayWindow({ x: 0, y: 0, width: 132, height: 132 })
 
-    fresh.sendCurrentPetPresenceOnReady(win as unknown as Electron.BrowserWindow, null)
+    fresh.sendCurrentPetPresenceOnReady(win as unknown as Electron.BrowserWindow)
 
     expect(win.webContents.send).not.toHaveBeenCalled()
   })
@@ -260,7 +260,7 @@ describe('sendCurrentPetPresenceOnReady (Stage 3 part 2, FIX 2/FIX 3)', () => {
     evaluateDesktopPresence(null, win as unknown as Electron.BrowserWindow) // broadcasts AMBIENT once
     vi.clearAllMocks()
 
-    sendCurrentPetPresenceOnReady(win as unknown as Electron.BrowserWindow, null)
+    sendCurrentPetPresenceOnReady(win as unknown as Electron.BrowserWindow)
 
     expect(win.webContents.send).toHaveBeenCalledWith('desktop-presence:changed', { presence: 'AMBIENT', edgeSide: null, handleSuppressed: false })
   })
@@ -280,7 +280,7 @@ describe('sendCurrentPetPresenceOnReady (Stage 3 part 2, FIX 2/FIX 3)', () => {
     evaluateDesktopPresence(null, win as unknown as Electron.BrowserWindow) // enters EDGE, still collapsed
     vi.clearAllMocks()
 
-    requestOverlayEdgeHover(win as unknown as Electron.BrowserWindow, null, true) // hover expands it
+    requestOverlayEdgeHover(win as unknown as Electron.BrowserWindow, true) // hover expands it
     win.getBounds = () => ({ x: 0, y: 0, width: 132, height: 132 }) // model the (mocked) move having happened
     vi.clearAllMocks()
 
@@ -288,7 +288,7 @@ describe('sendCurrentPetPresenceOnReady (Stage 3 part 2, FIX 2/FIX 3)', () => {
     // signal. Main still (wrongly, pre-fix) believes overlayEdgeHovered is true — 'ready' must
     // force it back to false and re-evaluate so the window collapses back to the edge, not stay
     // parked at the full bounds forever.
-    sendCurrentPetPresenceOnReady(win as unknown as Electron.BrowserWindow, null)
+    sendCurrentPetPresenceOnReady(win as unknown as Electron.BrowserWindow)
 
     expect(animateTo).toHaveBeenCalledWith(win, { x: -92, y: 0, width: 132, height: 132 }, expect.any(Function))
   })
@@ -866,7 +866,7 @@ describe('requestOverlayEdgeHover (Stage 3 part 2, Task 2)', () => {
     evaluateDesktopPresence(null, win as unknown as Electron.BrowserWindow) // settles at AMBIENT, not EDGE
     vi.clearAllMocks()
 
-    requestOverlayEdgeHover(win as unknown as Electron.BrowserWindow, null, true)
+    requestOverlayEdgeHover(win as unknown as Electron.BrowserWindow, true)
 
     expect(animateTo).not.toHaveBeenCalled()
   })
@@ -892,7 +892,7 @@ describe('requestOverlayEdgeHover (Stage 3 part 2, Task 2)', () => {
     // Mandatory sanity check (ii) is exercised at the pure-function level
     // (desktopPresence.test.ts's resolveEdgeHoverBounds tests) — this test instead pins the
     // orchestration wiring: hovered=true must actually reach animateTo with the full bounds.
-    requestOverlayEdgeHover(win as unknown as Electron.BrowserWindow, null, true)
+    requestOverlayEdgeHover(win as unknown as Electron.BrowserWindow, true)
     expect(animateTo).toHaveBeenCalledTimes(1)
     expect(animateTo).toHaveBeenCalledWith(win, { x: 0, y: 0, width: 132, height: 132 }, expect.any(Function))
 
@@ -902,7 +902,7 @@ describe('requestOverlayEdgeHover (Stage 3 part 2, Task 2)', () => {
     win.getBounds = () => ({ x: 0, y: 0, width: 132, height: 132 })
     vi.clearAllMocks()
 
-    requestOverlayEdgeHover(win as unknown as Electron.BrowserWindow, null, false)
+    requestOverlayEdgeHover(win as unknown as Electron.BrowserWindow, false)
     expect(animateTo).toHaveBeenCalledTimes(1)
     expect(animateTo).toHaveBeenCalledWith(win, { x: -92, y: 0, width: 132, height: 132 }, expect.any(Function))
   })
@@ -921,7 +921,7 @@ describe('requestOverlayEdgeHover (Stage 3 part 2, Task 2)', () => {
     evaluateDesktopPresence(null, win as unknown as Electron.BrowserWindow) // enters EDGE, side = left
     vi.clearAllMocks()
 
-    requestOverlayEdgeHover(win as unknown as Electron.BrowserWindow, null, true)
+    requestOverlayEdgeHover(win as unknown as Electron.BrowserWindow, true)
     win.getBounds = () => ({ x: 0, y: 0, width: 132, height: 132 })
     vi.clearAllMocks()
 
@@ -984,7 +984,7 @@ describe('EDGE episode exit restores the window (bug fix: applyEdgePlacement use
     evaluateDesktopPresence(null, win as unknown as Electron.BrowserWindow) // enters EDGE, side = left
     vi.clearAllMocks()
 
-    requestOverlayEdgeHover(win as unknown as Electron.BrowserWindow, null, true) // expand
+    requestOverlayEdgeHover(win as unknown as Electron.BrowserWindow, true) // expand
     expect(animateTo).toHaveBeenCalledWith(win, { x: 0, y: 0, width: 132, height: 132 }, expect.any(Function))
     win.getBounds = () => ({ x: 0, y: 0, width: 132, height: 132 })
     vi.clearAllMocks()
@@ -1748,7 +1748,7 @@ describe('关闭 petAvoidanceEnabled 后退出托管状态（Controller 层）',
 
       // 最终 applied：贴边手柄抑制解除，presence 收敛到 AMBIENT
       win.webContents.send.mockClear()
-      sendCurrentPetPresenceOnReady(win as unknown as Electron.BrowserWindow, null)
+      sendCurrentPetPresenceOnReady(win as unknown as Electron.BrowserWindow)
       expect(lastPresencePayload(win)).toEqual({ presence: 'AMBIENT', edgeSide: null, handleSuppressed: false })
 
       // 不留欠债：再求一次值不产生任何新的物理动作

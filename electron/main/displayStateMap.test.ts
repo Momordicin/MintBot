@@ -20,6 +20,7 @@ function makeInfo(overrides: Partial<ExternalWindowInfo> = {}): ExternalWindowIn
     hwnd: 1000n,
     pid: 111,
     title: 'Window',
+    className: 'Chrome_WidgetWin_1',
     isFullscreen: false,
     exeName: 'app.exe',
     displayId: 1,
@@ -179,6 +180,48 @@ describe('applyExternalObservation — establishment', () => {
   })
 })
 
+describe('shell UI exclusion', () => {
+  const shellInfo = (overrides: Partial<ExternalWindowInfo>) =>
+    makeInfo({ isFullscreen: true, exeName: 'explorer.exe', ...overrides })
+
+  it.each(['XamlExplorerHostIslandWindow', 'MultitaskingViewFrame', 'ForegroundStaging', 'TaskSwitcherWnd'])(
+    'explorer.exe with class %s creates no blocker',
+    className => {
+      const map = applyExternalObservation(new Map(), shellInfo({ className }), NO_RULES)
+      expect(map.size).toBe(0)
+    }
+  )
+
+  it('does not refresh or replace an existing blocker', () => {
+    const existing: DisplayStateMap = new Map([[1, makeBlocker()]])
+    const map = applyExternalObservation(existing, shellInfo({ className: 'XamlExplorerHostIslandWindow' }), NO_RULES)
+    expect(map).toBe(existing)
+  })
+
+  it('matches explorer.exe case-insensitively', () => {
+    const map = applyExternalObservation(
+      new Map(),
+      shellInfo({ exeName: 'Explorer.EXE', className: 'MultitaskingViewFrame' }),
+      NO_RULES
+    )
+    expect(map.size).toBe(0)
+  })
+
+  it('still blocks a fullscreen explorer.exe window of another class', () => {
+    const map = applyExternalObservation(new Map(), shellInfo({ className: 'CabinetWClass' }), NO_RULES)
+    expect(map.get(1)?.severity).toBe('hard')
+  })
+
+  it('still blocks a non-explorer process using a listed class', () => {
+    const map = applyExternalObservation(
+      new Map(),
+      shellInfo({ exeName: 'game.exe', className: 'XamlExplorerHostIslandWindow' }),
+      NO_RULES
+    )
+    expect(map.get(1)?.severity).toBe('hard')
+  })
+})
+
 describe('decideBlockerAfterValidation', () => {
   it('clears when the window no longer exists', () => {
     expect(decideBlockerAfterValidation(makeBlocker(), { status: 'gone' }, NO_RULES)).toBeNull()
@@ -234,6 +277,10 @@ describe('decideBlockerAfterValidation', () => {
     expect(decided).toEqual(blocker)
   })
 
+  it('clears the blocker on a hidden probe in standard mode', () => {
+    expect(decideBlockerAfterValidation(makeBlocker(), { status: 'hidden' }, NO_RULES)).toBeNull()
+  })
+
   // conservative mode (new): used only during the small window a user drag is in progress
   // (electron/main/dragActivity.ts), because the drag itself can steal focus from the
   // fullscreen app on the source display and make isFullscreen momentarily false — a soft
@@ -247,6 +294,10 @@ describe('decideBlockerAfterValidation', () => {
       expect(
         decideBlockerAfterValidation(makeBlocker(), { status: 'pid-mismatch' }, NO_RULES, 'conservative')
       ).toBeNull()
+    })
+
+    it('clears on "hidden", same as standard mode', () => {
+      expect(decideBlockerAfterValidation(makeBlocker(), { status: 'hidden' }, NO_RULES, 'conservative')).toBeNull()
     })
 
     it('still keeps the blocker unchanged (aside from displayId) on "probe-error", same as standard mode', () => {
@@ -309,6 +360,13 @@ describe('decideBlockerAfterValidation', () => {
 })
 
 describe('validateBlockers', () => {
+  it('drops a blocker whose probe reports hidden, in both modes', () => {
+    const map: DisplayStateMap = new Map([[1, makeBlocker()]])
+    const probe = (): BlockerProbe => ({ status: 'hidden' })
+    expect(validateBlockers(map, NO_RULES, probe).size).toBe(0)
+    expect(validateBlockers(map, NO_RULES, probe, 'conservative').size).toBe(0)
+  })
+
   it('only probes the already-known blocker hwnds, not an arbitrary enumeration', () => {
     const map: DisplayStateMap = new Map([
       [1, makeBlocker({ displayId: 1, hwnd: 1000n, pid: 111 })],
