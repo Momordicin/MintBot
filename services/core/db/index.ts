@@ -9,6 +9,10 @@ import { getEncryptSensitiveFields } from '../config/security.js'
 dotenv.config({ quiet: true })
  
 const DB_PATH = process.env.DB_PATH ?? './data/db.sqlite'
+
+if (process.env.VITEST && DB_PATH !== ':memory:') {
+  throw new Error(`[DB] refusing to open "${DB_PATH}" under vitest; DB_PATH must be :memory:`)
+}
  
 const dbDir = path.dirname(DB_PATH)
 if (!fs.existsSync(dbDir)) {

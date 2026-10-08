@@ -7,7 +7,7 @@ import { loadSession, resolveStartupPresetId } from './session/index.js'
 import { getAllPresets, backfillMessageFts } from './session/queries.js'
 import { chatRoutes } from './routes/chat.js'
 import { eventsRoutes } from './routes/events.js'
-import { presetRoutes } from './routes/presets.js'
+import { presetRoutes, WALLPAPER_DIR } from './routes/presets.js'
 import { characterImportRoutes } from './routes/characterImport.js'
 import { modelsRoutes } from './routes/models.js'
 import { internalRoutes } from './routes/internal.js'
@@ -122,7 +122,7 @@ async function start() {
   })
 
   await fastify.register(fastifyStatic, {
-  root: path.resolve(process.cwd(), 'data/wallpapers'),
+  root: WALLPAPER_DIR,
   prefix: '/wallpapers/',
   })
 

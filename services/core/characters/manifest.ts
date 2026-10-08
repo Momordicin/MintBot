@@ -1,11 +1,16 @@
 import fs from 'fs'
 import path from 'path'
+import os from 'os'
 import * as dotenv from 'dotenv'
 
 dotenv.config({ quiet: true })
 
 export const ASSET_ROOT = path.resolve(process.cwd(), process.env.ASSET_PATH ?? './assets')
 export const CHARACTERS_ROOT = path.join(ASSET_ROOT, 'characters')
+
+if (process.env.VITEST && !ASSET_ROOT.startsWith(os.tmpdir() + path.sep)) {
+  throw new Error(`[CharacterManifest] refusing ASSET_PATH "${ASSET_ROOT}" under vitest; it must resolve inside ${os.tmpdir()}`)
+}
 
 export interface PortraitForm {
   fallback: string

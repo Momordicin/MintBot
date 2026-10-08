@@ -8,6 +8,7 @@ export default defineConfig({
   },
   test: {
     globals: true,
+    env: { DB_PATH: ':memory:' },
     environment: 'node',
     include: ['**/*.test.ts'],
     exclude: ['node_modules', 'out', 'dist'],

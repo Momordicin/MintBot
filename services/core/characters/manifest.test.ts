@@ -1,13 +1,31 @@
-import { describe, it, expect, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { loadCharacterManifest, CHARACTERS_ROOT } from './manifest.js'
 
 // Aemeath 是本地专属、未提交进 git 的真实角色包
-const AEMEATH_FIXTURE_PATH = path.join(CHARACTERS_ROOT, 'Aemeath', 'manifest.json')
+const AEMEATH_FIXTURE_PATH = path.resolve(process.cwd(), 'assets', 'characters', 'Aemeath', 'manifest.json')
 
 describe('loadCharacterManifest — 真实角色包 fixture（assets/characters/ 下的实际文件）', () => {
+  const copiedIds = ['Aemeath', 'Mint']
+
+  beforeAll(() => {
+    for (const id of copiedIds) {
+      const source = path.resolve(process.cwd(), 'assets', 'characters', id, 'manifest.json')
+      if (!fs.existsSync(source)) continue
+      const target = path.join(CHARACTERS_ROOT, id, 'manifest.json')
+      fs.mkdirSync(path.dirname(target), { recursive: true })
+      fs.copyFileSync(source, target)
+    }
+  })
+
+  afterAll(() => {
+    for (const id of copiedIds) {
+      fs.rmSync(path.join(CHARACTERS_ROOT, id), { recursive: true, force: true })
+    }
+  })
+
   it.skipIf(!fs.existsSync(AEMEATH_FIXTURE_PATH))(
     'Aemeath（manifest schema v3 全字段，仅本地存在真实素材时运行）各层级结构与类型解析正确', 
     () => {
@@ -68,7 +86,7 @@ describe('loadCharacterManifest — 真实角色包 fixture（assets/characters/
   )
 
   // Mint 跟 Aemeath 同样是本地专属、未提交进 git 的真实角色包
-  const MINT_FIXTURE_PATH = path.join(CHARACTERS_ROOT, 'Mint', 'manifest.json')
+  const MINT_FIXTURE_PATH = path.resolve(process.cwd(), 'assets', 'characters', 'Mint', 'manifest.json')
 
   it.skipIf(!fs.existsSync(MINT_FIXTURE_PATH))(
     'Mint（legacy + Part D 补充的 emotionVocabulary，仅本地存在真实素材时运行）其余 v2 字段回退安全默认值，且不告警',
@@ -179,12 +197,14 @@ describe('loadCharacterManifest — 真实角色包 fixture（assets/characters/
 
 // 以下用例需要手工构造异常内容的 manifest.json, 验证 ASSET_PATH 是本模块解析角色包根目录的唯一来源
 describe('loadCharacterManifest — 手工构造的异常 manifest（临时目录 + ASSET_PATH 覆盖）', () => {
+  const originalAssetPath = process.env.ASSET_PATH
   let tempRoot: string | undefined
 
   afterEach(() => {
     if (tempRoot) fs.rmSync(tempRoot, { recursive: true, force: true })
     tempRoot = undefined
-    delete process.env.ASSET_PATH
+    if (originalAssetPath === undefined) delete process.env.ASSET_PATH
+    else process.env.ASSET_PATH = originalAssetPath
     vi.resetModules()
   })
 

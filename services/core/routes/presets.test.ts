@@ -6,7 +6,7 @@ import { initDb, db } from '../db/index.js'
 import { upsertPreset, getPresetById, updatePresetDisplayConfig, updatePresetSystemPrompt, updatePresetModelConfig, getEmotionState, upsertEmotionState } from '../session/queries.js'
 import { DEFAULT_DISPLAY_CONFIG } from '../session/displayConfig.js'
 import { loadSession, getCurrentState } from '../session/index.js'
-import { presetRoutes } from './presets.js'
+import { presetRoutes, WALLPAPER_DIR } from './presets.js'
 import { buildStatePayload } from '../state.js'
 
 // buildStatePayload 内部读取 getModelProviderConfig().ollamaBaseUrl，mock 掉独立 config
@@ -235,7 +235,7 @@ describe('POST /presets/:presetId/wallpaper', () => {
 
   afterEach(() => {
     for (const filename of writtenFiles) {
-      fs.rmSync(path.resolve(process.cwd(), 'data/wallpapers', filename), { force: true })
+      fs.rmSync(path.join(WALLPAPER_DIR, filename), { force: true })
     }
     writtenFiles.length = 0
   })
@@ -261,7 +261,7 @@ describe('POST /presets/:presetId/wallpaper', () => {
     expect(body.presetSnapshot.wallpaperPath).toBe(savedFilename)
     // DB 里的 Preset.wallpaperPath 列应同步更新（响应里的覆盖值不是唯一的落地位置）
     expect(getPresetById('p1')!.wallpaperPath).toBe(savedFilename)
-    expect(fs.existsSync(path.resolve(process.cwd(), 'data/wallpapers', savedFilename))).toBe(true)
+    expect(fs.existsSync(path.join(WALLPAPER_DIR, savedFilename))).toBe(true)
   })
 
   it('已有 session 的 preset 上传新壁纸后，独立的 buildStatePayload 调用（非本次上传的响应）也返回新 wallpaperPath，而非 session 创建时冻结的旧值', async () => {
@@ -379,7 +379,7 @@ describe('POST /presets/:presetId/wallpaper', () => {
     const second = await upload(Buffer.from([0x01, 0x02, 0x03, 0x04]))
     expect(second.statusCode).toBe(200)
 
-    const filePath = path.resolve(process.cwd(), 'data/wallpapers', savedFilename)
+    const filePath = path.join(WALLPAPER_DIR, savedFilename)
     expect(fs.readFileSync(filePath)).toEqual(Buffer.from([0x01, 0x02, 0x03, 0x04]))
   })
 
@@ -408,7 +408,7 @@ describe('POST /presets/:presetId/wallpaper', () => {
     expect(response.statusCode).toBe(500)
     expect(JSON.parse(response.payload)).toEqual({ error: 'Failed to save wallpaper' })
 
-    const leftoverTmp = fs.readdirSync(path.resolve(process.cwd(), 'data/wallpapers'))
+    const leftoverTmp = fs.readdirSync(WALLPAPER_DIR)
       .filter(f => f.startsWith('p1-wallpaper.png.tmp-'))
     expect(leftoverTmp).toHaveLength(0)
   })

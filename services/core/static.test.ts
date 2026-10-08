@@ -17,7 +17,10 @@ async function buildTestApp() {
 }
 
 describe('GET /characters/*', () => {
-  it('返回 assets/characters/ 下角色包的 manifest.json 内容', async () => {
+  it('返回 CHARACTERS_ROOT 下角色包的 manifest.json 内容', async () => {
+    const exampleDir = path.join(CHARACTERS_ROOT, 'example')
+    fs.mkdirSync(exampleDir, { recursive: true })
+    fs.writeFileSync(path.join(exampleDir, 'manifest.json'), JSON.stringify({ avatar: 'avatar.png' }))
     const fastify = await buildTestApp()
 
     const response = await fastify.inject({ method: 'GET', url: '/characters/example/manifest.json' })
@@ -39,6 +42,8 @@ describe('GET /characters/*', () => {
 // ASSET_PATH 配置外置（docs/MintBot_TDD.md §3.5）：静态路由与 services/core/characters/manifest.ts
 // 的 loadCharacterManifest 必须共用同一份可配置根路径，而不是两处各自硬编码 'assets/characters'
 describe('ASSET_PATH 配置外置：静态路由与 manifest loader 解析同一份根路径', () => {
+  const originalAssetPath = process.env.ASSET_PATH
+
   it('设置 ASSET_PATH 后，GET /characters/* 与 loadCharacterManifest 都从新的根目录读取', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mintbot-asset-path-'))
     try {
@@ -64,7 +69,8 @@ describe('ASSET_PATH 配置外置：静态路由与 manifest loader 解析同一
       const manifest = loadCharacterManifest('Override')
       expect(manifest?.avatar).toBe('avatar.jpg')
     } finally {
-      delete process.env.ASSET_PATH
+      if (originalAssetPath === undefined) delete process.env.ASSET_PATH
+      else process.env.ASSET_PATH = originalAssetPath
       vi.resetModules()
       fs.rmSync(tempRoot, { recursive: true, force: true })
     }

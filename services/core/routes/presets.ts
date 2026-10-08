@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify'
 import path from 'path'
+import os from 'os'
 import fs from 'fs'
 import crypto from 'crypto'
+import * as dotenv from 'dotenv'
 import { getAllPresets, getPresetById, createPreset, updatePresetWallpaper, updatePresetName, updatePresetDisplayConfig, updatePresetSystemPrompt, updatePresetModelConfig } from '../session/queries.js'
 import { switchPreset, refreshCurrentPresetIfActive } from '../session/index.js'
 import { buildStatePayload } from '../state.js'
@@ -16,7 +18,14 @@ import {
 } from '../session/displayConfig.js'
 import type { PresetDisplayConfig } from '../../../shared/types/index.js'
 
-const WALLPAPER_DIR = path.resolve(process.cwd(), 'data/wallpapers')
+dotenv.config({ quiet: true })
+
+export const WALLPAPER_DIR = path.resolve(process.cwd(), process.env.WALLPAPER_PATH ?? './data/wallpapers')
+
+if (process.env.VITEST && !WALLPAPER_DIR.startsWith(os.tmpdir() + path.sep)) {
+  throw new Error(`[Wallpaper] refusing WALLPAPER_PATH "${WALLPAPER_DIR}" under vitest; it must resolve inside ${os.tmpdir()}`)
+}
+
 const ALLOWED_WALLPAPER_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif'])
 const VALID_MODEL_TYPES: readonly string[] = ['anthropic', 'openai', 'ollama', 'deepseek']
 
