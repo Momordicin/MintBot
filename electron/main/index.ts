@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, Tray, globalShortcut, powerMonitor, ipcMain, dialog, screen, nativeImage } from 'electron'
+import { app, BrowserWindow, Menu, Tray, powerMonitor, ipcMain, dialog, screen, nativeImage } from 'electron'
 import { join, basename } from 'path'
 import { readFile, stat } from 'fs/promises'
 import { is } from '@electron-toolkit/utils'
@@ -578,6 +578,15 @@ ipcMain.on('titlebar:set-overlay', (_event, overlay: { color?: unknown; symbolCo
 })
 
 app.whenReady().then(() => {
+  app.on('browser-window-created', (_event, win) => {
+    win.webContents.on('before-input-event', (event, input) => {
+      if (input.type === 'keyDown' && (input.control || input.meta) && input.shift && input.code === 'KeyI') {
+        event.preventDefault()
+        win.webContents.openDevTools()
+      }
+    })
+  })
+
   if (shouldDistrustHomeAtStartup(queryUserNotificationState())) {
     closeStartupGate()
     setTimeout(() => {
@@ -614,10 +623,6 @@ app.whenReady().then(() => {
   applyIconFromCurrentPreset()
   initWindowBehaviorConfig(mainWindow, overlayWindow)
   subscribeToCoreEvents()
-
-  globalShortcut.register('CommandOrControl+Shift+I', () => {
-    BrowserWindow.getFocusedWindow()?.webContents.openDevTools()
-  })
 
   powerMonitor.on('lock-screen', () => {
     notifySystemEvent('lock-screen')
@@ -656,7 +661,6 @@ app.whenReady().then(() => {
 })
 
 app.on('will-quit', () => {
-  globalShortcut.unregisterAll()
   stopActiveWindowMonitoring()
   screen.removeListener('display-added', handleDisplayTopologyChange)
   screen.removeListener('display-removed', handleDisplayTopologyChange)
