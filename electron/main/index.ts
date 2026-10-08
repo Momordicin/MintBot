@@ -38,7 +38,6 @@ import {
   setPreferredBounds,
   getEffectiveHomeDisplay,
   clampBoundsToWorkArea,
-  computeSizeForDisplay,
   computeDefaultBoundsForDisplay,
   DEFAULT_WINDOW_SIZE
 } from './windowPositions'
@@ -486,22 +485,11 @@ const TITLEBAR_OVERLAY_COLOR = '#0f0f1400'
 const TITLEBAR_OVERLAY_SYMBOL_COLOR = '#e8e8f0'
 const TITLEBAR_OVERLAY_HEIGHT = 25
 
-function computeDefaultChatBounds(display: Electron.Display, displays: Electron.Display[]): Bounds {
-  const { width, height } = computeSizeForDisplay(display, displays, DEFAULT_WINDOW_SIZE.chat)
-  const { x: workAreaX, y: workAreaY, width: workAreaWidth, height: workAreaHeight } = display.workArea
-  return {
-    width,
-    height,
-    x: Math.round(workAreaX + (workAreaWidth - width) / 2),
-    y: Math.round(workAreaY + (workAreaHeight - height) / 2),
-  }
-}
-
 function resolveChatStartupBounds(): Bounds {
   const displays = screen.getAllDisplays()
   const targetDisplay = getEffectiveHomeDisplay(displays, 'chat')
   const stored = getPreferredBounds('chat', targetDisplay.id)
-  const bounds = stored ? clampBoundsToWorkArea(stored, targetDisplay.workArea) : computeDefaultChatBounds(targetDisplay, displays)
+  const bounds = stored ? clampBoundsToWorkArea(stored, targetDisplay.workArea) : computeDefaultBoundsForDisplay(targetDisplay, displays, DEFAULT_WINDOW_SIZE.chat, 'chat')
   if (!stored) {
     setPreferredBounds('chat', targetDisplay.id, bounds)
   }

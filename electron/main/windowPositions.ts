@@ -99,6 +99,9 @@ export function commitUserChosenHomeDisplay(windowKey: WindowKey, displayId: num
 
 const SCALE_DIFF_RATIO_THRESHOLD = 0.2
 
+export const OVERLAY_DEFAULT_RIGHT_OFFSET_DIP = 50
+export const OVERLAY_DEFAULT_BOTTOM_OFFSET_DIP = 100
+
 function physicalPixelArea(display: Electron.Display): number {
   const physicalWidth = display.bounds.width * display.scaleFactor
   const physicalHeight = display.bounds.height * display.scaleFactor
@@ -140,18 +143,32 @@ export function computeDefaultBoundsForDisplay(
   display: Electron.Display,
   displays: Electron.Display[],
   defaultSize: { width: number; height: number },
-  windowKey?: WindowKey
+  windowKey: WindowKey
 ): Bounds {
   const { width, height } = computeSizeForDisplay(display, displays, defaultSize)
+  const workArea = display.workArea
 
-  const { x: workAreaX, y: workAreaY, width: workAreaWidth, height: workAreaHeight } = display.workArea
-  const y = windowKey === 'overlay' ? workAreaY : workAreaY + workAreaHeight - height
-  return {
-    x: workAreaX + workAreaWidth - width,
-    y,
-    width,
-    height,
+  if (windowKey === 'chat') {
+    return clampBoundsToWorkArea(
+      {
+        x: Math.round(workArea.x + (workArea.width - width) / 2),
+        y: Math.round(workArea.y + (workArea.height - height) / 2),
+        width,
+        height,
+      },
+      workArea
+    )
   }
+
+  return clampBoundsToWorkArea(
+    {
+      x: workArea.x + workArea.width - width - OVERLAY_DEFAULT_RIGHT_OFFSET_DIP,
+      y: workArea.y + workArea.height - height - OVERLAY_DEFAULT_BOTTOM_OFFSET_DIP,
+      width,
+      height,
+    },
+    workArea
+  )
 }
 
 export function pickLargestDisplay(displays: Electron.Display[]): Electron.Display {
