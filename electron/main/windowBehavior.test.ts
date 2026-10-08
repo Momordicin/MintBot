@@ -1567,6 +1567,7 @@ describe('drag-end 后主动收敛（不依赖 1500ms 轮询）', () => {
     // 一次收敛 = 一次 blocker 复查 + 一次重新求值。求值本身的可观测证据是拖拽尾巴已经被收掉：
     // endDragTail 之后 isWindowDragInProgress 为假，resolver 才可能求出非 ACTIVE 的 desired
     expect(revalidateBlockersNowMock).toHaveBeenCalledTimes(1)
+    expect(revalidateBlockersNowMock).toHaveBeenCalledWith({ forceConservative: true })
     expect(testState.dragging.overlay).toBe(false)
   })
 
@@ -1616,6 +1617,7 @@ describe('drag-end 后主动收敛（不依赖 1500ms 轮询）', () => {
 
     expect(commitHomeDisplayFromDragOutcome).not.toHaveBeenCalled()
     expect(revalidateBlockersNowMock).toHaveBeenCalledTimes(1)
+    expect(revalidateBlockersNowMock).toHaveBeenCalledWith({ forceConservative: true })
     expect(testState.dragging.overlay).toBe(false)
   })
 
@@ -1637,6 +1639,7 @@ describe('drag-end 后主动收敛（不依赖 1500ms 轮询）', () => {
     vi.advanceTimersByTime(PERSIST_DEBOUNCE_MS + 10)
 
     expect(revalidateBlockersNowMock).toHaveBeenCalledTimes(1)
+    expect(revalidateBlockersNowMock).toHaveBeenCalledWith({ forceConservative: true })
   })
 })
 

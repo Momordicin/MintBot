@@ -16,17 +16,21 @@ export function updateDisplayStateMap(observation: ForegroundObservation): void 
   displayStateMap = applyExternalObservation(displayStateMap, observation.info, getWindowBehaviorRules())
 }
 
-export function selectValidationMode(isSelfForeground: boolean, isDragInProgress: boolean): ValidationMode {
-  return isSelfForeground || isDragInProgress ? 'conservative' : 'standard'
+export function selectValidationMode(
+  isSelfForeground: boolean,
+  isDragInProgress: boolean,
+  forceConservative = false
+): ValidationMode {
+  return forceConservative || isSelfForeground || isDragInProgress ? 'conservative' : 'standard'
 }
 
-function runValidationPass(): void {
-  const mode = selectValidationMode(getActiveWindowInfo().kind === 'self', isWindowDragInProgress('overlay'))
+function runValidationPass(forceConservative = false): void {
+  const mode = selectValidationMode(getActiveWindowInfo().kind === 'self', isWindowDragInProgress('overlay'), forceConservative)
   displayStateMap = validateBlockers(displayStateMap, getWindowBehaviorRules(), probeBlockerWindow, mode)
 }
 
-export function revalidateBlockersNow(): void {
-  runValidationPass()
+export function revalidateBlockersNow(options?: { forceConservative?: boolean }): void {
+  runValidationPass(options?.forceConservative === true)
 }
 
 const BLOCKER_VALIDATION_INTERVAL_MS = 1500

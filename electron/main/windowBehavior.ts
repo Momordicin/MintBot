@@ -373,7 +373,7 @@ function reconcileAfterDragPlacement(
   mainWindow: BrowserWindow | null,
   overlayWindow: BrowserWindow | null
 ): void {
-  revalidateBlockersNow()
+  revalidateBlockersNow({ forceConservative: true })
   endDragTail(windowKey)
   evaluateDesktopPresence(mainWindow, overlayWindow)
 }
