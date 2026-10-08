@@ -545,14 +545,6 @@ function createWindow(): BrowserWindow {
     clearDragState('chat')
   })
 
-  win.on('minimize', () => {
-    overlayWindow?.showInactive()
-  })
-
-  win.on('focus', () => {
-    overlayWindow?.hide()
-  })
-
   win.on('moved', () => {
     handleWindowMoved('chat', win, mainWindow, overlayWindow)
   })
@@ -565,7 +557,6 @@ function createWindow(): BrowserWindow {
     if (!isQuitting) {
       event.preventDefault()
       win.hide()
-      overlayWindow?.showInactive()
     }
   })
 
@@ -581,15 +572,14 @@ function createWindow(): BrowserWindow {
 ipcMain.on('overlay:activate', () => {
   mainWindow?.show()
   mainWindow?.focus()
-  overlayWindow?.hide()
 })
 
 ipcMain.on('overlay:edge-hover', (_event, hovered: unknown) => {
-  requestOverlayEdgeHover(overlayWindow, mainWindow, hovered === true)
+  requestOverlayEdgeHover(overlayWindow, hovered === true)
 })
 
 ipcMain.on('overlay:presence-ready', () => {
-  sendCurrentPetPresenceOnReady(overlayWindow, mainWindow)
+  sendCurrentPetPresenceOnReady(overlayWindow)
 })
 
 ipcMain.on('titlebar:set-overlay', (_event, overlay: { color?: unknown; symbolColor?: unknown }) => {

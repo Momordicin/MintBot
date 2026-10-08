@@ -147,7 +147,7 @@ describe('resolvePetDesiredState — ACTIVE (interacting)', () => {
     expect(desired).toEqual({ presence: 'ACTIVE', displayId: 2, alwaysOnTop: true })
     // and feeding this straight into diffPetState against the same appliedDisplayId (2) produces
     // no move, which is the actual behavioural requirement this branch exists to satisfy
-    expect(diffPetState(desired, 2, true, false).move).toBeNull()
+    expect(diffPetState(desired, 2, true).move).toBeNull()
   })
 
   // Fix 6（second rework pass）: the guarantee above only holds when currentDisplayId itself
@@ -163,7 +163,7 @@ describe('resolvePetDesiredState — ACTIVE (interacting)', () => {
     const map = makeMap([[1, {}]])
     const desired = resolvePetDesiredState(true, 1, 1, map, [1])
     expect(desired).toEqual({ presence: 'ACTIVE', displayId: 1, alwaysOnTop: true })
-    expect(diffPetState(desired, null, false, false).move).toBe(1)
+    expect(diffPetState(desired, null, false).move).toBe(1)
   })
 })
 
@@ -260,27 +260,27 @@ describe('resolveChatDesiredState', () => {
 describe('diffPetState', () => {
   it('produces no side effects when the desired state is unchanged from applied (idempotency requirement)', () => {
     const desired = { presence: 'AMBIENT' as const, displayId: 1, alwaysOnTop: true }
-    expect(diffPetState(desired, 1, true, false)).toEqual({ move: null, visibility: null })
+    expect(diffPetState(desired, 1, true)).toEqual({ move: null, visibility: null })
   })
 
   it('moves and shows on first-ever resolve (appliedDisplayId null, currently hidden)', () => {
     const desired = { presence: 'AMBIENT' as const, displayId: 1, alwaysOnTop: true }
-    expect(diffPetState(desired, null, false, false)).toEqual({ move: 1, visibility: 'show' })
+    expect(diffPetState(desired, null, false)).toEqual({ move: 1, visibility: 'show' })
   })
 
-  it('suppresses the show while chat is focused, but still tracks the move', () => {
+  it('shows and tracks the move regardless of any chat window state', () => {
     const desired = { presence: 'AMBIENT' as const, displayId: 2, alwaysOnTop: true }
-    expect(diffPetState(desired, 1, false, true)).toEqual({ move: 2, visibility: null })
+    expect(diffPetState(desired, 1, false)).toEqual({ move: 2, visibility: 'show' })
   })
 
   it('hides without moving when transitioning to HIDDEN while currently visible on a different display', () => {
     const desired = { presence: 'HIDDEN' as const, displayId: 1, alwaysOnTop: false }
-    expect(diffPetState(desired, 2, true, false)).toEqual({ move: null, visibility: 'hide' })
+    expect(diffPetState(desired, 2, true)).toEqual({ move: null, visibility: 'hide' })
   })
 
   it('still moves while already hidden (pre-positions it for the next reveal)', () => {
     const desired = { presence: 'HIDDEN' as const, displayId: 1, alwaysOnTop: false }
-    expect(diffPetState(desired, 2, false, false)).toEqual({ move: 1, visibility: null })
+    expect(diffPetState(desired, 2, false)).toEqual({ move: 1, visibility: null })
   })
 
   // Stage 3: ACTIVE and EDGE are both visible, exactly like AMBIENT (see diffPetState's
@@ -289,12 +289,12 @@ describe('diffPetState', () => {
   // comparison, which would have judged both of these as invisible.
   it('shows on first reveal when desired is ACTIVE (not just AMBIENT)', () => {
     const desired = { presence: 'ACTIVE' as const, displayId: 1, alwaysOnTop: true }
-    expect(diffPetState(desired, null, false, false)).toEqual({ move: 1, visibility: 'show' })
+    expect(diffPetState(desired, null, false)).toEqual({ move: 1, visibility: 'show' })
   })
 
   it('shows on first reveal when desired is EDGE (not just AMBIENT)', () => {
     const desired = { presence: 'EDGE' as const, displayId: 1, alwaysOnTop: true }
-    expect(diffPetState(desired, null, false, false)).toEqual({ move: 1, visibility: 'show' })
+    expect(diffPetState(desired, null, false)).toEqual({ move: 1, visibility: 'show' })
   })
 
   // Fix 4（cleanup sweep）：electron/main/windowBehavior.ts's applyingPetVisibility reentrancy
@@ -318,11 +318,9 @@ describe('diffPetState', () => {
         for (const displayId of displayIds) {
           for (const appliedDisplayId of appliedDisplayIds) {
             for (const isCurrentlyVisible of bools) {
-              for (const chatFocused of bools) {
-                const transition = diffPetState({ presence, displayId, alwaysOnTop: presence !== 'HIDDEN' }, appliedDisplayId, isCurrentlyVisible, chatFocused)
-                if (transition.visibility === 'hide') {
-                  expect(transition.move).toBeNull()
-                }
+              const transition = diffPetState({ presence, displayId, alwaysOnTop: presence !== 'HIDDEN' }, appliedDisplayId, isCurrentlyVisible)
+              if (transition.visibility === 'hide') {
+                expect(transition.move).toBeNull()
               }
             }
           }

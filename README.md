@@ -24,7 +24,7 @@ A locally-run AI character companion desktop app. Supports custom character pers
 - Full message history retention, with infinite-scroll-up pagination for older conversations
 
 **Desktop overlay**  
-- Automatically switches to an independent, transparent-background overlay window when the chat window is minimized or closed; character portrait switches in real time based on emotion tags (supports both animated GIF and static images)
+- An independent, transparent-background overlay window that lives alongside the chat window (each has its own visibility and avoidance; clicking the overlay opens the chat); character portrait switches in real time based on emotion tags (supports both animated GIF and static images)
 - Auto pin-on-top / hide / jump to another display based on the currently active window, with configurable fullscreen whitelist/blacklist
 - Enters a rest mode on lock screen / screen-off: switches to a sleeping portrait, pauses input monitoring, and preserves conversation context
 - Persists in the system tray in the background; double-click the tray icon to bring up the chat window

@@ -90,15 +90,14 @@ const HIDDEN_PET_PRESENCES: ReadonlySet<PetPresence> = new Set(['HIDDEN'])
 export function diffPetState(
   desired: DesiredPetState,
   appliedDisplayId: number | null,
-  isCurrentlyVisible: boolean,
-  chatFocused: boolean
+  isCurrentlyVisible: boolean
 ): PetTransition {
   const desiredVisible = !HIDDEN_PET_PRESENCES.has(desired.presence)
   const skipMoveBecauseHiding = isCurrentlyVisible && !desiredVisible
   const move = !skipMoveBecauseHiding && desired.displayId !== appliedDisplayId ? desired.displayId : null
 
   let visibility: 'show' | 'hide' | null = null
-  if (desiredVisible && !isCurrentlyVisible && !chatFocused) visibility = 'show'
+  if (desiredVisible && !isCurrentlyVisible) visibility = 'show'
   else if (!desiredVisible && isCurrentlyVisible) visibility = 'hide'
 
   return { move, visibility }
