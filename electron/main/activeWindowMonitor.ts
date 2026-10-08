@@ -132,6 +132,26 @@ function resolveExeName(pid: number): string | null {
   }
 }
 
+function measureWindow(hwnd: unknown): { displayId: number; isFullscreen: boolean } | null {
+  if (!GetWindowRect || !GetWindowLongW) return null
+
+  const rect = {} as { left: number; top: number; right: number; bottom: number }
+  const gotRect = GetWindowRect(hwnd, rect)
+  if (!gotRect) return null
+
+  const physicalRect = {
+    x: rect.left,
+    y: rect.top,
+    width: rect.right - rect.left,
+    height: rect.bottom - rect.top,
+  }
+  const dipRect = screen.screenToDipRect(null, physicalRect)
+  const display = screen.getDisplayMatching(dipRect)
+
+  const style = GetWindowLongW(hwnd, GWL_STYLE)
+  return { displayId: display.id, isFullscreen: isFullscreenRect(dipRect, display.bounds, style) }
+}
+
 export function getActiveWindowInfo(): ForegroundObservation {
   if (
     process.platform !== 'win32' ||
@@ -155,21 +175,9 @@ export function getActiveWindowInfo(): ForegroundObservation {
 
     const className = resolveClassName(hwnd)
 
-    const rect = {} as { left: number; top: number; right: number; bottom: number }
-    const gotRect = GetWindowRect(hwnd, rect)
-    if (!gotRect) return { kind: 'unavailable' }
-
-    const physicalRect = {
-      x: rect.left,
-      y: rect.top,
-      width: rect.right - rect.left,
-      height: rect.bottom - rect.top,
-    }
-    const dipRect = screen.screenToDipRect(null, physicalRect)
-    const display = screen.getDisplayMatching(dipRect)
-
-    const style = GetWindowLongW(hwnd, GWL_STYLE)
-    const isFullscreen = isFullscreenRect(dipRect, display.bounds, style)
+    const measured = measureWindow(hwnd)
+    if (!measured) return { kind: 'unavailable' }
+    const { displayId, isFullscreen } = measured
 
     const pid = resolvePid(hwnd)
     const exeName = pid !== null ? resolveExeName(pid) : null
@@ -180,7 +188,7 @@ export function getActiveWindowInfo(): ForegroundObservation {
 
     return {
       kind: 'external',
-      info: { hwnd: koffi.address(hwnd), pid, title, className, isFullscreen, exeName, displayId: display.id },
+      info: { hwnd: koffi.address(hwnd), pid, title, className, isFullscreen, exeName, displayId },
     }
   } catch {
     return { kind: 'unavailable' }
@@ -260,26 +268,14 @@ export function probeBlockerWindow(hwnd: bigint, pid: number): BlockerProbe {
       return { status: 'hidden' }
     }
 
-    const rect = {} as { left: number; top: number; right: number; bottom: number }
-    const gotRect = GetWindowRect(hwnd, rect)
-    if (classifyRectProbe(gotRect) === 'probe-error') {
+    const measured = measureWindow(hwnd)
+    if (classifyRectProbe(measured !== null) === 'probe-error' || measured === null) {
       logProbeErrorOnce(hwnd, 'GetWindowRect failed after IsWindow/pid checks already passed')
       return { status: 'probe-error' }
     }
 
-    const physicalRect = {
-      x: rect.left,
-      y: rect.top,
-      width: rect.right - rect.left,
-      height: rect.bottom - rect.top,
-    }
-    const dipRect = screen.screenToDipRect(null, physicalRect)
-    const display = screen.getDisplayMatching(dipRect)
-    const style = GetWindowLongW(hwnd, GWL_STYLE)
-    const isFullscreen = isFullscreenRect(dipRect, display.bounds, style)
-
     hwndsWithLoggedProbeError.delete(hwnd)
-    return { status: 'ok', displayId: display.id, isFullscreen }
+    return { status: 'ok', displayId: measured.displayId, isFullscreen: measured.isFullscreen }
   } catch (err) {
     logProbeErrorOnce(hwnd, err instanceof Error ? err.message : String(err))
     return { status: 'probe-error' }
