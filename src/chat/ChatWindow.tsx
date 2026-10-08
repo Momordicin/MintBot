@@ -16,6 +16,12 @@ const DEFAULT_WALLPAPER_URL = `${CORE_URL}/wallpapers/bg.jpg`
 const INITIAL_HISTORY_LIMIT = 3
 const LOAD_MORE_HISTORY_LIMIT = 20
 
+let localMessageSeq = 0
+function nextLocalMessageId(): string {
+  localMessageSeq += 1
+  return `local-${localMessageSeq}`
+}
+
 interface HistoryMessage {
   id: number
   role: 'user' | 'assistant' | 'system'
@@ -278,7 +284,7 @@ export function ChatWindow() {
 
   function addSystemMessage(content: string, isError = false) {
     setMessages(prev => [...prev, {
-      id: Date.now().toString(),
+      id: nextLocalMessageId(),
       role: 'system' as const,
       content,
       createdAt: Date.now(),
@@ -294,7 +300,7 @@ export function ChatWindow() {
     }
 
     setMessages(prev => [...prev, {
-      id: Date.now().toString(),
+      id: nextLocalMessageId(),
       role: 'user' as const,
       content: text,
       createdAt: Date.now(),
@@ -320,10 +326,10 @@ export function ChatWindow() {
         if (controller.signal.aborted) break
 
         if (event === 'message_done') {
-          const { text: replyText, sessionId: replySessionId } = data as { messageId: string; text: string; sessionId: string }
+          const { messageId, text: replyText, sessionId: replySessionId } = data as { messageId: string; text: string; sessionId: string }
           if (replySessionId !== appStateRef.current?.sessionId) continue
           setMessages(prev => [...prev, {
-            id: Date.now().toString(),
+            id: String(messageId),
             role: 'assistant' as const,
             content: replyText,
             createdAt: Date.now(),
