@@ -10,16 +10,19 @@ import { windowBehaviorRoutes } from './windowBehavior.js'
 // `VALID_*.includes(...)` 在 undefined 上抛错，把本该是 400 的用例变成 500
 const {
   getWindowBehaviorConfigMock,
+  getWindowBehaviorRevisionMock,
   updateWindowBehaviorConfigMock,
   broadcastEventMock,
 } = vi.hoisted(() => ({
   getWindowBehaviorConfigMock: vi.fn(),
+  getWindowBehaviorRevisionMock: vi.fn(),
   updateWindowBehaviorConfigMock: vi.fn(),
   broadcastEventMock: vi.fn(),
 }))
 
 vi.mock('../config/index.js', () => ({
   getWindowBehaviorConfig: getWindowBehaviorConfigMock,
+  getWindowBehaviorRevision: getWindowBehaviorRevisionMock,
   updateWindowBehaviorConfig: updateWindowBehaviorConfigMock,
   VALID_CHAT_PIN_MODES: ['always', 'smart', 'off'],
   VALID_APP_RULE_EFFECTS: ['allow', 'soft', 'hard'],
@@ -27,6 +30,7 @@ vi.mock('../config/index.js', () => ({
 
 vi.mock('../events/broadcast.js', () => ({
   broadcastEvent: broadcastEventMock,
+  SERVER_GENERATION: 'test-generation',
 }))
 
 async function buildTestApp() {
@@ -41,14 +45,23 @@ const SAMPLE_CONFIG = {
   appRules: [{ exeName: 'game.exe', effect: 'hard' }],
 }
 
+let revision = 1
+
+function snapshotOf(config: unknown, atRevision: number) {
+  return { generation: 'test-generation', revision: atRevision, config }
+}
+
 beforeEach(() => {
+  revision = 1
+  getWindowBehaviorRevisionMock.mockReset()
+  getWindowBehaviorRevisionMock.mockImplementation(() => revision)
   getWindowBehaviorConfigMock.mockReset()
   updateWindowBehaviorConfigMock.mockReset()
   broadcastEventMock.mockReset()
 })
 
 describe('GET /config/window-behavior', () => {
-  it('返回 getWindowBehaviorConfig() 的原样结果', async () => {
+  it('返回携带 generation 与 revision 的快照', async () => {
     getWindowBehaviorConfigMock.mockReturnValue(SAMPLE_CONFIG)
     const fastify = await buildTestApp()
 
@@ -56,7 +69,7 @@ describe('GET /config/window-behavior', () => {
     const body = JSON.parse(response.payload)
 
     expect(response.statusCode).toBe(200)
-    expect(body).toEqual(SAMPLE_CONFIG)
+    expect(body).toEqual(snapshotOf(SAMPLE_CONFIG, 1))
   })
 })
 
@@ -182,8 +195,11 @@ describe('PATCH /config/window-behavior — 校验', () => {
 })
 
 describe('PATCH /config/window-behavior — 成功路径', () => {
-  it('校验通过后调用 updateWindowBehaviorConfig，并广播 window-behavior-changed', async () => {
-    updateWindowBehaviorConfigMock.mockReturnValue(SAMPLE_CONFIG)
+  it('内容变化时调用 updateWindowBehaviorConfig，并广播 window-behavior-changed 快照', async () => {
+    updateWindowBehaviorConfigMock.mockImplementation(() => {
+      revision = 2
+      return SAMPLE_CONFIG
+    })
     getWindowBehaviorConfigMock.mockReturnValue(SAMPLE_CONFIG)
     const fastify = await buildTestApp()
 
@@ -196,8 +212,25 @@ describe('PATCH /config/window-behavior — 成功路径', () => {
 
     expect(response.statusCode).toBe(200)
     expect(updateWindowBehaviorConfigMock).toHaveBeenCalledWith({ chatPinMode: 'smart' })
-    expect(body).toEqual(SAMPLE_CONFIG)
-    expect(broadcastEventMock).toHaveBeenCalledWith('window-behavior-changed', SAMPLE_CONFIG)
+    expect(body).toEqual(snapshotOf(SAMPLE_CONFIG, 2))
+    expect(broadcastEventMock).toHaveBeenCalledTimes(1)
+    expect(broadcastEventMock).toHaveBeenCalledWith('window-behavior-changed', snapshotOf(SAMPLE_CONFIG, 2))
+  })
+
+  it('内容未变化时不广播，响应仍是当前快照', async () => {
+    updateWindowBehaviorConfigMock.mockReturnValue(SAMPLE_CONFIG)
+    getWindowBehaviorConfigMock.mockReturnValue(SAMPLE_CONFIG)
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/config/window-behavior',
+      payload: { chatPinMode: 'smart' },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(JSON.parse(response.payload)).toEqual(snapshotOf(SAMPLE_CONFIG, 1))
+    expect(broadcastEventMock).not.toHaveBeenCalled()
   })
 
   it('petAvoidanceEnabled: false 是合法值，不被当成"字段缺失"跳过校验后又被丢掉', async () => {
@@ -216,8 +249,11 @@ describe('PATCH /config/window-behavior — 成功路径', () => {
     expect(updateWindowBehaviorConfigMock).toHaveBeenCalledWith({ petAvoidanceEnabled: false })
   })
 
-  it('广播时机在 updateWindowBehaviorConfig 之后调用 getWindowBehaviorConfig 取值', async () => {
-    updateWindowBehaviorConfigMock.mockReturnValue(SAMPLE_CONFIG)
+  it('广播发生在 updateWindowBehaviorConfig 之后', async () => {
+    updateWindowBehaviorConfigMock.mockImplementation(() => {
+      revision = 2
+      return SAMPLE_CONFIG
+    })
     getWindowBehaviorConfigMock.mockReturnValue(SAMPLE_CONFIG)
     const fastify = await buildTestApp()
 

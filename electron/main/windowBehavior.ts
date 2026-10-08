@@ -34,14 +34,8 @@ import {
 import type { EdgeSide, DesiredPetState, PetPresence, PetPresencePayload } from './desktopPresence'
 import { isWindowDragInProgress, endDragTail } from './dragActivity'
 import { CORE_URL } from './coreUrl'
-
-type ChatPinMode = 'always' | 'smart' | 'off'
-
-interface WindowBehaviorConfig {
-  chatPinMode: ChatPinMode
-  petAvoidanceEnabled: boolean
-  appRules: AppRule[]
-}
+import { isNewerSnapshot } from '../../shared/windowBehavior.js'
+import type { WindowBehaviorConfig, WindowBehaviorSnapshot } from '../../shared/windowBehavior.js'
 
 const PIN_LEVEL: NonNullable<Parameters<BrowserWindow['setAlwaysOnTop']>[1]> = 'screen-saver'
 
@@ -59,10 +53,24 @@ const DEFAULT_CONFIG: WindowBehaviorConfig = {
   appRules: [],
 }
 
-let cachedConfig: WindowBehaviorConfig = DEFAULT_CONFIG
+let cachedSnapshot: WindowBehaviorSnapshot | null = null
+
+function currentConfig(): WindowBehaviorConfig {
+  return cachedSnapshot?.config ?? DEFAULT_CONFIG
+}
+
+function acceptSnapshot(snapshot: WindowBehaviorSnapshot): boolean {
+  if (!isNewerSnapshot(cachedSnapshot, snapshot)) return false
+  cachedSnapshot = snapshot
+  return true
+}
+
+export function getCachedWindowBehaviorConfig(): WindowBehaviorConfig {
+  return currentConfig()
+}
 
 export function getWindowBehaviorRules(): { appRules: AppRule[] } {
-  return { appRules: cachedConfig.appRules }
+  return { appRules: currentConfig().appRules }
 }
 
 let startupGateOpen = true
@@ -83,7 +91,7 @@ export async function initWindowBehaviorConfig(mainWindow: BrowserWindow | null,
   try {
     const response = await fetch(`${CORE_URL}/config/window-behavior`)
     if (response.ok) {
-      cachedConfig = await response.json()
+      acceptSnapshot((await response.json()) as WindowBehaviorSnapshot)
     }
   } catch (err) {
     console.error('[WindowBehavior] Failed to fetch initial config, using defaults:', err)
@@ -95,13 +103,14 @@ export async function initWindowBehaviorConfig(mainWindow: BrowserWindow | null,
   }
 }
 
-export function updateCachedWindowBehaviorConfig(
-  config: WindowBehaviorConfig,
+export function applyWindowBehaviorSnapshot(
+  snapshot: WindowBehaviorSnapshot,
   mainWindow: BrowserWindow | null,
   overlayWindow: BrowserWindow | null
-): void {
-  cachedConfig = config
+): boolean {
+  if (!acceptSnapshot(snapshot)) return false
   evaluateDesktopPresence(mainWindow, overlayWindow)
+  return true
 }
 
 const programmaticMoveInFlight = new Set<WindowKey>()
@@ -470,7 +479,7 @@ function evaluatePetPresence(overlayWindow: BrowserWindow | null): void {
     preferredDisplayId,
     getDisplayStateMap(),
     allDisplayIds,
-    cachedConfig.petAvoidanceEnabled
+    currentConfig().petAvoidanceEnabled
   )
 
   latestPetDesired = desired
@@ -496,7 +505,7 @@ function evaluateChatPresence(mainWindow: BrowserWindow | null): void {
   if (mainWindow.isMinimized()) return
   if (!mainWindow.isVisible() && appliedChatPresence !== 'SUPPRESSED') return
 
-  const { chatPinMode } = cachedConfig
+  const { chatPinMode } = currentConfig()
 
   if (chatPinMode !== 'smart') {
     if (appliedChatPresence === 'SUPPRESSED') mainWindow.showInactive()

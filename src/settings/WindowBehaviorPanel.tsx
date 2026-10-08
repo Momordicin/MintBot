@@ -2,20 +2,14 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import './settings.css'
 
 import { CORE_URL } from '../coreUrl.js'
-
-type ChatPinMode = 'always' | 'smart' | 'off'
-type AppRuleEffect = 'allow' | 'soft' | 'hard'
-
-interface AppRule {
-  exeName: string
-  effect: AppRuleEffect
-}
-
-interface WindowBehaviorConfig {
-  chatPinMode: ChatPinMode
-  petAvoidanceEnabled: boolean
-  appRules: AppRule[]
-}
+import { createWatchdogEventSource } from '../eventsWatchdog.js'
+import { isNewerSnapshot } from '../../shared/windowBehavior.js'
+import type {
+  AppRuleEffect,
+  ChatPinMode,
+  WindowBehaviorConfig,
+  WindowBehaviorSnapshot,
+} from '../../shared/windowBehavior.js'
 
 const CHAT_PIN_MODE_OPTIONS: ReadonlyArray<{ value: ChatPinMode; label: string }> = [
   { value: 'always', label: '始终置顶' },
@@ -32,16 +26,19 @@ const APP_RULE_EFFECT_OPTIONS: ReadonlyArray<{ value: AppRuleEffect; label: stri
 export function WindowBehaviorPanel() {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [config, setConfig] = useState<WindowBehaviorConfig | null>(null)
+  const [snapshot, setSnapshot] = useState<WindowBehaviorSnapshot | null>(null)
+  const [saving, setSaving] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const patchControllerRef = useRef<AbortController | null>(null)
+  const snapshotRef = useRef<WindowBehaviorSnapshot | null>(null)
 
-  const configRef = useRef<WindowBehaviorConfig | null>(null)
-
-  const applyConfig = useCallback((next: WindowBehaviorConfig) => {
-    configRef.current = next
-    setConfig(next)
+  const applySnapshot = useCallback((next: WindowBehaviorSnapshot) => {
+    setSnapshot(prev => (isNewerSnapshot(prev, next) ? next : prev))
   }, [])
+
+  useEffect(() => {
+    snapshotRef.current = snapshot
+  }, [snapshot])
 
   useEffect(() => {
     return () => {
@@ -49,42 +46,47 @@ export function WindowBehaviorPanel() {
     }
   }, [])
 
-  const fetchConfig = useCallback(async () => {
+  const fetchSnapshot = useCallback(async () => {
     const response = await fetch(`${CORE_URL}/config/window-behavior`)
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    return (await response.json()) as WindowBehaviorConfig
+    return (await response.json()) as WindowBehaviorSnapshot
   }, [])
 
   useEffect(() => {
-    fetchConfig()
-      .then(applyConfig)
+    fetchSnapshot()
+      .then(applySnapshot)
       .catch(() => setLoadError('加载窗口行为配置失败，请稍后重试'))
       .finally(() => setLoading(false))
-  }, [fetchConfig, applyConfig])
+  }, [fetchSnapshot, applySnapshot])
 
   useEffect(() => {
-    const source = new EventSource(`${CORE_URL}/events`)
-    source.addEventListener('window-behavior-changed', (event: MessageEvent) => {
-      try {
-        applyConfig(JSON.parse(event.data))
-      } catch {
-      }
+    const watchdog = createWatchdogEventSource({
+      url: `${CORE_URL}/events`,
+      listeners: {
+        'window-behavior-changed': (event: MessageEvent) => {
+          try {
+            applySnapshot(JSON.parse(event.data))
+          } catch {
+          }
+        },
+      },
+      onOpen: () => {
+        fetchSnapshot()
+          .then(applySnapshot)
+          .catch(() => {
+          })
+      },
     })
     return () => {
-      source.close()
+      watchdog.close()
     }
-  }, [applyConfig])
+  }, [applySnapshot, fetchSnapshot])
 
   const patchConfig = useCallback(async (partial: Partial<WindowBehaviorConfig>) => {
-    const base = configRef.current
-    if (!base) return
-
-    patchControllerRef.current?.abort()
     const controller = new AbortController()
     patchControllerRef.current = controller
+    setSaving(true)
     setErrorMessage(null)
-
-    applyConfig({ ...base, ...partial })
 
     try {
       const response = await fetch(`${CORE_URL}/config/window-behavior`, {
@@ -99,26 +101,20 @@ export function WindowBehaviorPanel() {
         throw new Error(typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`)
       }
 
-      const data: WindowBehaviorConfig = await response.json()
-      if (controller.signal.aborted) return
-      applyConfig(data)
+      applySnapshot((await response.json()) as WindowBehaviorSnapshot)
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
       setErrorMessage(err instanceof Error ? err.message : '保存窗口行为配置失败，请稍后重试')
-
-      if (patchControllerRef.current !== controller) return
-      fetchConfig()
-        .then(applyConfig)
-        .catch(() => {
-        })
+    } finally {
+      if (!controller.signal.aborted) setSaving(false)
     }
-  }, [applyConfig, fetchConfig])
+  }, [applySnapshot])
 
   const handleAddRule = useCallback(async () => {
     const result = await window.electronAPI.selectExeFile()
     if (!result) return
 
-    const current = configRef.current
+    const current = snapshotRef.current?.config
     if (!current) return
 
     const lower = result.filename.toLowerCase()
@@ -128,24 +124,26 @@ export function WindowBehaviorPanel() {
   }, [patchConfig])
 
   const handleRuleEffectChange = useCallback((exeName: string, effect: AppRuleEffect) => {
-    const current = configRef.current
+    const current = snapshot?.config
     if (!current) return
     patchConfig({ appRules: current.appRules.map(rule => (rule.exeName === exeName ? { ...rule, effect } : rule)) })
-  }, [patchConfig])
+  }, [snapshot, patchConfig])
 
   const handleRemoveRule = useCallback((exeName: string) => {
-    const current = configRef.current
+    const current = snapshot?.config
     if (!current) return
     patchConfig({ appRules: current.appRules.filter(rule => rule.exeName !== exeName) })
-  }, [patchConfig])
+  }, [snapshot, patchConfig])
 
   if (loading) {
     return <div className="memory-loading">加载中…</div>
   }
 
-  if (loadError || !config) {
+  if (!snapshot) {
     return <div className="character-panel__error">{loadError ?? '加载窗口行为配置失败，请稍后重试'}</div>
   }
+
+  const config = snapshot.config
 
   return (
     <div className="window-behavior-panel">
@@ -159,6 +157,7 @@ export function WindowBehaviorPanel() {
               name="chat-pin-mode"
               value={option.value}
               checked={config.chatPinMode === option.value}
+              disabled={saving}
               onChange={() => patchConfig({ chatPinMode: option.value })}
             />
             <span>{option.label}</span>
@@ -172,6 +171,7 @@ export function WindowBehaviorPanel() {
           <input
             type="checkbox"
             checked={config.petAvoidanceEnabled}
+            disabled={saving}
             onChange={e => patchConfig({ petAvoidanceEnabled: e.target.checked })}
           />
           <span>开启</span>
@@ -197,18 +197,19 @@ export function WindowBehaviorPanel() {
                 <select
                   className="window-behavior-panel__select"
                   value={rule.effect}
+                  disabled={saving}
                   onChange={e => handleRuleEffectChange(rule.exeName, e.target.value as AppRuleEffect)}
                 >
                   {APP_RULE_EFFECT_OPTIONS.map(option => (
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
-                <button className="memory-btn memory-btn--danger" onClick={() => handleRemoveRule(rule.exeName)}>删除</button>
+                <button className="memory-btn memory-btn--danger" disabled={saving} onClick={() => handleRemoveRule(rule.exeName)}>删除</button>
               </div>
             </div>
           ))}
         </div>
-        <button className="memory-btn" onClick={handleAddRule}>添加</button>
+        <button className="memory-btn" disabled={saving} onClick={handleAddRule}>添加</button>
       </div>
 
       {errorMessage && <div className="character-panel__error">{errorMessage}</div>}

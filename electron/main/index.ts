@@ -9,9 +9,11 @@ import { nextReconnectDelayMs, RECONNECT_BACKOFF_FLOOR_MS } from './reconnectBac
 import { EVENTS_CLIENT_TIMEOUT_MS } from './eventsGeneration'
 import { createCoreEventsConsumer } from './coreEventsConsumer'
 import { CORE_URL } from './coreUrl'
+import type { ChatPinMode, WindowBehaviorConfig, WindowBehaviorSnapshot } from '../../shared/windowBehavior.js'
 import {
   initWindowBehaviorConfig,
-  updateCachedWindowBehaviorConfig,
+  applyWindowBehaviorSnapshot,
+  getCachedWindowBehaviorConfig,
   evaluateDesktopPresence,
   handleWindowMoved,
   markProgrammaticWindowPlacement,
@@ -70,14 +72,6 @@ function stopActiveWindowMonitoring(): void {
   stopBlockerValidation = null
 }
 
-type ChatPinMode = 'always' | 'smart' | 'off'
-
-interface WindowBehaviorConfig {
-  chatPinMode: ChatPinMode
-  petAvoidanceEnabled: boolean
-  appRules: Array<{ exeName: string; effect: 'allow' | 'soft' | 'hard' }>
-}
-
 let tray: Tray | null = null
 let isQuitting = false
 
@@ -128,8 +122,8 @@ async function applyIconFromCurrentPreset(): Promise<void> {
 const coreEventsConsumer = createCoreEventsConsumer({
   converge,
   onPresetSwitched: applyIconFromCurrentPreset,
-  onWindowBehaviorChanged: config => {
-    updateCachedWindowBehaviorConfig(config, mainWindow, overlayWindow)
+  onWindowBehaviorChanged: snapshot => {
+    applyWindowBehaviorSnapshot(snapshot, mainWindow, overlayWindow)
     rebuildTrayMenu()
   },
   log: {
@@ -176,9 +170,8 @@ async function connectToCoreEvents(): Promise<boolean> {
 }
 
 function converge(): void {
-  initWindowBehaviorConfig(mainWindow, overlayWindow)
+  initWindowBehaviorConfig(mainWindow, overlayWindow).then(rebuildTrayMenu)
   applyIconFromCurrentPreset()
-  rebuildTrayMenu()
 }
 
 let isShuttingDownCoreEventsLoop = false
@@ -214,33 +207,26 @@ async function subscribeToCoreEvents(): Promise<void> {
   }
 }
 
-async function fetchWindowBehaviorConfig(): Promise<WindowBehaviorConfig | null> {
-  try {
-    const response = await fetch(`${CORE_URL}/config/window-behavior`)
-    if (!response.ok) return null
-    return await response.json()
-  } catch {
-    return null
-  }
-}
-
 async function patchWindowBehavior(partial: Partial<WindowBehaviorConfig>): Promise<void> {
   try {
-    await fetch(`${CORE_URL}/config/window-behavior`, {
+    const response = await fetch(`${CORE_URL}/config/window-behavior`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(partial),
     })
+    if (!response.ok) {
+      console.error('[Tray] Core rejected window behavior patch:', response.status)
+      return
+    }
+    applyWindowBehaviorSnapshot((await response.json()) as WindowBehaviorSnapshot, mainWindow, overlayWindow)
   } catch (err) {
     console.error('[Tray] Failed to patch window behavior config:', err)
   }
 }
 
-async function rebuildTrayMenu(): Promise<void> {
+function rebuildTrayMenu(): void {
   if (!tray) return
-  const config = await fetchWindowBehaviorConfig()
-  const currentChatPinMode: ChatPinMode = config?.chatPinMode ?? 'off'
-  const petAvoidanceEnabled = config?.petAvoidanceEnabled ?? true
+  const { chatPinMode: currentChatPinMode, petAvoidanceEnabled } = getCachedWindowBehaviorConfig()
 
   const menu = Menu.buildFromTemplate([
     {
@@ -292,12 +278,12 @@ async function rebuildTrayMenu(): Promise<void> {
 
 async function handleChatPinModeClick(chatPinMode: ChatPinMode): Promise<void> {
   await patchWindowBehavior({ chatPinMode })
-  await rebuildTrayMenu()
+  rebuildTrayMenu()
 }
 
 async function handlePetAvoidanceClick(petAvoidanceEnabled: boolean): Promise<void> {
   await patchWindowBehavior({ petAvoidanceEnabled })
-  await rebuildTrayMenu()
+  rebuildTrayMenu()
 }
 
 function createTray(): void {

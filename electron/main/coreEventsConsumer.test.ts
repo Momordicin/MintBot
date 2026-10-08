@@ -69,12 +69,16 @@ describe('createCoreEventsConsumer', () => {
   it('window-behavior-changed 帧派发到 onWindowBehaviorChanged 且解析出正确的 payload', () => {
     const handlers = createHandlers()
     const consumer = createCoreEventsConsumer(handlers)
-    const config = { chatPinMode: 'smart' as const, petAvoidanceEnabled: true, appRules: [{ exeName: 'a.exe', effect: 'allow' as const }] }
+    const snapshot = {
+      generation: 'gen-1',
+      revision: 3,
+      config: { chatPinMode: 'smart' as const, petAvoidanceEnabled: true, appRules: [{ exeName: 'a.exe', effect: 'allow' as const }] },
+    }
 
-    consumer.onChunk(frame('window-behavior-changed', config))
+    consumer.onChunk(frame('window-behavior-changed', snapshot))
 
     expect(handlers.onWindowBehaviorChanged).toHaveBeenCalledTimes(1)
-    expect(handlers.onWindowBehaviorChanged).toHaveBeenCalledWith(config)
+    expect(handlers.onWindowBehaviorChanged).toHaveBeenCalledWith(snapshot)
   })
 
   it('一帧跨两次 onChunk 调用拆开，仍然只派发一次', () => {
@@ -124,7 +128,7 @@ describe('createCoreEventsConsumer', () => {
     // 新连接建立：重连触发的收敛 + 缓冲重置
     consumer.onConnected()
     // 新连接自己发来的第一帧
-    consumer.onChunk(frame('window-behavior-changed', { chatPinMode: 'off', petAvoidanceEnabled: true, appRules: [] }))
+    consumer.onChunk(frame('window-behavior-changed', { generation: 'gen-1', revision: 1, config: { chatPinMode: 'off', petAvoidanceEnabled: true, appRules: [] } }))
 
     expect(handlers.onPresetSwitched).not.toHaveBeenCalled()
     expect(handlers.onWindowBehaviorChanged).toHaveBeenCalledTimes(1)

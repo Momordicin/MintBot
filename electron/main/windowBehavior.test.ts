@@ -136,13 +136,26 @@ import {
   handleWindowMoved,
   markProgrammaticWindowPlacement,
   markTopologySettle,
-  updateCachedWindowBehaviorConfig,
+  applyWindowBehaviorSnapshot,
+  initWindowBehaviorConfig,
+  getCachedWindowBehaviorConfig,
   requestOverlayEdgeHover,
   sendCurrentPetPresenceOnReady,
   closeStartupGate,
   openStartupGate,
   cancelProgrammaticMoveOnDragStart,
 } from './windowBehavior'
+
+let testRevision = 0
+
+function updateCachedWindowBehaviorConfig(
+  config: { chatPinMode: 'always' | 'smart' | 'off'; petAvoidanceEnabled: boolean; appRules: Array<{ exeName: string; effect: 'allow' | 'soft' | 'hard' }> },
+  mainWindow: Electron.BrowserWindow | null,
+  overlayWindow: Electron.BrowserWindow | null
+): void {
+  testRevision += 1
+  applyWindowBehaviorSnapshot({ generation: 'default-test-generation', revision: testRevision, config }, mainWindow, overlayWindow)
+}
 
 // Same durations as windowBehavior.ts. PERSIST_DEBOUNCE_MS is exported from windowPositions.ts
 // (Fix 4) and re-provided by this file's own vi.mock('./windowPositions', ...) above (kept equal
@@ -1959,6 +1972,47 @@ describe('非法 drop 的回滚接线', () => {
         // 回滚目标正是窗口此刻所在的 applied placement
         expect(win.getBounds().x).toBe(path.expectedX)
       })
+    }
+  })
+})
+
+describe('window behavior snapshot ordering', () => {
+  const CONFIG_A = { chatPinMode: 'always' as const, petAvoidanceEnabled: true, appRules: [] }
+  const CONFIG_B = { chatPinMode: 'off' as const, petAvoidanceEnabled: false, appRules: [{ exeName: 'x.exe', effect: 'hard' as const }] }
+
+  it('applies a newer revision and rejects an older or equal one from the same generation', () => {
+    expect(applyWindowBehaviorSnapshot({ generation: 'gen-order', revision: 5, config: CONFIG_A }, null, null)).toBe(true)
+    expect(getCachedWindowBehaviorConfig()).toEqual(CONFIG_A)
+
+    expect(applyWindowBehaviorSnapshot({ generation: 'gen-order', revision: 4, config: CONFIG_B }, null, null)).toBe(false)
+    expect(applyWindowBehaviorSnapshot({ generation: 'gen-order', revision: 5, config: CONFIG_B }, null, null)).toBe(false)
+    expect(getCachedWindowBehaviorConfig()).toEqual(CONFIG_A)
+
+    expect(applyWindowBehaviorSnapshot({ generation: 'gen-order', revision: 6, config: CONFIG_B }, null, null)).toBe(true)
+    expect(getCachedWindowBehaviorConfig()).toEqual(CONFIG_B)
+  })
+
+  it('accepts a different generation even with a lower revision', () => {
+    applyWindowBehaviorSnapshot({ generation: 'gen-old', revision: 9, config: CONFIG_B }, null, null)
+
+    expect(applyWindowBehaviorSnapshot({ generation: 'gen-new', revision: 1, config: CONFIG_A }, null, null)).toBe(true)
+    expect(getCachedWindowBehaviorConfig()).toEqual(CONFIG_A)
+  })
+
+  it('initWindowBehaviorConfig applies the fetched snapshot through the same ordering rule', async () => {
+    applyWindowBehaviorSnapshot({ generation: 'gen-init', revision: 7, config: CONFIG_A }, null, null)
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ generation: 'gen-init', revision: 3, config: CONFIG_B }) })
+      await initWindowBehaviorConfig(null, null)
+      expect(getCachedWindowBehaviorConfig()).toEqual(CONFIG_A)
+
+      fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ generation: 'gen-init', revision: 8, config: CONFIG_B }) })
+      await initWindowBehaviorConfig(null, null)
+      expect(getCachedWindowBehaviorConfig()).toEqual(CONFIG_B)
+    } finally {
+      vi.unstubAllGlobals()
     }
   })
 })

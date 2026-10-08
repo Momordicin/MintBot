@@ -1,16 +1,11 @@
 
 import { hasServerRestarted } from './eventsGeneration'
-
-export interface WindowBehaviorConfig {
-  chatPinMode: 'always' | 'smart' | 'off'
-  petAvoidanceEnabled: boolean
-  appRules: Array<{ exeName: string; effect: 'allow' | 'soft' | 'hard' }>
-}
+import type { WindowBehaviorSnapshot } from '../../shared/windowBehavior.js'
 
 export interface CoreEventsConsumerHandlers {
   converge: () => void
   onPresetSwitched: () => void
-  onWindowBehaviorChanged: (config: WindowBehaviorConfig) => void
+  onWindowBehaviorChanged: (snapshot: WindowBehaviorSnapshot) => void
   log: {
     generationChanged: () => void
     helloHeartbeatParseError: (err: unknown) => void
@@ -50,7 +45,7 @@ export function createCoreEventsConsumer(handlers: CoreEventsConsumerHandlers): 
       const dataLine = lines.find(line => line.startsWith('data: '))
       if (dataLine) {
         try {
-          handlers.onWindowBehaviorChanged(JSON.parse(dataLine.slice('data: '.length)) as WindowBehaviorConfig)
+          handlers.onWindowBehaviorChanged(JSON.parse(dataLine.slice('data: '.length)) as WindowBehaviorSnapshot)
         } catch (err) {
           handlers.log.windowBehaviorParseError(err)
         }
