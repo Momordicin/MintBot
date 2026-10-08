@@ -30,6 +30,18 @@ function findRule(rules: BlockingRules, exeName: string): AppRule | undefined {
   return rules.appRules.find(rule => rule.exeName.toLowerCase() === lower)
 }
 
+const SHELL_UI_EXE = 'explorer.exe'
+const SHELL_UI_CLASSES = new Set([
+  'XamlExplorerHostIslandWindow',
+  'MultitaskingViewFrame',
+  'ForegroundStaging',
+  'TaskSwitcherWnd',
+])
+
+export function isShellUiWindow(info: Pick<ExternalWindowInfo, 'exeName' | 'className'>): boolean {
+  return info.exeName !== null && info.exeName.toLowerCase() === SHELL_UI_EXE && SHELL_UI_CLASSES.has(info.className)
+}
+
 function classify(
   exeName: string | null,
   isFullscreen: boolean,
@@ -61,6 +73,7 @@ export function applyExternalObservation(
   rules: BlockingRules
 ): DisplayStateMap {
   if (info.pid === null) return map
+  if (isShellUiWindow(info)) return map
 
   const { reasons, severity } = classify(info.exeName, info.isFullscreen, rules)
   if (reasons.size === 0) return map
@@ -80,6 +93,7 @@ export function applyExternalObservation(
 export type BlockerProbe =
   | { status: 'gone' }
   | { status: 'pid-mismatch' }
+  | { status: 'hidden' }
   | { status: 'probe-error' }
   | { status: 'ok'; displayId: number; isFullscreen: boolean }
 
@@ -91,7 +105,7 @@ export function decideBlockerAfterValidation(
   rules: BlockingRules,
   mode: ValidationMode = 'standard'
 ): DisplayBlocker | null {
-  if (probe.status === 'gone' || probe.status === 'pid-mismatch') return null
+  if (probe.status === 'gone' || probe.status === 'pid-mismatch' || probe.status === 'hidden') return null
 
   if (probe.status === 'probe-error') return blocker
 

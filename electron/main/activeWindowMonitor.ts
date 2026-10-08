@@ -4,6 +4,7 @@ import { screen } from 'electron'
 import type { BlockerProbe } from './displayStateMap'
 
 const lib = process.platform === 'win32' ? koffi.load('user32.dll') : null
+const dwmapi = process.platform === 'win32' ? koffi.load('dwmapi.dll') : null
 const kernel32 = process.platform === 'win32' ? koffi.load('kernel32.dll') : null
 
 const HWND = lib ? koffi.pointer('HWND', koffi.opaque()) : null
@@ -22,6 +23,9 @@ const GetForegroundWindow = lib ? lib.func('HWND __stdcall GetForegroundWindow()
 const GetWindowTextW = lib
   ? lib.func(`int __stdcall GetWindowTextW(HWND hWnd, _Out_ ${GET_WINDOW_TEXT_OUT_TYPE} lpString, int nMaxCount)`)
   : null
+const GetClassNameW = lib
+  ? lib.func(`int __stdcall GetClassNameW(HWND hWnd, _Out_ ${GET_WINDOW_TEXT_OUT_TYPE} lpClassName, int nMaxCount)`)
+  : null
 const GetWindowRect = lib ? lib.func('bool __stdcall GetWindowRect(HWND hWnd, _Out_ RECT *lpRect)') : null
 
 const GetWindowThreadProcessId = lib
@@ -38,8 +42,15 @@ const QueryFullProcessImageNameW = kernel32
 const CloseHandle = kernel32 ? kernel32.func('bool __stdcall CloseHandle(HWND hObject)') : null
 const GetWindowLongW = lib ? lib.func('int32_t __stdcall GetWindowLongW(HWND hWnd, int32_t nIndex)') : null
 const IsWindow = lib ? lib.func('bool __stdcall IsWindow(HWND hWnd)') : null
+const IsWindowVisible = lib ? lib.func('bool __stdcall IsWindowVisible(HWND hWnd)') : null
+const IsIconic = lib ? lib.func('bool __stdcall IsIconic(HWND hWnd)') : null
+const DwmGetWindowAttribute = dwmapi
+  ? dwmapi.func('int32_t __stdcall DwmGetWindowAttribute(HWND hwnd, uint32_t dwAttribute, _Out_ uint32_t *pvAttribute, uint32_t cbAttribute)')
+  : null
 
 const PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+const DWMWA_CLOAKED = 14
 
 const GWL_STYLE = -16
 const WS_CAPTION = 0xc00000
@@ -64,6 +75,7 @@ export type ExternalWindowInfo = {
   hwnd: bigint
   pid: number | null
   title: string
+  className: string
   isFullscreen: boolean
   exeName: string | null
   displayId: number
@@ -81,6 +93,20 @@ function resolvePid(hwnd: unknown): number | null {
   GetWindowThreadProcessId(hwnd, pidBuf)
   const pid = pidBuf[0]
   return pid || null
+}
+
+function resolveClassName(hwnd: unknown): string {
+  if (!GetClassNameW) return ''
+  const classBuf = ['\0'.repeat(255)]
+  const len = GetClassNameW(hwnd, classBuf, 256)
+  return len > 0 ? classBuf[0].slice(0, len) : ''
+}
+
+function isCloaked(hwnd: unknown): boolean {
+  if (!DwmGetWindowAttribute) return false
+  const cloakedBuf = [0]
+  const hr = DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, cloakedBuf, 4)
+  return hr === 0 && cloakedBuf[0] !== 0
 }
 
 function resolveExeName(pid: number): string | null {
@@ -127,6 +153,8 @@ export function getActiveWindowInfo(): ForegroundObservation {
     GetWindowTextW(hwnd, titleBuf, 256)
     const title = titleBuf[0]
 
+    const className = resolveClassName(hwnd)
+
     const rect = {} as { left: number; top: number; right: number; bottom: number }
     const gotRect = GetWindowRect(hwnd, rect)
     if (!gotRect) return { kind: 'unavailable' }
@@ -152,7 +180,7 @@ export function getActiveWindowInfo(): ForegroundObservation {
 
     return {
       kind: 'external',
-      info: { hwnd: koffi.address(hwnd), pid, title, isFullscreen, exeName, displayId: display.id },
+      info: { hwnd: koffi.address(hwnd), pid, title, className, isFullscreen, exeName, displayId: display.id },
     }
   } catch {
     return { kind: 'unavailable' }
@@ -225,6 +253,11 @@ export function probeBlockerWindow(hwnd: bigint, pid: number): BlockerProbe {
     if (pidCheck === 'pid-mismatch') {
       hwndsWithLoggedProbeError.delete(hwnd)
       return { status: 'pid-mismatch' }
+    }
+
+    if (IsWindowVisible && IsIconic && (!IsWindowVisible(hwnd) || IsIconic(hwnd) || isCloaked(hwnd))) {
+      hwndsWithLoggedProbeError.delete(hwnd)
+      return { status: 'hidden' }
     }
 
     const rect = {} as { left: number; top: number; right: number; bottom: number }

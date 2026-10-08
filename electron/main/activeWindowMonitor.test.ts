@@ -35,6 +35,7 @@ function makeExternalInfo(overrides: Partial<ExternalWindowInfo> = {}): External
     hwnd: 1000n,
     pid: 111,
     title: 'Some Window',
+    className: 'SomeClass',
     isFullscreen: false,
     exeName: 'game.exe',
     displayId: 1,
