@@ -314,7 +314,7 @@ const WALLPAPER_MAX_BYTES = 10 * 1024 * 1024
 
 const CHARACTER_CARD_MAX_BYTES = 5 * 1024 * 1024
 
-const PRELOAD_PATH = join(__dirname, '../preload/index.mjs')
+const PRELOAD_PATH = join(__dirname, '../preload/index.cjs')
 
 ipcMain.handle('select-wallpaper-file', async (event) => {
   const owner = BrowserWindow.fromWebContents(event.sender)
@@ -387,8 +387,7 @@ function createSettingsWindow(): BrowserWindow {
     show: false,
     parent: mainWindow ?? undefined,
     webPreferences: {
-      preload: PRELOAD_PATH,
-      sandbox: false
+      preload: PRELOAD_PATH
     }
   })
 
@@ -459,8 +458,7 @@ function createOverlayWindow(): BrowserWindow {
     focusable: false,
     show: false,
     webPreferences: {
-      preload: PRELOAD_PATH,
-      sandbox: false
+      preload: PRELOAD_PATH
     }
   })
 
@@ -529,8 +527,7 @@ function createWindow(): BrowserWindow {
     },
     maximizable: false,
     webPreferences: {
-      preload: PRELOAD_PATH,
-      sandbox: false
+      preload: PRELOAD_PATH
     }
   })
 
