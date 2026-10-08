@@ -316,8 +316,10 @@ const CHARACTER_CARD_MAX_BYTES = 5 * 1024 * 1024
 
 const PRELOAD_PATH = join(__dirname, '../preload/index.mjs')
 
-ipcMain.handle('select-wallpaper-file', async () => {
-  const result = await dialog.showOpenDialog({
+ipcMain.handle('select-wallpaper-file', async (event) => {
+  const owner = BrowserWindow.fromWebContents(event.sender)
+  if (!owner) return null
+  const result = await dialog.showOpenDialog(owner, {
     properties: ['openFile'],
     filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }]
   })
@@ -333,8 +335,10 @@ ipcMain.handle('select-wallpaper-file', async () => {
   return { data: new Uint8Array(buffer), filename: basename(filePath) }
 })
 
-ipcMain.handle('select-character-card-file', async () => {
-  const result = await dialog.showOpenDialog({
+ipcMain.handle('select-character-card-file', async (event) => {
+  const owner = BrowserWindow.fromWebContents(event.sender)
+  if (!owner) return null
+  const result = await dialog.showOpenDialog(owner, {
     properties: ['openFile'],
     filters: [{ name: 'Character Cards', extensions: ['json', 'png'] }]
   })
@@ -350,8 +354,10 @@ ipcMain.handle('select-character-card-file', async () => {
   return { data: new Uint8Array(buffer), filename: basename(filePath) }
 })
 
-ipcMain.handle('select-exe-file', async () => {
-  const result = await dialog.showOpenDialog({
+ipcMain.handle('select-exe-file', async (event) => {
+  const owner = BrowserWindow.fromWebContents(event.sender)
+  if (!owner) return null
+  const result = await dialog.showOpenDialog(owner, {
     properties: ['openFile'],
     filters: [{ name: 'Executable', extensions: ['exe'] }]
   })
