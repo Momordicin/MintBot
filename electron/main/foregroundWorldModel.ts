@@ -3,7 +3,7 @@ import type { ForegroundObservation } from './activeWindowMonitor'
 import { getWindowBehaviorRules } from './windowBehavior'
 import { applyExternalObservation, validateBlockers } from './displayStateMap'
 import type { DisplayStateMap, ValidationMode } from './displayStateMap'
-import { isAnyDragInProgress } from './dragActivity'
+import { isWindowDragInProgress } from './dragActivity'
 
 let displayStateMap: DisplayStateMap = new Map()
 
@@ -21,7 +21,7 @@ export function selectValidationMode(isSelfForeground: boolean, isDragInProgress
 }
 
 function runValidationPass(): void {
-  const mode = selectValidationMode(getActiveWindowInfo().kind === 'self', isAnyDragInProgress())
+  const mode = selectValidationMode(getActiveWindowInfo().kind === 'self', isWindowDragInProgress('overlay'))
   displayStateMap = validateBlockers(displayStateMap, getWindowBehaviorRules(), probeBlockerWindow, mode)
 }
 

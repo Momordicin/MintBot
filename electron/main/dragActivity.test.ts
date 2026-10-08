@@ -3,7 +3,6 @@ import {
   noteDragStart,
   noteDragEnd,
   isWindowDragInProgress,
-  isAnyDragInProgress,
   clearDragState,
   endDragTail,
   DRAG_END_TAIL_MS,
@@ -70,26 +69,6 @@ describe('dragActivity — per-window state (isWindowDragInProgress)', () => {
     noteDragEnd('overlay', 0)
     expect(isWindowDragInProgress('overlay', DRAG_END_TAIL_MS)).toBe(false)
     expect(isWindowDragInProgress('chat', DRAG_END_TAIL_MS)).toBe(true) // chat's own drag is untouched
-  })
-})
-
-describe('dragActivity — isAnyDragInProgress (the one deliberately global signal, for selectValidationMode)', () => {
-  it('is true when only the overlay window is mid-drag', () => {
-    noteDragStart('overlay', 0)
-    expect(isAnyDragInProgress(0)).toBe(true)
-  })
-
-  it('is true when only the chat window is mid-drag', () => {
-    noteDragStart('chat', 0)
-    expect(isAnyDragInProgress(0)).toBe(true)
-  })
-
-  it('is false when neither window is dragging or in its tail', () => {
-    noteDragStart('overlay', 0)
-    noteDragEnd('overlay', 0)
-    noteDragStart('chat', 0)
-    noteDragEnd('chat', 0)
-    expect(isAnyDragInProgress(DRAG_END_TAIL_MS)).toBe(false)
   })
 })
 

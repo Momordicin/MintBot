@@ -41,10 +41,6 @@ export function isWindowDragInProgress(windowKey: WindowKey, now: number = Date.
   return now < state.tailUntil
 }
 
-export function isAnyDragInProgress(now: number = Date.now()): boolean {
-  return isWindowDragInProgress('overlay', now) || isWindowDragInProgress('chat', now)
-}
-
 export function clearDragState(windowKey: WindowKey): void {
   dragStates[windowKey] = makeInitialDragState()
 }
