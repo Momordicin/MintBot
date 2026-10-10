@@ -1,6 +1,4 @@
 import { db } from '../db/index.js'
-import { encrypt, decrypt } from '../db/crypto.js'
-import { getEncryptSensitiveFields } from '../config/security.js'
 import { DEFAULT_DISPLAY_CONFIG, parseDisplayConfig } from './displayConfig.js'
 import type { Message, Session, Preset, PresetSnapshot, MessageEntity, Summary, EmotionState, PresetDisplayConfig } from '../../../shared/types/index.js'
 import { errorCode } from '../../../shared/logFile.js'
@@ -12,17 +10,9 @@ function isStringArray(value: unknown): value is string[] {
 function parseAddressForms(raw: string | null): string[] {
   if (raw === null) return []
 
-  let decrypted: string
-  try {
-    decrypted = decrypt(raw)
-  } catch (err) {
-    console.warn('[Preset] addressForms 解密失败，使用默认值 []:', err)
-    return []
-  }
-
   let parsed: unknown
   try {
-    parsed = JSON.parse(decrypted)
+    parsed = JSON.parse(raw)
   } catch (err) {
     console.warn('[Preset] addressForms JSON 解析失败，使用默认值 []:', errorCode(err))
     return []
@@ -42,7 +32,6 @@ export function getPresetById(presetId: string): Preset | null {
     ...row,
     wallpaperPath: row.wallpaperPath ?? undefined,
     displayConfig: parseDisplayConfig(row.displayConfig),
-    systemPrompt: decrypt(row.systemPrompt),
     addressForms: parseAddressForms(row.addressForms),
   }
 }
@@ -53,7 +42,6 @@ export function getAllPresets(): Preset[] {
     ...row,
     wallpaperPath: row.wallpaperPath ?? undefined,
     displayConfig: parseDisplayConfig(row.displayConfig),
-    systemPrompt: decrypt(row.systemPrompt),
     addressForms: parseAddressForms(row.addressForms),
   }))
 }
@@ -77,8 +65,8 @@ export function upsertPreset(preset: Omit<Preset, 'createdAt' | 'updatedAt' | 'd
     ...preset,
     wallpaperPath: preset.wallpaperPath ?? null,
     displayConfig: JSON.stringify(preset.displayConfig ?? DEFAULT_DISPLAY_CONFIG),
-    systemPrompt: encrypt(preset.systemPrompt),
-    addressForms: encrypt(JSON.stringify(preset.addressForms ?? [])),
+    systemPrompt: preset.systemPrompt,
+    addressForms: JSON.stringify(preset.addressForms ?? []),
     createdAt: now,
     updatedAt: now,
   })
@@ -93,8 +81,8 @@ export function createPreset(preset: Omit<Preset, 'createdAt' | 'updatedAt'>): v
     ...preset,
     wallpaperPath: preset.wallpaperPath ?? null,
     displayConfig: JSON.stringify(preset.displayConfig),
-    systemPrompt: encrypt(preset.systemPrompt),
-    addressForms: encrypt(JSON.stringify(preset.addressForms)),
+    systemPrompt: preset.systemPrompt,
+    addressForms: JSON.stringify(preset.addressForms),
     createdAt: now,
     updatedAt: now,
   })
@@ -117,12 +105,12 @@ export function updatePresetDisplayConfig(presetId: string, displayConfig: Prese
 
 export function updatePresetSystemPrompt(presetId: string, systemPrompt: string): void {
   db.prepare(`UPDATE Presets SET systemPrompt = ?, updatedAt = ? WHERE presetId = ?`)
-    .run(encrypt(systemPrompt), Date.now(), presetId)
+    .run(systemPrompt, Date.now(), presetId)
 }
 
 export function updatePresetAddressForms(presetId: string, addressForms: string[]): void {
   db.prepare(`UPDATE Presets SET addressForms = ?, updatedAt = ? WHERE presetId = ?`)
-    .run(encrypt(JSON.stringify(addressForms)), Date.now(), presetId)
+    .run(JSON.stringify(addressForms), Date.now(), presetId)
 }
 
 export function updatePresetModelConfig(
@@ -174,7 +162,6 @@ export function getRecentMessages(sessionId: string, limit = 50): Message[] {
     .reverse()  
     .map(row => ({
       ...row,
-      content: decrypt(row.content),
       embedded: row.embedded === 1,
       summarized: row.summarized === 1,
       visibleToUser: row.visibleToUser === 1,
@@ -210,7 +197,6 @@ export function getMessagesPage(
       .reverse()  
       .map(row => ({
         ...row,
-        content: decrypt(row.content),
         embedded: row.embedded === 1,
         summarized: row.summarized === 1,
         visibleToUser: row.visibleToUser === 1,
@@ -226,7 +212,6 @@ export function appendMessage(msg: Omit<Message, 'id'>): number {
       (@sessionId, @role, @content, @createdAt, @embedded, @summarized, @visibleToUser, @trigger, @triggerEventId)
   `).run({
     ...msg,
-    content: encrypt(msg.content),
     embedded: msg.embedded ? 1 : 0,
     summarized: msg.summarized ? 1 : 0,
     visibleToUser: msg.visibleToUser ? 1 : 0,
@@ -280,7 +265,6 @@ export function getPendingEmbeddingMessages(limit = 200): Message[] {
 
   return rows.map(row => ({
     ...row,
-    content: decrypt(row.content),
     embedded: row.embedded === 1,
     summarized: row.summarized === 1,
     visibleToUser: row.visibleToUser === 1,
@@ -340,7 +324,6 @@ export function getMessagesByIds(ids: number[]): Message[] {
 
   return rows.map(row => ({
     ...row,
-    content: decrypt(row.content),
     embedded: row.embedded === 1,
     summarized: row.summarized === 1,
     visibleToUser: row.visibleToUser === 1,
@@ -354,7 +337,6 @@ export function getPendingSummaryMessages(sessionId: string, limit = 200): Messa
 
   return rows.map(row => ({
     ...row,
-    content: decrypt(row.content),
     embedded: row.embedded === 1,
     summarized: row.summarized === 1,
     visibleToUser: row.visibleToUser === 1,
@@ -391,7 +373,7 @@ export function insertEntity(entity: Omit<MessageEntity, 'id' | 'createdAt' | 'v
     messageId: entity.messageId,
     sessionId: entity.sessionId,
     type: entity.type,
-    value: encrypt(entity.value),
+    value: entity.value,
     validFrom: entity.validFrom,
     validUntil: entity.validUntil ?? null,
     createdAt: Date.now(),
@@ -413,7 +395,7 @@ export function getCurrentEntities(sessionId: string, type?: MessageEntity['type
       `).all(sessionId)
   ) as any[]
 
-  return rows.map(row => ({ ...row, value: decrypt(row.value) }))
+  return rows
 }
 
 export function getCurrentEntitiesPage(
@@ -449,7 +431,6 @@ export function getCurrentEntitiesPage(
     entities: rows
       .slice(0, limit)
       .reverse()  
-      .map(row => ({ ...row, value: decrypt(row.value) })),
   }
 }
 
@@ -467,7 +448,7 @@ export function getEntitiesAsOf(sessionId: string, timestamp: number, type?: Mes
       `).all(sessionId, timestamp, timestamp)
   ) as any[]
 
-  return rows.map(row => ({ ...row, value: decrypt(row.value) }))
+  return rows
 }
 
 export function closeEntity(id: number, validUntil: number = Date.now()): void {
@@ -490,7 +471,6 @@ export interface FtsSearchResult {
 }
 
 export function indexMessageFts(messageId: number, sessionId: string, content: string): void {
-  if (getEncryptSensitiveFields()) return
   db.prepare(`
     INSERT INTO message_fts (content, message_id, session_id)
     VALUES (@content, @messageId, @sessionId)
@@ -498,8 +478,6 @@ export function indexMessageFts(messageId: number, sessionId: string, content: s
 }
 
 export function searchMessagesFts(query: string, sessionId?: string, limit = 10): FtsSearchResult[] {
-  if (getEncryptSensitiveFields()) return []
-
   const params = { query, sessionId, limit }
   const rows = (sessionId
     ? db.prepare(`
@@ -526,7 +504,7 @@ export function backfillMessageFts(): number {
     SELECT id, sessionId, content FROM Messages WHERE embedded = 1
   `).all() as { id: number; sessionId: string; content: string }[]
   for (const msg of embeddedMessages) {
-    indexMessageFts(msg.id, msg.sessionId, decrypt(msg.content))
+    indexMessageFts(msg.id, msg.sessionId, msg.content)
   }
   return embeddedMessages.length
 }
@@ -535,7 +513,7 @@ export function insertSummary(summary: Omit<Summary, 'id' | 'createdAt'>): numbe
   const result = db.prepare(`
     INSERT INTO Summaries (sessionId, content, fromMessageId, toMessageId, createdAt)
     VALUES (@sessionId, @content, @fromMessageId, @toMessageId, @createdAt)
-  `).run({ ...summary, content: encrypt(summary.content), createdAt: Date.now() })
+  `).run({ ...summary, createdAt: Date.now() })
   return result.lastInsertRowid as number
 }
 
@@ -553,7 +531,7 @@ export function insertSummaryAndMarkMessages(
 
 export function getSummaries(sessionId: string): Summary[] {
   const rows = db.prepare(`SELECT * FROM Summaries WHERE sessionId = ? ORDER BY createdAt ASC`).all(sessionId) as any[]
-  return rows.map(row => ({ ...row, content: decrypt(row.content) }))
+  return rows
 }
 
 export function getMessageIdsInTimeRange(sessionId: string, fromTime: number, toTime: number): number[] {
@@ -568,7 +546,7 @@ export function getSummariesOverlappingRange(sessionId: string, minMessageId: nu
     SELECT * FROM Summaries
     WHERE sessionId = ? AND NOT (toMessageId < ? OR fromMessageId > ?)
   `).all(sessionId, minMessageId, maxMessageId) as any[]
-  return rows.map(row => ({ ...row, content: decrypt(row.content) }))
+  return rows
 }
 
 export function forgetMessages(params: {

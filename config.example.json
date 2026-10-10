@@ -9,9 +9,6 @@
     "deepseekApiKey": "",
     "deepseekBaseUrl": ""
   },
-  "security": {
-    "keyStorage": "system-keychain"
-  },
   "memory": {
     "recentTrackMaxMessages": 50,
     "recentTrackMaxMinutes": 30,

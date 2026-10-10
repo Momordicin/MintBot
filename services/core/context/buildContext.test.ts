@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { initDb } from '../db/index.js'
 import { db } from '../db/index.js'
 import { upsertPreset, appendMessage, insertEntity, closeEntity, upsertEmotionState, insertSummary } from '../session/queries.js'
@@ -44,11 +44,8 @@ function fakeEmbeddingProvider(): EmbeddingProvider {
   }
 }
 
-const prevFlag = process.env.ENCRYPT_SENSITIVE_FIELDS
 beforeEach(() => {
   mockMemoryConfig = structuredClone(DEFAULT_TEST_MEMORY_CONFIG)
-  // FTS 召回断言要求本地模式（encryptSensitiveFields=false，本地默认）
-  delete process.env.ENCRYPT_SENSITIVE_FIELDS
   db.exec(`
     DELETE FROM Messages; DELETE FROM Sessions; DELETE FROM Presets; DELETE FROM Summaries;
     DELETE FROM message_fts; DELETE FROM message_embeddings; DELETE FROM MessageEntities;
@@ -63,9 +60,6 @@ beforeEach(() => {
     systemPrompt: '你是一个AI助手',
   })
   loadSession('p1')
-})
-afterEach(() => {
-  process.env.ENCRYPT_SENSITIVE_FIELDS = prevFlag
 })
 
 describe('buildContext', () => {

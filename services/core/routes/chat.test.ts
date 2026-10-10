@@ -3,7 +3,6 @@ import Fastify from 'fastify'
 import fastifyCors from '@fastify/cors'
 import type { FastifyReply } from 'fastify'
 import { initDb, db } from '../db/index.js'
-import { decrypt } from '../db/crypto.js'
 import { upsertPreset, getEmotionState } from '../session/queries.js'
 import * as queries from '../session/queries.js'
 import { loadSession, getHistory } from '../session/index.js'
@@ -783,7 +782,7 @@ describe('POST /chat', () => {
 
     const rows = db.prepare('SELECT role, content FROM Messages WHERE sessionId = ? ORDER BY id ASC')
       .all(session.sessionId) as Array<{ role: string; content: string }>
-    const ordered = rows.map(r => ({ role: r.role, content: decrypt(r.content) }))
+    const ordered = rows.map(r => ({ role: r.role, content: r.content }))
 
     expect(ordered).toEqual([
       { role: 'user', content: '第一条' },
@@ -837,7 +836,7 @@ describe('POST /chat', () => {
 
     const rows = db.prepare('SELECT role, content FROM Messages WHERE sessionId = ? ORDER BY id ASC')
       .all(session.sessionId) as Array<{ role: string; content: string }>
-    const ordered = rows.map(r => ({ role: r.role, content: decrypt(r.content) }))
+    const ordered = rows.map(r => ({ role: r.role, content: r.content }))
 
     expect(ordered).toEqual([
       { role: 'user', content: '第一条' },

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { db, initDb } from '../db/index.js'
 import { appendMessage, getPendingEmbeddingCount, searchSimilarMessages, searchMessagesFts } from '../session/queries.js'
 import { processEmbedQueue } from './embedQueue.js'
@@ -6,16 +6,10 @@ import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
 
 initDb()
 
-const prevFlag = process.env.ENCRYPT_SENSITIVE_FIELDS
 beforeEach(() => {
-  // FTS 断言要求本地模式（encryptSensitiveFields=false，本地默认）
-  delete process.env.ENCRYPT_SENSITIVE_FIELDS
   db.exec(`
     DELETE FROM Messages; DELETE FROM message_embeddings; DELETE FROM message_fts;
   `)
-})
-afterEach(() => {
-  process.env.ENCRYPT_SENSITIVE_FIELDS = prevFlag
 })
 
 // 确定性 BGE-M3 维度（1024）假向量：按输入顺序、每条向量在 index 维度写入固定值，方便断言召回

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { db, initDb } from '../db/index.js'
 import {
   getPresetById,
@@ -69,7 +69,7 @@ function vec(dim: number, value: number): number[] {
 // ─── Preset ───────────────────────────────────────────────
 
 describe('Preset', () => {
-  it('upsertPreset 插入后能用 getPresetById 读回，systemPrompt 解密正确', () => {
+  it('upsertPreset 插入后能用 getPresetById 读回，systemPrompt 读回正确', () => {
     upsertPreset({
       presetId: 'p1',
       name: '测试角色',
@@ -159,22 +159,6 @@ describe('Preset', () => {
     expect(preset.name).toBe('A')
   })
 
-  it('encryptSensitiveFields=true 时 updatePresetSystemPrompt 加密落盘，getPresetById 解密后仍与原文一致', () => {
-    const prevFlag = process.env.ENCRYPT_SENSITIVE_FIELDS
-    process.env.ENCRYPT_SENSITIVE_FIELDS = 'true'
-    try {
-      upsertPreset({ presetId: 'p1', name: 'A', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: '原始人设', wallpaperPath: undefined })
-      updatePresetSystemPrompt('p1', '加密后的人设正文')
-
-      const raw = db.prepare(`SELECT systemPrompt FROM Presets WHERE presetId = ?`).get('p1') as any
-      expect(raw.systemPrompt).not.toBe('加密后的人设正文')
-
-      expect(getPresetById('p1')!.systemPrompt).toBe('加密后的人设正文')
-    } finally {
-      process.env.ENCRYPT_SENSITIVE_FIELDS = prevFlag
-    }
-  })
-
   it('upsertPreset 不传 addressForms 时默认写入空数组', () => {
     upsertPreset({ presetId: 'p1', name: 'A', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: 'a', wallpaperPath: undefined })
     expect(getPresetById('p1')!.addressForms).toEqual([])
@@ -214,25 +198,9 @@ describe('Preset', () => {
     expect(preset.systemPrompt).toBe('a')
   })
 
-  it('encryptSensitiveFields=true 时 updatePresetAddressForms 加密落盘，getPresetById 解密后仍与原文一致', () => {
-    const prevFlag = process.env.ENCRYPT_SENSITIVE_FIELDS
-    process.env.ENCRYPT_SENSITIVE_FIELDS = 'true'
-    try {
-      upsertPreset({ presetId: 'p1', name: 'A', characterId: 'c1', modelType: 'ollama', modelName: 'qwen3', systemPrompt: 'a', wallpaperPath: undefined })
-      updatePresetAddressForms('p1', ['小明', '笨蛋'])
-
-      const raw = db.prepare(`SELECT addressForms FROM Presets WHERE presetId = ?`).get('p1') as any
-      expect(raw.addressForms).not.toBe(JSON.stringify(['小明', '笨蛋']))
-
-      expect(getPresetById('p1')!.addressForms).toEqual(['小明', '笨蛋'])
-    } finally {
-      process.env.ENCRYPT_SENSITIVE_FIELDS = prevFlag
-    }
-  })
-
   // createPreset：手动创建入口专用，故意与 upsertPreset 分开测试——
   // 见 docs/MintBot_TDD.md「角色创建：固定种子角色集 → 手动创建 UI + 角色卡导入」
-  it('createPreset 插入后能用 getPresetById 读回，各字段（含 systemPrompt 解密）正确', () => {
+  it('createPreset 插入后能用 getPresetById 读回，各字段（含 systemPrompt）正确', () => {
     createPreset({
       presetId: 'p1',
       name: '新角色',
@@ -341,7 +309,7 @@ describe('Session', () => {
 // ─── Messages ─────────────────────────────────────────────
 
 describe('Messages', () => {
-  it('appendMessage 写入，getRecentMessages 读出 content 解密正确', () => {
+  it('appendMessage 写入，getRecentMessages 读出 content 正确', () => {
     appendMessage({
       sessionId: 's1', role: 'user', content: '你好', createdAt: Date.now(),
       embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null,
@@ -349,6 +317,16 @@ describe('Messages', () => {
     const msgs = getRecentMessages('s1')
     expect(msgs).toHaveLength(1)
     expect(msgs[0].content).toBe('你好')
+  })
+
+  it('appendMessage 的 content 明文落盘', () => {
+    const id = appendMessage({
+      sessionId: 's1', role: 'user', content: '本地明文消息', createdAt: Date.now(),
+      embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null,
+    })
+
+    const raw = db.prepare(`SELECT content FROM Messages WHERE id = ?`).get(id) as any
+    expect(raw.content).toBe('本地明文消息')
   })
 
   it('getRecentMessages 只返回 visibleToUser = true 的消息', () => {
@@ -616,7 +594,7 @@ describe('Embeddings', () => {
 // ─── Entities ─────────────────────────────────────────────
 
 describe('Entities', () => {
-  it('insertEntity 后 getCurrentEntities 能读回，value 解密正确', () => {
+  it('insertEntity 后 getCurrentEntities 能读回，value 读回正确', () => {
     insertEntity({ messageId: 1, sessionId: 's1', type: 'preference', value: '喜欢猫', validFrom: 1000 })
     const entities = getCurrentEntities('s1')
     expect(entities).toHaveLength(1)
@@ -755,44 +733,6 @@ describe('getSupersededMessageIds', () => {
   })
 })
 
-// ─── Encryption modes (encryptSensitiveFields) ─────────────
-// getEncryptSensitiveFields() 读取的是 process.env.ENCRYPT_SENSITIVE_FIELDS，本身不做缓存，
-// 因此测试内直接读写该环境变量即可让 crypto.ts 的判断实时生效，无需额外的测试 hook
-describe('Encryption modes (encryptSensitiveFields)', () => {
-  const prevFlag = process.env.ENCRYPT_SENSITIVE_FIELDS
-  afterEach(() => {
-    process.env.ENCRYPT_SENSITIVE_FIELDS = prevFlag
-  })
-
-  it('encryptSensitiveFields=false（本地默认）：消息内容明文落盘且可正常读回', () => {
-    delete process.env.ENCRYPT_SENSITIVE_FIELDS
-    const id = appendMessage({
-      sessionId: 's1', role: 'user', content: '本地明文消息', createdAt: Date.now(),
-      embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null,
-    })
-
-    const raw = db.prepare(`SELECT content FROM Messages WHERE id = ?`).get(id) as any
-    expect(raw.content).toBe('本地明文消息')
-
-    const msgs = getRecentMessages('s1')
-    expect(msgs[0].content).toBe('本地明文消息')
-  })
-
-  it('encryptSensitiveFields=true（线上部署）：消息内容加密落盘，读回后解密正确', () => {
-    process.env.ENCRYPT_SENSITIVE_FIELDS = 'true'
-    const id = appendMessage({
-      sessionId: 's1', role: 'user', content: '线上加密消息', createdAt: Date.now(),
-      embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null,
-    })
-
-    const raw = db.prepare(`SELECT content FROM Messages WHERE id = ?`).get(id) as any
-    expect(raw.content).not.toBe('线上加密消息')
-
-    const msgs = getRecentMessages('s1')
-    expect(msgs[0].content).toBe('线上加密消息')
-  })
-})
-
 // ─── EmotionState ─────────────────────────────────────────
 
 describe('EmotionState', () => {
@@ -830,13 +770,7 @@ describe('EmotionState', () => {
 // 索引，可命中任意跨"词"边界的子串；英文仍按连续字母整词索引，行为与旧的 unicode61 一致。
 // 拼音检索（官方文档提到的功能）实测未生效，不在本次修复范围内，不在此断言。
 describe('FTS (message_fts)', () => {
-  const prevFlag = process.env.ENCRYPT_SENSITIVE_FIELDS
-  afterEach(() => {
-    process.env.ENCRYPT_SENSITIVE_FIELDS = prevFlag
-  })
-
-  it('encryptSensitiveFields=false：写入索引后可通过关键词召回', () => {
-    delete process.env.ENCRYPT_SENSITIVE_FIELDS
+  it('写入索引后可通过关键词召回', () => {
     indexMessageFts(1, 's1', 'cat likes fish very much')
     indexMessageFts(2, 's1', 'today is a sunny day')
 
@@ -846,8 +780,7 @@ describe('FTS (message_fts)', () => {
     expect(results[0].sessionId).toBe('s1')
   })
 
-  it('encryptSensitiveFields=false：按 sessionId 过滤只返回该会话命中', () => {
-    delete process.env.ENCRYPT_SENSITIVE_FIELDS
+  it('按 sessionId 过滤只返回该会话命中', () => {
     indexMessageFts(1, 's1', 'cat likes fish')
     indexMessageFts(2, 's2', 'cat likes fish too')
 
@@ -857,17 +790,7 @@ describe('FTS (message_fts)', () => {
     expect(results[0].sessionId).toBe('s1')
   })
 
-  it('encryptSensitiveFields=true：写入为 no-op，搜索直接返回空数组（召回退化为纯向量检索）', () => {
-    process.env.ENCRYPT_SENSITIVE_FIELDS = 'true'
-    indexMessageFts(1, 's1', 'cat likes fish')
-
-    const raw = db.prepare(`SELECT COUNT(*) as count FROM message_fts`).get() as any
-    expect(raw.count).toBe(0)
-    expect(searchMessagesFts('cat')).toEqual([])
-  })
-
   it('中文 2 字词可命中（DIV-002）', () => {
-    delete process.env.ENCRYPT_SENSITIVE_FIELDS
     indexMessageFts(1, 's1', '我喜欢猫和狗')
     indexMessageFts(2, 's1', '今天天气很好')
 
@@ -877,7 +800,6 @@ describe('FTS (message_fts)', () => {
   })
 
   it('中文单字可命中', () => {
-    delete process.env.ENCRYPT_SENSITIVE_FIELDS
     indexMessageFts(1, 's1', '我喜欢猫和狗')
 
     const results = searchMessagesFts('猫')
@@ -886,7 +808,6 @@ describe('FTS (message_fts)', () => {
   })
 
   it('专有名词（游戏名/人名）可命中', () => {
-    delete process.env.ENCRYPT_SENSITIVE_FIELDS
     indexMessageFts(1, 's1', '我最近在玩原神')
     indexMessageFts(2, 's1', '张三昨天来找我了')
 
@@ -895,7 +816,6 @@ describe('FTS (message_fts)', () => {
   })
 
   it('跨"词"边界的中文子串可命中（逐字符索引，不依赖分词边界）', () => {
-    delete process.env.ENCRYPT_SENSITIVE_FIELDS
     indexMessageFts(1, 's1', '我喜欢猫和狗')
 
     // "欢猫" 横跨"喜欢"和"猫"两个词边界，不是一个真实存在的词
@@ -909,13 +829,7 @@ describe('FTS (message_fts)', () => {
 // 历史消息"那一步的实现，这里直接单测这个函数本身，而不是重跑一次完整迁移（迁移只在
 // initDb() 首次建库时按 user_version 触发一次）
 describe('backfillMessageFts (v5 迁移回填逻辑)', () => {
-  const prevFlag = process.env.ENCRYPT_SENSITIVE_FIELDS
-  afterEach(() => {
-    process.env.ENCRYPT_SENSITIVE_FIELDS = prevFlag
-  })
-
   it('embedded=1 但未出现在 message_fts 里的历史消息（模拟迁移前 drop 后的状态），回填后可被关键词召回', () => {
-    delete process.env.ENCRYPT_SENSITIVE_FIELDS
     // 模拟迁移场景：这些消息在旧表里已经 embedded=1，但 message_fts 表刚被 drop + 重建，是空的
     const id1 = appendMessage({
       sessionId: 's1', role: 'user', content: '我喜欢猫和狗',
@@ -940,7 +854,6 @@ describe('backfillMessageFts (v5 迁移回填逻辑)', () => {
   })
 
   it('未 embedded 的消息不参与回填', () => {
-    delete process.env.ENCRYPT_SENSITIVE_FIELDS
     appendMessage({
       sessionId: 's1', role: 'user', content: '还没处理的消息',
       createdAt: 1000, embedded: false, summarized: false, visibleToUser: true,
@@ -959,7 +872,7 @@ describe('getSummaries', () => {
     expect(getSummaries('s1')).toEqual([])
   })
 
-  it('按 createdAt 升序返回该 session 的全部摘要，content 解密正确（往返验证）', () => {
+  it('按 createdAt 升序返回该 session 的全部摘要，content 读回正确（往返验证）', () => {
     // insertSummary 内部用 Date.now() 写入 createdAt（不暴露可控参数），这里插入后直接改写
     // createdAt 确保两条摘要时间戳不同，避免同一毫秒内插入导致排序断言不稳定
     const id1 = insertSummary({ sessionId: 's1', content: '第一段摘要', fromMessageId: 1, toMessageId: 2 })
@@ -974,21 +887,6 @@ describe('getSummaries', () => {
     expect(summaries[0].content).toBe('第一段摘要')
     expect(summaries[1].id).toBe(id2)
     expect(summaries[1].content).toBe('第二段摘要')
-  })
-
-  it('encryptSensitiveFields=true 时落盘 content 非明文，getSummaries 解密后仍能正确还原', () => {
-    const prevFlag = process.env.ENCRYPT_SENSITIVE_FIELDS
-    process.env.ENCRYPT_SENSITIVE_FIELDS = 'true'
-    try {
-      const id = insertSummary({ sessionId: 's1', content: '加密摘要正文', fromMessageId: 1, toMessageId: 1 })
-      const raw = db.prepare(`SELECT content FROM Summaries WHERE id = ?`).get(id) as any
-      expect(raw.content).not.toBe('加密摘要正文')
-
-      const summaries = getSummaries('s1')
-      expect(summaries[0].content).toBe('加密摘要正文')
-    } finally {
-      process.env.ENCRYPT_SENSITIVE_FIELDS = prevFlag
-    }
   })
 })
 
@@ -1056,7 +954,7 @@ describe('getSummariesOverlappingRange', () => {
     expect(getSummariesOverlappingRange('s1', 1, 10)).toEqual([])
   })
 
-  it('content 解密正确', () => {
+  it('content 读回正确', () => {
     insertSummary({ sessionId: 's1', content: '真实摘要正文', fromMessageId: 3, toMessageId: 5 })
     const results = getSummariesOverlappingRange('s1', 1, 10)
     expect(results[0].content).toBe('真实摘要正文')
@@ -1065,7 +963,6 @@ describe('getSummariesOverlappingRange', () => {
 
 describe('forgetMessages', () => {
   it('级联删除 message_embeddings/message_fts/MessageEntities/Messages', () => {
-    delete process.env.ENCRYPT_SENSITIVE_FIELDS
     const id1 = appendMessage({ sessionId: 's1', role: 'user', content: '待删1', createdAt: 1000, embedded: true, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
     const id2 = appendMessage({ sessionId: 's1', role: 'user', content: '待删2', createdAt: 2000, embedded: true, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
     upsertMessageEmbedding(id1, 's1', vec(0, 1))

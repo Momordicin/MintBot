@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { db, initDb } from '../db/index.js'
-import { decrypt } from '../db/crypto.js'
 import { appendMessage } from '../session/queries.js'
 import { shouldTriggerSummary, generateSummary, type SummaryModelProvider } from './summarizer.js'
 
@@ -94,32 +93,13 @@ describe('generateSummary', () => {
 
     expect(result).toEqual({ summaryId: expect.any(Number), fromMessageId: id1, toMessageId: id2 })
 
-    // content 落盘前需 encrypt()（TDD §3.6 加密字段范围含摘要），decrypt 回来后应等于原文；
-    // decrypt() 在 encryptSensitiveFields=false 时是直通 no-op，两种模式下断言都成立
     const summaryRow = db.prepare(`SELECT * FROM Summaries WHERE id = ?`).get(result!.summaryId) as any
-    expect(decrypt(summaryRow.content)).toBe('用户喜欢猫，在阿里巴巴工作')
+    expect(summaryRow.content).toBe('用户喜欢猫，在阿里巴巴工作')
     expect(summaryRow.fromMessageId).toBe(id1)
     expect(summaryRow.toMessageId).toBe(id2)
 
     const messages = db.prepare(`SELECT * FROM Messages WHERE sessionId = ?`).all(sessionId) as any[]
     expect(messages.every(m => m.summarized === 1)).toBe(true)
-  })
-
-  it('encryptSensitiveFields=true 时落盘 content 非明文，decrypt 后可正确还原', async () => {
-    const prevFlag = process.env.ENCRYPT_SENSITIVE_FIELDS
-    process.env.ENCRYPT_SENSITIVE_FIELDS = 'true'
-    try {
-      const sessionId = 's2'
-      addMessage(sessionId, '我喜欢猫', 1000)
-
-      const result = await generateSummary(sessionId, { model: modelReturning('摘要正文') })
-
-      const summaryRow = db.prepare(`SELECT * FROM Summaries WHERE id = ?`).get(result!.summaryId) as any
-      expect(summaryRow.content).not.toBe('摘要正文')
-      expect(decrypt(summaryRow.content)).toBe('摘要正文')
-    } finally {
-      process.env.ENCRYPT_SENSITIVE_FIELDS = prevFlag
-    }
   })
 
   it('maxMessages 限制单批处理的待摘要消息数量，其余保持 summarized=0 留待下次', async () => {

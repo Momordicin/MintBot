@@ -51,12 +51,6 @@ cp .env.example .env
 cp config.example.json config.json
 ```
 
-编辑 `.env`，填入必要的密钥：
-
-```dotenv
-DB_ENCRYPTION_KEY=your-32-char-encryption-key-here
-```
-
 编辑 `config.json`，配置模型提供商：
 
 ```json
@@ -134,9 +128,9 @@ MintBot/
 │   └── styles/             # 全局样式和 CSS 变量
 ├── services/
 │   ├── core/               # Node.js Fastify 核心服务
-│   │   ├── config/         # 配置访问（加密开关等）
+│   │   ├── config/         # 配置访问
 │   │   ├── context/        # buildContext()，对话上下文组装
-│   │   ├── db/             # SQLite 初始化、migration、加密、seed
+│   │   ├── db/             # SQLite 初始化、migration、seed
 │   │   ├── memory/         # 记忆系统（embedding 队列、召回、摘要、实体抽取）
 │   │   ├── providers/      # ModelProvider（Anthropic/OpenAI/Ollama）
 │   │   ├── routes/         # REST + SSE 路由

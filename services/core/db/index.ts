@@ -3,7 +3,6 @@ import * as sqliteVec from 'sqlite-vec'
 import path from 'path'
 import fs from 'fs'
 import * as dotenv from 'dotenv'
-import { getEncryptSensitiveFields } from '../config/security.js'
 
 
 dotenv.config({ quiet: true })
@@ -251,12 +250,6 @@ export function initDb(): { needsFtsBackfill: boolean } {
   `)
  
   const { needsFtsBackfill } = runMigrations()
-  const encrypt = getEncryptSensitiveFields()
-  console.log(
-    encrypt
-      ? '[DB] encryptSensitiveFields = true (AES-256-GCM, FTS disabled)'
-      : '[DB] encryptSensitiveFields = false (plaintext at rest, FTS enabled)'
-  )
   console.log('[DB] Initialized')
   return { needsFtsBackfill }
 }

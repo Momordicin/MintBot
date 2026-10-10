@@ -113,10 +113,6 @@ pnpm setup:vendor
 cp .env.example .env
 cp config.example.json config.json
 # Edit config.json: fill in an API key, or configure local Ollama
-# Note: the `security` fields in config.json (encryptSensitiveFields / encryptionAlgorithm /
-# keyStorage) aren't actually wired up yet — whether sensitive fields get encrypted is
-# currently controlled by ENCRYPT_SENSITIVE_FIELDS and DB_ENCRYPTION_KEY in .env. Those
-# config.json fields are just the target design recorded in the TDD and aren't in effect yet.
 # You can also optionally add a `backgroundModelProvider` field (same shape as
 # `modelProvider`): if omitted, background "housekeeping" tasks (summary generation, entity
 # extraction) reuse the `modelProvider` model; if configured, they use a separate model — handy
@@ -214,8 +210,6 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
 
 - All conversation data is stored in local SQLite — nothing is uploaded to any server
 - When using an external API (Anthropic / OpenAI), conversation content is sent to that provider; for privacy-first use, we recommend configuring local Ollama instead
-- Sensitive fields (message content, character settings, entity info, summaries) support AES-256-GCM field-level encryption, toggleable via config — recommended when deploying online
-- The encryption key is currently read from an environment variable (`DB_ENCRYPTION_KEY` in `.env`); a design where the OS keychain (Windows Credential Manager) manages the key without ever writing it to disk in plaintext is still planned, not yet implemented
 
 ---
 
