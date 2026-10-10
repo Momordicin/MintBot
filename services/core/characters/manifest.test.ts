@@ -57,8 +57,10 @@ describe('loadCharacterManifest — 真实角色包 fixture（assets/characters/
       expect(typeof manifest.portraits.illustration.fallback).toBe('string')
       expect(typeof manifest.portraits.illustration.emotions).toBe('object')
 
-      expect(typeof manifest.interactionStates).toBe('object')
-      expect(typeof manifest.reservedStates).toBe('object')
+      for (const form of [manifest.portraits.pixel, manifest.portraits.illustration]) {
+        expect(typeof form.interactionStates).toBe('object')
+        expect(typeof form.reservedStates).toBe('object')
+      }
 
       expect(Array.isArray(manifest.emotePool)).toBe(true)
       for (const entry of manifest.emotePool) {
@@ -88,11 +90,9 @@ describe('loadCharacterManifest — 真实角色包 fixture（assets/characters/
       expect(manifest.emotionVocabulary.length).toBeGreaterThan(0)
       expect(manifest.emoteTagVocabulary).toEqual([])
       expect(manifest.portraits).toEqual({
-        pixel: { fallback: '', emotions: {} },
-        illustration: { fallback: '', emotions: {} },
+        pixel: { fallback: '', emotions: {}, interactionStates: {}, reservedStates: {} },
+        illustration: { fallback: '', emotions: {}, interactionStates: {}, reservedStates: {} },
       })
-      expect(manifest.interactionStates).toEqual({})
-      expect(manifest.reservedStates).toEqual({})
       expect(manifest.emotePool).toEqual([])
 
       expect(warnSpy).not.toHaveBeenCalled()
@@ -126,6 +126,16 @@ describe('loadCharacterManifest — 真实角色包 fixture（assets/characters/
             idle: ['gifs/idle1.gif', 'gifs/idle2.gif'],
             happy: ['gifs/happy1.gif'],
           },
+          interactionStates: {
+            drag: 'gifs/drag.gif',
+            move: 'gifs/move.gif',
+          },
+          reservedStates: {
+            thinking: ['gifs/thinking.gif'],
+            'listening-to-music': ['gifs/music.gif'],
+            'boredom-idle': ['gifs/boredom.gif'],
+            sleeping: ['gifs/sleeping.gif'],
+          },
         },
         illustration: {
           fallback: 'idle',
@@ -133,17 +143,17 @@ describe('loadCharacterManifest — 真实角色包 fixture（assets/characters/
             idle: ['full-body.png'],
             happy: ['half-body.png'],
           },
+          interactionStates: {
+            drag: 'gifs/drag.gif',
+            move: 'gifs/move.gif',
+          },
+          reservedStates: {
+            thinking: ['gifs/thinking.gif'],
+            'listening-to-music': ['gifs/music.gif'],
+            'boredom-idle': ['gifs/boredom.gif'],
+            sleeping: ['gifs/sleeping.gif'],
+          },
         },
-      },
-      interactionStates: {
-        drag: 'gifs/drag.gif',
-        move: 'gifs/move.gif',
-      },
-      reservedStates: {
-        thinking: ['gifs/thinking.gif'],
-        'listening-to-music': ['gifs/music.gif'],
-        'boredom-idle': ['gifs/boredom.gif'],
-        sleeping: ['gifs/sleeping.gif'],
       },
       emotePool: [
         { file: 'emotes/example.jpg', tags: ['excited'] },
@@ -257,24 +267,74 @@ describe('loadCharacterManifest — 手工构造的异常 manifest（临时目�
     const manifest = await loadWithFixture('asset-check', JSON.stringify({
       avatar: 'avatar.jpg',
       portraits: {
-        pixel: { fallback: 'idle', emotions: { idle: ['gifs/idle.gif'], happy: ['gifs/missing-happy.gif'] } },
-        illustration: { fallback: 'idle', emotions: { idle: ['art/missing-idle.png'] } },
+        pixel: {
+          fallback: 'idle',
+          emotions: { idle: ['gifs/idle.gif'], happy: ['gifs/missing-happy.gif'], calm: ['gifs/calm.gif'] },
+          interactionStates: { drag: 'gifs/drag.txt' },
+          reservedStates: { sleeping: ['../outside.gif'] },
+        },
+        illustration: {
+          fallback: 'idle',
+          emotions: { idle: ['art/missing-idle.png'], calm: ['art/missing-calm.png'] },
+          interactionStates: { drag: 'art/missing-drag.png' },
+          reservedStates: { sleeping: ['art/missing-sleep.png'] },
+        },
       },
-      interactionStates: { drag: 'gifs/drag.txt' },
-      reservedStates: { sleeping: ['../outside.gif'] },
       transitions: {
         'poke-neutral': [{ from: 'emotions.nowhere', durationMs: 1000 }],
+        'wake-from-bored': [{ from: 'emotions.calm', durationMs: 1000 }],
       },
-    }), ['gifs/idle.gif', 'gifs/drag.txt'])
+    }), ['gifs/idle.gif', 'gifs/drag.txt', 'gifs/calm.gif'])
 
     const messages = warnSpy.mock.calls.map(call => String(call[0]))
     expect(messages.some(m => m.includes('portraits.pixel.emotions.happy') && m.includes('gifs/missing-happy.gif'))).toBe(true)
     expect(messages.some(m => m.includes('portraits.illustration.emotions.idle') && m.includes('art/missing-idle.png'))).toBe(true)
-    expect(messages.some(m => m.includes('interactionStates.drag') && m.includes('gifs/drag.txt'))).toBe(true)
-    expect(messages.some(m => m.includes('reservedStates.sleeping') && m.includes('../outside.gif'))).toBe(true)
+    expect(messages.some(m => m.includes('portraits.pixel.interactionStates.drag') && m.includes('gifs/drag.txt'))).toBe(true)
+    expect(messages.some(m => m.includes('portraits.pixel.reservedStates.sleeping') && m.includes('../outside.gif'))).toBe(true)
+    expect(messages.some(m => m.includes('portraits.illustration.interactionStates.drag') && m.includes('art/missing-drag.png'))).toBe(true)
+    expect(messages.some(m => m.includes('portraits.illustration.reservedStates.sleeping') && m.includes('art/missing-sleep.png'))).toBe(true)
     expect(messages.some(m => m.includes('触发点 poke-neutral') && m.includes('emotions.nowhere'))).toBe(true)
+    expect(messages.some(m => m.includes('触发点 wake-from-bored') && m.includes('art/missing-calm.png'))).toBe(true)
+    expect(messages.some(m => m.includes('触发点 wake-from-bored') && m.includes('gifs/calm.gif'))).toBe(false)
     expect(messages.some(m => m.includes('gifs/idle.gif'))).toBe(false)
-    expect(manifest?.portraits.pixel.emotions).toEqual({ idle: ['gifs/idle.gif'], happy: ['gifs/missing-happy.gif'] })
+    expect(manifest?.portraits.pixel.emotions).toEqual({ idle: ['gifs/idle.gif'], happy: ['gifs/missing-happy.gif'], calm: ['gifs/calm.gif'] })
+    warnSpy.mockRestore()
+  })
+
+  it('从 portraits.<形态> 下读取互动与保留状态，两种形态各自独立', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const manifest = await loadWithFixture('per-form-states', JSON.stringify({
+      avatar: 'avatar.jpg',
+      portraits: {
+        pixel: { fallback: 'idle', emotions: { idle: ['a.gif'] }, interactionStates: { drag: 'drag.gif' }, reservedStates: { sleeping: ['sleep.gif'] } },
+        illustration: { fallback: 'idle', emotions: { idle: ['a.png'] }, reservedStates: { sleeping: ['sleep.png'] } },
+      },
+    }), ['a.gif', 'drag.gif', 'sleep.gif', 'a.png', 'sleep.png'])
+
+    expect(manifest?.portraits.pixel.interactionStates).toEqual({ drag: 'drag.gif' })
+    expect(manifest?.portraits.pixel.reservedStates).toEqual({ sleeping: ['sleep.gif'] })
+    expect(manifest?.portraits.illustration.interactionStates).toEqual({})
+    expect(manifest?.portraits.illustration.reservedStates).toEqual({ sleeping: ['sleep.png'] })
+    expect(warnSpy).not.toHaveBeenCalled()
+    warnSpy.mockRestore()
+  })
+
+  it('顶层 interactionStates / reservedStates 是旧格式：不再读取，并记日志提示', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const manifest = await loadWithFixture('legacy-states', JSON.stringify({
+      avatar: 'avatar.jpg',
+      portraits: { pixel: { fallback: 'idle', emotions: { idle: ['a.gif'] } } },
+      interactionStates: { drag: 'drag.gif' },
+      reservedStates: { sleeping: ['sleep.gif'] },
+    }), ['a.gif', 'drag.gif', 'sleep.gif'])
+
+    expect(manifest?.portraits.pixel.interactionStates).toEqual({})
+    expect(manifest?.portraits.pixel.reservedStates).toEqual({})
+    const messages = warnSpy.mock.calls.map(call => String(call[0]))
+    expect(messages.some(m => m.includes('顶层 interactionStates') && m.includes('旧格式'))).toBe(true)
+    expect(messages.some(m => m.includes('顶层 reservedStates') && m.includes('旧格式'))).toBe(true)
     warnSpy.mockRestore()
   })
 

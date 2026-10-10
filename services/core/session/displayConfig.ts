@@ -6,6 +6,7 @@ export const DEFAULT_DISPLAY_CONFIG: PresetDisplayConfig = {
   themeMode: 'auto',
   accentRgb: [0, 122, 255],
   tintStrength: 0,
+  currentPortrait: 'pixel',
 }
 
 export function isValidChatBgRgb(value: unknown): value is [number, number, number] {
@@ -28,6 +29,10 @@ export function isValidThemeMode(value: unknown): value is 'day' | 'night' | 'au
   return value === 'day' || value === 'night' || value === 'auto'
 }
 
+export function isValidCurrentPortrait(value: unknown): value is 'pixel' | 'illustration' {
+  return value === 'pixel' || value === 'illustration'
+}
+
 export function isValidTintStrength(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }
@@ -43,6 +48,7 @@ function mergeDisplayConfig(source: unknown): PresetDisplayConfig {
   const themeMode = record?.themeMode
   const accentRgb = record?.accentRgb
   const tintStrength = record?.tintStrength
+  const currentPortrait = record?.currentPortrait
 
   if (!isValidChatBgRgb(chatBgRgb)) {
     console.warn(`[DisplayConfig] chatBgRgb 缺失或类型错误，使用默认值 ${JSON.stringify(DEFAULT_DISPLAY_CONFIG.chatBgRgb)}`)
@@ -62,6 +68,9 @@ function mergeDisplayConfig(source: unknown): PresetDisplayConfig {
   if (tintStrength !== undefined && !isValidTintStrength(tintStrength)) {
     console.warn(`[DisplayConfig] tintStrength 类型错误，使用默认值 ${DEFAULT_DISPLAY_CONFIG.tintStrength}`)
   }
+  if (currentPortrait !== undefined && !isValidCurrentPortrait(currentPortrait)) {
+    console.warn(`[DisplayConfig] currentPortrait 类型错误，使用默认值 ${DEFAULT_DISPLAY_CONFIG.currentPortrait}`)
+  }
 
   return {
     chatBgRgb: resolvedChatBgRgb,
@@ -69,6 +78,7 @@ function mergeDisplayConfig(source: unknown): PresetDisplayConfig {
     themeMode: isValidThemeMode(themeMode) ? themeMode : DEFAULT_DISPLAY_CONFIG.themeMode,
     accentRgb: isValidAccentRgb(accentRgb) ? accentRgb : DEFAULT_DISPLAY_CONFIG.accentRgb,
     tintStrength: isValidTintStrength(tintStrength) ? clampTintStrength(tintStrength) : DEFAULT_DISPLAY_CONFIG.tintStrength,
+    currentPortrait: isValidCurrentPortrait(currentPortrait) ? currentPortrait : DEFAULT_DISPLAY_CONFIG.currentPortrait,
   }
 }
 

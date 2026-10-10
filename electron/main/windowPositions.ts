@@ -187,6 +187,22 @@ export function resolveStartupDisplay(
   return remembered ?? pickLargestDisplay(displays)
 }
 
+export function computeAnchoredResizeBounds(
+  bounds: Bounds,
+  size: { width: number; height: number },
+  workArea: Electron.Rectangle
+): Bounds {
+  return clampBoundsToWorkArea(
+    {
+      x: Math.round(bounds.x + (bounds.width - size.width) / 2),
+      y: bounds.y + bounds.height - size.height,
+      width: size.width,
+      height: size.height,
+    },
+    workArea
+  )
+}
+
 export function clampBoundsToWorkArea(bounds: Bounds, workArea: Electron.Rectangle): Bounds {
   const width = Math.min(bounds.width, workArea.width)
   const height = Math.min(bounds.height, workArea.height)

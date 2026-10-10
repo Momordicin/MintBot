@@ -31,6 +31,7 @@ describe('parseDisplayConfig', () => {
       themeMode: 'night',
       accentRgb: [40, 50, 60],
       tintStrength: 0.5,
+      currentPortrait: 'illustration',
     })
     expect(parseDisplayConfig(raw)).toEqual({
       chatBgRgb: [10, 20, 30],
@@ -38,6 +39,7 @@ describe('parseDisplayConfig', () => {
       themeMode: 'night',
       accentRgb: [40, 50, 60],
       tintStrength: 0.5,
+      currentPortrait: 'illustration',
     })
     expect(warnSpy).not.toHaveBeenCalled()
     warnSpy.mockRestore()
@@ -103,8 +105,26 @@ describe('parseDisplayConfig', () => {
       themeMode: DEFAULT_DISPLAY_CONFIG.themeMode,
       accentRgb: DEFAULT_DISPLAY_CONFIG.accentRgb,
       tintStrength: DEFAULT_DISPLAY_CONFIG.tintStrength,
+      currentPortrait: DEFAULT_DISPLAY_CONFIG.currentPortrait,
     })
     expect(warnSpy).not.toHaveBeenCalled()
+    warnSpy.mockRestore()
+  })
+
+  it('currentPortrait 缺失时取默认值 pixel 且不告警；合法值原样使用', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(DEFAULT_DISPLAY_CONFIG.currentPortrait).toBe('pixel')
+    expect(parseDisplayConfig(JSON.stringify({ chatBgRgb: [1, 2, 3], chatBgOpacity: 0.5 })).currentPortrait).toBe('pixel')
+    expect(parseDisplayConfig(JSON.stringify({ chatBgRgb: [1, 2, 3], chatBgOpacity: 0.5, currentPortrait: 'illustration' })).currentPortrait).toBe('illustration')
+    expect(warnSpy).not.toHaveBeenCalled()
+    warnSpy.mockRestore()
+  })
+
+  it('currentPortrait 不是 pixel/illustration 之一时告警并回退默认值', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const raw = JSON.stringify({ chatBgRgb: [1, 2, 3], chatBgOpacity: 0.5, currentPortrait: 'photo' })
+    expect(parseDisplayConfig(raw).currentPortrait).toBe(DEFAULT_DISPLAY_CONFIG.currentPortrait)
+    expect(warnSpy).toHaveBeenCalled()
     warnSpy.mockRestore()
   })
 

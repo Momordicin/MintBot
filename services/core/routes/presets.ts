@@ -7,12 +7,14 @@ import * as dotenv from 'dotenv'
 import { getAllPresets, getPresetById, createPreset, updatePresetWallpaper, updatePresetName, updatePresetDisplayConfig, updatePresetSystemPrompt, updatePresetModelConfig } from '../session/queries.js'
 import { switchPreset, refreshCurrentPresetIfActive } from '../session/index.js'
 import { buildStatePayload } from '../state.js'
+import { broadcastEvent } from '../events/broadcast.js'
 import {
   isValidChatBgRgb,
   isValidChatBgOpacity,
   isValidThemeMode,
   isValidAccentRgb,
   isValidTintStrength,
+  isValidCurrentPortrait,
   clampTintStrength,
   DEFAULT_DISPLAY_CONFIG,
 } from '../session/displayConfig.js'
@@ -187,6 +189,12 @@ export async function presetRoutes(fastify: FastifyInstance) {
       if (displayConfig.tintStrength !== undefined && !isValidTintStrength(displayConfig.tintStrength)) {
         return reply.status(400).send({ error: 'tintStrength must be a finite number' })
       }
+      if (displayConfig.currentPortrait !== undefined && !isValidCurrentPortrait(displayConfig.currentPortrait)) {
+        return reply.status(400).send({ error: 'currentPortrait must be one of pixel, illustration' })
+      }
+
+      const portraitChanged = displayConfig.currentPortrait !== undefined
+        && displayConfig.currentPortrait !== preset.displayConfig.currentPortrait
 
       updatePresetDisplayConfig(presetId, {
         chatBgRgb: displayConfig.chatBgRgb ?? preset.displayConfig.chatBgRgb,
@@ -196,7 +204,9 @@ export async function presetRoutes(fastify: FastifyInstance) {
         tintStrength: displayConfig.tintStrength !== undefined
           ? clampTintStrength(displayConfig.tintStrength)
           : preset.displayConfig.tintStrength,
+        currentPortrait: displayConfig.currentPortrait ?? preset.displayConfig.currentPortrait,
       })
+      if (portraitChanged) broadcastEvent('preset-portrait-changed', { presetId })
     }
 
     if (systemPrompt !== undefined) {

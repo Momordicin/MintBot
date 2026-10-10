@@ -23,6 +23,7 @@ import {
   markTopologySettle,
   requestOverlayEdgeHover,
   sendCurrentPetPresenceOnReady,
+  applyOverlaySize,
   cancelProgrammaticMoveOnDragStart
 } from './windowBehavior'
 import {
@@ -551,6 +552,15 @@ ipcMain.on('overlay:edge-hover', (_event, hovered: unknown) => {
 
 ipcMain.on('overlay:presence-ready', () => {
   sendCurrentPetPresenceOnReady(overlayWindow)
+})
+
+ipcMain.on('overlay:set-size', (event, size: { width?: unknown; height?: unknown }) => {
+  if (!overlayWindow || event.sender !== overlayWindow.webContents) return
+  if (!Number.isFinite(size?.width) || !Number.isFinite(size?.height)) return
+  const width = Math.round(size.width as number)
+  const height = Math.round(size.height as number)
+  if (width < 1 || height < 1) return
+  applyOverlaySize(overlayWindow, { width, height })
 })
 
 ipcMain.on('titlebar:set-overlay', (_event, overlay: { color?: unknown; symbolColor?: unknown }) => {

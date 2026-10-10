@@ -2,6 +2,7 @@
 import { TRANSITION_PICKS, type TransitionChainStep } from '../../shared/transitionChain.js'
 import {
   type OverlayManifest,
+  type PortraitFormName,
   type YState,
   pickRandom,
   resolveDisplayFile,
@@ -66,6 +67,7 @@ export function resolveTransitionSteps(chain: TransitionChainStep[]): ResolvedTr
 
 export function resolveOverlayDisplayFile(
   manifest: OverlayManifest | undefined,
+  form: PortraitFormName,
   transitionFile: string | null,
   isDragging: boolean,
   y: YState,
@@ -73,8 +75,8 @@ export function resolveOverlayDisplayFile(
 ): string | null {
   if (transitionFile !== null) return transitionFile
   if (isDragging) {
-    const dragFile = selectInteractionStateFile(manifest, 'drag')
+    const dragFile = selectInteractionStateFile(manifest, form, 'drag')
     if (dragFile !== null) return dragFile
   }
-  return resolveDisplayFile(manifest, y, x)
+  return resolveDisplayFile(manifest, form, y, x)
 }

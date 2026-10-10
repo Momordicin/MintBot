@@ -137,33 +137,35 @@ describe('transitionState: parseTransitionChain（整份响应校验，任何一
 })
 
 describe('transitionState: resolveOverlayDisplayFile 展示优先级', () => {
+  const withDrag: OverlayManifest = {
+    portraits: {
+      pixel: { ...manifest.portraits!.pixel!, interactionStates: { drag: 'gifs/drag.gif' } },
+      illustration: { fallback: 'idle', emotions: { idle: ['art/full.png'], happy: ['art/half.png'] } },
+    },
+  }
+
   it('转场播放中时，转场文件优先于 y/x（即使 y/x 另有对应素材）', () => {
-    expect(resolveOverlayDisplayFile(manifest, 'gifs/confused1.gif', false, 'sleeping', 'happy')).toBe('gifs/confused1.gif')
+    expect(resolveOverlayDisplayFile(manifest, 'pixel', 'gifs/confused1.gif', false, 'sleeping', 'happy')).toBe('gifs/confused1.gif')
   })
 
   it('没有转场在播放（null）时落回既有的 y/x 回落链', () => {
-    expect(resolveOverlayDisplayFile(manifest, null, false, null, 'happy')).toBe('gifs/happy.gif')
+    expect(resolveOverlayDisplayFile(manifest, 'pixel', null, false, null, 'happy')).toBe('gifs/happy.gif')
   })
 
   it('转场播放中时，转场文件优先于拖拽（拖拽同时进行也不例外）', () => {
-    const withDrag: OverlayManifest = { ...manifest, interactionStates: { drag: 'gifs/drag.gif' } }
-    expect(resolveOverlayDisplayFile(withDrag, 'gifs/confused1.gif', true, 'sleeping', 'happy')).toBe('gifs/confused1.gif')
+    expect(resolveOverlayDisplayFile(withDrag, 'pixel', 'gifs/confused1.gif', true, 'sleeping', 'happy')).toBe('gifs/confused1.gif')
   })
 
   it('没有转场在播放但正在拖拽时，拖拽素材优先于 y/x', () => {
-    const withDrag: OverlayManifest = { ...manifest, interactionStates: { drag: 'gifs/drag.gif' } }
-    expect(resolveOverlayDisplayFile(withDrag, null, true, 'sleeping', 'happy')).toBe('gifs/drag.gif')
+    expect(resolveOverlayDisplayFile(withDrag, 'pixel', null, true, 'sleeping', 'happy')).toBe('gifs/drag.gif')
   })
 
-  it('正在拖拽但角色包未声明 drag 素材时，落回既有的 y/x 回落链，不当作空白', () => {
-    // manifest 没有 interactionStates.drag，selectInteractionStateFile 返回 null，
-    // 继续落到 y/x 回落链——此处 y 为空，落到 x
-    expect(resolveOverlayDisplayFile(manifest, null, true, null, 'happy')).toBe('gifs/happy.gif')
+  it('正在拖拽但当前形态未声明 drag 素材时，取该形态 fallback 组第一个文件，不借用别的形态', () => {
+    expect(resolveOverlayDisplayFile(withDrag, 'illustration', null, true, null, 'happy')).toBe('art/full.png')
   })
 
   it('未在拖拽时（isDragging = false）即使角色包声明了 drag 素材也不使用', () => {
-    const withDrag: OverlayManifest = { ...manifest, interactionStates: { drag: 'gifs/drag.gif' } }
-    expect(resolveOverlayDisplayFile(withDrag, null, false, null, 'happy')).toBe('gifs/happy.gif')
+    expect(resolveOverlayDisplayFile(withDrag, 'pixel', null, false, null, 'happy')).toBe('gifs/happy.gif')
   })
 })
 

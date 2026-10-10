@@ -50,8 +50,11 @@ vi.mock('../characters/manifest.js', async importOriginal => {
     schemaVersion: 2, name: '', displayName: '', description: '', tags: [], creator: '', version: '', creatorNotes: '', avatar: '',
     userAvatar: '',
     emotionVocabulary: [], emoteTagVocabulary: [],
-    portraits: { pixel: { fallback: '', emotions: {} }, illustration: { fallback: '', emotions: {} } },
-    interactionStates: {}, reservedStates: {}, emotePool: [],
+    portraits: {
+      pixel: { fallback: '', emotions: {}, interactionStates: {}, reservedStates: {} },
+      illustration: { fallback: '', emotions: {}, interactionStates: {}, reservedStates: {} },
+    },
+    emotePool: [],
     ...overrides,
   })
   return {

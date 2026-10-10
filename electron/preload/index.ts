@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   requestOverlayEdgeHover: (hovered: boolean) => ipcRenderer.send('overlay:edge-hover', hovered),
   notifyOverlayReady: () => ipcRenderer.send('overlay:presence-ready'),
+  setOverlaySize: (size: { width: number; height: number }) => ipcRenderer.send('overlay:set-size', size),
   onDesktopPresenceChanged: (callback: (payload: { presence: string; edgeSide: 'left' | 'right' | null; handleSuppressed: boolean }) => void) => {
     const listener = (
       _event: Electron.IpcRendererEvent,

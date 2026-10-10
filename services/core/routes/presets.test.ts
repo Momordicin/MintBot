@@ -8,6 +8,12 @@ import { DEFAULT_DISPLAY_CONFIG } from '../session/displayConfig.js'
 import { loadSession, getCurrentState } from '../session/index.js'
 import { presetRoutes, WALLPAPER_DIR } from './presets.js'
 import { buildStatePayload } from '../state.js'
+import * as BroadcastModule from '../events/broadcast.js'
+
+vi.mock('../events/broadcast.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../events/broadcast.js')>()
+  return { ...actual, broadcastEvent: vi.fn() }
+})
 
 // buildStatePayload 内部读取 getModelProviderConfig().ollamaBaseUrl，mock 掉独立 config
 // 模块（而不是依赖真实的本地 config.json），保证测试结果不受本机 config.json 内容影响。
@@ -690,6 +696,64 @@ describe('PATCH /presets/:presetId', () => {
     })
 
     expect(response.statusCode).toBe(400)
+  })
+
+  it('PATCH currentPortrait 后读回新值，其余字段不受影响', async () => {
+    loadSession('p1')
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { displayConfig: { currentPortrait: 'illustration' } },
+    })
+    const body = JSON.parse(response.payload)
+
+    expect(response.statusCode).toBe(200)
+    expect(body.presetSnapshot.displayConfig).toEqual({ ...DEFAULT_DISPLAY_CONFIG, currentPortrait: 'illustration' })
+    expect(getPresetById('p1')!.displayConfig).toEqual({ ...DEFAULT_DISPLAY_CONFIG, currentPortrait: 'illustration' })
+  })
+
+  it('未传 currentPortrait 的 displayConfig PATCH 不改动已保存的形态', async () => {
+    loadSession('p1')
+    const fastify = await buildTestApp()
+    await fastify.inject({ method: 'PATCH', url: '/presets/p1', payload: { displayConfig: { currentPortrait: 'illustration' } } })
+
+    await fastify.inject({ method: 'PATCH', url: '/presets/p1', payload: { displayConfig: { chatBgOpacity: 0.2 } } })
+
+    expect(getPresetById('p1')!.displayConfig.currentPortrait).toBe('illustration')
+  })
+
+  it('currentPortrait 不是 pixel/illustration 之一时返回 400，且不广播', async () => {
+    const fastify = await buildTestApp()
+    vi.mocked(BroadcastModule.broadcastEvent).mockClear()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { displayConfig: { currentPortrait: 'photo' } },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(BroadcastModule.broadcastEvent).not.toHaveBeenCalled()
+  })
+
+  it('currentPortrait 真正变化时广播 preset-portrait-changed，payload 带上 presetId；未变化或未提供时不广播', async () => {
+    loadSession('p1')
+    const fastify = await buildTestApp()
+    vi.mocked(BroadcastModule.broadcastEvent).mockClear()
+
+    await fastify.inject({ method: 'PATCH', url: '/presets/p1', payload: { name: 'renamed' } })
+    await fastify.inject({ method: 'PATCH', url: '/presets/p1', payload: { displayConfig: { chatBgOpacity: 0.2, tintStrength: 0.5 } } })
+    await fastify.inject({ method: 'PATCH', url: '/presets/p1', payload: { displayConfig: { currentPortrait: DEFAULT_DISPLAY_CONFIG.currentPortrait } } })
+    expect(BroadcastModule.broadcastEvent).not.toHaveBeenCalled()
+
+    await fastify.inject({ method: 'PATCH', url: '/presets/p1', payload: { displayConfig: { currentPortrait: 'illustration' } } })
+    expect(BroadcastModule.broadcastEvent).toHaveBeenCalledTimes(1)
+    expect(BroadcastModule.broadcastEvent).toHaveBeenCalledWith('preset-portrait-changed', { presetId: 'p1' })
+
+    await fastify.inject({ method: 'PATCH', url: '/presets/p1', payload: { displayConfig: { currentPortrait: 'illustration', chatBgOpacity: 0.3 } } })
+    expect(BroadcastModule.broadcastEvent).toHaveBeenCalledTimes(1)
   })
 
   it('仅 systemPrompt 的合法更新成功，DB 反映新值', async () => {

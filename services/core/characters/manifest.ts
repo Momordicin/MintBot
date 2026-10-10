@@ -3,6 +3,7 @@ import path from 'path'
 import os from 'os'
 import * as dotenv from 'dotenv'
 import { checkFileGroup, resolveTransitionChain } from './transitionChain.js'
+import { isPortraitFormAvailable } from '../../../shared/portraitForm.js'
 
 dotenv.config({ quiet: true })
 
@@ -16,6 +17,8 @@ if (process.env.VITEST && !ASSET_ROOT.startsWith(os.tmpdir() + path.sep)) {
 export interface PortraitForm {
   fallback: string
   emotions: Record<string, string[]>
+  interactionStates: Record<string, string>
+  reservedStates: Record<string, string[]>
 }
 
 export interface EmotePoolEntry {
@@ -40,8 +43,6 @@ export interface CharacterManifest {
     pixel: PortraitForm
     illustration: PortraitForm
   }
-  interactionStates: Record<string, string>
-  reservedStates: Record<string, string[]>
   emotePool: EmotePoolEntry[]
 }
 
@@ -111,11 +112,13 @@ function mergeStringArrayMap(value: unknown, label: string): Record<string, stri
 }
 
 function mergePortraitForm(value: unknown, label: string): PortraitForm {
-  if (value === undefined) return { fallback: '', emotions: {} }
+  if (value === undefined) return { fallback: '', emotions: {}, interactionStates: {}, reservedStates: {} }
   const source = value as Record<string, unknown>
   return {
     fallback: mergeOptionalString(source.fallback, `${label}.fallback`),
     emotions: mergeStringArrayMap(source.emotions, `${label}.emotions`),
+    interactionStates: mergeStringMap(source.interactionStates, `${label}.interactionStates`),
+    reservedStates: mergeStringArrayMap(source.reservedStates, `${label}.reservedStates`),
   }
 }
 
@@ -142,6 +145,12 @@ function mergeManifest(raw: unknown): CharacterManifest {
   const portraits = (source.portraits ?? {}) as Record<string, unknown>
   const emotionVocabulary = mergeOptionalStringArray(source.emotionVocabulary, 'emotionVocabulary')
 
+  for (const legacyKey of ['interactionStates', 'reservedStates']) {
+    if (source[legacyKey] !== undefined) {
+      console.warn(`[CharacterManifest] 顶层 ${legacyKey} 是旧格式，已不再读取；请移到 portraits.<形态>.${legacyKey} 下`)
+    }
+  }
+
   return {
     schemaVersion: mergeOptionalNumber(source.schemaVersion, 1, 'schemaVersion'),
     name: mergeOptionalString(source.name, 'name'),
@@ -159,8 +168,6 @@ function mergeManifest(raw: unknown): CharacterManifest {
       pixel: mergePortraitForm(portraits.pixel, 'portraits.pixel'),
       illustration: mergePortraitForm(portraits.illustration, 'portraits.illustration'),
     },
-    interactionStates: mergeStringMap(source.interactionStates, 'interactionStates'),
-    reservedStates: mergeStringArrayMap(source.reservedStates, 'reservedStates'),
     emotePool: mergeEmotePool(source.emotePool),
   }
 }
@@ -173,18 +180,21 @@ function checkManifestAssets(characterId: string, raw: unknown, manifest: Charac
     for (const [key, files] of Object.entries(manifest.portraits[form].emotions)) {
       checkFileGroup(characterDir, files, `${label} portraits.${form}.emotions.${key}`)
     }
-  }
-  for (const [key, file] of Object.entries(manifest.interactionStates)) {
-    checkFileGroup(characterDir, [file], `${label} interactionStates.${key}`)
-  }
-  for (const [key, files] of Object.entries(manifest.reservedStates)) {
-    checkFileGroup(characterDir, files, `${label} reservedStates.${key}`)
+    for (const [key, file] of Object.entries(manifest.portraits[form].interactionStates)) {
+      checkFileGroup(characterDir, [file], `${label} portraits.${form}.interactionStates.${key}`)
+    }
+    for (const [key, files] of Object.entries(manifest.portraits[form].reservedStates)) {
+      checkFileGroup(characterDir, files, `${label} portraits.${form}.reservedStates.${key}`)
+    }
   }
 
   const transitions = (raw as Record<string, unknown> | null)?.transitions
   if (typeof transitions !== 'object' || transitions === null || Array.isArray(transitions)) return
   for (const trigger of Object.keys(transitions)) {
-    resolveTransitionChain({ characterId, characterDir, raw, trigger, form: 'pixel' })
+    for (const form of ['pixel', 'illustration'] as const) {
+      if (!isPortraitFormAvailable(manifest.portraits[form])) continue
+      resolveTransitionChain({ characterId, characterDir, raw, trigger, form })
+    }
   }
 }
 

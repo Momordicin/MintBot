@@ -6,6 +6,7 @@ import {
   pickFinestDisplay,
   computeSizeForDisplay,
   computeDefaultBoundsForDisplay,
+  computeAnchoredResizeBounds,
   OVERLAY_DEFAULT_RIGHT_OFFSET_DIP,
   OVERLAY_DEFAULT_BOTTOM_OFFSET_DIP,
 } from './windowPositions'
@@ -251,6 +252,88 @@ describe('computeDefaultBoundsForDisplay', () => {
       y: 260,
       width: 290,
       height: 520,
+    })
+  })
+})
+
+describe('computeAnchoredResizeBounds', () => {
+  const workArea = { x: 0, y: 0, width: 1920, height: 1040 }
+
+  it('keeps the bottom edge and the horizontal center when growing', () => {
+    expect(computeAnchoredResizeBounds({ x: 1000, y: 800, width: 132, height: 132 }, { width: 300, height: 500 }, workArea)).toEqual({
+      x: 916,
+      y: 432,
+      width: 300,
+      height: 500,
+    })
+  })
+
+  it('keeps the bottom edge and the horizontal center when shrinking', () => {
+    expect(computeAnchoredResizeBounds({ x: 900, y: 500, width: 300, height: 500 }, { width: 132, height: 132 }, workArea)).toEqual({
+      x: 984,
+      y: 868,
+      width: 132,
+      height: 132,
+    })
+  })
+
+  it('returns the same bounds when the size does not change', () => {
+    const bounds = { x: 300, y: 400, width: 132, height: 132 }
+    expect(computeAnchoredResizeBounds(bounds, { width: 132, height: 132 }, workArea)).toEqual(bounds)
+  })
+
+  it('pulls the window back inside the work area when growing would overflow it', () => {
+    expect(computeAnchoredResizeBounds({ x: 1850, y: 900, width: 132, height: 132 }, { width: 300, height: 500 }, workArea)).toEqual({
+      x: 1620,
+      y: 532,
+      width: 300,
+      height: 500,
+    })
+    expect(computeAnchoredResizeBounds({ x: 10, y: 20, width: 132, height: 132 }, { width: 300, height: 500 }, { x: 0, y: 0, width: 1920, height: 1040 })).toEqual({
+      x: 0,
+      y: 0,
+      width: 300,
+      height: 500,
+    })
+  })
+
+  it('never exceeds the work area size', () => {
+    expect(computeAnchoredResizeBounds({ x: 0, y: 0, width: 132, height: 132 }, { width: 3000, height: 2000 }, workArea)).toEqual({
+      x: 0,
+      y: 0,
+      width: 1920,
+      height: 1040,
+    })
+  })
+
+  it('restores an edge-docked window at the new width: widening re-centers and stays inside the work area', () => {
+    const secondary = { x: 1920, y: 0, width: 1920, height: 1040 }
+    expect(computeAnchoredResizeBounds({ x: 3708, y: 900, width: 132, height: 132 }, { width: 300, height: 500 }, secondary)).toEqual({
+      x: 3540,
+      y: 532,
+      width: 300,
+      height: 500,
+    })
+    expect(computeAnchoredResizeBounds({ x: 1000, y: 900, width: 132, height: 132 }, { width: 300, height: 500 }, workArea)).toEqual({
+      x: 916,
+      y: 532,
+      width: 300,
+      height: 500,
+    })
+  })
+
+  it('restores an edge-docked window at the new width: narrowing re-centers and stays inside the work area', () => {
+    expect(computeAnchoredResizeBounds({ x: 1620, y: 532, width: 300, height: 500 }, { width: 132, height: 132 }, workArea)).toEqual({
+      x: 1704,
+      y: 900,
+      width: 132,
+      height: 132,
+    })
+    expect(computeAnchoredResizeBounds({ x: 0, y: 532, width: 300, height: 500 }, { width: 132, height: 132 }, workArea)).toEqual({
+      x: 84,
+      y: 900,
+      width: 132,
+      height: 132,
     })
   })
 })

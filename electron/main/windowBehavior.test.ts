@@ -49,9 +49,10 @@ const testState = vi.hoisted(() => ({
   dragging: { overlay: false, chat: false } as Record<'overlay' | 'chat', boolean>,
 }))
 
-const { revalidateBlockersNowMock, setPreferredBoundsMock } = vi.hoisted(() => ({
+const { revalidateBlockersNowMock, setPreferredBoundsMock, getPreferredBoundsMock } = vi.hoisted(() => ({
   revalidateBlockersNowMock: vi.fn(),
   setPreferredBoundsMock: vi.fn(),
+  getPreferredBoundsMock: vi.fn((): unknown => null),
 }))
 
 vi.mock('electron', () => ({
@@ -62,8 +63,26 @@ vi.mock('electron', () => ({
   BrowserWindow: class {},
 }))
 
+const actualComputeAnchoredResizeBounds = vi.hoisted(() => (
+  bounds: { x: number; y: number; width: number; height: number },
+  size: { width: number; height: number },
+  workArea: { x: number; y: number; width: number; height: number }
+) => {
+  const width = Math.min(size.width, workArea.width)
+  const height = Math.min(size.height, workArea.height)
+  const x = Math.round(bounds.x + (bounds.width - size.width) / 2)
+  const y = bounds.y + bounds.height - size.height
+  return {
+    x: Math.min(Math.max(x, workArea.x), workArea.x + workArea.width - width),
+    y: Math.min(Math.max(y, workArea.y), workArea.y + workArea.height - height),
+    width,
+    height,
+  }
+})
+
 vi.mock('./windowPositions', () => ({
-  getPreferredBounds: () => null,
+  getPreferredBounds: getPreferredBoundsMock,
+  computeAnchoredResizeBounds: actualComputeAnchoredResizeBounds,
   setPreferredBounds: setPreferredBoundsMock,
   getEffectiveHomeDisplay: (displays: typeof testState.displays) => {
     const home = displays.find(d => d.id === testState.homeDisplayId)
@@ -144,6 +163,7 @@ import {
   closeStartupGate,
   openStartupGate,
   cancelProgrammaticMoveOnDragStart,
+  applyOverlaySize,
 } from './windowBehavior'
 
 let testRevision = 0
@@ -2014,5 +2034,58 @@ describe('window behavior snapshot ordering', () => {
     } finally {
       vi.unstubAllGlobals()
     }
+  })
+})
+
+describe('applyOverlaySize', () => {
+  let fresh: typeof import('./windowBehavior')
+
+  beforeEach(async () => {
+    vi.resetModules()
+    fresh = await import('./windowBehavior')
+  })
+
+  function makeResizableOverlayWindow(bounds: { x: number; y: number; width: number; height: number }) {
+    return { ...makeFakeOverlayWindow(bounds), setBounds: vi.fn() }
+  }
+
+  it('keeps the bottom edge anchored and leaves x to the edge controller while docked at an edge', () => {
+    const display1 = makeDisplay(1, 0)
+    testState.displays = [display1]
+    testState.homeDisplayId = 1
+    testState.matchDisplay = () => display1
+    testState.blockerMap = new Map()
+
+    const win = makeResizableOverlayWindow({ x: -92, y: 900, width: 132, height: 132 })
+    fresh.evaluateDesktopPresence(null, win as unknown as Electron.BrowserWindow)
+    testState.blockerMap = new Map([
+      [1, { hwnd: 1n, pid: 1, exeName: null, displayId: 1, reasons: new Set(['user-rule']), severity: 'soft' }],
+    ])
+    fresh.evaluateDesktopPresence(null, win as unknown as Electron.BrowserWindow)
+    win.getBounds = () => ({ x: -92, y: 900, width: 132, height: 132 })
+    vi.clearAllMocks()
+
+    fresh.applyOverlaySize(win as unknown as Electron.BrowserWindow, { width: 300, height: 500 })
+
+    expect(win.setBounds).toHaveBeenCalledWith({ x: -92, y: 532, width: 300, height: 500 })
+  })
+
+  it('reads and writes preferred bounds under the applied display, not the display the window mostly overlaps', () => {
+    const display1 = makeDisplay(1, 0)
+    const display2 = makeDisplay(2, 1920)
+    testState.displays = [display1, display2]
+    testState.homeDisplayId = 2
+    testState.matchDisplay = () => display1
+    testState.blockerMap = new Map()
+
+    const win = makeResizableOverlayWindow({ x: 2000, y: 900, width: 132, height: 132 })
+    fresh.evaluateDesktopPresence(null, win as unknown as Electron.BrowserWindow)
+    win.getBounds = () => ({ x: 2000, y: 900, width: 132, height: 132 })
+    vi.clearAllMocks()
+
+    fresh.applyOverlaySize(win as unknown as Electron.BrowserWindow, { width: 300, height: 500 })
+
+    expect(getPreferredBoundsMock).toHaveBeenCalledWith('overlay', 2)
+    expect(setPreferredBoundsMock).toHaveBeenCalledWith('overlay', 2, { x: 1920, y: 532, width: 300, height: 500 })
   })
 })

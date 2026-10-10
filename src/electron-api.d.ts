@@ -15,6 +15,7 @@ export interface ElectronAPI {
   onOverlayDragEnd: (callback: () => void) => () => void
   requestOverlayEdgeHover: (hovered: boolean) => void
   notifyOverlayReady: () => void
+  setOverlaySize: (size: { width: number; height: number }) => void
   onDesktopPresenceChanged: (callback: (payload: DesktopPresencePayload) => void) => () => void
   setTitlebarOverlay: (overlay: { color: string; symbolColor: string }) => void
 }

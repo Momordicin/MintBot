@@ -5,6 +5,7 @@ import {
   setPreferredBounds,
   getEffectiveHomeDisplay,
   computeDefaultBoundsForDisplay,
+  computeAnchoredResizeBounds,
   clampBoundsToWorkArea,
   DEFAULT_WINDOW_SIZE,
   PERSIST_DEBOUNCE_MS,
@@ -191,10 +192,13 @@ function moveToDisplay(win: BrowserWindow, windowKey: WindowKey, targetDisplayId
 
   let bounds = getPreferredBounds(windowKey, target.id)
   if (!bounds) {
-    bounds = computeDefaultBoundsForDisplay(target, displays, DEFAULT_WINDOW_SIZE[windowKey], windowKey)
+    const defaultSize = windowKey === 'overlay' ? win.getBounds() : DEFAULT_WINDOW_SIZE[windowKey]
+    bounds = computeDefaultBoundsForDisplay(target, displays, { width: defaultSize.width, height: defaultSize.height }, windowKey)
     setPreferredBounds(windowKey, target.id, bounds)
   } else {
-    bounds = clampBoundsToWorkArea(bounds, target.workArea)
+    bounds = windowKey === 'overlay'
+      ? computeAnchoredResizeBounds(bounds, win.getBounds(), target.workArea)
+      : clampBoundsToWorkArea(bounds, target.workArea)
   }
   notePlacement(windowKey, target.id, bounds)
 
@@ -221,7 +225,10 @@ function computeEdgeFullBounds(
   displays: Electron.Display[],
   currentBounds: Electron.Rectangle
 ): Electron.Rectangle {
-  const fullBounds = getPreferredBounds('overlay', target.id) ?? computeDefaultBoundsForDisplay(target, displays, DEFAULT_WINDOW_SIZE.overlay, 'overlay')
+  const preferredBounds = getPreferredBounds('overlay', target.id)
+  const fullBounds = preferredBounds
+    ? computeAnchoredResizeBounds(preferredBounds, currentBounds, target.workArea)
+    : computeDefaultBoundsForDisplay(target, displays, { width: currentBounds.width, height: currentBounds.height }, 'overlay')
   return {
     x: fullBounds.x,
     y: currentBounds.y,
@@ -449,6 +456,33 @@ export function handleWindowMoved(
     if (win.isDestroyed()) return
     persistBoundsNow(windowKey, win, mainWindow, overlayWindow)
   }, PERSIST_DEBOUNCE_MS))
+}
+
+export function applyOverlaySize(
+  overlayWindow: BrowserWindow | null,
+  size: { width: number; height: number }
+): void {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return
+
+  const current = overlayWindow.getBounds()
+  if (current.width === size.width && current.height === size.height) return
+
+  activeAnimationCancelFor.get('overlay')?.()
+
+  const settled = overlayWindow.getBounds()
+  const appliedDisplayId = appliedDisplayIdFor('overlay')
+  const display =
+    screen.getAllDisplays().find(candidate => candidate.id === appliedDisplayId) ?? screen.getDisplayMatching(settled)
+  const remembered = getPreferredBounds('overlay', display.id) ?? settled
+  const anchored = computeAnchoredResizeBounds(remembered, size, display.workArea)
+
+  markProgrammaticQuiet('overlay', PROGRAMMATIC_MOVE_COOLDOWN_MS)
+  overlayWindow.setBounds(
+    appliedPetPresence === 'EDGE' ? { x: settled.x, y: anchored.y, width: size.width, height: size.height } : anchored
+  )
+  setPreferredBounds('overlay', display.id, anchored)
+  notePlacement('overlay', display.id, anchored)
+  evaluatePetPresence(overlayWindow)
 }
 
 let applyingPetVisibility = false

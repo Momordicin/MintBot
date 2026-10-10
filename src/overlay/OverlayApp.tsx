@@ -2,11 +2,15 @@ import React, { useEffect, useRef, useState } from 'react'
 import { createWatchdogEventSource } from '../eventsWatchdog.js'
 import type { AppState } from '../../shared/types/index.js'
 import type { TransitionChainStep } from '../../shared/transitionChain.js'
+import { resolveEffectiveForm } from '../../shared/portraitForm.js'
 import './overlay.css'
 import {
   type OverlayManifest,
+  type PortraitFormName,
   type YState,
+  computeOverlaySize,
   deriveY,
+  fallbackFirstFile,
   nextThresholdInstant,
 } from './portraitState.js'
 import {
@@ -55,6 +59,8 @@ export function OverlayApp() {
   const [isLocked, setIsLocked] = useState(false)
   const [transitionStepKey, setTransitionStepKey] = useState('')
   const manifestRef = useRef<OverlayManifest | undefined>(undefined)
+  const formRef = useRef<PortraitFormName>('pixel')
+  const sizedKeyRef = useRef<string | null>(null)
   const yRef = useRef<YState>(null)
   const xRef = useRef<string | undefined>(undefined)
   const ownSessionIdRef = useRef<string | null>(null)
@@ -126,6 +132,34 @@ export function OverlayApp() {
     timerRef.current = setTimeout(() => loadCharacterAndPortrait(true), Math.max(0, next - Date.now()))
   }
 
+  function abortTransition() {
+    if (transitionTimerRef.current !== undefined) {
+      clearTimeout(transitionTimerRef.current)
+      transitionTimerRef.current = undefined
+    }
+    transitionIdRef.current++
+    transitionFileRef.current = null
+    transitionInProgressRef.current = null
+    transitionLockedRef.current = false
+    setIsLocked(false)
+  }
+
+  function sizeOverlayWindowOnce(id: string, form: PortraitFormName, manifest: OverlayManifest) {
+    const key = `${id}|${form}`
+    if (sizedKeyRef.current === key) return
+    const sizingFile = fallbackFirstFile(manifest.portraits?.[form])
+    if (sizingFile === null) return
+    sizedKeyRef.current = key
+
+    const probe = new Image()
+    probe.onload = () => {
+      if (sizedKeyRef.current !== key) return
+      if (probe.naturalWidth === 0 || probe.naturalHeight === 0) return
+      window.electronAPI.setOverlaySize(computeOverlaySize(form, probe.naturalWidth, probe.naturalHeight))
+    }
+    probe.src = resolveAssetUrl(id, sizingFile)
+  }
+
   function loadCharacterAndPortrait(calledByThresholdTimer: boolean) {
     const gen = ++loadGenRef.current
     const previousY = yRef.current
@@ -140,6 +174,8 @@ export function OverlayApp() {
         characterIdRef.current = id
         ownSessionIdRef.current = state.sessionId
 
+        const savedForm = state.presetSnapshot?.displayConfig?.currentPortrait ?? 'pixel'
+
         yRef.current = deriveY({
           lastAttentionAt: state.lastAttentionAt,
           explicitSleep: state.explicitSleep,
@@ -152,7 +188,13 @@ export function OverlayApp() {
           .then(r => r.json())
           .then((manifest: OverlayManifest) => {
             if (gen !== loadGenRef.current) return
+            const form = resolveEffectiveForm(savedForm, manifest.portraits) ?? savedForm
+            if (form !== formRef.current) {
+              formRef.current = form
+              abortTransition()
+            }
             manifestRef.current = manifest
+            sizeOverlayWindowOnce(id, form, manifest)
             if (shouldPlayFallAsleep({
               calledByThresholdTimer,
               previousY,
@@ -162,7 +204,7 @@ export function OverlayApp() {
               startTransition('fall-asleep')
               return
             }
-            setFile(resolveOverlayDisplayFile(manifestRef.current, transitionFileRef.current, isDraggingRef.current, yRef.current, xRef.current))
+            setFile(resolveOverlayDisplayFile(manifestRef.current, formRef.current, transitionFileRef.current, isDraggingRef.current, yRef.current, xRef.current))
           })
       })
       .catch(() => {
@@ -199,7 +241,7 @@ export function OverlayApp() {
   function fetchTransitionChain(trigger: TransitionTrigger): Promise<TransitionChainStep[]> {
     const id = characterIdRef.current
     if (id === null) return Promise.resolve([])
-    const query = `characterId=${encodeURIComponent(id)}&trigger=${encodeURIComponent(trigger)}&form=pixel`
+    const query = `characterId=${encodeURIComponent(id)}&trigger=${encodeURIComponent(trigger)}&form=${formRef.current}`
     return fetch(`${CORE_URL}/overlay/transition-chain?${query}`, { signal: AbortSignal.timeout(TRANSITION_CHAIN_TIMEOUT_MS) })
       .then(r => r.json())
       .then(parseTransitionChain)
@@ -293,7 +335,7 @@ export function OverlayApp() {
       const now = Date.now()
       yRef.current = deriveY({ lastAttentionAt: now, explicitSleep: false, now })
       scheduleThresholdCheck(now)
-      setFile(resolveOverlayDisplayFile(manifestRef.current, null, isDraggingRef.current, yRef.current, xRef.current))
+      setFile(resolveOverlayDisplayFile(manifestRef.current, formRef.current, null, isDraggingRef.current, yRef.current, xRef.current))
       return
     }
 
@@ -330,7 +372,7 @@ export function OverlayApp() {
 
     dragStartYRef.current = yRef.current
     isDraggingRef.current = true
-    setFile(resolveOverlayDisplayFile(manifestRef.current, transitionFileRef.current, true, yRef.current, xRef.current))
+    setFile(resolveOverlayDisplayFile(manifestRef.current, formRef.current, transitionFileRef.current, true, yRef.current, xRef.current))
   }
 
   function handleDragEnd() {
@@ -379,7 +421,7 @@ export function OverlayApp() {
       if (transitionInProgressRef.current !== null) {
         endTransition()
       } else if (wasDragging) {
-        setFile(resolveOverlayDisplayFile(manifestRef.current, null, false, yRef.current, xRef.current))
+        setFile(resolveOverlayDisplayFile(manifestRef.current, formRef.current, null, false, yRef.current, xRef.current))
       }
     }
     document.addEventListener('visibilitychange', handleVisibilityChange)
@@ -437,7 +479,7 @@ export function OverlayApp() {
         scheduleThresholdCheck(now)
         dragStartYRef.current = null
 
-        setFile(resolveOverlayDisplayFile(manifestRef.current, transitionFileRef.current, isDraggingRef.current, yRef.current, xRef.current))
+        setFile(resolveOverlayDisplayFile(manifestRef.current, formRef.current, transitionFileRef.current, isDraggingRef.current, yRef.current, xRef.current))
       } catch {
       }
     }
@@ -464,6 +506,7 @@ export function OverlayApp() {
       }
       setIsHandleVisible(false)
       manifestRef.current = undefined
+      sizedKeyRef.current = null
       characterIdRef.current = null
       yRef.current = null
       xRef.current = undefined
@@ -477,6 +520,7 @@ export function OverlayApp() {
       listeners: {
         emotion: handleEmotionEvent,
         'preset-switched': handlePresetSwitchedEvent,
+        'preset-portrait-changed': () => loadCharacterAndPortrait(false),
       },
       onOpen: () => {
         loadCharacterAndPortrait(false)

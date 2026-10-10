@@ -4,6 +4,7 @@ import { hexToRgb, percentToTintStrength, rgbToHex, tintStrengthToPercent } from
 import { deriveTheme } from '../chat/theme.js'
 import { resolveThemeMode, themeCssVars } from '../chat/themeVars.js'
 import { usePrefersDark } from '../usePrefersDark.js'
+import { isPortraitFormAvailable, resolveEffectiveForm, type PortraitFormName, type PortraitFormShape } from '../../shared/portraitForm.js'
 import './settings.css'
 
 import { CORE_URL } from '../coreUrl.js'
@@ -14,8 +15,13 @@ const DEFAULT_DISPLAY_CONFIG: PresetDisplayConfig = {
   themeMode: 'auto',
   accentRgb: [0, 122, 255],
   tintStrength: 0,
+  currentPortrait: 'pixel',
 }
 const DISPLAY_CONFIG_DEBOUNCE_MS = 400
+const PORTRAIT_FORM_LABELS: Record<PresetDisplayConfig['currentPortrait'], string> = {
+  pixel: '像素',
+  illustration: '立绘',
+}
 
 interface PresetOption {
   presetId: string
@@ -86,6 +92,8 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
   const [themeMode, setThemeMode] = useState<PresetDisplayConfig['themeMode']>(DEFAULT_DISPLAY_CONFIG.themeMode)
   const [accentRgb, setAccentRgb] = useState<[number, number, number]>(DEFAULT_DISPLAY_CONFIG.accentRgb)
   const [tintStrength, setTintStrength] = useState<number>(DEFAULT_DISPLAY_CONFIG.tintStrength)
+  const [portraitForms, setPortraitForms] = useState<Partial<Record<PortraitFormName, PortraitFormShape>> | null>(null)
+  const [isSwitchingPortrait, setIsSwitchingPortrait] = useState(false)
   const displayConfigControllerRef = useRef<AbortController | null>(null)
   const displayConfigDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingDisplayConfigRef = useRef<{ presetId: string; partial: Partial<PresetDisplayConfig> } | null>(null)
@@ -115,6 +123,25 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
     setTintStrength(presetSnapshot?.displayConfig?.tintStrength ?? DEFAULT_DISPLAY_CONFIG.tintStrength)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [presetSnapshot?.presetId])
+
+  const characterId = presetSnapshot?.characterId
+  useEffect(() => {
+    setPortraitForms(null)
+    if (!characterId) return
+    const controller = new AbortController()
+    fetch(`${CORE_URL}/characters/${encodeURIComponent(characterId)}/manifest.json`, { signal: controller.signal })
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      .then((manifest: { portraits?: Partial<Record<PortraitFormName, PortraitFormShape>> }) => {
+        if (controller.signal.aborted) return
+        setPortraitForms(manifest.portraits ?? {})
+      })
+      .catch(() => {
+      })
+    return () => controller.abort()
+  }, [characterId])
 
   useEffect(() => {
     setSystemPromptStep('idle')
@@ -763,6 +790,36 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
     scheduleDisplayConfigChange({ tintStrength: 0 })
   }, [scheduleDisplayConfigChange])
 
+  const savedPortrait = presetSnapshot?.displayConfig?.currentPortrait ?? DEFAULT_DISPLAY_CONFIG.currentPortrait
+  const effectivePortrait = (portraitForms && resolveEffectiveForm(savedPortrait, portraitForms)) ?? savedPortrait
+  const otherPortrait: PortraitFormName = effectivePortrait === 'pixel' ? 'illustration' : 'pixel'
+  const canSwitchPortrait = portraitForms !== null && isPortraitFormAvailable(portraitForms[otherPortrait])
+
+  const handlePortraitToggle = useCallback(() => {
+    const presetId = presetSnapshotRef.current?.presetId
+    if (!presetId) return
+    setErrorMessage(null)
+    setIsSwitchingPortrait(true)
+    fetch(`${CORE_URL}/presets/${encodeURIComponent(presetId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ displayConfig: { currentPortrait: otherPortrait } }),
+    })
+      .then(response => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        return response.json() as Promise<AppState>
+      })
+      .then(state => {
+        if (state.presetSnapshot?.presetId === presetSnapshotRef.current?.presetId) {
+          onSwitched(state)
+        }
+      })
+      .catch(() => {
+        setErrorMessage('形态切换失败，请稍后重试')
+      })
+      .finally(() => setIsSwitchingPortrait(false))
+  }, [otherPortrait, onSwitched])
+
   const characterIdOptions = importedCardFields && createCharacterId && !characterIds.includes(createCharacterId)
     ? [{ value: createCharacterId, label: `（新导入）${createCharacterId}` }, ...characterIds.map(id => ({ value: id, label: id }))]
     : characterIds.map(id => ({ value: id, label: id }))
@@ -814,6 +871,18 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
             title="更换壁纸"
           >
             {isUploadingWallpaper ? '更换中…' : '更换壁纸'}
+          </button>
+        )}
+        {presets.length > 0 && (
+          <button
+            className="rename-btn"
+            onClick={handlePortraitToggle}
+            disabled={!canSwitchPortrait || isSwitchingPortrait}
+            title={portraitForms !== null && !canSwitchPortrait
+              ? `该角色没有${PORTRAIT_FORM_LABELS[otherPortrait]}`
+              : '切换桌宠形态'}
+          >
+            {PORTRAIT_FORM_LABELS[effectivePortrait]}
           </button>
         )}
         {!isCreating && (
