@@ -1,3 +1,4 @@
+import './logBootstrap'
 import { app, BrowserWindow, Menu, Tray, powerMonitor, ipcMain, dialog, screen, nativeImage } from 'electron'
 import { join, basename } from 'path'
 import { readFile, stat } from 'fs/promises'
@@ -9,6 +10,7 @@ import { nextReconnectDelayMs, RECONNECT_BACKOFF_FLOOR_MS } from './reconnectBac
 import { EVENTS_CLIENT_TIMEOUT_MS } from './eventsGeneration'
 import { createCoreEventsConsumer } from './coreEventsConsumer'
 import { CORE_URL } from './coreUrl'
+import { appendLogLine } from '../../shared/logFile.js'
 import type { ChatPinMode, WindowBehaviorConfig, WindowBehaviorSnapshot } from '../../shared/windowBehavior.js'
 import {
   initWindowBehaviorConfig,
@@ -580,6 +582,12 @@ app.whenReady().then(() => {
         event.preventDefault()
         win.webContents.openDevTools()
       }
+    })
+    win.webContents.on('console-message', (details) => {
+      if (details.level !== 'warning' && details.level !== 'error') return
+      const url = win.webContents.getURL()
+      const source = url.includes('/overlay/') ? 'overlay' : url.includes('/settings/') ? 'settings' : 'chat'
+      appendLogLine({ level: details.level === 'error' ? 'error' : 'warn', source, text: details.message })
     })
   })
 

@@ -7,6 +7,7 @@ import {
 } from '../session/queries.js'
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
 import type { Message } from '../../../shared/types/index.js'
+import { errorCode } from '../../../shared/logFile.js'
 
 const RRF_K = 60
 
@@ -58,7 +59,7 @@ export async function retrieveMemories(
     const ftsResults = searchMessagesFts(queryText, sessionId, k * 2)
     addRrfScores(scores, ftsResults.map(r => r.messageId))
   } catch (err) {
-    console.error('[Retrieval] FTS search failed, skipping:', err)
+    console.error('[Retrieval] FTS search failed, skipping:', errorCode(err))
   }
 
   try {

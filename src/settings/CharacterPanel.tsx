@@ -138,7 +138,9 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
         if (controller.signal.aborted) return
         setPortraitForms(manifest.portraits ?? {})
       })
-      .catch(() => {
+      .catch((err: unknown) => {
+        if (err instanceof DOMException && err.name === 'AbortError') return
+        console.error('[CharacterPanel] 读取角色 manifest 失败', characterId, err)
       })
     return () => controller.abort()
   }, [characterId])

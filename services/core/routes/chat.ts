@@ -103,8 +103,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
         if (isEmptyReply(replyText)) {
           console.error(
-            `[Chat] Empty reply body (sessionId=${sessionId}, modelType=${modelType}): ` +
-            JSON.stringify(fullReply.slice(0, 200))
+            `[Chat] Empty reply body (sessionId=${sessionId}, modelType=${modelType}, replyLength=${fullReply.length})`
           )
           send('system', { type: 'error', payload: { message: 'Model call failed' }, sessionId })
           return
