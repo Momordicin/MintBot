@@ -5,7 +5,6 @@
 import { db } from '../db/index.js'
 import { DEFAULT_DISPLAY_CONFIG, parseDisplayConfig } from './displayConfig.js'
 import type { Message, Session, Preset, PresetSnapshot, MessageEntity, Summary, EmotionState, PresetDisplayConfig } from '../../../shared/types/index.js'
-import { errorCode } from '../../../shared/logFile.js'
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every(item => typeof item === 'string')
@@ -18,7 +17,7 @@ function parseAddressForms(raw: string | null): string[] {
   try {
     parsed = JSON.parse(raw)
   } catch (err) {
-    console.warn('[Preset] addressForms JSON 解析失败，使用默认值 []:', errorCode(err))
+    console.warn('[Preset] addressForms JSON 解析失败，使用默认值 []:', err)
     return []
   }
 

@@ -85,7 +85,7 @@ interface Installed {
 
 let installed: Installed | null = null
 
-export function errorCode(err: unknown): string {
+function errorCode(err: unknown): string {
   const e = err as { code?: unknown; name?: unknown } | null
   if (typeof e?.code === 'string') return e.code
   if (typeof e?.name === 'string') return e.name

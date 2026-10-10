@@ -8,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   appendLogLine,
   createLineFormatter,
-  errorCode,
   installLogFile,
   redactSecrets,
   rotateIfLarge,
@@ -79,14 +78,6 @@ describe('rotateIfLarge', () => {
     fs.truncateSync(file, 10 * 1024 * 1024 + 1)
     expect(rotateIfLarge(file)).toBe(true)
     expect(fs.existsSync(`${file}.1`)).toBe(true)
-  })
-})
-
-describe('errorCode', () => {
-  it('优先 code，其次 name，否则 unknown', () => {
-    expect(errorCode(Object.assign(new Error('x'), { code: 'ENOENT' }))).toBe('ENOENT')
-    expect(errorCode(new SyntaxError('secret sk-123'))).toBe('SyntaxError')
-    expect(errorCode(null)).toBe('unknown')
   })
 })
 

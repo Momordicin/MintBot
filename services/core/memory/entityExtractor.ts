@@ -277,7 +277,7 @@ export async function extractEntities(
       closed++
     } else {
       console.warn(
-        `[EntityExtractor] layer3 flagged a change with no matching current entity (sessionId=${msg.sessionId}, type=${change.type}); inserting new value without closing old one`
+        `[EntityExtractor] layer3 flagged a change with no matching current entity (sessionId=${msg.sessionId}, type=${change.type}, oldValue=${change.oldValue}); inserting new value without closing old one`
       )
     }
 

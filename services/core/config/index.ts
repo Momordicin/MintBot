@@ -8,7 +8,6 @@ import crypto from 'crypto'
 import chokidar from 'chokidar'
 import type { ModelConfig } from '../../../shared/types/index.js'
 import type { AppRule, AppRuleEffect, ChatPinMode, WindowBehaviorConfig } from '../../../shared/windowBehavior.js'
-import { errorCode } from '../../../shared/logFile.js'
 
 export interface SummaryTriggerConfig {
   pendingCountThreshold: number
@@ -217,7 +216,7 @@ function load(): LoadResult {
     raw = JSON.parse(text)
   } catch (err) {
     if (!loaded) {
-      console.warn('[Config] config.json 不存在或解析失败，全部字段使用默认值:', errorCode(err))
+      console.warn('[Config] config.json 不存在或解析失败，全部字段使用默认值:', err)
       currentMemoryConfig = mergeMemoryConfig(undefined)
       currentModelProviderConfig = undefined
       currentBackgroundModelProviderConfig = undefined
@@ -225,7 +224,7 @@ function load(): LoadResult {
       currentDefaultPresetId = undefined
       loaded = true
     } else {
-      console.warn('[Config] config.json 重新加载失败，保留上一次的有效配置:', errorCode(err))
+      console.warn('[Config] config.json 重新加载失败，保留上一次的有效配置:', err)
     }
     return { ok: false, windowBehaviorChanged: false }
   }
