@@ -180,6 +180,37 @@ describe('installLogFile', () => {
     expect(text).not.toMatch(/abcdefghijklmnop1234|tok12345678|hunter2|renderersecret|leaky/)
   })
 
+  it('带非 utf8 编码参数的字符串写入：文件里是解码后的文本，终端收到原参数', () => {
+    installLogFile({ dir, fileName: 'core.log', source: 'core' })
+    const hex = Buffer.from('hex 你好').toString('hex')
+    const b64 = Buffer.from('b64 text').toString('base64')
+    process.stdout.write(hex, 'hex')
+    process.stdout.write('\n')
+    process.stdout.write(b64, 'base64', () => {})
+    process.stdout.write('\n')
+    process.stdout.write('plain\n', 'utf8')
+    expect(stdoutSpy.mock.calls[0]).toEqual([hex, 'hex'])
+    expect(stdoutSpy.mock.calls[2][1]).toBe('base64')
+    const text = read()
+    expect(text).toMatch(/info \[core\] hex 你好\n/)
+    expect(text).toMatch(/info \[core\] b64 text\n/)
+    expect(text).toMatch(/info \[core\] plain\n/)
+    expect(text).not.toContain(hex)
+    expect(text).not.toContain(b64)
+  })
+
+  it('ucs2 / utf16le / latin1 等其他编码的字符串写入：文件里是原字符串，不含 NUL', () => {
+    installLogFile({ dir, fileName: 'core.log', source: 'core' })
+    process.stdout.write('ucs2 text\n', 'ucs2')
+    process.stdout.write('utf16 text\n', 'utf16le')
+    process.stdout.write('latin1 text\n', 'latin1')
+    const text = read()
+    expect(text).toMatch(/info \[core\] ucs2 text\n/)
+    expect(text).toMatch(/info \[core\] utf16 text\n/)
+    expect(text).toMatch(/info \[core\] latin1 text\n/)
+    expect(text).not.toContain('\0')
+  })
+
   it('目录无法创建：不抛、不改 process.stdout.write、只报一次', () => {
     const blocker = path.join(dir, 'blocker')
     fs.writeFileSync(blocker, 'file')

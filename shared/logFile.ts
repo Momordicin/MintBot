@@ -139,7 +139,11 @@ export function installLogFile(options: InstallLogFileOptions): string | null {
     stream.write = function (this: unknown, ...args: unknown[]): boolean {
       try {
         const chunk = args[0]
-        append(format(typeof chunk === 'string' ? chunk : decoder.write(Buffer.from(chunk as Uint8Array))))
+        const encoding = args[1]
+        const decodedFromEncoding =
+          typeof chunk === 'string' && typeof encoding === 'string' && /^(hex|base64|base64url)$/i.test(encoding)
+        const raw = decodedFromEncoding ? Buffer.from(chunk as string, encoding as BufferEncoding) : chunk
+        append(format(typeof raw === 'string' ? raw : decoder.write(Buffer.from(raw as Uint8Array))))
       } catch {}
       return (original as (...a: unknown[]) => boolean).apply(stream, args)
     } as typeof stream.write

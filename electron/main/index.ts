@@ -11,6 +11,7 @@ import { EVENTS_CLIENT_TIMEOUT_MS } from './eventsGeneration'
 import { createCoreEventsConsumer } from './coreEventsConsumer'
 import { CORE_URL } from './coreUrl'
 import { appendLogLine } from '../../shared/logFile.js'
+import { windowNameFromUrl } from './logWindowName'
 import type { ChatPinMode, WindowBehaviorConfig, WindowBehaviorSnapshot } from '../../shared/windowBehavior.js'
 import {
   initWindowBehaviorConfig,
@@ -585,8 +586,7 @@ app.whenReady().then(() => {
     })
     win.webContents.on('console-message', (details) => {
       if (details.level !== 'warning' && details.level !== 'error') return
-      const url = win.webContents.getURL()
-      const source = url.includes('/overlay/') ? 'overlay' : url.includes('/settings/') ? 'settings' : 'chat'
+      const source = windowNameFromUrl(win.webContents.getURL())
       appendLogLine({ level: details.level === 'error' ? 'error' : 'warn', source, text: details.message })
     })
   })
