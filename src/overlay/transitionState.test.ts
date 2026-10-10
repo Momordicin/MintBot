@@ -2,10 +2,11 @@ import { describe, it, expect } from 'vitest'
 import {
   selectTransitionTrigger,
   shouldPlayFallAsleep,
-  parseTransitionResponse,
-  pickTransitionFiles,
+  resolveTransitionChain,
+  transitionEndInstant,
   isTransitionLocked,
   resolveOverlayDisplayFile,
+  type ResolvedTransitionStep,
 } from './transitionState.js'
 import type { OverlayManifest } from './portraitState.js'
 
@@ -20,6 +21,21 @@ const manifest: OverlayManifest = {
         shy: [],
       },
     },
+  },
+  transitions: {
+    'fall-asleep': [
+      { from: 'emotions.idle', pick: 'random', durationMs: 3000 },
+    ],
+    'wake-from-sleep': [
+      { from: 'emotions.confused', pick: 'random', durationMs: 3000 },
+      { from: 'emotions.happy', pick: 'random', durationMs: 3000 },
+    ],
+    'wake-from-bored': [
+      { from: 'emotions.shy', pick: 'random', durationMs: 3000 },
+    ],
+    'poke-neutral': [
+      { from: ['emotions.happy', 'emotions.confused'], pick: 'random', durationMs: 3000 },
+    ],
   },
 }
 
@@ -59,82 +75,156 @@ describe('transitionState: shouldPlayFallAsleep（TDD「入睡转场」表格：
   })
 })
 
-describe('transitionState: parseTransitionResponse（只做响应外形防御，不解释转场配置）', () => {
-  it('返回核心服务给出的 steps 数组', () => {
-    const steps = [{ files: ['a.gif'], durationMs: 1000 }]
-    expect(parseTransitionResponse({ steps })).toEqual(steps)
+describe('transitionState: resolveTransitionChain 防御性解析', () => {
+  it('manifest 未加载完成（undefined）时返回空数组', () => {
+    expect(resolveTransitionChain(undefined, 'wake-from-sleep')).toEqual([])
   })
 
-  it('响应缺 steps、steps 不是数组或响应为 null 时视为没有转场', () => {
-    expect(parseTransitionResponse({})).toEqual([])
-    expect(parseTransitionResponse({ steps: 'x' })).toEqual([])
-    expect(parseTransitionResponse(null)).toEqual([])
+  it('角色包未声明 transitions 时返回空数组（TDD「回落规则」不播转场）', () => {
+    const noTransitions: OverlayManifest = { portraits: manifest.portraits }
+    expect(resolveTransitionChain(noTransitions, 'wake-from-sleep')).toEqual([])
   })
 
-  it('丢弃畸形步骤：files 缺失/非数组/为空/含非字符串，durationMs 缺失/非数字/非有限/不大于 0，或步骤本身不是对象', () => {
-    const good = { files: ['a.gif'], durationMs: 1000 }
-    const malformed: unknown[] = [
-      null,
-      'x',
-      7,
-      {},
-      { durationMs: 1000 },
-      { files: 'a.gif', durationMs: 1000 },
-      { files: [], durationMs: 1000 },
-      { files: ['a.gif', 3], durationMs: 1000 },
-      { files: ['a.gif'] },
-      { files: ['a.gif'], durationMs: '1000' },
-      { files: ['a.gif'], durationMs: Number.NaN },
-      { files: ['a.gif'], durationMs: Number.POSITIVE_INFINITY },
-      { files: ['a.gif'], durationMs: 0 },
-      { files: ['a.gif'], durationMs: -5 },
-    ]
-    expect(parseTransitionResponse({ steps: [...malformed, good] })).toEqual([good])
-    expect(parseTransitionResponse({ steps: malformed })).toEqual([])
-  })
-})
-
-describe('transitionState: pickTransitionFiles 每步在候选并集里均匀随机挑一个', () => {
-  it('每步挑出一个落在该步候选内的文件，保留 durationMs 与步骤顺序', () => {
-    const steps = pickTransitionFiles([
-      { files: ['a.gif', 'b.gif'], durationMs: 1000 },
-      { files: ['c.gif'], durationMs: 2000 },
-    ])
+  it('正常两步链条：每步都解析出素材，且保留声明的 durationMs', () => {
+    const steps = resolveTransitionChain(manifest, 'wake-from-sleep')
     expect(steps).toHaveLength(2)
-    expect(['a.gif', 'b.gif']).toContain(steps[0].file)
-    expect(steps[0].durationMs).toBe(1000)
-    expect(steps[1]).toEqual({ file: 'c.gif', durationMs: 2000 })
+    expect(['gifs/confused1.gif', 'gifs/confused2.gif']).toContain(steps[0].file)
+    expect(steps[0].durationMs).toBe(3000)
+    expect(steps[1]).toEqual({ file: 'gifs/happy.gif', durationMs: 3000 })
   })
 
-  it('通过注入的 pick 选择：随机函数拿到的是整个候选数组（对候选一视同仁）', () => {
-    const seen: string[][] = []
-    const steps = pickTransitionFiles([{ files: ['a.gif', 'b.gif', 'c.gif'], durationMs: 1 }], items => {
-      seen.push(items as string[])
-      return items[2]
-    })
-    expect(seen).toEqual([['a.gif', 'b.gif', 'c.gif']])
-    expect(steps).toEqual([{ file: 'c.gif', durationMs: 1 }])
+  it('fall-asleep 与唤醒三条转场走同一套解析机制，不需要特殊处理（TDD「名字不编码来源」）', () => {
+    expect(resolveTransitionChain(manifest, 'fall-asleep')).toEqual([
+      { file: 'gifs/idle1.gif', durationMs: 3000 },
+    ])
   })
 
-  it('候选为空的步骤被丢弃，没有步骤时返回空数组（当作没有转场）', () => {
-    expect(pickTransitionFiles([{ files: [], durationMs: 1000 }])).toEqual([])
-    expect(pickTransitionFiles([])).toEqual([])
+  it('from 为数组时能在多个来源间解析出素材（TDD「from 可以是数组（先在多个来源间随机挑一个）」）', () => {
+    const steps = resolveTransitionChain(manifest, 'poke-neutral')
+    expect(steps).toHaveLength(1)
+    // 数组两个来源（happy/confused）都非空——无论随机挑中哪一个，结果都必须落在两者
+    // 候选素材的并集内，不会因为"多个来源"这件事本身导致解析失败
+    expect(['gifs/happy.gif', 'gifs/confused1.gif', 'gifs/confused2.gif']).toContain(steps[0].file)
+  })
+
+  it('durationMs 缺失/非正/非有限数时整步跳过', () => {
+    const badManifest: OverlayManifest = {
+      portraits: manifest.portraits,
+      transitions: {
+        'wake-from-bored': [
+          { from: 'emotions.happy', durationMs: 0 },
+          { from: 'emotions.happy', durationMs: -100 },
+          { from: 'emotions.happy', durationMs: Infinity },
+          { from: 'emotions.happy', durationMs: Number.NaN },
+          { from: 'emotions.happy' },
+          { from: 'emotions.happy', durationMs: '3000' },
+        ],
+      },
+    }
+    expect(resolveTransitionChain(badManifest, 'wake-from-bored')).toEqual([])
+  })
+
+  it('from 条目不是 "emotions.<key>" 形式时被过滤，整步因无可用来源而跳过', () => {
+    const badManifest: OverlayManifest = {
+      portraits: manifest.portraits,
+      transitions: {
+        'wake-from-bored': [
+          { from: 'happy', durationMs: 3000 },
+          { from: 'reservedStates.thinking', durationMs: 3000 },
+          { from: 'interactionStates.drag', durationMs: 3000 },
+        ],
+      },
+    }
+    expect(resolveTransitionChain(badManifest, 'wake-from-bored')).toEqual([])
+  })
+
+  it('from 数组里混有非法条目时，只保留合法的 emotions.<key> 部分', () => {
+    const mixedManifest: OverlayManifest = {
+      portraits: manifest.portraits,
+      transitions: {
+        'wake-from-bored': [
+          { from: ['reservedStates.thinking', 'emotions.happy'], durationMs: 3000 },
+        ],
+      },
+    }
+    expect(resolveTransitionChain(mixedManifest, 'wake-from-bored')).toEqual([
+      { file: 'gifs/happy.gif', durationMs: 3000 },
+    ])
+  })
+
+  it('某一步引用的键没有对应素材（空数组）时该步跳过，不影响其余步骤', () => {
+    const partialManifest: OverlayManifest = {
+      portraits: manifest.portraits,
+      transitions: {
+        'wake-from-sleep': [
+          { from: 'emotions.shy', durationMs: 1000 }, // shy 是空数组，解析不出
+          { from: 'emotions.happy', durationMs: 2000 },
+        ],
+      },
+    }
+    expect(resolveTransitionChain(partialManifest, 'wake-from-sleep')).toEqual([
+      { file: 'gifs/happy.gif', durationMs: 2000 },
+    ])
+  })
+
+  it('某一步引用的键在 emotions 里完全不存在时该步跳过', () => {
+    const missingKeyManifest: OverlayManifest = {
+      portraits: manifest.portraits,
+      transitions: {
+        'wake-from-sleep': [
+          { from: 'emotions.playful', durationMs: 1000 }, // playful 未声明
+          { from: 'emotions.happy', durationMs: 2000 },
+        ],
+      },
+    }
+    expect(resolveTransitionChain(missingKeyManifest, 'wake-from-sleep')).toEqual([
+      { file: 'gifs/happy.gif', durationMs: 2000 },
+    ])
+  })
+
+  it('全部步骤都解析不出素材时返回空数组（当作没有转场，绝不卡住立绘）', () => {
+    const allBadManifest: OverlayManifest = {
+      portraits: manifest.portraits,
+      transitions: {
+        'wake-from-sleep': [
+          { from: 'emotions.shy', durationMs: 1000 },
+          { from: 'emotions.playful', durationMs: 2000 },
+        ],
+      },
+    }
+    expect(resolveTransitionChain(allBadManifest, 'wake-from-sleep')).toEqual([])
   })
 })
 
-describe('transitionState: isTransitionLocked（锁与转场生命周期绑定：非入睡转场从触发到结束都锁）', () => {
-  it('没有转场在进行时未锁', () => {
-    expect(isTransitionLocked(null)).toBe(false)
+describe('transitionState: transitionEndInstant', () => {
+  it('结束时刻 = 开始时刻 + 全部步骤时长之和', () => {
+    const steps: ResolvedTransitionStep[] = [
+      { file: 'a.gif', durationMs: 3000 },
+      { file: 'b.gif', durationMs: 2000 },
+    ]
+    expect(transitionEndInstant(steps, 1_000_000)).toBe(1_000_000 + 5000)
   })
 
-  it('入睡转场不锁点击', () => {
-    expect(isTransitionLocked('fall-asleep')).toBe(false)
+  it('空步骤数组时结束时刻等于开始时刻', () => {
+    expect(transitionEndInstant([], 1_000_000)).toBe(1_000_000)
+  })
+})
+
+describe('transitionState: isTransitionLocked', () => {
+  it('lockedUntil 为 null 时视为未锁', () => {
+    expect(isTransitionLocked(null, Date.now())).toBe(false)
   })
 
-  it('其余触发器（含仍在拉取候选的阶段）都锁', () => {
-    expect(isTransitionLocked('wake-from-sleep')).toBe(true)
-    expect(isTransitionLocked('wake-from-bored')).toBe(true)
-    expect(isTransitionLocked('poke-neutral')).toBe(true)
+  it('now 早于 lockedUntil 时仍锁着', () => {
+    expect(isTransitionLocked(2000, 1000)).toBe(true)
+  })
+
+  it('now 达到 lockedUntil（边界）时已解锁——绝对结束时刻本身不算锁着', () => {
+    expect(isTransitionLocked(2000, 2000)).toBe(false)
+  })
+
+  it('now 晚于 lockedUntil 时已解锁', () => {
+    expect(isTransitionLocked(2000, 3000)).toBe(false)
   })
 })
 
@@ -166,6 +256,41 @@ describe('transitionState: resolveOverlayDisplayFile 展示优先级', () => {
   it('未在拖拽时（isDragging = false）即使角色包声明了 drag 素材也不使用', () => {
     const withDrag: OverlayManifest = { ...manifest, interactionStates: { drag: 'gifs/drag.gif' } }
     expect(resolveOverlayDisplayFile(withDrag, null, false, null, 'happy')).toBe('gifs/happy.gif')
+  })
+})
+
+describe('transitionState: from 数组先筛可用来源再随机', () => {
+  it('from 数组里混有无素材的来源时，该步必定仍能解析出素材，不会因为抽中空来源而整步消失', () => {
+    const mixedManifest: OverlayManifest = {
+      ...manifest,
+      transitions: {
+        'wake-from-bored': [
+          { from: ['emotions.shy', 'emotions.happy'], pick: 'random', durationMs: 3000 },
+        ],
+      },
+    }
+
+    // emotions.shy 声明了但素材为空数组。随机只应在"确实有素材"的来源之间进行，
+    // 否则这一步能不能播就成了掷硬币——链条只有一步时整条转场都会静默消失。
+    // 多跑若干次覆盖随机性：每次都必须落在 happy 上，且永远不会解析成空链
+    for (let i = 0; i < 50; i++) {
+      expect(resolveTransitionChain(mixedManifest, 'wake-from-bored')).toEqual([
+        { file: 'gifs/happy.gif', durationMs: 3000 },
+      ])
+    }
+  })
+
+  it('from 数组里全部来源都没有素材时，仍然判定该步解析不出', () => {
+    const emptyManifest: OverlayManifest = {
+      ...manifest,
+      transitions: {
+        'wake-from-bored': [
+          { from: ['emotions.shy', 'emotions.nonexistent'], pick: 'random', durationMs: 3000 },
+        ],
+      },
+    }
+
+    expect(resolveTransitionChain(emptyManifest, 'wake-from-bored')).toEqual([])
   })
 })
 

@@ -15,6 +15,7 @@ export interface OverlayManifest {
   }
   reservedStates?: Record<string, string[]>
   interactionStates?: Record<string, string>
+  transitions?: Record<string, unknown>
 }
 
 export function pickRandom<T>(items: T[]): T {

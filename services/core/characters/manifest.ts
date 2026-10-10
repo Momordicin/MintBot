@@ -2,7 +2,6 @@ import fs from 'fs'
 import path from 'path'
 import os from 'os'
 import * as dotenv from 'dotenv'
-import { logAssetProblems, validateManifestAssets } from './manifestAssets.js'
 
 dotenv.config({ quiet: true })
 
@@ -21,6 +20,12 @@ export interface PortraitForm {
 export interface EmotePoolEntry {
   file: string
   tags: string[]
+}
+
+export interface TransitionStep {
+  from: string[]        
+  pick: 'random'
+  durationMs: number
 }
 
 export interface CharacterManifest {
@@ -43,6 +48,7 @@ export interface CharacterManifest {
   interactionStates: Record<string, string>
   reservedStates: Record<string, string[]>
   emotePool: EmotePoolEntry[]
+  transitions: Record<string, TransitionStep[]>
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -137,6 +143,78 @@ function mergeEmotePool(value: unknown): EmotePoolEntry[] {
   return result
 }
 
+const TRANSITION_FROM_PREFIX = 'emotions.'
+
+function normalizeTransitionFrom(value: unknown): string[] | null {
+  if (typeof value === 'string') return [value]
+  if (isStringArray(value) && value.length > 0) return value
+  return null
+}
+
+function mergeTransitionStep(
+  entry: unknown,
+  emotionVocabulary: string[],
+  label: string
+): TransitionStep | null {
+  if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+    console.warn(`[CharacterManifest] ${label} 类型错误，应为对象，跳过该步`)
+    return null
+  }
+  const step = entry as Record<string, unknown>
+
+  const from = normalizeTransitionFrom(step.from)
+  if (from === null) {
+    console.warn(`[CharacterManifest] ${label}.from 缺失、类型错误或为空数组，应为非空字符串数组或单个字符串，跳过该步`)
+    return null
+  }
+
+  for (const source of from) {
+    const key = source.startsWith(TRANSITION_FROM_PREFIX) ? source.slice(TRANSITION_FROM_PREFIX.length) : null
+    if (key === null || !emotionVocabulary.includes(key)) {
+      console.warn(`[CharacterManifest] ${label}.from 引用了不存在的键 '${source}'，跳过该步`)
+      return null
+    }
+  }
+
+  let pick: TransitionStep['pick'] = 'random'
+  if (step.pick !== undefined && step.pick !== 'random') {
+    console.warn(`[CharacterManifest] ${label}.pick 类型错误，应为 'random'，使用默认值 'random'`)
+  }
+
+  if (typeof step.durationMs !== 'number' || !Number.isFinite(step.durationMs) || step.durationMs <= 0) {
+    console.warn(`[CharacterManifest] ${label}.durationMs 缺失或类型错误，应为正数，跳过该步`)
+    return null
+  }
+
+  return { from, pick, durationMs: step.durationMs }
+}
+
+function mergeTransitions(
+  value: unknown,
+  emotionVocabulary: string[],
+  label: string
+): Record<string, TransitionStep[]> {
+  if (value === undefined) return {}
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    console.warn(`[CharacterManifest] ${label} 类型错误，应为对象，使用默认值 {}`)
+    return {}
+  }
+  const result: Record<string, TransitionStep[]> = {}
+  for (const [chainName, chainValue] of Object.entries(value as Record<string, unknown>)) {
+    if (!Array.isArray(chainValue)) {
+      console.warn(`[CharacterManifest] ${label}.${chainName} 类型错误，应为数组，跳过该链`)
+      continue
+    }
+    const steps: TransitionStep[] = []
+    chainValue.forEach((entry, index) => {
+      const step = mergeTransitionStep(entry, emotionVocabulary, `${label}.${chainName}[${index}]`)
+      if (step) steps.push(step)
+    })
+    result[chainName] = steps
+  }
+  return result
+}
+
 function mergeManifest(raw: unknown): CharacterManifest {
   const source = (raw ?? {}) as Record<string, unknown>
   const portraits = (source.portraits ?? {}) as Record<string, unknown>
@@ -162,6 +240,7 @@ function mergeManifest(raw: unknown): CharacterManifest {
     interactionStates: mergeStringMap(source.interactionStates, 'interactionStates'),
     reservedStates: mergeStringArrayMap(source.reservedStates, 'reservedStates'),
     emotePool: mergeEmotePool(source.emotePool),
+    transitions: mergeTransitions(source.transitions, emotionVocabulary, 'transitions'),
   }
 }
 
@@ -184,7 +263,5 @@ export function loadCharacterManifest(characterId: string): CharacterManifest | 
     return null
   }
 
-  const manifest = mergeManifest(raw)
-  logAssetProblems(validateManifestAssets(characterId, raw, path.join(CHARACTERS_ROOT, characterId)))
-  return manifest
+  return mergeManifest(raw)
 }
