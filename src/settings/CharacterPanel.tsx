@@ -20,6 +20,7 @@ const DEFAULT_DISPLAY_CONFIG: PresetDisplayConfig = {
   accentRgb: [0, 122, 255],
   tintStrength: 0,
   currentPortrait: 'pixel',
+  petScale: { pixel: 1, illustration: 1 },
 }
 const DISPLAY_CONFIG_DEBOUNCE_MS = 400
 const PORTRAIT_FORM_LABELS: Record<PresetDisplayConfig['currentPortrait'], string> = {

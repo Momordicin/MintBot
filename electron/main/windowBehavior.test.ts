@@ -169,12 +169,12 @@ import {
 let testRevision = 0
 
 function updateCachedWindowBehaviorConfig(
-  config: { chatPinMode: 'always' | 'smart' | 'off'; petAvoidanceEnabled: boolean; appRules: Array<{ exeName: string; effect: 'allow' | 'soft' | 'hard' }> },
+  config: { chatPinMode: 'always' | 'smart' | 'off'; petAvoidanceEnabled: boolean; petClickThrough?: boolean; petCollapsed?: boolean; appRules: Array<{ exeName: string; effect: 'allow' | 'soft' | 'hard' }> },
   mainWindow: Electron.BrowserWindow | null,
   overlayWindow: Electron.BrowserWindow | null
 ): void {
   testRevision += 1
-  applyWindowBehaviorSnapshot({ generation: 'default-test-generation', revision: testRevision, config }, mainWindow, overlayWindow)
+  applyWindowBehaviorSnapshot({ generation: 'default-test-generation', revision: testRevision, config: { petClickThrough: false, petCollapsed: false, ...config } }, mainWindow, overlayWindow)
 }
 
 // Same durations as windowBehavior.ts. PERSIST_DEBOUNCE_MS is exported from windowPositions.ts
@@ -1997,8 +1997,8 @@ describe('非法 drop 的回滚接线', () => {
 })
 
 describe('window behavior snapshot ordering', () => {
-  const CONFIG_A = { chatPinMode: 'always' as const, petAvoidanceEnabled: true, appRules: [] }
-  const CONFIG_B = { chatPinMode: 'off' as const, petAvoidanceEnabled: false, appRules: [{ exeName: 'x.exe', effect: 'hard' as const }] }
+  const CONFIG_A = { chatPinMode: 'always' as const, petAvoidanceEnabled: true, petClickThrough: false, petCollapsed: false, appRules: [] }
+  const CONFIG_B = { chatPinMode: 'off' as const, petAvoidanceEnabled: false, petClickThrough: false, petCollapsed: false, appRules: [{ exeName: 'x.exe', effect: 'hard' as const }] }
 
   it('applies a newer revision and rejects an older or equal one from the same generation', () => {
     expect(applyWindowBehaviorSnapshot({ generation: 'gen-order', revision: 5, config: CONFIG_A }, null, null)).toBe(true)

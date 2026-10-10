@@ -449,14 +449,14 @@ describe('config/index — updateBackgroundModelProviderConfig', () => {
 
 // ─── 桌面呈现配置（chatPinMode / petAvoidanceEnabled / appRules）────────────
 describe('config/index — getWindowBehaviorConfig', () => {
-  it('config.json 不存在时，回退到默认值 { chatPinMode: off, petAvoidanceEnabled: true, appRules: [] }', async () => {
+  it('config.json 不存在时，回退到默认值 { chatPinMode: off, petAvoidanceEnabled: true, petClickThrough: false, petCollapsed: false, appRules: [] }', async () => {
     readFileSyncMock.mockImplementation(() => { throw new Error('ENOENT') })
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { startConfigWatcher, getWindowBehaviorConfig } = await import('./index.js')
 
     startConfigWatcher()
 
-    expect(getWindowBehaviorConfig()).toEqual({ chatPinMode: 'off', petAvoidanceEnabled: true, appRules: [] })
+    expect(getWindowBehaviorConfig()).toEqual({ chatPinMode: 'off', petAvoidanceEnabled: true, petClickThrough: false, petCollapsed: false, appRules: [] })
   })
 
   it('完整合法的 windowBehavior 按原样使用', async () => {
@@ -464,6 +464,8 @@ describe('config/index — getWindowBehaviorConfig', () => {
       windowBehavior: {
         chatPinMode: 'smart',
         petAvoidanceEnabled: false,
+        petClickThrough: true,
+        petCollapsed: true,
         appRules: [{ exeName: 'chrome.exe', effect: 'allow' }, { exeName: 'game.exe', effect: 'hard' }],
       },
     }))
@@ -474,6 +476,8 @@ describe('config/index — getWindowBehaviorConfig', () => {
     expect(getWindowBehaviorConfig()).toEqual({
       chatPinMode: 'smart',
       petAvoidanceEnabled: false,
+      petClickThrough: true,
+      petCollapsed: true,
       appRules: [{ exeName: 'chrome.exe', effect: 'allow' }, { exeName: 'game.exe', effect: 'hard' }],
     })
   })
@@ -487,7 +491,7 @@ describe('config/index — getWindowBehaviorConfig', () => {
 
     startConfigWatcher()
 
-    expect(getWindowBehaviorConfig()).toEqual({ chatPinMode: 'off', petAvoidanceEnabled: false, appRules: [] })
+    expect(getWindowBehaviorConfig()).toEqual({ chatPinMode: 'off', petAvoidanceEnabled: false, petClickThrough: false, petCollapsed: false, appRules: [] })
     expect(warnSpy).toHaveBeenCalled()
   })
 
@@ -500,6 +504,18 @@ describe('config/index — getWindowBehaviorConfig', () => {
     startConfigWatcher()
 
     expect(getWindowBehaviorConfig().petAvoidanceEnabled).toBe(true)
+  })
+
+  it('petClickThrough / petCollapsed 缺失或不是布尔值时回退到默认的 false', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      windowBehavior: { chatPinMode: 'off', petAvoidanceEnabled: true, petClickThrough: 'yes', petCollapsed: 1, appRules: [] },
+    }))
+    const { startConfigWatcher, getWindowBehaviorConfig } = await import('./index.js')
+
+    startConfigWatcher()
+
+    expect(getWindowBehaviorConfig().petClickThrough).toBe(false)
+    expect(getWindowBehaviorConfig().petCollapsed).toBe(false)
   })
 
   it('appRules 里不合法的条目被单独丢弃并 warn，不连累其它合法条目', async () => {
@@ -551,7 +567,7 @@ describe('config/index — getWindowBehaviorConfig', () => {
 
     startConfigWatcher()
 
-    expect(getWindowBehaviorConfig()).toEqual({ chatPinMode: 'off', petAvoidanceEnabled: true, appRules: [] })
+    expect(getWindowBehaviorConfig()).toEqual({ chatPinMode: 'off', petAvoidanceEnabled: true, petClickThrough: false, petCollapsed: false, appRules: [] })
   })
 })
 
@@ -665,6 +681,8 @@ describe('config/index — updateWindowBehaviorConfig', () => {
     expect(result).toEqual({
       chatPinMode: 'smart',
       petAvoidanceEnabled: false,
+      petClickThrough: false,
+      petCollapsed: false,
       appRules: [{ exeName: 'chrome.exe', effect: 'allow' }],
     })
 
@@ -677,6 +695,8 @@ describe('config/index — updateWindowBehaviorConfig', () => {
     expect(writtenJson.windowBehavior).toEqual({
       chatPinMode: 'smart',
       petAvoidanceEnabled: false,
+      petClickThrough: false,
+      petCollapsed: false,
       appRules: [{ exeName: 'chrome.exe', effect: 'allow' }],
     })
     expect(writtenJson.memory).toEqual({ recentTrackMaxMessages: 200 })
@@ -734,6 +754,8 @@ describe('config/index — updateWindowBehaviorConfig', () => {
     expect(result).toEqual({
       chatPinMode: 'smart',
       petAvoidanceEnabled: false,
+      petClickThrough: false,
+      petCollapsed: false,
       appRules: [{ exeName: 'game.exe', effect: 'hard' }],
     })
 
@@ -743,6 +765,8 @@ describe('config/index — updateWindowBehaviorConfig', () => {
     expect(writtenJson.windowBehavior).toEqual({
       chatPinMode: 'smart',
       petAvoidanceEnabled: false,
+      petClickThrough: false,
+      petCollapsed: false,
       appRules: [{ exeName: 'game.exe', effect: 'hard' }],
     })
   })
@@ -796,6 +820,20 @@ describe('config/index — windowBehavior revision', () => {
     mod.updateWindowBehaviorConfig({ chatPinMode: 'smart' })
 
     expect(mod.getWindowBehaviorRevision()).toBe(1)
+  })
+
+  it('petClickThrough 或 petCollapsed 变化时 revision +1，写入相同值时不变', async () => {
+    readFileSyncMock.mockReturnValue(windowBehaviorFile())
+    const { mod } = await startWatching()
+
+    mod.updateWindowBehaviorConfig({ petClickThrough: false, petCollapsed: false })
+    expect(mod.getWindowBehaviorRevision()).toBe(1)
+
+    mod.updateWindowBehaviorConfig({ petClickThrough: true })
+    expect(mod.getWindowBehaviorRevision()).toBe(2)
+
+    mod.updateWindowBehaviorConfig({ petCollapsed: true })
+    expect(mod.getWindowBehaviorRevision()).toBe(3)
   })
 
   it('appRules 的顺序变化算内容变化', async () => {

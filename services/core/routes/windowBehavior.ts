@@ -32,6 +32,12 @@ function validateWindowBehaviorPartial(partial: Partial<WindowBehaviorConfig>): 
   if (partial.petAvoidanceEnabled !== undefined && typeof partial.petAvoidanceEnabled !== 'boolean') {
     return 'petAvoidanceEnabled must be a boolean'
   }
+  if (partial.petClickThrough !== undefined && typeof partial.petClickThrough !== 'boolean') {
+    return 'petClickThrough must be a boolean'
+  }
+  if (partial.petCollapsed !== undefined && typeof partial.petCollapsed !== 'boolean') {
+    return 'petCollapsed must be a boolean'
+  }
   if (partial.appRules !== undefined) {
     if (!Array.isArray(partial.appRules)) {
       return 'appRules must be an array'

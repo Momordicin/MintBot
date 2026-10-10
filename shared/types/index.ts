@@ -75,6 +75,8 @@ export interface Summary {
   createdAt: number
 }
 
+import type { PetScale } from '../portraitForm.js'
+
 // 每角色显示设置（聊天窗口背景叠色），见 docs/MintBot_TDD.md §3.2.2「Presets.displayConfig」
 export interface PresetDisplayConfig {
   chatBgRgb: [number, number, number]   // 0-255 整数，对应 CSS 变量 --chat-bg-rgb
@@ -85,6 +87,7 @@ export interface PresetDisplayConfig {
   accentRgb: [number, number, number]   // 0-255 整数，用户选择的唯一 accent 色，对应 theme.ts ThemeInput.accentRgb
   tintStrength: number                  // 0-1，0 = 纯参考发布值，对应 theme.ts ThemeInput.tintStrength
   currentPortrait: 'pixel' | 'illustration'   // 桌宠当前形态，决定素材与窗口尺寸；桌宠读取，聊天窗口不使用
+  petScale: { pixel: PetScale; illustration: PetScale }   // 桌宠按形态分别记忆的缩放档位
 }
 
 // Preset（可复用的配置模板，用户管理）

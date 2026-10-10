@@ -1,7 +1,7 @@
 // services/core/routes/presets.ts — 预设（角色人设档案）的增删改、切换与壁纸上传路由
-// 用法：core/index.ts 里 fastify.register(presetRoutes)，并取其导出的 WALLPAPER_DIR 作 /wallpapers/ 静态目录；GET /presets、POST /presets、POST /switch-preset、POST /presets/:presetId/wallpaper、PATCH /presets/:presetId；广播 preset-portrait-changed
+// 用法：core/index.ts 里 fastify.register(presetRoutes)，并取其导出的 WALLPAPER_DIR 作 /wallpapers/ 静态目录；GET /presets、POST /presets、POST /switch-preset、POST /presets/:presetId/wallpaper、PATCH /presets/:presetId；广播 preset-pet-display-changed
 // 形状：切换、壁纸、PATCH 的响应为 buildStatePayload() 的状态载荷
-// 对应文件：src/settings/CharacterPanel.tsx（调用方）/ src/overlay/OverlayApp.tsx（消费 preset-portrait-changed）/ services/core/session/queries.ts / services/core/session/index.ts / services/core/session/displayConfig.ts / services/core/state.ts / services/core/routes/presets.test.ts / services/core/routes/wallpaperGuard.test.ts
+// 对应文件：src/settings/CharacterPanel.tsx（调用方）/ src/overlay/OverlayApp.tsx（消费 preset-pet-display-changed）/ services/core/session/queries.ts / services/core/session/index.ts / services/core/session/displayConfig.ts / services/core/state.ts / services/core/routes/presets.test.ts / services/core/routes/wallpaperGuard.test.ts
 import type { FastifyInstance } from 'fastify'
 import path from 'path'
 import os from 'os'
@@ -19,6 +19,7 @@ import {
   isValidAccentRgb,
   isValidTintStrength,
   isValidCurrentPortrait,
+  isValidPetScale,
   clampTintStrength,
   DEFAULT_DISPLAY_CONFIG,
 } from '../session/displayConfig.js'
@@ -197,8 +198,15 @@ export async function presetRoutes(fastify: FastifyInstance) {
         return reply.status(400).send({ error: 'currentPortrait must be one of pixel, illustration' })
       }
 
+      if (displayConfig.petScale !== undefined && !isValidPetScale(displayConfig.petScale)) {
+        return reply.status(400).send({ error: 'petScale must be an object with pixel and illustration each one of 0.5, 0.75, 1, 1.25, 1.5' })
+      }
+
       const portraitChanged = displayConfig.currentPortrait !== undefined
         && displayConfig.currentPortrait !== preset.displayConfig.currentPortrait
+      const petScaleChanged = displayConfig.petScale !== undefined
+        && (displayConfig.petScale.pixel !== preset.displayConfig.petScale.pixel
+          || displayConfig.petScale.illustration !== preset.displayConfig.petScale.illustration)
 
       updatePresetDisplayConfig(presetId, {
         chatBgRgb: displayConfig.chatBgRgb ?? preset.displayConfig.chatBgRgb,
@@ -209,8 +217,11 @@ export async function presetRoutes(fastify: FastifyInstance) {
           ? clampTintStrength(displayConfig.tintStrength)
           : preset.displayConfig.tintStrength,
         currentPortrait: displayConfig.currentPortrait ?? preset.displayConfig.currentPortrait,
+        petScale: displayConfig.petScale
+          ? { pixel: displayConfig.petScale.pixel, illustration: displayConfig.petScale.illustration }
+          : preset.displayConfig.petScale,
       })
-      if (portraitChanged) broadcastEvent('preset-portrait-changed', { presetId })
+      if (portraitChanged || petScaleChanged) broadcastEvent('preset-pet-display-changed', { presetId })
     }
 
     if (systemPrompt !== undefined) {

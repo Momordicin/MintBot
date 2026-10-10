@@ -55,6 +55,8 @@ function applyAlwaysOnTop(win: BrowserWindow, windowKey: WindowKey, onTop: boole
 const DEFAULT_CONFIG: WindowBehaviorConfig = {
   chatPinMode: 'off',
   petAvoidanceEnabled: true,
+  petClickThrough: false,
+  petCollapsed: false,
   appRules: [],
 }
 

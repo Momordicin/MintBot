@@ -22,7 +22,7 @@ function fakePreset(overrides: Partial<Preset> = {}): Preset {
     characterId: 'c1',
     modelType: 'ollama',
     modelName: 'llama3',
-    displayConfig: { chatBgRgb: [15, 15, 20], chatBgOpacity: 0.65, themeMode: 'auto', accentRgb: [15, 15, 20], tintStrength: 0, currentPortrait: 'pixel' },
+    displayConfig: { chatBgRgb: [15, 15, 20], chatBgOpacity: 0.65, themeMode: 'auto', accentRgb: [15, 15, 20], tintStrength: 0, currentPortrait: 'pixel', petScale: { pixel: 1, illustration: 1 } },
     systemPrompt: 'sys',
     addressForms: [],
     createdAt: 0,

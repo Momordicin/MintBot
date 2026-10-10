@@ -738,7 +738,7 @@ describe('PATCH /presets/:presetId', () => {
     expect(BroadcastModule.broadcastEvent).not.toHaveBeenCalled()
   })
 
-  it('currentPortrait 真正变化时广播 preset-portrait-changed，payload 带上 presetId；未变化或未提供时不广播', async () => {
+  it('currentPortrait 真正变化时广播 preset-pet-display-changed，payload 带上 presetId；未变化或未提供时不广播', async () => {
     loadSession('p1')
     const fastify = await buildTestApp()
     vi.mocked(BroadcastModule.broadcastEvent).mockClear()
@@ -750,10 +750,59 @@ describe('PATCH /presets/:presetId', () => {
 
     await fastify.inject({ method: 'PATCH', url: '/presets/p1', payload: { displayConfig: { currentPortrait: 'illustration' } } })
     expect(BroadcastModule.broadcastEvent).toHaveBeenCalledTimes(1)
-    expect(BroadcastModule.broadcastEvent).toHaveBeenCalledWith('preset-portrait-changed', { presetId: 'p1' })
+    expect(BroadcastModule.broadcastEvent).toHaveBeenCalledWith('preset-pet-display-changed', { presetId: 'p1' })
 
     await fastify.inject({ method: 'PATCH', url: '/presets/p1', payload: { displayConfig: { currentPortrait: 'illustration', chatBgOpacity: 0.3 } } })
     expect(BroadcastModule.broadcastEvent).toHaveBeenCalledTimes(1)
+  })
+
+  it('仅 petScale 变化时广播一次，其余字段不变；petScale 值未变时不广播', async () => {
+    loadSession('p1')
+    const fastify = await buildTestApp()
+    vi.mocked(BroadcastModule.broadcastEvent).mockClear()
+
+    const response = await fastify.inject({ method: 'PATCH', url: '/presets/p1', payload: { displayConfig: { petScale: { pixel: 1.5, illustration: 1 } } } })
+    expect(response.statusCode).toBe(200)
+    expect(BroadcastModule.broadcastEvent).toHaveBeenCalledTimes(1)
+    expect(BroadcastModule.broadcastEvent).toHaveBeenCalledWith('preset-pet-display-changed', { presetId: 'p1' })
+    expect(getPresetById('p1')!.displayConfig).toEqual({ ...DEFAULT_DISPLAY_CONFIG, petScale: { pixel: 1.5, illustration: 1 } })
+
+    await fastify.inject({ method: 'PATCH', url: '/presets/p1', payload: { displayConfig: { petScale: { pixel: 1.5, illustration: 1 } } } })
+    await fastify.inject({ method: 'PATCH', url: '/presets/p1', payload: { displayConfig: { chatBgOpacity: 0.2 } } })
+    expect(BroadcastModule.broadcastEvent).toHaveBeenCalledTimes(1)
+    expect(getPresetById('p1')!.displayConfig.petScale).toEqual({ pixel: 1.5, illustration: 1 })
+  })
+
+  it('currentPortrait 与 petScale 同时变化时只广播一次', async () => {
+    loadSession('p1')
+    const fastify = await buildTestApp()
+    vi.mocked(BroadcastModule.broadcastEvent).mockClear()
+
+    await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { displayConfig: { currentPortrait: 'illustration', petScale: { pixel: 1, illustration: 0.75 } } },
+    })
+
+    expect(BroadcastModule.broadcastEvent).toHaveBeenCalledTimes(1)
+    expect(BroadcastModule.broadcastEvent).toHaveBeenCalledWith('preset-pet-display-changed', { presetId: 'p1' })
+  })
+
+  it.each([
+    ['缺少 key', { pixel: 1 }],
+    ['值不在档位内', { pixel: 1, illustration: 2 }],
+    ['不是对象', 1.5],
+  ])('petScale %s 时返回 400，不写入也不广播', async (_label, petScale) => {
+    loadSession('p1')
+    const fastify = await buildTestApp()
+    vi.mocked(BroadcastModule.broadcastEvent).mockClear()
+
+    const response = await fastify.inject({ method: 'PATCH', url: '/presets/p1', payload: { displayConfig: { chatBgOpacity: 0.2, petScale } } })
+
+    expect(response.statusCode).toBe(400)
+    expect(JSON.parse(response.payload).error).toContain('petScale')
+    expect(getPresetById('p1')!.displayConfig).toEqual(DEFAULT_DISPLAY_CONFIG)
+    expect(BroadcastModule.broadcastEvent).not.toHaveBeenCalled()
   })
 
   it('仅 systemPrompt 的合法更新成功，DB 反映新值', async () => {

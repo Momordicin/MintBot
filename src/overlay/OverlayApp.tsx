@@ -1,5 +1,5 @@
 // src/overlay/OverlayApp.tsx — 桌宠悬浮窗：按情绪与无聊/睡眠状态显示角色立绘，播放转场序列，处理点击唤出聊天窗口、拖动手柄与贴边悬停展开
-// 用法：overlay/main.tsx 渲染 <OverlayApp />；GET /state、/characters/:id/manifest.json、/overlay/transition-chain，POST /internal/overlay-interaction，GET /events（emotion、preset-switched、preset-portrait-changed）；调用 electronAPI 的桌宠相关方法
+// 用法：overlay/main.tsx 渲染 <OverlayApp />；GET /state、/characters/:id/manifest.json、/overlay/transition-chain，POST /internal/overlay-interaction，GET /events（emotion、preset-switched、preset-pet-display-changed）；调用 electronAPI 的桌宠相关方法
 // 对应文件：src/overlay/portraitState.ts / src/overlay/transitionState.ts / src/overlay/edgeHoverState.ts / src/overlay/overlay.css / src/eventsWatchdog.ts / shared/portraitForm.ts / shared/transitionChain.ts / services/core/index.ts / services/core/routes/internal.ts / services/core/routes/transitionChain.ts / electron/main/index.ts（overlay:* IPC）
 import React, { useEffect, useRef, useState } from 'react'
 import { createWatchdogEventSource } from '../eventsWatchdog.js'
@@ -523,7 +523,7 @@ export function OverlayApp() {
       listeners: {
         emotion: handleEmotionEvent,
         'preset-switched': handlePresetSwitchedEvent,
-        'preset-portrait-changed': () => loadCharacterAndPortrait(false),
+        'preset-pet-display-changed': () => loadCharacterAndPortrait(false),
       },
       onOpen: () => {
         loadCharacterAndPortrait(false)

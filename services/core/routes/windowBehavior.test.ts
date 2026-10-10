@@ -42,6 +42,8 @@ async function buildTestApp() {
 const SAMPLE_CONFIG = {
   chatPinMode: 'smart',
   petAvoidanceEnabled: true,
+  petClickThrough: false,
+  petCollapsed: false,
   appRules: [{ exeName: 'game.exe', effect: 'hard' }],
 }
 
@@ -113,6 +115,36 @@ describe('PATCH /config/window-behavior — 校验', () => {
 
     expect(response.statusCode).toBe(400)
     expect(updateWindowBehaviorConfigMock).not.toHaveBeenCalled()
+  })
+
+  it.each(['petClickThrough', 'petCollapsed'])('%s 不是布尔值时返回 400', async field => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/config/window-behavior',
+      payload: { [field]: 'yes' },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(JSON.parse(response.payload).error).toContain(field)
+    expect(updateWindowBehaviorConfigMock).not.toHaveBeenCalled()
+  })
+
+  it.each(['petClickThrough', 'petCollapsed'])('%s: true 是合法值，原样传给配置层', async field => {
+    const enabled = { ...SAMPLE_CONFIG, [field]: true }
+    updateWindowBehaviorConfigMock.mockReturnValue(enabled)
+    getWindowBehaviorConfigMock.mockReturnValue(enabled)
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/config/window-behavior',
+      payload: { [field]: true },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(updateWindowBehaviorConfigMock).toHaveBeenCalledWith({ [field]: true })
   })
 
   it('appRules 不是数组时返回 400', async () => {

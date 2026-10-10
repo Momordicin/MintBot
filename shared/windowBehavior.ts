@@ -15,6 +15,8 @@ export interface AppRule {
 export interface WindowBehaviorConfig {
   chatPinMode: ChatPinMode
   petAvoidanceEnabled: boolean
+  petClickThrough: boolean
+  petCollapsed: boolean
   appRules: AppRule[]
 }
 

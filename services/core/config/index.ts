@@ -62,6 +62,8 @@ const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
 const DEFAULT_WINDOW_BEHAVIOR_CONFIG: WindowBehaviorConfig = {
   chatPinMode: 'off',
   petAvoidanceEnabled: true,
+  petClickThrough: false,
+  petCollapsed: false,
   appRules: [],
 }
 
@@ -187,11 +189,19 @@ function mergeWindowBehaviorConfig(raw: unknown): WindowBehaviorConfig {
   const petAvoidanceEnabled =
     typeof petAvoidanceValue === 'boolean' ? petAvoidanceValue : DEFAULT_WINDOW_BEHAVIOR_CONFIG.petAvoidanceEnabled
 
-  return { chatPinMode, petAvoidanceEnabled, appRules: mergeAppRules(windowBehavior) }
+  const petClickThroughValue = section?.petClickThrough
+  const petClickThrough =
+    typeof petClickThroughValue === 'boolean' ? petClickThroughValue : DEFAULT_WINDOW_BEHAVIOR_CONFIG.petClickThrough
+
+  const petCollapsedValue = section?.petCollapsed
+  const petCollapsed =
+    typeof petCollapsedValue === 'boolean' ? petCollapsedValue : DEFAULT_WINDOW_BEHAVIOR_CONFIG.petCollapsed
+
+  return { chatPinMode, petAvoidanceEnabled, petClickThrough, petCollapsed, appRules: mergeAppRules(windowBehavior) }
 }
 
 function serializeWindowBehaviorConfig(config: WindowBehaviorConfig): string {
-  return JSON.stringify([config.chatPinMode, config.petAvoidanceEnabled, config.appRules.map(rule => [rule.exeName, rule.effect])])
+  return JSON.stringify([config.chatPinMode, config.petAvoidanceEnabled, config.petClickThrough, config.petCollapsed, config.appRules.map(rule => [rule.exeName, rule.effect])])
 }
 
 function applyWindowBehaviorConfig(next: WindowBehaviorConfig): boolean {
