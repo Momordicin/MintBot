@@ -11,12 +11,14 @@ import {
 import {
   type ResolvedTransitionStep,
   type TransitionTrigger,
+  TRANSITION_FETCH_TIMEOUT_MS,
+  TRANSITION_IMAGE_TIMEOUT_MS,
   isTransitionLocked,
+  parseTransitionResponse,
+  pickTransitionFiles,
   resolveOverlayDisplayFile,
-  resolveTransitionChain,
   selectTransitionTrigger,
   shouldPlayFallAsleep,
-  transitionEndInstant,
 } from './transitionState.js'
 import {
   type EdgeHoverState,
@@ -33,6 +35,36 @@ import {
 import { CORE_URL, resolveAssetUrl } from '../coreUrl.js'
 
 const CLICK_DISPLACEMENT_THRESHOLD_PX = 5
+
+async function fetchTransitionBody(characterId: string, trigger: TransitionTrigger): Promise<unknown> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), TRANSITION_FETCH_TIMEOUT_MS)
+  try {
+    const response = await fetch(
+      `${CORE_URL}/transitions/${encodeURIComponent(characterId)}/${encodeURIComponent(trigger)}?form=pixel`,
+      { signal: controller.signal },
+    )
+    return response.ok ? await response.json() : null
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+function preloadImage(url: string): Promise<boolean> {
+  return new Promise(resolve => {
+    const image = new Image()
+    const timeout = setTimeout(() => settle(false), TRANSITION_IMAGE_TIMEOUT_MS)
+    function settle(loaded: boolean) {
+      clearTimeout(timeout)
+      image.onload = null
+      image.onerror = null
+      resolve(loaded)
+    }
+    image.onload = () => settle(true)
+    image.onerror = () => settle(false)
+    image.src = url
+  })
+}
 
 interface EmotionEventPayload {
   self?: { label: string; intensity: number } | null
@@ -53,6 +85,7 @@ export function OverlayApp() {
   const [file, setFile] = useState<string | null>(null)
   const [isLocked, setIsLocked] = useState(false)
   const manifestRef = useRef<OverlayManifest | undefined>(undefined)
+  const characterIdRef = useRef<string | null>(null)
   const yRef = useRef<YState>(null)
   const xRef = useRef<string | undefined>(undefined)
   const ownSessionIdRef = useRef<string | null>(null)
@@ -60,8 +93,8 @@ export function OverlayApp() {
   const loadGenRef = useRef(0)
   const transitionFileRef = useRef<string | null>(null)
   const transitionInProgressRef = useRef<TransitionTrigger | null>(null)
-  const transitionEndAtRef = useRef<number | null>(null)
   const transitionTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const transitionGenRef = useRef(0)
   const mouseDownPosRef = useRef<{ x: number; y: number } | null>(null)
   const isDraggingRef = useRef(false)
   const dragStartYRef = useRef<YState>(null)
@@ -131,6 +164,7 @@ export function OverlayApp() {
         const id = state.presetSnapshot?.characterId
         if (!id) return
         setCharacterId(id)
+        characterIdRef.current = id
         ownSessionIdRef.current = state.sessionId
 
         yRef.current = deriveY({
@@ -162,31 +196,50 @@ export function OverlayApp() {
       })
   }
 
-  function playTransitionStep(steps: ResolvedTransitionStep[], index: number) {
+  function playTransitionStep(
+    steps: ResolvedTransitionStep[],
+    index: number,
+    gen: number,
+    trigger: TransitionTrigger,
+    id: string,
+  ) {
+    if (gen !== transitionGenRef.current) return
     if (index >= steps.length) {
       endTransition()
       return
     }
     const step = steps[index]
-    transitionFileRef.current = step.file
-    setFile(step.file)
-    transitionTimerRef.current = setTimeout(() => playTransitionStep(steps, index + 1), step.durationMs)
+
+    preloadImage(resolveAssetUrl(id, step.file))
+      .then(loaded => {
+        if (gen !== transitionGenRef.current) return
+        if (!loaded) {
+          playTransitionStep(steps, index + 1, gen, trigger, id)
+          return
+        }
+        transitionFileRef.current = step.file
+        setFile(step.file)
+        transitionTimerRef.current = setTimeout(() => playTransitionStep(steps, index + 1, gen, trigger, id), step.durationMs)
+      })
+      .catch(() => {
+        if (gen === transitionGenRef.current) endTransition()
+      })
   }
 
   function endTransition() {
+    transitionGenRef.current++
     if (transitionTimerRef.current !== undefined) {
       clearTimeout(transitionTimerRef.current)
       transitionTimerRef.current = undefined
     }
     transitionFileRef.current = null
     transitionInProgressRef.current = null
-    transitionEndAtRef.current = null
     setIsLocked(false)
     loadCharacterAndPortrait(false)
   }
 
   function startTransition(trigger: TransitionTrigger) {
-    if (trigger === 'fall-asleep' && isTransitionLocked(transitionEndAtRef.current, Date.now())) {
+    if (trigger === 'fall-asleep' && isTransitionLocked(transitionInProgressRef.current)) {
       return
     }
 
@@ -194,20 +247,33 @@ export function OverlayApp() {
       clearTimeout(transitionTimerRef.current)
       transitionTimerRef.current = undefined
     }
+    const gen = ++transitionGenRef.current
     transitionInProgressRef.current = null
     transitionFileRef.current = null
-    transitionEndAtRef.current = null
     setIsLocked(false)
 
-    const steps = resolveTransitionChain(manifestRef.current, trigger)
-    if (steps.length === 0) {
+    const id = characterIdRef.current
+    if (id === null) {
       setFile(resolveOverlayDisplayFile(manifestRef.current, null, isDraggingRef.current, yRef.current, xRef.current))
       return
     }
     transitionInProgressRef.current = trigger
-    transitionEndAtRef.current = trigger === 'fall-asleep' ? null : transitionEndInstant(steps, Date.now())
-    setIsLocked(isTransitionLocked(transitionEndAtRef.current, Date.now()))
-    playTransitionStep(steps, 0)
+    setIsLocked(isTransitionLocked(trigger))
+    fetchTransitionBody(id, trigger)
+      .then(parseTransitionResponse)
+      .catch(() => [])
+      .then(candidates => {
+        if (gen !== transitionGenRef.current) return
+        const steps = pickTransitionFiles(candidates)
+        if (steps.length === 0) {
+          endTransition()
+          return
+        }
+        playTransitionStep(steps, 0, gen, trigger, id)
+      })
+      .catch(() => {
+        if (gen === transitionGenRef.current) endTransition()
+      })
   }
 
   function scheduleHandleHide() {
@@ -247,9 +313,10 @@ export function OverlayApp() {
       if (displaced) return 
     }
 
-    if (isTransitionLocked(transitionEndAtRef.current, Date.now())) return 
+    if (isTransitionLocked(transitionInProgressRef.current)) return
 
     if (transitionInProgressRef.current === 'fall-asleep') {
+      transitionGenRef.current++
       if (transitionTimerRef.current !== undefined) {
         clearTimeout(transitionTimerRef.current)
         transitionTimerRef.current = undefined
@@ -291,6 +358,7 @@ export function OverlayApp() {
 
   function handleDragStart() {
     if (transitionInProgressRef.current === 'fall-asleep') {
+      transitionGenRef.current++
       if (transitionTimerRef.current !== undefined) {
         clearTimeout(transitionTimerRef.current)
         transitionTimerRef.current = undefined
@@ -328,6 +396,7 @@ export function OverlayApp() {
     loadCharacterAndPortrait(false)
     return () => {
       loadGenRef.current++
+      transitionGenRef.current++
       if (timerRef.current !== undefined) {
         clearTimeout(timerRef.current)
       }
@@ -418,13 +487,13 @@ export function OverlayApp() {
         clearTimeout(timerRef.current)
         timerRef.current = undefined
       }
+      transitionGenRef.current++
       if (transitionTimerRef.current !== undefined) {
         clearTimeout(transitionTimerRef.current)
         transitionTimerRef.current = undefined
       }
       transitionFileRef.current = null
       transitionInProgressRef.current = null
-      transitionEndAtRef.current = null
       setIsLocked(false)
       isDraggingRef.current = false
       dragStartYRef.current = null
@@ -434,6 +503,7 @@ export function OverlayApp() {
       }
       setIsHandleVisible(false)
       manifestRef.current = undefined
+      characterIdRef.current = null
       yRef.current = null
       xRef.current = undefined
       ownSessionIdRef.current = null

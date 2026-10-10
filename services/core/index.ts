@@ -17,6 +17,7 @@ import { forgetRoutes } from './routes/forget.js'
 import { memoryRoutes } from './routes/memory.js'
 import { configRoutes } from './routes/config.js'
 import { windowBehaviorRoutes, broadcastWindowBehaviorSnapshot } from './routes/windowBehavior.js'
+import { transitionRoutes } from './routes/transitions.js'
 import { createModelProvider, ModelProvider } from './providers/ModelProvider.js'
 import { BGEProvider, getAiBaseUrl, type EmbeddingProvider } from './providers/EmbeddingProvider.js'
 import { Bert4NerProvider, type NERProvider } from './providers/NERProvider.js'
@@ -145,6 +146,7 @@ async function start() {
   await fastify.register(memoryRoutes)
   await fastify.register(configRoutes)
   await fastify.register(windowBehaviorRoutes)
+  await fastify.register(transitionRoutes)
   await fastify.listen({ port: PORT, host: LOOPBACK_HOST })
   console.log(`[Core] Running on port ${PORT}`)
 
