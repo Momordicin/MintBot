@@ -114,6 +114,14 @@ describe('redactSecrets', () => {
     expect(redactSecrets('url?api_key=abc123&x=1')).toBe('url?api_key=***&x=1')
   })
 
+  it('引号没闭合的值（被截断的错误体）：掩到行尾；闭合的只掩引号内并保留闭合引号', () => {
+    expect(redactSecrets('{"api_key": "abc123 trunc…')).toBe('{"api_key": "***')
+    expect(redactSecrets("authorization: 'abc 123")).toBe("authorization: '***")
+    expect(redactSecrets('{"api_key": "abc", "n": 1}')).toBe('{"api_key": "***", "n": 1}')
+    expect(redactSecrets("apiKey='abc' rest")).toBe("apiKey='***' rest")
+    expect(redactSecrets('first line apiKey: "abc\nsecond line')).toBe('first line apiKey: "***\nsecond line')
+  })
+
   it('非密钥内容不动', () => {
     expect(redactSecrets('authorization is required for this route')).toBe('authorization is required for this route')
     expect(redactSecrets('api key missing')).toBe('api key missing')

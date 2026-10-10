@@ -20,7 +20,7 @@ export const MAX_LOG_BYTES = 10 * 1024 * 1024
 
 const SK_KEY_PATTERN = /\bsk-[A-Za-z0-9_-]{16,}/g
 const BEARER_PATTERN = /\b(Bearer[ \t]+)[A-Za-z0-9._~+\/=-]{8,}/gi
-const KEY_VALUE_PATTERN = /(["']?(?:api[_-]?key|authorization)["']?[ \t]*[:=][ \t]*)("[^"\r\n]*"|'[^'\r\n]*'|[^\s,;"'}&]+)/gi
+const KEY_VALUE_PATTERN = /(["']?(?:api[_-]?key|authorization)["']?[ \t]*[:=][ \t]*)("[^"\r\n]*"?|'[^'\r\n]*'?|[^\s,;"'}&]+)/gi
 
 export function redactSecrets(text: string): string {
   return text
@@ -28,7 +28,8 @@ export function redactSecrets(text: string): string {
     .replace(BEARER_PATTERN, '$1***')
     .replace(KEY_VALUE_PATTERN, (_match, prefix: string, value: string) => {
       const quote = value[0] === '"' || value[0] === "'" ? value[0] : ''
-      return `${prefix}${quote}***${quote}`
+      const closing = quote !== '' && value.length > 1 && value.endsWith(quote) ? quote : ''
+      return `${prefix}${quote}***${closing}`
     })
 }
 
