@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { createWatchdogEventSource } from '../eventsWatchdog.js'
 import type { AppState } from '../../shared/types/index.js'
+import type { TransitionChainStep } from '../../shared/transitionChain.js'
 import './overlay.css'
 import {
   type OverlayManifest,
@@ -10,13 +11,12 @@ import {
 } from './portraitState.js'
 import {
   type ResolvedTransitionStep,
+  parseTransitionChain,
   type TransitionTrigger,
-  isTransitionLocked,
   resolveOverlayDisplayFile,
-  resolveTransitionChain,
+  resolveTransitionSteps,
   selectTransitionTrigger,
   shouldPlayFallAsleep,
-  transitionEndInstant,
 } from './transitionState.js'
 import {
   type EdgeHoverState,
@@ -33,6 +33,7 @@ import {
 import { CORE_URL, resolveAssetUrl } from '../coreUrl.js'
 
 const CLICK_DISPLACEMENT_THRESHOLD_PX = 5
+const TRANSITION_CHAIN_TIMEOUT_MS = 500
 
 interface EmotionEventPayload {
   self?: { label: string; intensity: number } | null
@@ -52,6 +53,7 @@ export function OverlayApp() {
   const [characterId, setCharacterId] = useState<string | null>(null)
   const [file, setFile] = useState<string | null>(null)
   const [isLocked, setIsLocked] = useState(false)
+  const [transitionStepKey, setTransitionStepKey] = useState('')
   const manifestRef = useRef<OverlayManifest | undefined>(undefined)
   const yRef = useRef<YState>(null)
   const xRef = useRef<string | undefined>(undefined)
@@ -60,7 +62,11 @@ export function OverlayApp() {
   const loadGenRef = useRef(0)
   const transitionFileRef = useRef<string | null>(null)
   const transitionInProgressRef = useRef<TransitionTrigger | null>(null)
-  const transitionEndAtRef = useRef<number | null>(null)
+  const transitionLockedRef = useRef(false)
+  const transitionIdRef = useRef(0)
+  const transitionStepsRef = useRef<ResolvedTransitionStep[]>([])
+  const transitionStepIndexRef = useRef(0)
+  const characterIdRef = useRef<string | null>(null)
   const transitionTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const mouseDownPosRef = useRef<{ x: number; y: number } | null>(null)
   const isDraggingRef = useRef(false)
@@ -131,6 +137,7 @@ export function OverlayApp() {
         const id = state.presetSnapshot?.characterId
         if (!id) return
         setCharacterId(id)
+        characterIdRef.current = id
         ownSessionIdRef.current = state.sessionId
 
         yRef.current = deriveY({
@@ -168,7 +175,10 @@ export function OverlayApp() {
       return
     }
     const step = steps[index]
+    transitionStepsRef.current = steps
+    transitionStepIndexRef.current = index
     transitionFileRef.current = step.file
+    setTransitionStepKey(`${transitionIdRef.current}-${index}`)
     setFile(step.file)
     transitionTimerRef.current = setTimeout(() => playTransitionStep(steps, index + 1), step.durationMs)
   }
@@ -178,15 +188,35 @@ export function OverlayApp() {
       clearTimeout(transitionTimerRef.current)
       transitionTimerRef.current = undefined
     }
+    transitionIdRef.current++
     transitionFileRef.current = null
     transitionInProgressRef.current = null
-    transitionEndAtRef.current = null
+    transitionLockedRef.current = false
     setIsLocked(false)
     loadCharacterAndPortrait(false)
   }
 
+  function fetchTransitionChain(trigger: TransitionTrigger): Promise<TransitionChainStep[]> {
+    const id = characterIdRef.current
+    if (id === null) return Promise.resolve([])
+    const query = `characterId=${encodeURIComponent(id)}&trigger=${encodeURIComponent(trigger)}&form=pixel`
+    return fetch(`${CORE_URL}/overlay/transition-chain?${query}`, { signal: AbortSignal.timeout(TRANSITION_CHAIN_TIMEOUT_MS) })
+      .then(r => r.json())
+      .then(parseTransitionChain)
+      .catch(() => [])
+  }
+
+  function handleTransitionImageError() {
+    if (transitionFileRef.current === null) return
+    if (transitionTimerRef.current !== undefined) {
+      clearTimeout(transitionTimerRef.current)
+      transitionTimerRef.current = undefined
+    }
+    playTransitionStep(transitionStepsRef.current, transitionStepIndexRef.current + 1)
+  }
+
   function startTransition(trigger: TransitionTrigger) {
-    if (trigger === 'fall-asleep' && isTransitionLocked(transitionEndAtRef.current, Date.now())) {
+    if (trigger === 'fall-asleep' && transitionLockedRef.current) {
       return
     }
 
@@ -194,20 +224,16 @@ export function OverlayApp() {
       clearTimeout(transitionTimerRef.current)
       transitionTimerRef.current = undefined
     }
-    transitionInProgressRef.current = null
+    const transitionId = ++transitionIdRef.current
     transitionFileRef.current = null
-    transitionEndAtRef.current = null
-    setIsLocked(false)
-
-    const steps = resolveTransitionChain(manifestRef.current, trigger)
-    if (steps.length === 0) {
-      setFile(resolveOverlayDisplayFile(manifestRef.current, null, isDraggingRef.current, yRef.current, xRef.current))
-      return
-    }
     transitionInProgressRef.current = trigger
-    transitionEndAtRef.current = trigger === 'fall-asleep' ? null : transitionEndInstant(steps, Date.now())
-    setIsLocked(isTransitionLocked(transitionEndAtRef.current, Date.now()))
-    playTransitionStep(steps, 0)
+    transitionLockedRef.current = trigger !== 'fall-asleep'
+    setIsLocked(transitionLockedRef.current)
+
+    fetchTransitionChain(trigger).then(chain => {
+      if (transitionId !== transitionIdRef.current) return
+      playTransitionStep(resolveTransitionSteps(chain), 0)
+    })
   }
 
   function scheduleHandleHide() {
@@ -247,13 +273,14 @@ export function OverlayApp() {
       if (displaced) return 
     }
 
-    if (isTransitionLocked(transitionEndAtRef.current, Date.now())) return 
+    if (transitionLockedRef.current) return
 
     if (transitionInProgressRef.current === 'fall-asleep') {
       if (transitionTimerRef.current !== undefined) {
         clearTimeout(transitionTimerRef.current)
         transitionTimerRef.current = undefined
       }
+      transitionIdRef.current++
       transitionInProgressRef.current = null
       transitionFileRef.current = null
 
@@ -295,6 +322,7 @@ export function OverlayApp() {
         clearTimeout(transitionTimerRef.current)
         transitionTimerRef.current = undefined
       }
+      transitionIdRef.current++
       transitionInProgressRef.current = null
       transitionFileRef.current = null
       yRef.current = null
@@ -328,6 +356,7 @@ export function OverlayApp() {
     loadCharacterAndPortrait(false)
     return () => {
       loadGenRef.current++
+      transitionIdRef.current++
       if (timerRef.current !== undefined) {
         clearTimeout(timerRef.current)
       }
@@ -422,9 +451,10 @@ export function OverlayApp() {
         clearTimeout(transitionTimerRef.current)
         transitionTimerRef.current = undefined
       }
+      transitionIdRef.current++
       transitionFileRef.current = null
       transitionInProgressRef.current = null
-      transitionEndAtRef.current = null
+      transitionLockedRef.current = false
       setIsLocked(false)
       isDraggingRef.current = false
       dragStartYRef.current = null
@@ -434,6 +464,7 @@ export function OverlayApp() {
       }
       setIsHandleVisible(false)
       manifestRef.current = undefined
+      characterIdRef.current = null
       yRef.current = null
       xRef.current = undefined
       ownSessionIdRef.current = null
@@ -457,17 +488,20 @@ export function OverlayApp() {
     }
   }, [])
 
+  const imgKey = transitionFileRef.current !== null ? `transition-${transitionStepKey}` : 'portrait'
   const src = file && characterId ? resolveAssetUrl(characterId, file) : null
 
   return (
     <div className={`overlay-root${isLocked ? ' overlay-root--locked' : ''}`}>
       {src && (
         <img
+          key={imgKey}
           className="overlay-portrait"
           src={src}
           alt=""
           onMouseDown={handleMouseDown}
           onClick={handlePortraitClick}
+          onError={handleTransitionImageError}
           onMouseEnter={handlePortraitMouseEnter}
           onMouseLeave={handlePortraitMouseLeave}
         />

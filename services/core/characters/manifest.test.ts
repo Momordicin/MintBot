@@ -65,23 +65,6 @@ describe('loadCharacterManifest — 真实角色包 fixture（assets/characters/
         expect(typeof entry.file).toBe('string')
         expect(Array.isArray(entry.tags)).toBe(true)
       }
-
-      // v3 新增：transitions 的每一步都必须解析成归一化后的结构（from 恒为数组），
-      // 且引用的情绪键都在该角色包自己的 emotionVocabulary 内——本地真实角色包上
-      // 校验一遍解析结果，与上面各字段同款的结构性断言
-      expect(typeof manifest.transitions).toBe('object')
-      for (const steps of Object.values(manifest.transitions)) {
-        expect(Array.isArray(steps)).toBe(true)
-        for (const step of steps) {
-          expect(Array.isArray(step.from)).toBe(true)
-          expect(step.from.length).toBeGreaterThan(0)
-          for (const source of step.from) {
-            expect(manifest.emotionVocabulary).toContain(source.replace('emotions.', ''))
-          }
-          expect(step.pick).toBe('random')
-          expect(step.durationMs).toBeGreaterThan(0)
-        }
-      }
     }
   )
 
@@ -165,23 +148,9 @@ describe('loadCharacterManifest — 真实角色包 fixture（assets/characters/
       emotePool: [
         { file: 'emotes/example.jpg', tags: ['excited'] },
       ],
-      transitions: {
-        'fall-asleep': [
-          { from: ['emotions.idle'], pick: 'random', durationMs: 3000 },
-        ],
-        'wake-from-sleep': [
-          { from: ['emotions.sad'], pick: 'random', durationMs: 3000 },
-          { from: ['emotions.happy'], pick: 'random', durationMs: 3000 },
-        ],
-        'wake-from-bored': [
-          { from: ['emotions.curious'], pick: 'random', durationMs: 3000 },
-        ],
-        'poke-neutral': [
-          { from: ['emotions.shy', 'emotions.happy'], pick: 'random', durationMs: 3000 },
-        ],
-      },
     })
-    expect(warnSpy).not.toHaveBeenCalled()
+    const manifestWarnings = warnSpy.mock.calls.filter(call => String(call[0]).startsWith('[CharacterManifest]'))
+    expect(manifestWarnings).toEqual([])
     warnSpy.mockRestore()
   })
 
@@ -208,11 +177,15 @@ describe('loadCharacterManifest — 手工构造的异常 manifest（临时目�
     vi.resetModules()
   })
 
-  async function loadWithFixture(characterId: string, manifestContent: string) {
+  async function loadWithFixture(characterId: string, manifestContent: string, assetFiles: string[] = []) {
     tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mintbot-manifest-'))
     const dir = path.join(tempRoot, 'characters', characterId)
     fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(path.join(dir, 'manifest.json'), manifestContent)
+    for (const file of assetFiles) {
+      fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true })
+      fs.writeFileSync(path.join(dir, file), '')
+    }
 
     process.env.ASSET_PATH = tempRoot
     vi.resetModules()
@@ -278,105 +251,42 @@ describe('loadCharacterManifest — 手工构造的异常 manifest（临时目�
     warnSpy.mockRestore()
   })
 
-  it('v2 manifest（未声明 transitions）仍能加载，transitions 回退为 {}，不告警', async () => {
+  it('加载时检查全部立绘、互动、保留状态与转场引用的文件组，问题记进日志，返回值不受影响', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    const manifest = await loadWithFixture('v2-no-transitions', JSON.stringify({
-      schemaVersion: 2,
+    const manifest = await loadWithFixture('asset-check', JSON.stringify({
       avatar: 'avatar.jpg',
-    }))
+      portraits: {
+        pixel: { fallback: 'idle', emotions: { idle: ['gifs/idle.gif'], happy: ['gifs/missing-happy.gif'] } },
+        illustration: { fallback: 'idle', emotions: { idle: ['art/missing-idle.png'] } },
+      },
+      interactionStates: { drag: 'gifs/drag.txt' },
+      reservedStates: { sleeping: ['../outside.gif'] },
+      transitions: {
+        'poke-neutral': [{ from: 'emotions.nowhere', durationMs: 1000 }],
+      },
+    }), ['gifs/idle.gif', 'gifs/drag.txt'])
 
-    expect(manifest?.transitions).toEqual({})
-    expect(warnSpy).not.toHaveBeenCalled()
+    const messages = warnSpy.mock.calls.map(call => String(call[0]))
+    expect(messages.some(m => m.includes('portraits.pixel.emotions.happy') && m.includes('gifs/missing-happy.gif'))).toBe(true)
+    expect(messages.some(m => m.includes('portraits.illustration.emotions.idle') && m.includes('art/missing-idle.png'))).toBe(true)
+    expect(messages.some(m => m.includes('interactionStates.drag') && m.includes('gifs/drag.txt'))).toBe(true)
+    expect(messages.some(m => m.includes('reservedStates.sleeping') && m.includes('../outside.gif'))).toBe(true)
+    expect(messages.some(m => m.includes('触发点 poke-neutral') && m.includes('emotions.nowhere'))).toBe(true)
+    expect(messages.some(m => m.includes('gifs/idle.gif'))).toBe(false)
+    expect(manifest?.portraits.pixel.emotions).toEqual({ idle: ['gifs/idle.gif'], happy: ['gifs/missing-happy.gif'] })
     warnSpy.mockRestore()
   })
 
-  it('transitions 声明且全部合法时被解析，单字符串 from 被归一化为数组', async () => {
+  it('素材文件齐全时加载不记任何告警', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    const manifest = await loadWithFixture('transitions-valid', JSON.stringify({
+    await loadWithFixture('asset-check-clean', JSON.stringify({
       avatar: 'avatar.jpg',
-      emotionVocabulary: ['idle', 'happy'],
-      transitions: {
-        'wake-from-sleep': [
-          { from: 'emotions.idle', durationMs: 3000 },
-        ],
-      },
-    }))
+      portraits: { pixel: { fallback: 'idle', emotions: { idle: ['gifs/idle.gif'] } } },
+      transitions: { 'poke-neutral': [{ from: 'emotions.idle', durationMs: 1000, pick: 'random' }] },
+    }), ['gifs/idle.gif'])
 
-    expect(manifest?.transitions).toEqual({
-      'wake-from-sleep': [
-        { from: ['emotions.idle'], pick: 'random', durationMs: 3000 },
-      ],
-    })
-    expect(warnSpy).not.toHaveBeenCalled()
-    warnSpy.mockRestore()
-  })
-
-  it('步骤缺少 durationMs 时跳过该步，链内其它步骤不受影响，并告警', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-    const manifest = await loadWithFixture('transitions-bad-duration', JSON.stringify({
-      avatar: 'avatar.jpg',
-      emotionVocabulary: ['idle', 'happy'],
-      transitions: {
-        'wake-from-bored': [
-          { from: 'emotions.idle' },
-          { from: 'emotions.happy', durationMs: 3000 },
-        ],
-      },
-    }))
-
-    expect(manifest?.transitions).toEqual({
-      'wake-from-bored': [
-        { from: ['emotions.happy'], pick: 'random', durationMs: 3000 },
-      ],
-    })
-    expect(warnSpy).toHaveBeenCalled()
-    warnSpy.mockRestore()
-  })
-
-  it('步骤引用了不存在于 emotionVocabulary 的键时跳过该步，链内其它步骤仍解析，并告警', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-    const manifest = await loadWithFixture('transitions-bad-ref', JSON.stringify({
-      avatar: 'avatar.jpg',
-      emotionVocabulary: ['idle', 'happy'],
-      transitions: {
-        'poke-neutral': [
-          { from: 'emotions.missing', durationMs: 3000 },
-          { from: 'emotions.happy', durationMs: 3000 },
-        ],
-      },
-    }))
-
-    expect(manifest?.transitions).toEqual({
-      'poke-neutral': [
-        { from: ['emotions.happy'], pick: 'random', durationMs: 3000 },
-      ],
-    })
-    expect(warnSpy).toHaveBeenCalled()
-    warnSpy.mockRestore()
-  })
-
-  it('多来源 from 数组按完整来源列表解析', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-    const manifest = await loadWithFixture('transitions-multi-source', JSON.stringify({
-      avatar: 'avatar.jpg',
-      emotionVocabulary: ['idle', 'happy', 'shy'],
-      transitions: {
-        'poke-neutral': [
-          { from: ['emotions.shy', 'emotions.happy'], durationMs: 3000 },
-        ],
-      },
-    }))
-
-    expect(manifest?.transitions).toEqual({
-      'poke-neutral': [
-        { from: ['emotions.shy', 'emotions.happy'], pick: 'random', durationMs: 3000 },
-      ],
-    })
     expect(warnSpy).not.toHaveBeenCalled()
     warnSpy.mockRestore()
   })
