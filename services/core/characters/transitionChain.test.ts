@@ -118,7 +118,7 @@ describe('resolveTransitionChain', () => {
     expect(chain[0].files).toEqual(['a.gif'])
   })
 
-  it('单个坏键不影响同一步里的其他键，并记日志写明角色、触发点、步序号、键', () => {
+  it('单个坏键不影响同一步里的其他键，并记日志写明角色、形态、触发点、步序号、键', () => {
     touch('a.gif')
 
     const chain = resolve({
@@ -129,9 +129,9 @@ describe('resolveTransitionChain', () => {
     })
 
     expect(chain).toEqual([{ files: ['a.gif'], durationMs: 1000, pick: 'random' }])
-    const messages = warnings().filter(m => m.includes('角色 hero') && m.includes('触发点 poke-neutral') && m.includes('第 1 步'))
+    const messages = warnings().filter(m => m.includes('角色 hero') && m.includes('形态 pixel') && m.includes('触发点 poke-neutral') && m.includes('第 1 步'))
     expect(messages.some(m => m.includes('"happy"'))).toBe(true)
-    expect(messages.some(m => m.includes('emotions.nowhere'))).toBe(true)
+    expect(messages.some(m => m.includes('emotions.nowhere') && m.includes('形态 pixel') && m.includes('在该形态的 emotions 里不存在'))).toBe(true)
     expect(messages.some(m => m.includes('7'))).toBe(true)
     expect(messages.some(m => m.includes('emotions.broken') && m.includes('missing.gif'))).toBe(true)
   })

@@ -88,7 +88,7 @@ function resolveStep(
     }
     const group = ownValue(emotions, entry.slice(FROM_PREFIX.length))
     if (group === undefined) {
-      console.warn(`[Transition] ${context} 键 ${entry} 在立绘文件组里不存在，已跳过`)
+      console.warn(`[Transition] ${context} 键 ${entry} 在该形态的 emotions 里不存在，已跳过`)
       continue
     }
     for (const file of checkFileGroup(characterDir, group, `${context} 键 ${entry}`)) files.add(file)
@@ -126,14 +126,14 @@ export function resolveTransitionChain(params: {
   const chain = ownValue(ownValue(raw, 'transitions'), trigger)
   if (chain === undefined) return []
   if (!Array.isArray(chain)) {
-    console.warn(`[Transition] 角色 ${characterId} 触发点 ${trigger} 类型错误，应为数组，按空链处理`)
+    console.warn(`[Transition] 角色 ${characterId} 形态 ${form} 触发点 ${trigger} 类型错误，应为数组，按空链处理`)
     return []
   }
 
   const emotions = ownValue(ownValue(ownValue(raw, 'portraits'), form), 'emotions')
   const steps: TransitionChainStep[] = []
   chain.forEach((step, index) => {
-    const resolved = resolveStep(characterDir, step, emotions, `角色 ${characterId} 触发点 ${trigger} 第 ${index + 1} 步`)
+    const resolved = resolveStep(characterDir, step, emotions, `角色 ${characterId} 形态 ${form} 触发点 ${trigger} 第 ${index + 1} 步`)
     if (resolved) steps.push(resolved)
   })
   return steps
