@@ -10,6 +10,7 @@ import {
   createLineFormatter,
   errorCode,
   installLogFile,
+  redactSecrets,
   rotateIfLarge,
   uninstallLogFile,
 } from './logFile.js'
@@ -89,6 +90,37 @@ describe('errorCode', () => {
   })
 })
 
+describe('redactSecrets', () => {
+  it('sk- 密钥：保留前缀，其余打码；长度不足 16 的不动', () => {
+    expect(redactSecrets('key sk-ant-api03-AbCdEf_1234567890xyz end')).toBe('key sk-*** end')
+    expect(redactSecrets('openai sk-abcdefghijklmnop1234')).toBe('openai sk-***')
+    expect(redactSecrets('pip install sk-learn and sk-123456789012345')).toBe('pip install sk-learn and sk-123456789012345')
+    expect(redactSecrets('sk-1234567890123456')).toBe('sk-***')
+  })
+
+  it('Bearer 令牌', () => {
+    expect(redactSecrets('Authorization: Bearer abc.DEF-123_456~x')).toBe('Authorization: *** ***')
+    expect(redactSecrets('header bearer abcdefgh12345')).toBe('header bearer ***')
+    expect(redactSecrets('the Bearer of bad news')).toBe('the Bearer of bad news')
+  })
+
+  it('api_key / apiKey / api-key / x-api-key / authorization 的值（三种写法），保留键名', () => {
+    expect(redactSecrets('api_key=abc123')).toBe('api_key=***')
+    expect(redactSecrets('apiKey: abc123, next')).toBe('apiKey: ***, next')
+    expect(redactSecrets('x-api-key: abc123')).toBe('x-api-key: ***')
+    expect(redactSecrets('API-KEY = abc123')).toBe('API-KEY = ***')
+    expect(redactSecrets('{"apiKey": "abc 123", "n": 1}')).toBe('{"apiKey": "***", "n": 1}')
+    expect(redactSecrets("authorization: 'abc 123'")).toBe("authorization: '***'")
+    expect(redactSecrets('url?api_key=abc123&x=1')).toBe('url?api_key=***&x=1')
+  })
+
+  it('非密钥内容不动', () => {
+    expect(redactSecrets('authorization is required for this route')).toBe('authorization is required for this route')
+    expect(redactSecrets('api key missing')).toBe('api key missing')
+    expect(redactSecrets('plain text 你好')).toBe('plain text 你好')
+  })
+})
+
 describe('installLogFile', () => {
   let dir: string
   let stdoutSpy: ReturnType<typeof vi.fn>
@@ -125,6 +157,30 @@ describe('installLogFile', () => {
     const lines = read().trimEnd().split('\n')
     expect(lines[0]).toMatch(/^\S+ info \[core\] hello$/)
     expect(lines[1]).toMatch(/^\S+ error \[core\] boom$/)
+  })
+
+  it('文件里的密钥被打码，终端收到的仍是原文；appendLogLine 与 monitor 同样打码', () => {
+    installLogFile({ dir, fileName: 'core.log', source: 'core' })
+    process.stdout.write('using sk-abcdefghijklmnop1234 and Bearer tok12345678 api_key=hunter2\n')
+    appendLogLine({ level: 'error', source: 'overlay', text: 'x-api-key: renderersecret' })
+    process.emit('uncaughtExceptionMonitor', new Error('boom apiKey=leaky'), 'uncaughtException')
+    expect(stdoutSpy).toHaveBeenCalledWith('using sk-abcdefghijklmnop1234 and Bearer tok12345678 api_key=hunter2\n')
+    const text = read()
+    expect(text).toContain('using sk-*** and Bearer *** api_key=***')
+    expect(text).toContain('x-api-key: ***')
+    expect(text).toMatch(/uncaughtException: Error: boom apiKey=\*\*\*\n\S+ error \[core\]\s+at /)
+    expect(text).not.toMatch(/abcdefghijklmnop1234|tok12345678|hunter2|renderersecret|leaky/)
+  })
+
+  it('目录无法创建：不抛、不改 process.stdout.write、只报一次', () => {
+    const blocker = path.join(dir, 'blocker')
+    fs.writeFileSync(blocker, 'file')
+    const wrapped = process.stdout.write
+    expect(installLogFile({ dir: path.join(blocker, 'logs'), fileName: 'core.log', source: 'core' })).toBeNull()
+    expect(process.stdout.write).toBe(wrapped)
+    expect(process.stderr.write).toBe(stderrSpy)
+    expect(stderrSpy.mock.calls.filter(c => String(c[0]).startsWith('[LogFile]'))).toHaveLength(1)
+    expect(() => appendLogLine({ level: 'error', source: 'x', text: 'y' })).not.toThrow()
   })
 
   it('Buffer 块按 utf8 解码', () => {

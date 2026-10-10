@@ -5,6 +5,9 @@
 //   installLogFile；Electron 主进程用 appendLogLine 记录渲染进程的 warning / error
 // 形状：每行 `ISO时间 级别 [来源] 文本`；stdout 记为 info，stderr 记为 error；写文件用 appendFileSync，
 //   因为 Windows 下每种停止方式都是强杀，异步写入会丢尾部；写文件失败只通过原始 stderr 报一次，之后不再写文件
+// 脱敏：只处理写进文件的内容（终端输出不变），对 sk- 密钥、Bearer 令牌、api_key / authorization 的值打码；
+//   按每次写入的块逐块处理，被拆在两个块里的密钥无法识别（已知限制）
+// 创建日志目录或滚动失败：经原始 stderr 报一次并返回 null，不安装任何包装，程序照常运行（只有 VITEST 守卫会抛）
 // 对应方：测试环境（VITEST）下只允许写入 os.tmpdir() 内，镜像 db / 资源 / 壁纸的测试隔离守卫
 import fs from 'fs'
 import os from 'os'
@@ -14,6 +17,20 @@ import { StringDecoder } from 'string_decoder'
 export type LogLevel = 'info' | 'warn' | 'error'
 
 export const MAX_LOG_BYTES = 10 * 1024 * 1024
+
+const SK_KEY_PATTERN = /\bsk-[A-Za-z0-9_-]{16,}/g
+const BEARER_PATTERN = /\b(Bearer[ \t]+)[A-Za-z0-9._~+\/=-]{8,}/gi
+const KEY_VALUE_PATTERN = /(["']?(?:api[_-]?key|authorization)["']?[ \t]*[:=][ \t]*)("[^"\r\n]*"|'[^'\r\n]*'|[^\s,;"'}&]+)/gi
+
+export function redactSecrets(text: string): string {
+  return text
+    .replace(SK_KEY_PATTERN, 'sk-***')
+    .replace(BEARER_PATTERN, '$1***')
+    .replace(KEY_VALUE_PATTERN, (_match, prefix: string, value: string) => {
+      const quote = value[0] === '"' || value[0] === "'" ? value[0] : ''
+      return `${prefix}${quote}***${quote}`
+    })
+}
 
 export interface InstallLogFileOptions {
   dir: string
@@ -74,7 +91,7 @@ export function errorCode(err: unknown): string {
   return 'unknown'
 }
 
-export function installLogFile(options: InstallLogFileOptions): string {
+export function installLogFile(options: InstallLogFileOptions): string | null {
   if (installed) return installed.filePath
 
   const dir = path.resolve(options.dir)
@@ -82,18 +99,31 @@ export function installLogFile(options: InstallLogFileOptions): string {
     throw new Error(`[LogFile] refusing log dir "${dir}" under vitest; it must resolve inside ${os.tmpdir()}`)
   }
 
-  fs.mkdirSync(dir, { recursive: true })
-  const filePath = path.join(dir, options.fileName)
-  rotateIfLarge(filePath, options.maxBytes)
-
   const originalStdoutWrite = process.stdout.write
   const originalStderrWrite = process.stderr.write
+
+  const filePath = path.join(dir, options.fileName)
+  try {
+    fs.mkdirSync(dir, { recursive: true })
+    rotateIfLarge(filePath, options.maxBytes)
+  } catch (err) {
+    try {
+      originalStderrWrite.call(process.stderr, `[LogFile] 无法准备日志目录，本次运行不写日志文件 ${dir} (${errorCode(err)})\n`)
+    } catch {}
+    return null
+  }
 
   let failed = false
   const append = (text: string): void => {
     if (failed || text === '') return
     try {
-      fs.appendFileSync(filePath, text)
+      let safe: string
+      try {
+        safe = redactSecrets(text)
+      } catch {
+        safe = '[LogFile] 脱敏失败，该行已丢弃\n'
+      }
+      fs.appendFileSync(filePath, safe)
     } catch (err) {
       failed = true
       try {
