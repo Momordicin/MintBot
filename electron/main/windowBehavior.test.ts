@@ -2070,7 +2070,7 @@ describe('applyOverlaySize', () => {
     expect(win.setBounds).toHaveBeenCalledWith({ x: -92, y: 532, width: 300, height: 500 })
   })
 
-  it('reads and writes preferred bounds under the applied display, not the display the window mostly overlaps', () => {
+  it('reads preferred bounds under the applied display, not the display the window mostly overlaps, and never writes them', () => {
     const display1 = makeDisplay(1, 0)
     const display2 = makeDisplay(2, 1920)
     testState.displays = [display1, display2]
@@ -2086,6 +2086,39 @@ describe('applyOverlaySize', () => {
     fresh.applyOverlaySize(win as unknown as Electron.BrowserWindow, { width: 300, height: 500 })
 
     expect(getPreferredBoundsMock).toHaveBeenCalledWith('overlay', 2)
-    expect(setPreferredBoundsMock).toHaveBeenCalledWith('overlay', 2, { x: 1920, y: 532, width: 300, height: 500 })
+    expect(win.setBounds).toHaveBeenCalledWith({ x: 1920, y: 532, width: 300, height: 500 })
+    expect(setPreferredBoundsMock).not.toHaveBeenCalled()
+  })
+
+  it('returns to the exact original bounds after resizing larger and back, even when the larger size is clamped', () => {
+    const display1 = makeDisplay(1, 0)
+    testState.displays = [display1]
+    testState.homeDisplayId = 1
+    testState.matchDisplay = () => display1
+    testState.blockerMap = new Map()
+
+    const pixel = { x: 1920 - 132 - 100, y: 900, width: 132, height: 132 }
+    const win = makeResizableOverlayWindow(pixel)
+    fresh.evaluateDesktopPresence(null, win as unknown as Electron.BrowserWindow)
+    let current: { x: number; y: number; width: number; height: number } = { ...pixel }
+    win.getBounds = () => current
+    win.setBounds.mockImplementation((next: typeof current) => {
+      current = { ...next }
+    })
+    vi.clearAllMocks()
+    getPreferredBoundsMock.mockReturnValue({ ...pixel })
+
+    try {
+      for (const illustration of [{ width: 400, height: 500 }, { width: 401, height: 500 }]) {
+        fresh.applyOverlaySize(win as unknown as Electron.BrowserWindow, illustration)
+        expect(current.x).toBe(1920 - illustration.width)
+        fresh.applyOverlaySize(win as unknown as Electron.BrowserWindow, { width: 132, height: 132 })
+        expect(win.setBounds).toHaveBeenLastCalledWith(pixel)
+        expect(current).toEqual(pixel)
+      }
+      expect(setPreferredBoundsMock).not.toHaveBeenCalled()
+    } finally {
+      getPreferredBoundsMock.mockReturnValue(null)
+    }
   })
 })

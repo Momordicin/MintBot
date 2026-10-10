@@ -480,7 +480,6 @@ export function applyOverlaySize(
   overlayWindow.setBounds(
     appliedPetPresence === 'EDGE' ? { x: settled.x, y: anchored.y, width: size.width, height: size.height } : anchored
   )
-  setPreferredBounds('overlay', display.id, anchored)
   notePlacement('overlay', display.id, anchored)
   evaluatePetPresence(overlayWindow)
 }
