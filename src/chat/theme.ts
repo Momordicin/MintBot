@@ -1,3 +1,7 @@
+// src/chat/theme.ts — 主题配色推导：由强调色、日/夜模式与着色强度，在 OKLab 空间生成整套界面色板，并保证气泡文字对比度
+// 用法：deriveTheme(input) 返回 ThemeColors；ChatWindow、SettingsApp、CharacterPanel（预览）调用后交给 themeVars.themeCssVars 转成 CSS 变量；另导出 contrastRatio、compositeOverBackground 与对比度常量
+// 形状：ThemeInput { accentRgb, mode: 'day' | 'night', tintStrength(0–1) } -> ThemeColors（RGB 元组与带 alpha 的颜色）
+// 对应文件：src/chat/themeVars.ts / src/chat/theme.test.ts / src/chat/ChatWindow.tsx / src/settings/SettingsApp.tsx / src/settings/CharacterPanel.tsx
 
 export type RgbTuple = [number, number, number]
 export type ThemeMode = 'day' | 'night'

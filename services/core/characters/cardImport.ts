@@ -1,3 +1,7 @@
+// services/core/characters/cardImport.ts — 解析 SillyTavern 角色卡（PNG 的 ccv3/chara tEXt 块或 JSON 文件）为 MintBot 角色草稿
+// 用法：routes/characterImport.ts 的 POST /characters/import/parse 调 parseCharacterCard(buffer)
+// 形状：Buffer -> ParsedCharacterCard（name/systemPrompt/suggestedCharacterId/avatarCandidate 等）| { error }
+// 对应文件：services/core/routes/characterImport.ts / services/core/characters/cardImport.test.ts
 import crypto from 'crypto'
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])

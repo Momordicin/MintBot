@@ -1,3 +1,6 @@
+// services/core/db/seed.ts — 开发用种子脚本：向 Presets 表写入两条示例预设（preset-001 / preset-002）
+// 用法：手动运行 pnpm seed
+// 对应文件：services/core/db/index.ts / services/core/session/queries.ts（upsertPreset）
 import { initDb } from './index.js'
 import { upsertPreset } from '../session/queries.js'
 

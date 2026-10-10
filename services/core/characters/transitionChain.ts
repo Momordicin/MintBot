@@ -1,7 +1,7 @@
-// services/core/characters/transitionChain.ts
-// 用途：检查角色目录内的一组素材文件（checkFileGroup），并把 manifest 中某个触发点的转场链解析成每步的候选文件集合（resolveTransitionChain）
-// 用法：checkFileGroup(characterDir, group, context) 返回合法文件；resolveTransitionChain({ characterId, characterDir, raw, trigger, form }) 返回整条链，问题一律 console.warn
-// 对应文件：services/core/characters/manifest.ts（加载时检查）/ services/core/routes/transitionChain.ts（接口）/ shared/transitionChain.ts（契约）/ services/core/characters/transitionChain.test.ts
+// services/core/characters/transitionChain.ts — 检查角色目录内的素材文件组，并把 manifest.transitions 某触发点的转场链解析成每步的候选文件集合
+// 用法：manifest.ts 加载角色时调 checkFileGroup / resolveTransitionChain；routes/transitionChain.ts 的 GET /overlay/transition-chain 调 resolveTransitionChain
+// 形状：checkFileGroup(characterDir, group, context) -> string[]（合法文件）；resolveTransitionChain({ characterId, characterDir, raw, trigger, form }) -> TransitionChainStep[]
+// 对应文件：services/core/characters/manifest.ts / services/core/routes/transitionChain.ts / shared/transitionChain.ts / services/core/characters/transitionChain.test.ts
 
 import fs from 'fs'
 import path from 'path'

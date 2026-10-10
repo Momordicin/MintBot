@@ -1,3 +1,7 @@
+// services/core/routes/presets.ts — 预设（角色人设档案）的增删改、切换与壁纸上传路由
+// 用法：core/index.ts 里 fastify.register(presetRoutes)，并取其导出的 WALLPAPER_DIR 作 /wallpapers/ 静态目录；GET /presets、POST /presets、POST /switch-preset、POST /presets/:presetId/wallpaper、PATCH /presets/:presetId；广播 preset-portrait-changed
+// 形状：切换、壁纸、PATCH 的响应为 buildStatePayload() 的状态载荷
+// 对应文件：src/settings/CharacterPanel.tsx（调用方）/ src/overlay/OverlayApp.tsx（消费 preset-portrait-changed）/ services/core/session/queries.ts / services/core/session/index.ts / services/core/session/displayConfig.ts / services/core/state.ts / services/core/routes/presets.test.ts / services/core/routes/wallpaperGuard.test.ts
 import type { FastifyInstance } from 'fastify'
 import path from 'path'
 import os from 'os'

@@ -1,3 +1,6 @@
+// electron/main/windowAnimation.ts — BrowserWindow 位置移动动画：同显示器内补间，跨显示器则滑出淡出、瞬移、滑入淡入
+// 用法：animateTo(win, target, onComplete, { instant }) 返回 cancel 函数（立即落到目标并回调 onComplete）；窗口 minimize / hide / close 时同样落到目标；isAnimating(win) 查询
+// 对应文件：electron/main/windowBehavior.ts（moveToDisplay、贴边移动、拖拽回滚）/ electron/main/windowAnimation.test.ts
 import { BrowserWindow, screen } from 'electron'
 
 const FRAME_MS = 16

@@ -1,3 +1,7 @@
+// electron/main/windowPositions.ts — 窗口位置持久化与几何计算：<userData>/window-positions.json 按窗口与显示器存 bounds 及主显示器，并提供默认位置、跨 DPI 尺寸、锚点缩放、工作区裁剪
+// 用法：index.ts 算启动 bounds；windowBehavior.ts 读写 getPreferredBounds / setPreferredBounds / getEffectiveHomeDisplay；homeDisplayCommit.ts 调 commitUserChosenHomeDisplay
+// 形状：WindowKey 为 'chat' | 'overlay'；Bounds 为 { x, y, width, height }（DIP）
+// 对应文件：electron/main/index.ts / electron/main/windowBehavior.ts / electron/main/homeDisplayCommit.ts / electron/main/dragActivity.ts（PERSIST_DEBOUNCE_MS）/ electron/main/windowPositions.test.ts / electron/main/windowPositionsCommitGuard.test.ts
 import { app } from 'electron'
 import fs from 'fs'
 import path from 'path'

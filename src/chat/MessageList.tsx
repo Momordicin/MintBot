@@ -1,3 +1,7 @@
+// src/chat/MessageList.tsx — 聊天窗口的消息滚动列表：渲染气泡与"正在回复"指示，滚到顶部附近或内容未铺满容器时请求更早历史并保持滚动位置，离底部较远时显示回到底部按钮
+// 用法：ChatWindow 渲染 <MessageList />（以 sessionId 作 key）；scrollToBottomSignal 变化时滚到底部
+// 形状：props { messages, isReplying, avatarUrl?, userAvatarUrl?, displayName?, hasMoreHistory?, onLoadMore?, scrollToBottomSignal? }
+// 对应文件：src/chat/ChatWindow.tsx / src/chat/MessageBubble.tsx / src/chat/TypingIndicator.tsx
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { MessageBubble, MessageData } from './MessageBubble'
 import { TypingIndicator } from './TypingIndicator'

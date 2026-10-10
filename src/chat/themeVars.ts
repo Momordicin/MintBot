@@ -1,3 +1,6 @@
+// src/chat/themeVars.ts — 把 ThemeColors 转为界面用的 CSS 自定义属性，并提供默认主题输入、日夜模式解析与 Windows 标题栏覆盖色
+// 用法：themeCssVars(theme, chatBgOpacity) 的结果由 ChatWindow / SettingsApp 写到 document.documentElement.style，CharacterPanel 写到预览容器；resolveThemeMode 解析 auto；titlebarOverlayFromTheme 的结果由 ChatWindow 传给 electronAPI.setTitlebarOverlay
+// 对应文件：src/chat/theme.ts / src/chat/themeVars.test.ts / src/chat/chat.css / src/settings/settings.css / src/chat/ChatWindow.tsx / src/settings/SettingsApp.tsx / src/settings/CharacterPanel.tsx
 import type { AlphaColor, RgbTuple, ThemeColors, ThemeInput, ThemeMode } from './theme.js'
 
 export const DEFAULT_THEME_INPUT: ThemeInput = {

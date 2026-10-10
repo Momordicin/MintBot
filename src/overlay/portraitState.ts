@@ -1,3 +1,7 @@
+// src/overlay/portraitState.ts — 桌宠立绘选择的纯函数：由最近互动时间推导无聊/睡眠状态，按形态、状态与情绪从 manifest 选立绘文件，按图片尺寸算悬浮窗大小
+// 用法：OverlayApp 调用 deriveY、nextThresholdInstant（下次状态切换时刻）、fallbackFirstFile、computeOverlaySize；transitionState.ts 调用 resolveDisplayFile、selectInteractionStateFile、pickRandom
+// 形状：OverlayManifest { portraits?: { pixel | illustration: { fallback, emotions?, interactionStates?, reservedStates? } } }；YState = 'boredom-idle' | 'sleeping' | null
+// 对应文件：src/overlay/OverlayApp.tsx / src/overlay/transitionState.ts / src/overlay/portraitState.test.ts / shared/portraitForm.ts
 import type { PortraitFormName } from '../../shared/portraitForm.js'
 
 export const BOREDOM_THRESHOLD_MS = 15 * 60 * 1000

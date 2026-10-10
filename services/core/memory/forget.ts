@@ -1,3 +1,7 @@
+// services/core/memory/forget.ts — "遗忘"指定会话某时间范围内的消息：预览影响范围，并级联删除消息及其实体、向量、全文索引（可连带删除重叠摘要）
+// 用法：routes/forget.ts 的 POST /forget/check 调 checkForgetImpact，POST /forget 调 forgetTimeRange
+// 形状：checkForgetImpact(sessionId, fromTime, toTime) -> ForgetImpact；forgetTimeRange(sessionId, fromTime, toTime, { alsoDeleteAffectedSummaries }) -> ForgetResult（各类删除条数）
+// 对应文件：services/core/routes/forget.ts / services/core/session/queries.ts（forgetMessages）/ services/core/memory/forget.test.ts
 import {
   getMessageIdsInTimeRange,
   getSummariesOverlappingRange,

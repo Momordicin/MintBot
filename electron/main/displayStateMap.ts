@@ -1,3 +1,7 @@
+// electron/main/displayStateMap.ts — 显示器阻挡表（displayId -> DisplayBlocker）的纯函数：按全屏与用户应用规则（allow/soft/hard）归类前台窗口观测，并按探测结果校验、剔除失效阻挡者
+// 用法：foregroundWorldModel.ts 调 applyExternalObservation / validateBlockers 更新阻挡表；desktopPresence.ts 读取 DisplayStateMap
+// 形状：DisplayBlocker { hwnd, pid, exeName, displayId, reasons, severity }；BlockerProbe 为单个阻挡窗口的探测结果
+// 对应文件：electron/main/foregroundWorldModel.ts / electron/main/desktopPresence.ts / electron/main/activeWindowMonitor.ts（ExternalWindowInfo、probeBlockerWindow）/ electron/main/displayStateMap.test.ts
 import type { ExternalWindowInfo } from './activeWindowMonitor'
 
 export type Reason = 'fullscreen' | 'user-rule'

@@ -1,3 +1,7 @@
+// services/core/providers/aiService.ts — 探测并托管 Python AI 服务（services/ai，提供 embedding/NER）：已在运行则直接用，否则用 .venv 里的 python 启动 uvicorn 并等待 /health 就绪
+// 用法：index.ts 的 start() 调 ensureAiService(baseUrl)，SIGINT/SIGTERM 时调 stopAiServiceIfManaged()；AI_SERVICE_IDENTITY 供 EmbeddingProvider 校验 /health 身份
+// 形状：ensureAiService(baseUrl) -> Promise<boolean>（服务是否可用）
+// 对应文件：services/ai/main.py / services/core/providers/EmbeddingProvider.ts / services/core/config/ports.ts / scripts/dev-ai.ts / services/core/providers/aiService.test.ts
 import { spawn, ChildProcess } from 'child_process'
 import type { Readable } from 'stream'
 import fs from 'fs'

@@ -1,3 +1,7 @@
+// src/settings/CharacterPanel.tsx — 设置窗口的"角色设定"面板：切换/新建/重命名预设、导入角色卡、换壁纸、聊天界面主题与立绘形态、人设提示词、预设级模型覆盖
+// 用法：SettingsApp 渲染 <CharacterPanel presetSnapshot onSwitched />；GET /presets、/characters、/models、/characters/:id/manifest.json，POST /switch-preset、/presets、/presets/:id/wallpaper、/characters/import/{parse,generate}、/characters/:id/{avatar,metadata}，PATCH /presets/:id；electronAPI.selectWallpaperFile / selectCharacterCardFile
+// 形状：props { presetSnapshot: PresetSnapshot | null, onSwitched(state: AppState) }
+// 对应文件：src/settings/SettingsApp.tsx / src/settings/themeControls.ts / src/chat/theme.ts / src/chat/themeVars.ts / shared/portraitForm.ts / services/core/index.ts / services/core/routes/presets.ts / services/core/routes/characterImport.ts / services/core/routes/models.ts / electron/main/index.ts（select-wallpaper-file、select-character-card-file）
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AppState, ModelConfig, PresetDisplayConfig, PresetSnapshot } from '../../shared/types/index.js'
 import { hexToRgb, percentToTintStrength, rgbToHex, tintStrengthToPercent } from './themeControls.js'

@@ -1,3 +1,7 @@
+// services/core/memory/entityExtractor.ts — 从用户消息抽取实体写入 MessageEntities：正则规则 + NER 服务新增实体，后台模型判断"实体变更"并关闭被取代的旧实体
+// 用法：orchestrator.ts 的 runOrganizeModeTick 对每批待嵌入消息调 extractEntities(messages, { ner, model })（model 即 backgroundModelProvider 的 completeSync）；导出 VALID_TYPES 供 routes/memory.ts 校验实体类型
+// 形状：(Message[], { ner, model }) -> { inserted, closed }
+// 对应文件：services/core/memory/orchestrator.ts / services/core/routes/memory.ts / services/core/providers/NERProvider.ts / services/core/util/jsonSalvage.ts / services/core/session/queries.ts / services/core/memory/entityExtractor.test.ts
 import { insertEntity, getCurrentEntities, closeEntity } from '../session/queries.js'
 import type { NERProvider } from '../providers/NERProvider.js'
 import type { Message, MessageEntity, BuiltContext, CompletionOptions } from '../../../shared/types/index.js'

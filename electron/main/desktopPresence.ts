@@ -1,3 +1,7 @@
+// electron/main/desktopPresence.ts — 桌宠与聊天窗口“桌面存在状态”的纯函数：由显示器阻挡表算出期望状态与状态差分，并含贴边几何、拖拽落点裁决
+// 用法：windowBehavior.ts 调用 resolvePetDesiredState / resolveChatDesiredState / diffPetState / diffChatState / resolveDragOutcome / computeEdgeBounds 等
+// 形状：PetPresence（ACTIVE/AMBIENT/EDGE/HIDDEN）、ChatPresence（SHOWN/NORMAL/SUPPRESSED）、DragOutcome（accept/reject）
+// 对应文件：electron/main/windowBehavior.ts / electron/main/displayStateMap.ts（DisplayStateMap）/ electron/main/windowPositions.ts（Bounds）/ electron/main/homeDisplayCommit.ts（DragOutcome）/ electron/main/desktopPresence.test.ts
 import type { DisplayStateMap } from './displayStateMap'
 import type { Bounds } from './windowPositions'
 

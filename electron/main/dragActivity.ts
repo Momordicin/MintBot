@@ -1,3 +1,6 @@
+// electron/main/dragActivity.ts — overlay / chat 两个窗口的拖拽进行态记录（拖拽中、拖拽结束后的尾段时间窗），仅内存
+// 用法：index.ts 的 windowDragMonitor 回调里 noteDragStart / noteDragEnd，窗口 closed 与锁屏/解锁时 clearDragState；windowBehavior.ts、foregroundWorldModel.ts 用 isWindowDragInProgress 查询，落点处理后 endDragTail
+// 对应文件：electron/main/index.ts / electron/main/windowBehavior.ts / electron/main/foregroundWorldModel.ts / electron/main/windowPositions.ts（PERSIST_DEBOUNCE_MS）/ electron/main/dragActivity.test.ts
 import type { WindowKey } from './windowPositions'
 import { PERSIST_DEBOUNCE_MS } from './windowPositions'
 

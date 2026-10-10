@@ -1,7 +1,7 @@
-// services/core/routes/transitionChain.ts
-// 用途：GET /overlay/transition-chain，悬浮窗触发转场时请求；每次从磁盘现读角色 manifest.json，一次性确认该触发点整条转场链的可用素材
-// 用法：fastify.register(transitionChainRoutes)；查询参数 characterId、trigger、form（pixel | illustration）；角色不存在、manifest 读不到或没有该触发点时返回 { steps: [] }
-// 对应文件：services/core/characters/transitionChain.ts（解析与检查）/ shared/transitionChain.ts（契约）/ src/overlay/OverlayApp.tsx（调用方）/ services/core/routes/transitionChain.test.ts
+// services/core/routes/transitionChain.ts — 悬浮窗转场链查询路由：现读角色 manifest.json，返回某触发点整条转场链里可用的素材步骤
+// 用法：core/index.ts 里 fastify.register(transitionChainRoutes)；GET /overlay/transition-chain?characterId&trigger&form（pixel | illustration）；角色不存在、manifest 读不到或没有该触发点时返回 { steps: [] }
+// 形状：响应 TransitionChainResponse { steps }
+// 对应文件：src/overlay/OverlayApp.tsx（调用方）/ shared/transitionChain.ts（契约）/ services/core/characters/transitionChain.ts（解析与检查）/ services/core/routes/transitionChain.test.ts
 
 import type { FastifyInstance } from 'fastify'
 import fs from 'fs'

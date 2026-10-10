@@ -1,3 +1,6 @@
+// src/settings/WindowBehaviorPanel.tsx — 设置窗口的"窗口行为"面板：聊天窗口置顶模式、桌宠智能避让开关、应用规则
+// 用法：SettingsApp 里渲染 <WindowBehaviorPanel />；读写 GET/PATCH /config/window-behavior，监听 SSE window-behavior-changed；添加规则时调用 electronAPI.selectExeFile
+// 对应文件：shared/windowBehavior.ts（快照契约）/ src/eventsWatchdog.ts / services/core/routes/windowBehavior.ts / electron/main/index.ts（select-exe-file、托盘同一组开关）
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import './settings.css'
 

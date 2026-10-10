@@ -1,3 +1,6 @@
+// src/settings/memory/EntityList.tsx — "实体列表"子面板：按类型筛选、分页列出当前会话抽取到的实体，可向前加载更早条目
+// 用法：MemoryPanel 渲染 <EntityList sessionId />；GET /entities?sessionId&limit&beforeId&type
+// 对应文件：src/settings/memory/MemoryPanel.tsx / services/core/routes/memory.ts
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 
 import { CORE_URL } from '../../coreUrl.js'

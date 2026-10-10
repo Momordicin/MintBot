@@ -1,3 +1,6 @@
+// services/core/util/jsonSalvage.ts — 从夹杂文字或代码块的模型输出里尽量解析出 JSON
+// 用法：parseJsonSalvage(raw) 依次尝试整段解析、从后往前逐个 ``` 代码块、首个 { 到末个 } 的片段，全部失败返回 undefined；chat.ts、session/emotion.ts、memory/entityExtractor.ts 调用
+// 对应文件：services/core/routes/chat.ts / services/core/session/emotion.ts / services/core/memory/entityExtractor.ts / services/core/util/jsonSalvage.test.ts
 const FENCED_BLOCK_PATTERN = /```(?:json)?\s*\n?([\s\S]*?)```/g
 const GREEDY_BRACE_PATTERN = /\{[\s\S]*\}/
 

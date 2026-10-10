@@ -1,3 +1,7 @@
+// services/core/session/queries.ts — SQLite 数据访问层：预设、会话、消息、向量与全文索引、实体、摘要、情绪状态的读写与检索
+// 用法：被 session/index.ts、state.ts、各 routes、context/buildContext.ts、memory/* 以同步函数直接调用，经 db/index.ts 的 better-sqlite3 连接；db/seed.ts 用 upsertPreset 写种子预设，core/index.ts 启动时按需 backfillMessageFts
+// 形状：表 Presets / Sessions / Messages / MessageEntities / Summaries / EmotionStates，虚表 message_embeddings（sqlite-vec）/ message_fts（FTS5）
+// 对应文件：services/core/db/index.ts（建表与连接）/ services/core/session/displayConfig.ts / services/core/memory/embedQueue.ts / services/core/memory/entityExtractor.ts / services/core/memory/forget.ts / services/core/memory/orchestrator.ts / services/core/memory/retrieval.ts / services/core/memory/summarizer.ts / services/core/context/buildContext.ts / services/core/session/queries.test.ts
 import { db } from '../db/index.js'
 import { DEFAULT_DISPLAY_CONFIG, parseDisplayConfig } from './displayConfig.js'
 import type { Message, Session, Preset, PresetSnapshot, MessageEntity, Summary, EmotionState, PresetDisplayConfig } from '../../../shared/types/index.js'

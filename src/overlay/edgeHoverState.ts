@@ -1,3 +1,7 @@
+// src/overlay/edgeHoverState.ts — 桌宠贴边（EDGE）时悬停展开/延迟收起的纯状态函数
+// 用法：OverlayApp 调用 onEdgeHoverEnter / onEdgeHoverLeave / onEdgeHoverDebounceElapsed / resetEdgeHoverOnPresenceLeftEdge / edgeHoverExpandedChanged / isDragHandleSuppressedByEdge
+// 形状：EdgeHoverState { expanded, pendingCollapseAt }
+// 对应文件：src/overlay/OverlayApp.tsx / src/overlay/edgeHoverState.test.ts
 
 export interface EdgeHoverState {
   expanded: boolean

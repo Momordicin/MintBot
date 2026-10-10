@@ -1,8 +1,6 @@
-// services/core/logBootstrap.ts
-// 用途：核心服务启动时安装日志文件（LOG_DIR 缺省为 <cwd>/logs，文件名 core.log）
-// 用法：必须是 services/core/index.ts 的第一条 import——pino 在构造 Fastify logger 时检测 process.stdout
-//   是否被改写，只有先装好才会改走 process.stdout，pino 行才能进入日志文件
-// 对应方：shared/logFile.ts；Electron 主进程对应 electron/main/logBootstrap.ts
+// services/core/logBootstrap.ts — core 进程日志文件的安装入口：加载 .env 后调 installLogFile，写入 LOG_DIR（缺省 <cwd>/logs）下的 core.log
+// 用法：services/core/index.ts 的第一条 import，仅靠 import 时的副作用生效；进程内之后的 console 与 pino 输出均写入该文件
+// 对应文件：shared/logFile.ts / electron/main/logBootstrap.ts（主进程对应物）/ services/core/index.ts / services/core/logBootstrap.test.ts
 import path from 'path'
 import * as dotenv from 'dotenv'
 import { installLogFile } from '../../shared/logFile.js'

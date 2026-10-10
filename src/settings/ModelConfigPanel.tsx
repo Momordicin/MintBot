@@ -1,3 +1,7 @@
+// src/settings/ModelConfigPanel.tsx — 设置窗口的"模型配置"面板：对话模型与摘要模型（可选"与对话模型相同"）的类型、API Key、模型名、Base URL、max_tokens
+// 用法：SettingsApp 里渲染 <ModelConfigPanel />（无 props）；GET/PATCH /config/model
+// 形状：PATCH body { modelProvider: Partial<ModelConfig>, backgroundModelProvider: Partial<ModelConfig> | null }
+// 对应文件：src/settings/SettingsApp.tsx / services/core/routes/config.ts / shared/types/index.ts
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { ModelConfig } from '../../shared/types/index.js'
 import './settings.css'

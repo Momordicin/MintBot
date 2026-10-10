@@ -1,3 +1,7 @@
+// services/core/memory/retrieval.ts — 聊天时的历史记忆检索：判断是否需要检索，并以向量搜索 + 全文搜索 + 实体匹配做 RRF 融合排序（对近 14 天消息加权）
+// 用法：context/buildContext.ts 调 shouldTriggerRetrieval(userInput) 与 retrieveMemories(sessionId, query, { embedding }, k, signal)
+// 形状：retrieveMemories -> Message[]（至多 k 条，按融合得分降序）
+// 对应文件：services/core/context/buildContext.ts / services/core/session/queries.ts / services/core/providers/EmbeddingProvider.ts / services/core/memory/retrieval.test.ts
 import {
   searchSimilarMessages,
   searchMessagesFts,

@@ -1,3 +1,7 @@
+// electron/main/coreEventsConsumer.ts — 解析 core GET /events 的 SSE 文本流：按空行切帧，分发 hello/heartbeat（记录 generation）、preset-switched、window-behavior-changed
+// 用法：index.ts 里 createCoreEventsConsumer(handlers) 一次；每次连上 /events 调 onConnected()（清缓冲并触发 converge），读到的每个文本块调 onChunk(text)
+// 形状：输入为 SSE 文本块；输出为 handlers 的回调（converge / onPresetSwitched / onWindowBehaviorChanged(snapshot) / log.*）
+// 对应文件：electron/main/index.ts（connectToCoreEvents）/ electron/main/eventsGeneration.ts / shared/windowBehavior.ts（WindowBehaviorSnapshot）/ electron/main/coreEventsConsumer.test.ts
 
 import { hasServerRestarted } from './eventsGeneration'
 import type { WindowBehaviorSnapshot } from '../../shared/windowBehavior.js'

@@ -1,3 +1,6 @@
+// services/core/characters/manifest.ts — 读取 assets/characters/<角色ID>/manifest.json，与默认值合并成 CharacterManifest，并检查其素材文件与转场链
+// 用法：session/index.ts 的 loadSession 调 loadCharacterManifest(characterId)；导出 ASSET_ROOT / CHARACTERS_ROOT，index.ts 将后者挂为 /characters/ 静态目录
+// 对应文件：services/core/characters/transitionChain.ts / shared/portraitForm.ts / services/core/session/index.ts / services/core/routes/characterImport.ts / services/core/routes/transitionChain.ts / services/core/characters/manifest.test.ts
 import fs from 'fs'
 import path from 'path'
 import os from 'os'

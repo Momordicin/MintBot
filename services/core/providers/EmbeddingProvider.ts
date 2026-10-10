@@ -1,3 +1,7 @@
+// services/core/providers/EmbeddingProvider.ts — EmbeddingProvider 接口及其 HTTP 实现 BGEProvider：经 AI 服务的 /embed、/embed/unload 取向量与卸载模型；另有 AI 服务 /health 的 embedding 就绪检查
+// 用法：index.ts 的 start() 构造 new BGEProvider(getAiBaseUrl()) 挂到 fastify.embeddingProvider，并在 AI 服务就绪后 embed("ping") 预热；buildContext / retrieval / embedQueue / orchestrator 通过该接口使用；routes/status.ts 与 state.ts 调 isEmbeddingReady；每次 embed/embedBatch 调 recordActivity()
+// 形状：embed(text) -> number[]；embedBatch(texts) -> number[][]；unload() -> boolean
+// 对应文件：services/ai/main.py / services/core/providers/aiActivity.ts / services/core/providers/aiService.ts / services/core/config/ports.ts / services/core/providers/EmbeddingProvider.test.ts
 import { recordActivity } from './aiActivity.js'
 import { AI_URL } from '../config/ports.js'
 import { AI_SERVICE_IDENTITY } from './aiService.js'

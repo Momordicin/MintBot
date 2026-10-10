@@ -1,3 +1,7 @@
+// services/core/session/displayConfig.ts — 预设显示配置（聊天背景、主题、强调色、着色强度、立绘形态）的默认值、字段校验与解析
+// 用法：isValidXxx / clampTintStrength 供 PATCH /presets/:presetId；DEFAULT_DISPLAY_CONFIG 供 POST /presets 与 queries.ts；parseDisplayConfig(raw JSON 字符串 | null) 供 queries.ts
+// 形状：PresetDisplayConfig（定义在 shared/types/index.ts）
+// 对应文件：services/core/routes/presets.ts / services/core/session/queries.ts / shared/types/index.ts / services/core/session/displayConfig.test.ts
 import type { PresetDisplayConfig } from '../../../shared/types/index.js'
 
 export const DEFAULT_DISPLAY_CONFIG: PresetDisplayConfig = {

@@ -1,3 +1,6 @@
+// src/settings/memory/MessageBrowser.tsx — "消息浏览"子面板：分页列出当前会话消息，可向前加载更早消息
+// 用法：MemoryPanel 渲染 <MessageBrowser sessionId />；GET /messages?sessionId&limit&beforeId
+// 对应文件：src/settings/memory/MemoryPanel.tsx / services/core/routes/messages.ts
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 
 import { CORE_URL } from '../../coreUrl.js'

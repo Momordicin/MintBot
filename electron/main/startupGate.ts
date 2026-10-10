@@ -1,3 +1,6 @@
+// electron/main/startupGate.ts — 启动时经 shell32 SHQueryUserNotificationState 查询用户是否处于忙碌 / D3D 全屏 / 演示模式，用于决定是否暂缓信任主显示器
+// 用法：index.ts 在 app ready 时调 shouldDistrustHomeAtStartup(queryUserNotificationState())，为真则 closeStartupGate 并在 STARTUP_GATE_TIMEOUT_MS 后 openStartupGate；非 win32 查询返回 null
+// 对应文件：electron/main/index.ts / electron/main/windowBehavior.ts（closeStartupGate / openStartupGate）/ electron/main/startupGate.test.ts
 import koffi from 'koffi'
 
 const lib = process.platform === 'win32' ? koffi.load('shell32.dll') : null

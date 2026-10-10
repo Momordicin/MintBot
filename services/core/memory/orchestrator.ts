@@ -1,3 +1,7 @@
+// services/core/memory/orchestrator.ts — "整理模式"后台调度：在无活跃对话的整理时段抽取实体并嵌入积压消息；无活跃对话且 shouldTriggerSummary 通过时生成摘要；AI 空闲后卸载 embedding/NER 模型；另提供嵌入队列状态
+// 用法：index.ts 的 start() 调 startOrganizeModeScheduler(fastify)（node-cron，用 fastify 上的 embedding/NER/backgroundModel provider，关闭时 stop()）；runOrganizeModeTick 为单次执行；routes/memory.ts（GET /embedding-queue-status）与 state.ts（GET /state）调 computeEmbeddingQueueStatus
+// 形状：runOrganizeModeTick -> OrganizeModeTickResult；computeEmbeddingQueueStatus -> EmbeddingQueueStatus；startOrganizeModeScheduler -> ScheduledTask
+// 对应文件：services/core/memory/embedQueue.ts / services/core/memory/entityExtractor.ts / services/core/memory/summarizer.ts / services/core/providers/aiActivity.ts / services/core/system/lockState.ts / services/core/routes/memory.ts / services/core/state.ts / services/core/memory/orchestrator.test.ts
 import { schedule, type ScheduledTask } from 'node-cron'
 import type { FastifyInstance } from 'fastify'
 import { extractEntities, type EntityModelProvider } from './entityExtractor.js'

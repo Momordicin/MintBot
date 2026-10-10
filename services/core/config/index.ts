@@ -1,3 +1,7 @@
+// services/core/config/index.ts — 项目根 config.json 的读取、热重载缓存与按段写回（memory / modelProvider / backgroundModelProvider / windowBehavior / defaultPresetId）
+// 用法：index.ts 的 start() 调 startConfigWatcher；其余模块用 getXxxConfig()；routes/config.ts、routes/windowBehavior.ts 调 update*Config，session/index.ts 调 setDefaultPresetId
+// 形状：getMemoryConfig() -> MemoryConfig；getModelProviderConfig() -> ModelConfig；getWindowBehaviorConfig() -> WindowBehaviorConfig；getDefaultPresetId() -> string | undefined
+// 对应文件：services/core/index.ts / services/core/routes/config.ts / services/core/routes/windowBehavior.ts / services/core/session/index.ts / shared/windowBehavior.ts / services/core/config/index.test.ts
 import fs from 'fs'
 import path from 'path'
 import crypto from 'crypto'

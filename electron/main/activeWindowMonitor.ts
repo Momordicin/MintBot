@@ -1,3 +1,6 @@
+// electron/main/activeWindowMonitor.ts — Windows 前台窗口探测：经 koffi 调 user32/dwmapi/kernel32 读取前台窗口（标题、类名、exe、所在显示器、是否全屏），并探测已记录阻挡窗口是否仍存活
+// 用法：startActiveWindowMonitor(onChange) 每 500ms 轮询，观测指纹变化才回调 ForegroundObservation（external / self / unavailable）；probeBlockerWindow(hwnd, pid) 返回 BlockerProbe；非 win32 平台为空操作或 unavailable
+// 对应文件：electron/main/index.ts（startActiveWindowMonitoring）/ electron/main/foregroundWorldModel.ts / electron/main/displayStateMap.ts（BlockerProbe、ExternalWindowInfo 的使用方）/ electron/main/activeWindowMonitor.test.ts
 import koffi from 'koffi'
 import path from 'path'
 import { screen } from 'electron'

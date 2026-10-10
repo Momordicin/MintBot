@@ -1,3 +1,7 @@
+// src/overlay/transitionState.ts — 桌宠转场（唤醒/戳一下/入睡）的纯函数：选转场触发点、判断是否播放入睡转场、解析并展开转场链、决定当前显示哪张立绘
+// 用法：OverlayApp 调用 selectTransitionTrigger、shouldPlayFallAsleep、parseTransitionChain（解析 GET /overlay/transition-chain 的响应）、resolveTransitionSteps、resolveOverlayDisplayFile
+// 形状：TransitionTrigger = 'wake-from-sleep' | 'wake-from-bored' | 'poke-neutral' | 'fall-asleep'；转场链步骤 { files, durationMs, pick }
+// 对应文件：src/overlay/OverlayApp.tsx / src/overlay/portraitState.ts / src/overlay/transitionState.test.ts / shared/transitionChain.ts / services/core/routes/transitionChain.ts
 
 import { TRANSITION_PICKS, type TransitionChainStep } from '../../shared/transitionChain.js'
 import {

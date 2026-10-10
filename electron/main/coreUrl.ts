@@ -1,7 +1,6 @@
-// electron/main/coreUrl.ts — Electron 主进程 core 服务 URL 的唯一入口，值来自构建期注入的 __CORE_URL__
-//
-// 用法：import { CORE_URL } from './coreUrl.js'
-// 配套文件：electron.vite.config.ts（注入 __CORE_URL__ 常量）
+// electron/main/coreUrl.ts — 主进程访问 core 服务的 URL 常量，值为构建期注入的 __CORE_URL__
+// 用法：import { CORE_URL } from './coreUrl'
+// 对应文件：electron.vite.config.ts（define 注入 __CORE_URL__）/ electron/main/index.ts / electron/main/windowBehavior.ts
 
 declare const __CORE_URL__: string
 

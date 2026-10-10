@@ -1,3 +1,7 @@
+// services/core/routes/chat.ts — 一轮聊天：建上下文、调模型、解析回复，经 SSE 把结果回给发起请求的窗口
+// 用法：core/index.ts 里 fastify.register(chatRoutes)；POST /chat { message }，请求在模块级队列里串行执行；响应为 SSE 流，事件 message_done / emotion / system(error)；emotion 同时 broadcastEvent 到 GET /events
+// 形状：模型回复为 JSON { reply, emotion: { self }, emote }，经 parseJsonSalvage 解析；用户与助手消息写入 Messages，情绪写入 EmotionStates
+// 对应文件：src/chat/ChatWindow.tsx（POST /chat）/ src/overlay/OverlayApp.tsx（消费 /events 的 emotion）/ services/core/context/buildContext.ts / services/core/session/index.ts / services/core/session/emotion.ts / services/core/session/attention.ts / services/core/reply/interceptor.ts / services/core/reply/sleepDetector.ts / services/core/events/broadcast.ts / services/core/routes/chat.test.ts
 import type { FastifyInstance } from 'fastify'
 import type { OutgoingHttpHeaders } from 'node:http'
 import { requireCurrentState, addMessage } from '../session/index.js'
