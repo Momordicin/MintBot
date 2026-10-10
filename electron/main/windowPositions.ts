@@ -1,5 +1,5 @@
 // electron/main/windowPositions.ts — 窗口位置持久化与几何计算：<userData>/window-positions.json 按窗口与显示器存 bounds 及主显示器，并提供默认位置、跨 DPI 尺寸、锚点缩放、工作区裁剪
-// 用法：index.ts 算启动 bounds；windowBehavior.ts 读写 getPreferredBounds / setPreferredBounds / getEffectiveHomeDisplay；homeDisplayCommit.ts 调 commitUserChosenHomeDisplay
+// 用法：index.ts 算启动 bounds；windowBehavior.ts 读写 getPreferredBounds / setPreferredBounds / getEffectiveHomeDisplay；homeDisplayCommit.ts 调 commitUserChosenHomeDisplay；桌宠收起为手柄时 windowBehavior.ts 与 index.ts 用 collapsedHandleBounds / expandedBoundsFromHandle 在展开 bounds 与手柄 bounds 间换算
 // 形状：WindowKey 为 'chat' | 'overlay'；Bounds 为 { x, y, width, height }（DIP）
 // 对应文件：electron/main/index.ts / electron/main/windowBehavior.ts / electron/main/homeDisplayCommit.ts / electron/main/dragActivity.ts（PERSIST_DEBOUNCE_MS）/ electron/main/windowPositions.test.ts / electron/main/windowPositionsCommitGuard.test.ts
 import { app } from 'electron'
@@ -205,6 +205,29 @@ export function computeAnchoredResizeBounds(
     },
     workArea
   )
+}
+
+export const HANDLE_SIZE = 20
+export const HANDLE_INSET = 2
+export const COLLAPSED_MARGIN = 2
+export const COLLAPSED_SIZE = HANDLE_SIZE + 2 * COLLAPSED_MARGIN
+
+export function collapsedHandleBounds(expanded: Bounds): Bounds {
+  return {
+    x: expanded.x + expanded.width - HANDLE_INSET - HANDLE_SIZE - COLLAPSED_MARGIN,
+    y: expanded.y + HANDLE_INSET - COLLAPSED_MARGIN,
+    width: COLLAPSED_SIZE,
+    height: COLLAPSED_SIZE,
+  }
+}
+
+export function expandedBoundsFromHandle(handle: Bounds, size: { width: number; height: number }): Bounds {
+  return {
+    x: handle.x - (size.width - HANDLE_INSET - HANDLE_SIZE - COLLAPSED_MARGIN),
+    y: handle.y - HANDLE_INSET + COLLAPSED_MARGIN,
+    width: size.width,
+    height: size.height,
+  }
 }
 
 export function clampBoundsToWorkArea(bounds: Bounds, workArea: Electron.Rectangle): Bounds {

@@ -197,7 +197,6 @@ export async function presetRoutes(fastify: FastifyInstance) {
       if (displayConfig.currentPortrait !== undefined && !isValidCurrentPortrait(displayConfig.currentPortrait)) {
         return reply.status(400).send({ error: 'currentPortrait must be one of pixel, illustration' })
       }
-
       if (displayConfig.petScale !== undefined && !isValidPetScale(displayConfig.petScale)) {
         return reply.status(400).send({ error: 'petScale must be an object with pixel and illustration each one of 0.5, 0.75, 1, 1.25, 1.5' })
       }

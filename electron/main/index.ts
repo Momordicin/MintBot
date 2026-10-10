@@ -1,8 +1,9 @@
 // electron/main/index.ts — Electron 主进程入口：app ready 后创建聊天窗口、桌宠 overlay 与托盘，注册 IPC，启动前台窗口监控与 core /events 订阅，will-quit 时收尾
 // 用法：electron.vite.config.ts 的主进程 entry；第一条 import 为 logBootstrap；设置窗口按 open-settings-window IPC 按需创建
-// 对应文件：electron/preload/index.ts（暴露的 IPC 通道）/ electron/main/windowBehavior.ts / electron/main/coreEventsConsumer.ts / electron/main/activeWindowMonitor.ts / electron/main/windowDragMonitor.ts / electron/main/startupGate.ts / shared/windowBehavior.ts
+// 对应文件：electron/preload/index.ts（暴露的 IPC 通道）/ electron/main/windowBehavior.ts / electron/main/petContextMenu.ts / electron/main/coreEventsConsumer.ts / electron/main/activeWindowMonitor.ts / electron/main/windowDragMonitor.ts / electron/main/startupGate.ts / shared/windowBehavior.ts
 import './logBootstrap'
 import { app, BrowserWindow, Menu, Tray, powerMonitor, ipcMain, dialog, screen, nativeImage } from 'electron'
+import type { MenuItemConstructorOptions } from 'electron'
 import { join, basename } from 'path'
 import { readFile, stat } from 'fs/promises'
 import { is } from '@electron-toolkit/utils'
@@ -30,8 +31,13 @@ import {
   requestOverlayEdgeHover,
   sendCurrentPetPresenceOnReady,
   applyOverlaySize,
-  cancelProgrammaticMoveOnDragStart
+  cancelProgrammaticMoveOnDragStart,
+  getCurrentPetMode,
+  requestOverlayHandleHover,
+  noteOverlayCreatedCollapsed
 } from './windowBehavior'
+import { buildPetMenu, parsePetMenuState } from './petContextMenu'
+import type { PetMenuAction, PetMenuItem, PetMenuState } from './petContextMenu'
 import {
   queryUserNotificationState,
   shouldDistrustHomeAtStartup,
@@ -47,6 +53,7 @@ import {
   setPreferredBounds,
   getEffectiveHomeDisplay,
   clampBoundsToWorkArea,
+  collapsedHandleBounds,
   computeDefaultBoundsForDisplay,
   DEFAULT_WINDOW_SIZE
 } from './windowPositions'
@@ -428,11 +435,75 @@ function resolveOverlayStartupBounds(): Bounds {
   if (!stored) {
     setPreferredBounds('overlay', targetDisplay.id, bounds)
   }
-  return bounds
+  return getCachedWindowBehaviorConfig().petCollapsed ? collapsedHandleBounds(bounds) : bounds
+}
+
+let petMenuState: PetMenuState | null = null
+
+function toMenuTemplate(items: PetMenuItem[]): MenuItemConstructorOptions[] {
+  return items.map(item => {
+    const option: MenuItemConstructorOptions = { label: item.label }
+    if (item.type) option.type = item.type
+    if (item.checked !== undefined) option.checked = item.checked
+    if (item.enabled !== undefined) option.enabled = item.enabled
+    if (item.submenu) option.submenu = toMenuTemplate(item.submenu)
+    const action = item.action
+    if (action) option.click = () => { void runPetMenuAction(action) }
+    return option
+  })
+}
+
+async function patchPresetDisplayConfig(presetId: string, displayConfig: Record<string, unknown>): Promise<void> {
+  try {
+    const response = await fetch(`${CORE_URL}/presets/${encodeURIComponent(presetId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ displayConfig }),
+    })
+    if (!response.ok) {
+      console.error('[PetMenu] Core rejected preset display config patch:', response.status, await response.text().catch(() => ''))
+    }
+  } catch (err) {
+    console.error('[PetMenu] Failed to patch preset display config:', err)
+  }
+}
+
+async function runPetMenuAction(action: PetMenuAction): Promise<void> {
+  switch (action.kind) {
+    case 'set-click-through':
+      await patchWindowBehavior({ petClickThrough: action.value })
+      break
+    case 'set-avoidance':
+      await patchWindowBehavior({ petAvoidanceEnabled: action.value })
+      break
+    case 'set-collapsed':
+      await patchWindowBehavior({ petCollapsed: action.value })
+      break
+    case 'set-scale':
+      if (petMenuState) {
+        await patchPresetDisplayConfig(petMenuState.presetId, {
+          petScale: { ...petMenuState.petScale, [petMenuState.effectiveForm]: action.value },
+        })
+      }
+      break
+    case 'switch-form':
+      if (petMenuState) {
+        await patchPresetDisplayConfig(petMenuState.presetId, { currentPortrait: action.form })
+      }
+      break
+  }
+  rebuildTrayMenu()
+}
+
+function popUpPetContextMenu(): void {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return
+  const items = buildPetMenu(getCurrentPetMode(), getCachedWindowBehaviorConfig(), petMenuState)
+  Menu.buildFromTemplate(toMenuTemplate(items)).popup({ window: overlayWindow })
 }
 
 function createOverlayWindow(): BrowserWindow {
   const { x, y, width, height } = resolveOverlayStartupBounds()
+  noteOverlayCreatedCollapsed(getCachedWindowBehaviorConfig().petCollapsed)
 
   markProgrammaticWindowPlacement('overlay')
 
@@ -461,6 +532,11 @@ function createOverlayWindow(): BrowserWindow {
 
   win.on('moved', () => {
     handleWindowMoved('overlay', win, mainWindow, overlayWindow)
+  })
+
+  win.on('system-context-menu', event => {
+    event.preventDefault()
+    popUpPetContextMenu()
   })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
@@ -554,6 +630,23 @@ ipcMain.on('overlay:activate', () => {
 
 ipcMain.on('overlay:edge-hover', (_event, hovered: unknown) => {
   requestOverlayEdgeHover(overlayWindow, hovered === true)
+})
+
+ipcMain.on('overlay:handle-hover', (event, hovered: unknown) => {
+  if (!overlayWindow || event.sender !== overlayWindow.webContents) return
+  if (typeof hovered !== 'boolean') return
+  requestOverlayHandleHover(overlayWindow, hovered)
+})
+
+ipcMain.on('overlay:menu-state', (event, payload: unknown) => {
+  if (!overlayWindow || event.sender !== overlayWindow.webContents) return
+  const state = parsePetMenuState(payload)
+  if (state) petMenuState = state
+})
+
+ipcMain.on('overlay:context-menu', event => {
+  if (!overlayWindow || event.sender !== overlayWindow.webContents) return
+  popUpPetContextMenu()
 })
 
 ipcMain.on('overlay:presence-ready', () => {

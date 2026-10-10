@@ -80,29 +80,34 @@ const actualComputeAnchoredResizeBounds = vi.hoisted(() => (
   }
 })
 
-vi.mock('./windowPositions', () => ({
-  getPreferredBounds: getPreferredBoundsMock,
-  computeAnchoredResizeBounds: actualComputeAnchoredResizeBounds,
-  setPreferredBounds: setPreferredBoundsMock,
-  getEffectiveHomeDisplay: (displays: typeof testState.displays) => {
-    const home = displays.find(d => d.id === testState.homeDisplayId)
-    if (home) return home
-    // Mirrors the real resolveStartupDisplay fallback (pick the largest connected display) —
-    // a faithful-enough stand-in for this test's purposes, see windowPositions.ts.
-    return displays.reduce((a, b) => (a.bounds.width * a.bounds.height >= b.bounds.width * b.bounds.height ? a : b))
-  },
-  computeDefaultBoundsForDisplay: (display: { bounds: { x: number; y: number } }) => ({
-    x: display.bounds.x,
-    y: display.bounds.y,
-    width: 132,
-    height: 132,
-  }),
-  DEFAULT_WINDOW_SIZE: { chat: { width: 290, height: 520 }, overlay: { width: 132, height: 132 } },
-  // Fix 4 (second rework pass): windowBehavior.ts now imports this from windowPositions.ts
-  // instead of defining its own local copy — the mock must provide it. Kept equal to this file's
-  // own local PERSIST_DEBOUNCE_MS constant below (used for this file's own timer arithmetic).
-  PERSIST_DEBOUNCE_MS: 300,
-}))
+vi.mock('./windowPositions', async () => {
+  const actual = await vi.importActual<typeof import('./windowPositions')>('./windowPositions')
+  return {
+    collapsedHandleBounds: actual.collapsedHandleBounds,
+    expandedBoundsFromHandle: actual.expandedBoundsFromHandle,
+    getPreferredBounds: getPreferredBoundsMock,
+    computeAnchoredResizeBounds: actualComputeAnchoredResizeBounds,
+    setPreferredBounds: setPreferredBoundsMock,
+    getEffectiveHomeDisplay: (displays: typeof testState.displays) => {
+      const home = displays.find(d => d.id === testState.homeDisplayId)
+      if (home) return home
+      // Mirrors the real resolveStartupDisplay fallback (pick the largest connected display) —
+      // a faithful-enough stand-in for this test's purposes, see windowPositions.ts.
+      return displays.reduce((a, b) => (a.bounds.width * a.bounds.height >= b.bounds.width * b.bounds.height ? a : b))
+    },
+    computeDefaultBoundsForDisplay: (display: { bounds: { x: number; y: number } }) => ({
+      x: display.bounds.x,
+      y: display.bounds.y,
+      width: 132,
+      height: 132,
+    }),
+    DEFAULT_WINDOW_SIZE: { chat: { width: 290, height: 520 }, overlay: { width: 132, height: 132 } },
+    // Fix 4 (second rework pass): windowBehavior.ts now imports this from windowPositions.ts
+    // instead of defining its own local copy — the mock must provide it. Kept equal to this file's
+    // own local PERSIST_DEBOUNCE_MS constant below (used for this file's own timer arithmetic).
+    PERSIST_DEBOUNCE_MS: 300,
+  }
+})
 
 vi.mock('./homeDisplayCommit', () => ({
   commitHomeDisplayFromDragOutcome: vi.fn(),
@@ -295,7 +300,7 @@ describe('sendCurrentPetPresenceOnReady (Stage 3 part 2, FIX 2/FIX 3)', () => {
 
     sendCurrentPetPresenceOnReady(win as unknown as Electron.BrowserWindow)
 
-    expect(win.webContents.send).toHaveBeenCalledWith('desktop-presence:changed', { presence: 'AMBIENT', edgeSide: null, handleSuppressed: false })
+    expect(win.webContents.send).toHaveBeenCalledWith('desktop-presence:changed', { presence: 'AMBIENT', edgeSide: null, handleSuppressed: false, collapsed: false, clickThrough: false })
   })
 
   it('(c) clears the stale hover flag and collapses a window a reloaded renderer would otherwise find stuck expanded', () => {
@@ -323,7 +328,7 @@ describe('sendCurrentPetPresenceOnReady (Stage 3 part 2, FIX 2/FIX 3)', () => {
     // parked at the full bounds forever.
     sendCurrentPetPresenceOnReady(win as unknown as Electron.BrowserWindow)
 
-    expect(animateTo).toHaveBeenCalledWith(win, { x: -92, y: 0, width: 132, height: 132 }, expect.any(Function))
+    expect(animateTo).toHaveBeenCalledWith(win, { x: -92, y: 0, width: 132, height: 132 }, expect.any(Function), { finalOpacity: 1 })
   })
 })
 
@@ -624,7 +629,7 @@ describe('Fix 1 (second rework pass) — per-window drag state, not one global f
 
     // If the chat drag had wrongly driven the pet's isInteracting, resolvePetDesiredState would
     // report ACTIVE at the current (home) display and never relocate to the free display 2.
-    expect(animateTo).toHaveBeenCalledWith(win, expect.objectContaining({ x: 1920, y: 0 }), expect.any(Function))
+    expect(animateTo).toHaveBeenCalledWith(win, expect.objectContaining({ x: 1920, y: 0 }), expect.any(Function), { finalOpacity: 1 })
   })
 
   it('an overlay drag DOES make the pet ACTIVE — it stays put instead of relocating away from a blocked home', () => {
@@ -672,7 +677,7 @@ describe('Fix 1 (second rework pass) — per-window drag state, not one global f
 
     evaluateDesktopPresence(chatWin as unknown as Electron.BrowserWindow, null)
 
-    expect(animateTo).toHaveBeenCalledWith(chatWin, expect.objectContaining({ x: 1920, y: 0 }), expect.any(Function))
+    expect(animateTo).toHaveBeenCalledWith(chatWin, expect.objectContaining({ x: 1920, y: 0 }), expect.any(Function), { finalOpacity: 1 })
   })
 
   it("each window's move-skip guard responds to its own drag only — chat does NOT relocate while it itself is dragging", () => {
@@ -764,6 +769,8 @@ describe('Fix 1 — applied must settle to the truth while interacting, not get 
       presence: 'ACTIVE',
       edgeSide: null,
       handleSuppressed: false,
+      collapsed: false,
+      clickThrough: false,
     })
   })
 
@@ -812,6 +819,8 @@ describe('Fix 1 — applied must settle to the truth while interacting, not get 
       presence: 'ACTIVE',
       edgeSide: null,
       handleSuppressed: false,
+      collapsed: false,
+      clickThrough: false,
     })
   })
 })
@@ -872,6 +881,8 @@ describe('Presence broadcast (Stage 3 part 2, Task 1) — desktop-presence:chang
       presence: 'AMBIENT',
       edgeSide: null,
       handleSuppressed: true,
+      collapsed: false,
+      clickThrough: false,
     })
     // Once the collapse animation settles, presence/edgeSide catch up (applied), handleSuppressed
     // unchanged (still true — both desired and applied are EDGE now).
@@ -879,6 +890,8 @@ describe('Presence broadcast (Stage 3 part 2, Task 1) — desktop-presence:chang
       presence: 'EDGE',
       edgeSide: 'left',
       handleSuppressed: true,
+      collapsed: false,
+      clickThrough: false,
     })
 
     // Re-evaluating under the exact same (still EDGE) conditions must not broadcast again.
@@ -927,7 +940,7 @@ describe('requestOverlayEdgeHover (Stage 3 part 2, Task 2)', () => {
     // orchestration wiring: hovered=true must actually reach animateTo with the full bounds.
     requestOverlayEdgeHover(win as unknown as Electron.BrowserWindow, true)
     expect(animateTo).toHaveBeenCalledTimes(1)
-    expect(animateTo).toHaveBeenCalledWith(win, { x: 0, y: 0, width: 132, height: 132 }, expect.any(Function))
+    expect(animateTo).toHaveBeenCalledWith(win, { x: 0, y: 0, width: 132, height: 132 }, expect.any(Function), { finalOpacity: 1 })
 
     // Simulate the (mocked, synchronous) animateTo call above having actually moved the window —
     // the shared animateTo mock in this file does not touch getBounds() itself (see its own
@@ -937,7 +950,7 @@ describe('requestOverlayEdgeHover (Stage 3 part 2, Task 2)', () => {
 
     requestOverlayEdgeHover(win as unknown as Electron.BrowserWindow, false)
     expect(animateTo).toHaveBeenCalledTimes(1)
-    expect(animateTo).toHaveBeenCalledWith(win, { x: -92, y: 0, width: 132, height: 132 }, expect.any(Function))
+    expect(animateTo).toHaveBeenCalledWith(win, { x: -92, y: 0, width: 132, height: 132 }, expect.any(Function), { finalOpacity: 1 })
   })
 
   it('a hover expand does not change presence, does not clear rememberedPetEdgeSide, and does not end the EDGE episode — a subsequent unrelated evaluate stays EDGE with the same side', () => {
@@ -1000,7 +1013,7 @@ describe('EDGE episode exit restores the window (bug fix: applyEdgePlacement use
     evaluateDesktopPresence(null, win as unknown as Electron.BrowserWindow)
 
     expect(animateTo).toHaveBeenCalledTimes(1)
-    expect(animateTo).toHaveBeenCalledWith(win, { x: 0, y: 0, width: 132, height: 132 }, expect.any(Function))
+    expect(animateTo).toHaveBeenCalledWith(win, { x: 0, y: 0, width: 132, height: 132 }, expect.any(Function), { finalOpacity: 1 })
   })
 
   it('restores to the same full bounds when the episode ends while hovered/expanded — no redundant re-animation, since the hover expansion and the exit restore share the same fullBounds computation', () => {
@@ -1018,7 +1031,7 @@ describe('EDGE episode exit restores the window (bug fix: applyEdgePlacement use
     vi.clearAllMocks()
 
     requestOverlayEdgeHover(win as unknown as Electron.BrowserWindow, true) // expand
-    expect(animateTo).toHaveBeenCalledWith(win, { x: 0, y: 0, width: 132, height: 132 }, expect.any(Function))
+    expect(animateTo).toHaveBeenCalledWith(win, { x: 0, y: 0, width: 132, height: 132 }, expect.any(Function), { finalOpacity: 1 })
     win.getBounds = () => ({ x: 0, y: 0, width: 132, height: 132 })
     vi.clearAllMocks()
 
@@ -1240,7 +1253,7 @@ describe('geometry rule — EDGE bounds computation is deferred past an in-fligh
     // Only now must the EDGE computation run — using display 1's geometry (y=0), not display 2's
     // stale y=300. -92 = 0 - (132 - EDGE_VISIBLE_SLIVER_PX 40), matching every other EDGE test here.
     expect(animateTo).toHaveBeenCalledTimes(1)
-    expect(animateTo).toHaveBeenLastCalledWith(win, { x: -92, y: 0, width: 132, height: 132 }, expect.any(Function))
+    expect(animateTo).toHaveBeenLastCalledWith(win, { x: -92, y: 0, width: 132, height: 132 }, expect.any(Function), { finalOpacity: 1 })
   })
 })
 
@@ -1302,7 +1315,7 @@ describe('broadcast follows applied — the EDGE-exit presence broadcast is defe
     win.getBounds = () => ({ x: 0, y: 0, width: 132, height: 132 })
     capturedRestoreOnComplete?.()
 
-    expect(win.webContents.send).toHaveBeenCalledWith('desktop-presence:changed', { presence: 'AMBIENT', edgeSide: null, handleSuppressed: false })
+    expect(win.webContents.send).toHaveBeenCalledWith('desktop-presence:changed', { presence: 'AMBIENT', edgeSide: null, handleSuppressed: false, collapsed: false, clickThrough: false })
   })
 })
 
@@ -1357,7 +1370,7 @@ describe('broadcast follows applied, relocate path — the EDGE-exit-via-relocat
     win.getBounds = () => ({ x: 1920, y: 0, width: 132, height: 132 })
     capturedRelocateOnComplete?.()
 
-    expect(win.webContents.send).toHaveBeenCalledWith('desktop-presence:changed', { presence: 'AMBIENT', edgeSide: null, handleSuppressed: false })
+    expect(win.webContents.send).toHaveBeenCalledWith('desktop-presence:changed', { presence: 'AMBIENT', edgeSide: null, handleSuppressed: false, collapsed: false, clickThrough: false })
   })
 })
 
@@ -1395,7 +1408,7 @@ describe('no move queue — chasing a rapidly-changing desired target settles on
       [1, { hwnd: 1n, pid: 1, exeName: null, displayId: 1, reasons: new Set(['fullscreen']), severity: 'hard' }],
     ])
     evaluateDesktopPresence(null, win as unknown as Electron.BrowserWindow)
-    expect(animateTo).toHaveBeenLastCalledWith(win, expect.objectContaining({ x: displayB.bounds.x }), expect.any(Function))
+    expect(animateTo).toHaveBeenLastCalledWith(win, expect.objectContaining({ x: displayB.bounds.x }), expect.any(Function), { finalOpacity: 1 })
 
     // Target 2: C. B also blocked now — while the B-relocate above is still in flight (never
     // invoked), a new evaluate decides C instead.
@@ -1405,7 +1418,7 @@ describe('no move queue — chasing a rapidly-changing desired target settles on
       [2, { hwnd: 2n, pid: 2, exeName: null, displayId: 2, reasons: new Set(['fullscreen']), severity: 'hard' }],
     ])
     evaluateDesktopPresence(null, win as unknown as Electron.BrowserWindow)
-    expect(animateTo).toHaveBeenLastCalledWith(win, expect.objectContaining({ x: displayC.bounds.x }), expect.any(Function))
+    expect(animateTo).toHaveBeenLastCalledWith(win, expect.objectContaining({ x: displayC.bounds.x }), expect.any(Function), { finalOpacity: 1 })
 
     // Target 3: A (home) — home frees up while C is also now blocked.
     captureNextAnimateTo()
@@ -1414,7 +1427,7 @@ describe('no move queue — chasing a rapidly-changing desired target settles on
       [3, { hwnd: 3n, pid: 3, exeName: null, displayId: 3, reasons: new Set(['fullscreen']), severity: 'hard' }],
     ])
     evaluateDesktopPresence(null, win as unknown as Electron.BrowserWindow)
-    expect(animateTo).toHaveBeenLastCalledWith(win, expect.objectContaining({ x: displayHome.bounds.x }), expect.any(Function))
+    expect(animateTo).toHaveBeenLastCalledWith(win, expect.objectContaining({ x: displayHome.bounds.x }), expect.any(Function), { finalOpacity: 1 })
 
     // Target 4: C again — home re-blocks, B stays blocked, C frees up. This is the FINAL desired.
     captureNextAnimateTo()
@@ -1423,7 +1436,7 @@ describe('no move queue — chasing a rapidly-changing desired target settles on
       [2, { hwnd: 2n, pid: 2, exeName: null, displayId: 2, reasons: new Set(['fullscreen']), severity: 'hard' }],
     ])
     evaluateDesktopPresence(null, win as unknown as Electron.BrowserWindow)
-    expect(animateTo).toHaveBeenLastCalledWith(win, expect.objectContaining({ x: displayC.bounds.x }), expect.any(Function))
+    expect(animateTo).toHaveBeenLastCalledWith(win, expect.objectContaining({ x: displayC.bounds.x }), expect.any(Function), { finalOpacity: 1 })
 
     expect(captured).toHaveLength(4)
     vi.clearAllMocks()
@@ -1785,7 +1798,7 @@ describe('关闭 petAvoidanceEnabled 后退出托管状态（Controller 层）',
       // 最终 applied：贴边手柄抑制解除，presence 收敛到 AMBIENT
       win.webContents.send.mockClear()
       sendCurrentPetPresenceOnReady(win as unknown as Electron.BrowserWindow)
-      expect(lastPresencePayload(win)).toEqual({ presence: 'AMBIENT', edgeSide: null, handleSuppressed: false })
+      expect(lastPresencePayload(win)).toEqual({ presence: 'AMBIENT', edgeSide: null, handleSuppressed: false, collapsed: false, clickThrough: false })
 
       // 不留欠债：再求一次值不产生任何新的物理动作
       vi.clearAllMocks()
@@ -2120,5 +2133,267 @@ describe('applyOverlaySize', () => {
     } finally {
       getPreferredBoundsMock.mockReturnValue(null)
     }
+  })
+})
+
+describe('pet interaction mode, collapsed handle geometry', () => {
+  let fresh: typeof import('./windowBehavior')
+  let revision = 0
+  const PREFERRED = { x: 1500, y: 600, width: 132, height: 132 }
+  const BASE_CONFIG = { chatPinMode: 'off' as const, petAvoidanceEnabled: true, petClickThrough: false, petCollapsed: false, appRules: [] }
+
+  beforeEach(async () => {
+    vi.resetModules()
+    fresh = await import('./windowBehavior')
+    revision = 0
+    testState.displays = [makeDisplay(1, 0)]
+    testState.homeDisplayId = 1
+    testState.matchDisplay = () => testState.displays[0]
+    testState.blockerMap = new Map()
+    getPreferredBoundsMock.mockReturnValue({ ...PREFERRED })
+  })
+
+  afterEach(() => {
+    getPreferredBoundsMock.mockReturnValue(null)
+  })
+
+  function makeModeWindow(bounds: { x: number; y: number; width: number; height: number }) {
+    const win = {
+      ...makeFakeOverlayWindow(bounds),
+      setBounds: vi.fn(),
+      setIgnoreMouseEvents: vi.fn(),
+      setOpacity: vi.fn(),
+    }
+    win.setBounds.mockImplementation((next: typeof bounds) => {
+      win.getBounds = () => next
+    })
+    return win
+  }
+
+  function asWindow(win: ReturnType<typeof makeModeWindow>): Electron.BrowserWindow {
+    return win as unknown as Electron.BrowserWindow
+  }
+
+  function applyConfig(win: ReturnType<typeof makeModeWindow>, overrides: Partial<typeof BASE_CONFIG>): void {
+    revision += 1
+    fresh.applyWindowBehaviorSnapshot(
+      { generation: 'mode-test', revision, config: { ...BASE_CONFIG, ...overrides } },
+      null,
+      asWindow(win)
+    )
+  }
+
+  it('fills the new fields with false when an older core omits them', () => {
+    const { petClickThrough: _a, petCollapsed: _b, ...legacy } = BASE_CONFIG
+    fresh.applyWindowBehaviorSnapshot(
+      { generation: 'legacy', revision: 1, config: legacy as unknown as typeof BASE_CONFIG },
+      null,
+      null
+    )
+    expect(fresh.getCachedWindowBehaviorConfig()).toMatchObject({ petClickThrough: false, petCollapsed: false })
+  })
+
+  it('touches neither mouse handling nor opacity in normal mode, however often it re-evaluates', () => {
+    const win = makeModeWindow({ ...PREFERRED })
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+
+    expect(win.setIgnoreMouseEvents).not.toHaveBeenCalled()
+    expect(win.setOpacity).not.toHaveBeenCalled()
+  })
+
+  it('click-through ignores the mouse with forwarding and dims to 0.6 exactly once, then restores once on leaving it', () => {
+    const win = makeModeWindow({ ...PREFERRED })
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+
+    applyConfig(win, { petClickThrough: true })
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+
+    expect(win.setIgnoreMouseEvents).toHaveBeenCalledTimes(1)
+    expect(win.setIgnoreMouseEvents).toHaveBeenCalledWith(true, { forward: true })
+    expect(win.setOpacity).toHaveBeenCalledTimes(1)
+    expect(win.setOpacity).toHaveBeenCalledWith(0.6)
+
+    applyConfig(win, { petClickThrough: false })
+
+    expect(win.setIgnoreMouseEvents).toHaveBeenCalledTimes(2)
+    expect(win.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false)
+    expect(win.setOpacity).toHaveBeenCalledTimes(2)
+    expect(win.setOpacity).toHaveBeenLastCalledWith(1)
+  })
+
+  it('collapsed ignores the mouse at full opacity, and wins over click-through', () => {
+    const win = makeModeWindow({ ...PREFERRED })
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+
+    applyConfig(win, { petCollapsed: true, petClickThrough: true })
+
+    expect(win.setIgnoreMouseEvents).toHaveBeenCalledTimes(1)
+    expect(win.setIgnoreMouseEvents).toHaveBeenCalledWith(true, { forward: true })
+    expect(win.setOpacity).not.toHaveBeenCalled()
+  })
+
+  it('handle hover lifts the ignore in click-through and collapsed modes only, and a mode change resets it', () => {
+    const win = makeModeWindow({ ...PREFERRED })
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+
+    fresh.requestOverlayHandleHover(asWindow(win), true)
+    expect(win.setIgnoreMouseEvents).not.toHaveBeenCalled()
+
+    applyConfig(win, { petClickThrough: true })
+    win.setIgnoreMouseEvents.mockClear()
+
+    fresh.requestOverlayHandleHover(asWindow(win), true)
+    expect(win.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false)
+    fresh.requestOverlayHandleHover(asWindow(win), true)
+    expect(win.setIgnoreMouseEvents).toHaveBeenCalledTimes(1)
+    fresh.requestOverlayHandleHover(asWindow(win), false)
+    expect(win.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true, { forward: true })
+
+    fresh.requestOverlayHandleHover(asWindow(win), true)
+    win.setIgnoreMouseEvents.mockClear()
+    applyConfig(win, { petClickThrough: true, petCollapsed: true })
+    expect(win.setIgnoreMouseEvents).toHaveBeenCalledTimes(1)
+    expect(win.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true, { forward: true })
+  })
+
+  it('moveToDisplay and edge animations end at the current mode target opacity', () => {
+    testState.displays = [makeDisplay(1, 0), makeDisplay(2, 1920)]
+    testState.homeDisplayId = 2
+    const win = makeModeWindow({ ...PREFERRED })
+
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+    expect(animateTo).toHaveBeenLastCalledWith(asWindow(win), expect.anything(), expect.any(Function), { finalOpacity: 1 })
+
+    testState.homeDisplayId = 1
+    applyConfig(win, { petClickThrough: true })
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+    expect(animateTo).toHaveBeenLastCalledWith(asWindow(win), expect.anything(), expect.any(Function), { finalOpacity: 0.6 })
+  })
+
+  it('collapse sets the 24x24 handle bounds and expand restores the expanded bounds, never writing preferred bounds', () => {
+    const win = makeModeWindow({ ...PREFERRED })
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+    win.setBounds.mockClear()
+    setPreferredBoundsMock.mockClear()
+
+    applyConfig(win, { petCollapsed: true })
+    expect(win.setBounds).toHaveBeenCalledTimes(1)
+    expect(win.setBounds).toHaveBeenLastCalledWith({ x: 1500 + 132 - 24, y: 600, width: 24, height: 24 })
+
+    applyConfig(win, { petCollapsed: false })
+    expect(win.setBounds).toHaveBeenCalledTimes(2)
+    expect(win.setBounds).toHaveBeenLastCalledWith(PREFERRED)
+    expect(setPreferredBoundsMock).not.toHaveBeenCalled()
+  })
+
+  it('ignores set-size reports while collapsed but remembers the last one for the next expand', () => {
+    const win = makeModeWindow({ ...PREFERRED })
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+    fresh.applyOverlaySize(asWindow(win), { width: 200, height: 200 })
+    applyConfig(win, { petCollapsed: true })
+    win.setBounds.mockClear()
+
+    fresh.applyOverlaySize(asWindow(win), { width: 300, height: 300 })
+    expect(win.setBounds).not.toHaveBeenCalled()
+
+    applyConfig(win, { petCollapsed: false })
+    expect(win.setBounds).toHaveBeenCalledTimes(1)
+    expect(win.setBounds).toHaveBeenLastCalledWith({ x: 1500 + (132 - 300) / 2, y: 600 + 132 - 300, width: 300, height: 300 })
+  })
+
+  it('uses the preferred bounds size for the first expand when no size was ever reported', () => {
+    const win = makeModeWindow({ x: 1608, y: 600, width: 24, height: 24 })
+    fresh.noteOverlayCreatedCollapsed(true)
+    applyConfig(win, { petCollapsed: true })
+
+    expect(win.setBounds).not.toHaveBeenCalled()
+    expect(animateTo).toHaveBeenLastCalledWith(
+      asWindow(win),
+      { x: 1608, y: 600, width: 24, height: 24 },
+      expect.any(Function),
+      { finalOpacity: 1 }
+    )
+
+    win.setBounds.mockClear()
+    applyConfig(win, { petCollapsed: false })
+    expect(win.setBounds).toHaveBeenLastCalledWith(PREFERRED)
+  })
+
+  it('moveToDisplay targets the handle bounds of the destination display while collapsed', () => {
+    testState.displays = [makeDisplay(1, 0), makeDisplay(2, 1920)]
+    testState.homeDisplayId = 2
+    getPreferredBoundsMock.mockImplementation(((_key: string, displayId: number) =>
+      displayId === 2 ? { x: 2000, y: 600, width: 132, height: 132 } : null) as () => unknown)
+    const win = makeModeWindow({ x: 0, y: 0, width: 132, height: 132 })
+
+    applyConfig(win, { petCollapsed: true })
+
+    expect(animateTo).toHaveBeenLastCalledWith(
+      asWindow(win),
+      { x: 2000 + 132 - 24, y: 600, width: 24, height: 24 },
+      expect.any(Function),
+      { finalOpacity: 1 }
+    )
+  })
+
+  it('edge restore on hover maps the full bounds computed with the pet size onto the handle, and the handle never reports handleSuppressed', () => {
+    const win = makeModeWindow({ ...PREFERRED })
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+    applyConfig(win, { petCollapsed: true })
+
+    testState.blockerMap = new Map([
+      [1, { hwnd: 1n, pid: 1, exeName: null, displayId: 1, reasons: new Set(['user-rule']), severity: 'soft' }],
+    ])
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+    expect(animateTo).toHaveBeenLastCalledWith(
+      asWindow(win),
+      { x: 1920 - 40, y: 600, width: 24, height: 24 },
+      expect.any(Function),
+      { finalOpacity: 1 }
+    )
+    expect(win.webContents.send).toHaveBeenLastCalledWith(
+      'desktop-presence:changed',
+      expect.objectContaining({ presence: 'EDGE', collapsed: true, handleSuppressed: false })
+    )
+
+    fresh.requestOverlayEdgeHover(asWindow(win), true)
+    expect(animateTo).toHaveBeenLastCalledWith(
+      asWindow(win),
+      { x: 1500 + 132 - 24, y: 600, width: 24, height: 24 },
+      expect.any(Function),
+      { finalOpacity: 1 }
+    )
+  })
+
+  it('persists a dragged handle as the expanded bounds it implies, not as a 24x24 box', () => {
+    const win = makeModeWindow({ ...PREFERRED })
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+    applyConfig(win, { petCollapsed: true })
+    setPreferredBoundsMock.mockClear()
+
+    testState.dragging = { overlay: true, chat: false }
+    win.getBounds = () => ({ x: 1000, y: 300, width: 24, height: 24 })
+    fresh.handleWindowMoved('overlay', asWindow(win), null, null)
+    vi.advanceTimersByTime(PERSIST_DEBOUNCE_MS + 10)
+
+    expect(setPreferredBoundsMock).toHaveBeenCalledWith('overlay', 1, { x: 1000 - (132 - 24), y: 300, width: 132, height: 132 })
+  })
+
+  it('broadcasts the configured collapsed and clickThrough flags', () => {
+    const win = makeModeWindow({ ...PREFERRED })
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+
+    applyConfig(win, { petClickThrough: true })
+    expect(win.webContents.send).toHaveBeenLastCalledWith(
+      'desktop-presence:changed',
+      expect.objectContaining({ collapsed: false, clickThrough: true })
+    )
+
+    applyConfig(win, { petClickThrough: true, petCollapsed: true })
+    expect(win.webContents.send).toHaveBeenLastCalledWith(
+      'desktop-presence:changed',
+      expect.objectContaining({ collapsed: true, clickThrough: true })
+    )
   })
 })

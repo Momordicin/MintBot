@@ -9,6 +9,9 @@ import {
   computeAnchoredResizeBounds,
   OVERLAY_DEFAULT_RIGHT_OFFSET_DIP,
   OVERLAY_DEFAULT_BOTTOM_OFFSET_DIP,
+  COLLAPSED_SIZE,
+  collapsedHandleBounds,
+  expandedBoundsFromHandle,
 } from './windowPositions'
 
 // 只测新增的纯函数（显示器挑选 + bounds 夹紧）。getPreferredBounds/setPreferredBounds/
@@ -335,5 +338,25 @@ describe('computeAnchoredResizeBounds', () => {
       width: 132,
       height: 132,
     })
+  })
+})
+
+describe('collapsedHandleBounds', () => {
+  it('is a 24x24 square hugging the top-right corner where the drag handle sits', () => {
+    const handle = collapsedHandleBounds({ x: 1000, y: 500, width: 132, height: 132 })
+    expect(COLLAPSED_SIZE).toBe(24)
+    expect(handle).toEqual({ x: 1000 + 132 - 2 - 20 - 2, y: 500 + 2 - 2, width: 24, height: 24 })
+  })
+
+  it('depends only on the expanded top-right corner, not on the height', () => {
+    const tall = collapsedHandleBounds({ x: 10, y: 20, width: 300, height: 500 })
+    expect(tall).toEqual({ x: 10 + 300 - 24, y: 20, width: 24, height: 24 })
+  })
+})
+
+describe('expandedBoundsFromHandle', () => {
+  it('inverts collapsedHandleBounds for a known pet size', () => {
+    const expanded = { x: 321, y: 654, width: 300, height: 500 }
+    expect(expandedBoundsFromHandle(collapsedHandleBounds(expanded), expanded)).toEqual(expanded)
   })
 })

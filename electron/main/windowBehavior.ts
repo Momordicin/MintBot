@@ -1,5 +1,5 @@
-// electron/main/windowBehavior.ts — 窗口行为编排：缓存 window-behavior 配置快照，按显示器阻挡表为桌宠与聊天窗口套用迁移、置顶、显示/隐藏、贴边，并处理拖拽落点持久化与 overlay 尺寸
-// 用法：index.ts 启动与事件里调 initWindowBehaviorConfig / applyWindowBehaviorSnapshot / evaluateDesktopPresence / handleWindowMoved / requestOverlayEdgeHover / applyOverlaySize 等；向 overlay 发 desktop-presence:changed
+// electron/main/windowBehavior.ts — 窗口行为编排：缓存 window-behavior 配置快照，按显示器阻挡表为桌宠与聊天窗口套用迁移、置顶、显示/隐藏、贴边，并处理拖拽落点持久化、overlay 尺寸与收起手柄几何、穿透与透明度
+// 用法：index.ts 启动与事件里调 initWindowBehaviorConfig / applyWindowBehaviorSnapshot / evaluateDesktopPresence / handleWindowMoved / requestOverlayEdgeHover / requestOverlayHandleHover / applyOverlaySize / getCurrentPetMode / noteOverlayCreatedCollapsed 等；向 overlay 发 desktop-presence:changed
 // 形状：输入 WindowBehaviorSnapshot（core GET/PATCH /config/window-behavior 与 SSE window-behavior-changed）和阻挡表；输出为对 BrowserWindow 的操作与 IPC 推送
 // 对应文件：electron/main/index.ts / electron/main/desktopPresence.ts / electron/main/foregroundWorldModel.ts / electron/main/windowPositions.ts / electron/main/windowAnimation.ts / shared/windowBehavior.ts / electron/main/windowBehavior.test.ts
 import { BrowserWindow, screen } from 'electron'
@@ -10,11 +10,13 @@ import {
   getEffectiveHomeDisplay,
   computeDefaultBoundsForDisplay,
   computeAnchoredResizeBounds,
+  collapsedHandleBounds,
+  expandedBoundsFromHandle,
   clampBoundsToWorkArea,
   DEFAULT_WINDOW_SIZE,
   PERSIST_DEBOUNCE_MS,
 } from './windowPositions'
-import type { WindowKey } from './windowPositions'
+import type { Bounds, WindowKey } from './windowPositions'
 import { commitHomeDisplayFromDragOutcome } from './homeDisplayCommit'
 import { getDisplayStateMap, revalidateBlockersNow } from './foregroundWorldModel'
 import type { AppRule } from './displayStateMap'
@@ -35,8 +37,11 @@ import {
   resolveEdgeHoverBounds,
   presencePayloadChanged,
   computeHandleSuppressed,
+  petMode,
+  petModeIgnoresMouse,
+  petModeTargetOpacity,
 } from './desktopPresence'
-import type { EdgeSide, DesiredPetState, PetPresence, PetPresencePayload } from './desktopPresence'
+import type { EdgeSide, DesiredPetState, PetMode, PetPresence, PetPresencePayload } from './desktopPresence'
 import { isWindowDragInProgress, endDragTail } from './dragActivity'
 import { CORE_URL } from './coreUrl'
 import { isNewerSnapshot } from '../../shared/windowBehavior.js'
@@ -68,12 +73,21 @@ function currentConfig(): WindowBehaviorConfig {
 
 function acceptSnapshot(snapshot: WindowBehaviorSnapshot): boolean {
   if (!isNewerSnapshot(cachedSnapshot, snapshot)) return false
-  cachedSnapshot = snapshot
+  cachedSnapshot = { ...snapshot, config: { ...DEFAULT_CONFIG, ...snapshot.config } }
   return true
 }
 
 export function getCachedWindowBehaviorConfig(): WindowBehaviorConfig {
   return currentConfig()
+}
+
+export function getCurrentPetMode(): PetMode {
+  const { petCollapsed, petClickThrough } = currentConfig()
+  return petMode(petCollapsed, petClickThrough)
+}
+
+function targetOpacityFor(windowKey: WindowKey): number {
+  return windowKey === 'overlay' ? petModeTargetOpacity(getCurrentPetMode()) : 1
 }
 
 export function getWindowBehaviorRules(): { appRules: AppRule[] } {
@@ -197,22 +211,25 @@ function moveToDisplay(win: BrowserWindow, windowKey: WindowKey, targetDisplayId
   if (!target) return
 
   let bounds = getPreferredBounds(windowKey, target.id)
+  const defaultSize = windowKey === 'overlay'
+    ? resolvePetSize(win.getBounds(), bounds, appliedPetCollapsed)
+    : DEFAULT_WINDOW_SIZE[windowKey]
   if (!bounds) {
-    const defaultSize = windowKey === 'overlay' ? win.getBounds() : DEFAULT_WINDOW_SIZE[windowKey]
     bounds = computeDefaultBoundsForDisplay(target, displays, { width: defaultSize.width, height: defaultSize.height }, windowKey)
     setPreferredBounds(windowKey, target.id, bounds)
   } else {
     bounds = windowKey === 'overlay'
-      ? computeAnchoredResizeBounds(bounds, win.getBounds(), target.workArea)
+      ? computeAnchoredResizeBounds(bounds, defaultSize, target.workArea)
       : clampBoundsToWorkArea(bounds, target.workArea)
   }
+  if (windowKey === 'overlay' && appliedPetCollapsed) bounds = collapsedHandleBounds(bounds)
   notePlacement(windowKey, target.id, bounds)
 
   const { generation, onComplete } = beginProgrammaticMove(windowKey)
   const cancel = animateTo(win, bounds, () => {
     const wasCurrent = onComplete()
     if (wasCurrent) onSettled?.()
-  })
+  }, { finalOpacity: targetOpacityFor(windowKey) })
   setActiveAnimationCancelIfCurrent(windowKey, generation, cancel)
 }
 
@@ -232,9 +249,11 @@ function computeEdgeFullBounds(
   currentBounds: Electron.Rectangle
 ): Electron.Rectangle {
   const preferredBounds = getPreferredBounds('overlay', target.id)
-  const fullBounds = preferredBounds
-    ? computeAnchoredResizeBounds(preferredBounds, currentBounds, target.workArea)
-    : computeDefaultBoundsForDisplay(target, displays, { width: currentBounds.width, height: currentBounds.height }, 'overlay')
+  const petSize = resolvePetSize(currentBounds, preferredBounds, appliedPetCollapsed)
+  const expandedBounds = preferredBounds
+    ? computeAnchoredResizeBounds(preferredBounds, petSize, target.workArea)
+    : computeDefaultBoundsForDisplay(target, displays, { width: petSize.width, height: petSize.height }, 'overlay')
+  const fullBounds = appliedPetCollapsed ? collapsedHandleBounds(expandedBounds) : expandedBounds
   return {
     x: fullBounds.x,
     y: currentBounds.y,
@@ -275,7 +294,7 @@ function runPetEdgeController(
     const { generation, onComplete } = beginProgrammaticMove('overlay')
     const cancel = animateTo(overlayWindow, restoredBounds, () => {
       if (onComplete()) settlePetPresence(overlayWindow, desired.presence, null, true)
-    })
+    }, { finalOpacity: targetOpacityFor('overlay') })
     setActiveAnimationCancelIfCurrent('overlay', generation, cancel)
     return
   }
@@ -305,7 +324,7 @@ function runPetEdgeController(
   const { generation, onComplete } = beginProgrammaticMove('overlay')
   const cancel = animateTo(overlayWindow, desiredBounds, () => {
     if (onComplete()) settlePetPresence(overlayWindow, 'EDGE', stableSide, true)
-  })
+  }, { finalOpacity: targetOpacityFor('overlay') })
   setActiveAnimationCancelIfCurrent('overlay', generation, cancel)
 }
 
@@ -344,10 +363,13 @@ function broadcastPetPresenceIfChanged(overlayWindow: BrowserWindow, payload: Pe
 
 function currentPetPresencePayload(): PetPresencePayload {
   const presence = appliedPetPresence ?? 'AMBIENT'
+  const { petCollapsed, petClickThrough } = currentConfig()
   return {
     presence,
     edgeSide: presence === 'EDGE' ? appliedPetEdgeSide : null,
-    handleSuppressed: computeHandleSuppressed(latestPetDesired?.presence ?? presence, presence),
+    handleSuppressed: computeHandleSuppressed(latestPetDesired?.presence ?? presence, presence, petCollapsed),
+    collapsed: petCollapsed,
+    clickThrough: petClickThrough,
   }
 }
 
@@ -426,7 +448,7 @@ function persistBoundsNow(
       const { generation, onComplete } = beginProgrammaticMove(windowKey)
       const cancel = animateTo(win, rollback.bounds, () => {
         if (onComplete()) reconcileAfterDragPlacement(windowKey, mainWindow, overlayWindow)
-      }, { instant: true })
+      }, { instant: true, finalOpacity: targetOpacityFor(windowKey) })
       setActiveAnimationCancelIfCurrent(windowKey, generation, cancel)
     } else {
       moveToDisplay(win, windowKey, currentDisplayId, () =>
@@ -438,7 +460,13 @@ function persistBoundsNow(
 
   commitHomeDisplayFromDragOutcome(windowKey, outcome)
   if (outcome.boundsWriteDisplayId !== null) {
-    setPreferredBounds(windowKey, outcome.boundsWriteDisplayId, bounds)
+    const boundsToWrite = windowKey === 'overlay' && appliedPetCollapsed
+      ? expandedBoundsFromHandle(
+          bounds,
+          resolvePetSize(bounds, getPreferredBounds('overlay', outcome.boundsWriteDisplayId), true)
+        )
+      : bounds
+    setPreferredBounds(windowKey, outcome.boundsWriteDisplayId, boundsToWrite)
   }
   notePlacement(windowKey, dropDisplayId, bounds)
 
@@ -470,6 +498,9 @@ export function applyOverlaySize(
 ): void {
   if (!overlayWindow || overlayWindow.isDestroyed()) return
 
+  lastPetSize = { width: size.width, height: size.height }
+  if (appliedPetCollapsed) return
+
   const current = overlayWindow.getBounds()
   if (current.width === size.width && current.height === size.height) return
 
@@ -490,6 +521,83 @@ export function applyOverlaySize(
   evaluatePetPresence(overlayWindow)
 }
 
+let lastPetSize: { width: number; height: number } | null = null
+let appliedPetCollapsed = false
+
+export function noteOverlayCreatedCollapsed(collapsed: boolean): void {
+  appliedPetCollapsed = collapsed
+}
+
+function resolvePetSize(
+  currentBounds: Electron.Rectangle,
+  preferredBounds: Bounds | null,
+  layoutCollapsed: boolean
+): { width: number; height: number } {
+  if (!layoutCollapsed) return { width: currentBounds.width, height: currentBounds.height }
+  if (lastPetSize) return lastPetSize
+  if (preferredBounds) return { width: preferredBounds.width, height: preferredBounds.height }
+  return DEFAULT_WINDOW_SIZE.overlay
+}
+
+function syncPetCollapsedGeometry(win: BrowserWindow): void {
+  const collapsed = currentConfig().petCollapsed
+  if (collapsed === appliedPetCollapsed) return
+
+  activeAnimationCancelFor.get('overlay')?.()
+  if (collapsed === appliedPetCollapsed) return
+
+  const settled = win.getBounds()
+  const displays = screen.getAllDisplays()
+  const appliedDisplayId = appliedDisplayIdFor('overlay')
+  const display = displays.find(candidate => candidate.id === appliedDisplayId) ?? screen.getDisplayMatching(settled)
+  const preferred = getPreferredBounds('overlay', display.id)
+  const petSize = resolvePetSize(settled, preferred, appliedPetCollapsed)
+  const expanded = preferred
+    ? computeAnchoredResizeBounds(preferred, petSize, display.workArea)
+    : computeDefaultBoundsForDisplay(display, displays, petSize, 'overlay')
+  const target = collapsed ? collapsedHandleBounds(expanded) : expanded
+
+  appliedPetCollapsed = collapsed
+  markProgrammaticQuiet('overlay', PROGRAMMATIC_MOVE_COOLDOWN_MS)
+  win.setBounds(target)
+  notePlacement('overlay', display.id, target)
+}
+
+let appliedPetMode: PetMode = 'normal'
+let appliedIgnoreMouse = false
+let appliedPetOpacity = 1
+let overlayHandleHovered = false
+
+function applyPetInteractionMode(overlayWindow: BrowserWindow): void {
+  const mode = getCurrentPetMode()
+  if (mode !== appliedPetMode) {
+    appliedPetMode = mode
+    overlayHandleHovered = false
+  }
+
+  const ignoreMouse = petModeIgnoresMouse(mode) && !overlayHandleHovered
+  if (ignoreMouse !== appliedIgnoreMouse) {
+    if (ignoreMouse) overlayWindow.setIgnoreMouseEvents(true, { forward: true })
+    else overlayWindow.setIgnoreMouseEvents(false)
+    appliedIgnoreMouse = ignoreMouse
+  }
+
+  if (programmaticMoveInFlight.has('overlay')) return
+  const opacity = petModeTargetOpacity(mode)
+  if (opacity !== appliedPetOpacity) {
+    overlayWindow.setOpacity(opacity)
+    appliedPetOpacity = opacity
+  }
+}
+
+export function requestOverlayHandleHover(overlayWindow: BrowserWindow | null, hovered: boolean): void {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return
+  if (getCurrentPetMode() === 'normal') return
+
+  overlayHandleHovered = hovered
+  applyPetInteractionMode(overlayWindow)
+}
+
 let applyingPetVisibility = false
 
 function applyPetVisibility(overlayWindow: BrowserWindow, visibility: 'show' | 'hide' | null): void {
@@ -506,6 +614,8 @@ function applyPetVisibility(overlayWindow: BrowserWindow, visibility: 'show' | '
 function evaluatePetPresence(overlayWindow: BrowserWindow | null): void {
   if (!overlayWindow || overlayWindow.isDestroyed()) return
   if (!startupGateOpen) return
+
+  if (!isWindowDragInProgress('overlay')) syncPetCollapsedGeometry(overlayWindow)
 
   const displays = screen.getAllDisplays()
   const preferredDisplayId = getEffectiveHomeDisplay(displays, 'overlay').id
@@ -529,6 +639,8 @@ function evaluatePetPresence(overlayWindow: BrowserWindow | null): void {
   applyPetVisibility(overlayWindow, transition.visibility)
 
   applyAlwaysOnTop(overlayWindow, 'overlay', desired.alwaysOnTop)
+
+  applyPetInteractionMode(overlayWindow)
 
   if (transition.move !== null && !isInteracting) {
     appliedPetDisplayId = transition.move

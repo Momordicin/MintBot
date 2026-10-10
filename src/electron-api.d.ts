@@ -5,6 +5,15 @@ export interface DesktopPresencePayload {
   presence: 'ACTIVE' | 'AMBIENT' | 'EDGE' | 'HIDDEN'
   edgeSide: 'left' | 'right' | null
   handleSuppressed: boolean
+  collapsed: boolean
+  clickThrough: boolean
+}
+
+export interface OverlayMenuState {
+  presetId: string
+  effectiveForm: 'pixel' | 'illustration'
+  otherFormAvailable: boolean
+  petScale: { pixel: 0.5 | 0.75 | 1 | 1.25 | 1.5; illustration: 0.5 | 0.75 | 1 | 1.25 | 1.5 }
 }
 
 export interface ElectronAPI {
@@ -19,6 +28,9 @@ export interface ElectronAPI {
   requestOverlayEdgeHover: (hovered: boolean) => void
   notifyOverlayReady: () => void
   setOverlaySize: (size: { width: number; height: number }) => void
+  setOverlayHandleHover: (hovered: boolean) => void
+  setOverlayMenuState: (state: OverlayMenuState) => void
+  openOverlayContextMenu: () => void
   onDesktopPresenceChanged: (callback: (payload: DesktopPresencePayload) => void) => () => void
   setTitlebarOverlay: (overlay: { color: string; symbolColor: string }) => void
 }

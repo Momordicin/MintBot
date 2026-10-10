@@ -1,3 +1,5 @@
+import type { PetScale } from '../portraitForm.js'
+
 // 建议索引（写 SQLite schema 时建立）：
 // CREATE INDEX idx_messages_session ON Messages(sessionId, createdAt)
 // CREATE INDEX idx_messages_visible ON Messages(sessionId, visibleToUser)
@@ -74,8 +76,6 @@ export interface Summary {
   toMessageId: number
   createdAt: number
 }
-
-import type { PetScale } from '../portraitForm.js'
 
 // 每角色显示设置（聊天窗口背景叠色），见 docs/MintBot_TDD.md §3.2.2「Presets.displayConfig」
 export interface PresetDisplayConfig {

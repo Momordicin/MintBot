@@ -141,13 +141,37 @@ export function resolveEdgeHoverBounds(edgeBounds: Bounds, fullBounds: Bounds, h
   return hovered ? fullBounds : edgeBounds
 }
 
+export type PetMode = 'normal' | 'clickThrough' | 'collapsed'
+
+export function petMode(collapsed: boolean, clickThrough: boolean): PetMode {
+  if (collapsed) return 'collapsed'
+  return clickThrough ? 'clickThrough' : 'normal'
+}
+
+export function petModeIgnoresMouse(mode: PetMode): boolean {
+  return mode !== 'normal'
+}
+
+export const CLICK_THROUGH_OPACITY = 0.6
+
+export function petModeTargetOpacity(mode: PetMode): number {
+  return mode === 'clickThrough' ? CLICK_THROUGH_OPACITY : 1
+}
+
 export interface PetPresencePayload {
   presence: PetPresence
   edgeSide: EdgeSide | null
   handleSuppressed: boolean
+  collapsed: boolean
+  clickThrough: boolean
 }
 
-export function computeHandleSuppressed(latestDesiredPresence: PetPresence, appliedPresence: PetPresence): boolean {
+export function computeHandleSuppressed(
+  latestDesiredPresence: PetPresence,
+  appliedPresence: PetPresence,
+  collapsed: boolean = false
+): boolean {
+  if (collapsed) return false
   return latestDesiredPresence === 'EDGE' || appliedPresence === 'EDGE'
 }
 
@@ -156,7 +180,9 @@ export function presencePayloadChanged(previous: PetPresencePayload | null, next
   return (
     previous.presence !== next.presence ||
     previous.edgeSide !== next.edgeSide ||
-    previous.handleSuppressed !== next.handleSuppressed
+    previous.handleSuppressed !== next.handleSuppressed ||
+    previous.collapsed !== next.collapsed ||
+    previous.clickThrough !== next.clickThrough
   )
 }
 

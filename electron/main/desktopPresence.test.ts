@@ -17,6 +17,9 @@ import {
   resolveEdgeHoverBounds,
   presencePayloadChanged,
   computeHandleSuppressed,
+  petMode,
+  petModeIgnoresMouse,
+  petModeTargetOpacity,
 } from './desktopPresence'
 import type { DisplayStateMap, DisplayBlocker } from './displayStateMap'
 
@@ -716,42 +719,77 @@ describe('computeHandleSuppressed (Resolver/Controller 边界修正 — safety g
 })
 
 describe('presencePayloadChanged (Stage 3 part 2, Task 1 — broadcast only on change)', () => {
+  const AMBIENT = { presence: 'AMBIENT' as const, edgeSide: null, handleSuppressed: false, collapsed: false, clickThrough: false }
+
   it('is unconditionally true when there has never been a previous broadcast (previous = null)', () => {
-    expect(presencePayloadChanged(null, { presence: 'AMBIENT', edgeSide: null, handleSuppressed: false })).toBe(true)
+    expect(presencePayloadChanged(null, AMBIENT)).toBe(true)
   })
 
-  it('is false when presence, edgeSide, and handleSuppressed are all unchanged', () => {
-    const payload = { presence: 'EDGE' as const, edgeSide: 'left' as const, handleSuppressed: true }
+  it('is false when every field is unchanged', () => {
+    const payload = { presence: 'EDGE' as const, edgeSide: 'left' as const, handleSuppressed: true, collapsed: false, clickThrough: true }
     expect(presencePayloadChanged(payload, { ...payload })).toBe(false)
   })
 
   it('is true when presence changed', () => {
     expect(
-      presencePayloadChanged(
-        { presence: 'AMBIENT', edgeSide: null, handleSuppressed: false },
-        { presence: 'EDGE', edgeSide: 'left', handleSuppressed: true }
-      )
+      presencePayloadChanged(AMBIENT, { ...AMBIENT, presence: 'EDGE', edgeSide: 'left', handleSuppressed: true })
     ).toBe(true)
   })
 
   it('is true when only edgeSide changed (presence still EDGE)', () => {
-    expect(
-      presencePayloadChanged(
-        { presence: 'EDGE', edgeSide: 'left', handleSuppressed: true },
-        { presence: 'EDGE', edgeSide: 'right', handleSuppressed: true }
-      )
-    ).toBe(true)
+    const left = { ...AMBIENT, presence: 'EDGE' as const, edgeSide: 'left' as const, handleSuppressed: true }
+    expect(presencePayloadChanged(left, { ...left, edgeSide: 'right' })).toBe(true)
   })
 
   // This is the case that would be invisible if handleSuppressed were not compared: desired just
   // became EDGE (front edge, fail-closed) while applied has not caught up — presence/edgeSide are
   // unchanged, only handleSuppressed flips.
   it('is true when only handleSuppressed changed (presence/edgeSide unchanged — the fail-closed front-edge case)', () => {
-    expect(
-      presencePayloadChanged(
-        { presence: 'AMBIENT', edgeSide: null, handleSuppressed: false },
-        { presence: 'AMBIENT', edgeSide: null, handleSuppressed: true }
-      )
-    ).toBe(true)
+    expect(presencePayloadChanged(AMBIENT, { ...AMBIENT, handleSuppressed: true })).toBe(true)
+  })
+
+  it('is true when only collapsed changed', () => {
+    expect(presencePayloadChanged(AMBIENT, { ...AMBIENT, collapsed: true })).toBe(true)
+  })
+
+  it('is true when only clickThrough changed', () => {
+    expect(presencePayloadChanged(AMBIENT, { ...AMBIENT, clickThrough: true })).toBe(true)
+  })
+})
+
+describe('computeHandleSuppressed while collapsed (the handle is the whole window)', () => {
+  it('is never suppressed, even with EDGE desired or applied', () => {
+    expect(computeHandleSuppressed('EDGE', 'EDGE', true)).toBe(false)
+    expect(computeHandleSuppressed('EDGE', 'AMBIENT', true)).toBe(false)
+    expect(computeHandleSuppressed('AMBIENT', 'EDGE', true)).toBe(false)
+  })
+})
+
+describe('petMode', () => {
+  it('is normal with neither flag', () => {
+    expect(petMode(false, false)).toBe('normal')
+  })
+
+  it('is clickThrough when only click-through is set', () => {
+    expect(petMode(false, true)).toBe('clickThrough')
+  })
+
+  it('is collapsed when only collapsed is set', () => {
+    expect(petMode(true, false)).toBe('collapsed')
+  })
+
+  it('lets collapsed win over click-through', () => {
+    expect(petMode(true, true)).toBe('collapsed')
+  })
+})
+
+describe('petModeIgnoresMouse / petModeTargetOpacity', () => {
+  it('maps each mode to its mouse handling and opacity', () => {
+    expect(petModeIgnoresMouse('normal')).toBe(false)
+    expect(petModeIgnoresMouse('clickThrough')).toBe(true)
+    expect(petModeIgnoresMouse('collapsed')).toBe(true)
+    expect(petModeTargetOpacity('normal')).toBe(1)
+    expect(petModeTargetOpacity('clickThrough')).toBe(0.6)
+    expect(petModeTargetOpacity('collapsed')).toBe(1)
   })
 })
