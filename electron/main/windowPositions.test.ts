@@ -6,6 +6,9 @@ import {
   pickFinestDisplay,
   computeSizeForDisplay,
   computeDefaultBoundsForDisplay,
+  computeAnchoredResizeBounds,
+  OVERLAY_DEFAULT_RIGHT_OFFSET_DIP,
+  OVERLAY_DEFAULT_BOTTOM_OFFSET_DIP,
 } from './windowPositions'
 
 // 只测新增的纯函数（显示器挑选 + bounds 夹紧）。getPreferredBounds/setPreferredBounds/
@@ -180,7 +183,7 @@ describe('computeSizeForDisplay', () => {
 })
 
 describe('computeDefaultBoundsForDisplay', () => {
-  it('combines the computed size with the bottom-right work-area anchored position', () => {
+  it('applies density-scaled size and centers the chat window in a non-zero-origin work area', () => {
     const anchor = makeDisplay(1, { x: 0, y: 0, width: 1920, height: 1080 }, undefined, 2)
     const other = makeDisplay(
       2,
@@ -189,25 +192,148 @@ describe('computeDefaultBoundsForDisplay', () => {
       1
     )
     const defaultSize = { width: 300, height: 600 }
-    expect(computeDefaultBoundsForDisplay(other, [anchor, other], defaultSize)).toEqual({
-      x: 1920 + 1920 - 150,
-      y: 40 + 1040 - 300,
+    expect(computeDefaultBoundsForDisplay(other, [anchor, other], defaultSize, 'chat')).toEqual({
+      x: 1920 + (1920 - 150) / 2,
+      y: 40 + (1040 - 300) / 2,
       width: 150,
       height: 300,
     })
   })
 
-  it('anchors the overlay to the top-right corner instead, so it never lands fully inside the chat window default bottom-right footprint (review issue 1b)', () => {
-    // 两块屏密度相同（都不传 scaleFactor，默认 1），不触发 computeSizeForDisplay 的密度换算，
-    // defaultSize 原样使用——把这个测试跟"密度换算是否正确"（上面那个测试）完全分开，只验证
-    // windowKey='overlay' 时 y 锚点确实换成了工作区顶端
-    const display = makeDisplay(1, { x: 0, y: 0, width: 1920, height: 1080 }, { x: 0, y: 40, width: 1920, height: 1040 })
-    const defaultSize = { width: 150, height: 300 }
+  it('keeps a chat window larger than the work area inside the work area', () => {
+    const display = makeDisplay(1, { x: 0, y: 0, width: 800, height: 600 }, { x: 0, y: 0, width: 800, height: 560 })
+    const defaultSize = { width: 1000, height: 800 }
+    expect(computeDefaultBoundsForDisplay(display, [display], defaultSize, 'chat')).toEqual({ x: 0, y: 0, width: 800, height: 560 })
+  })
+
+  it('places the overlay bottom-right, 50 DIP from the right edge and 100 DIP above the work-area bottom', () => {
+    const display = makeDisplay(1, { x: 0, y: 0, width: 1920, height: 1080 }, { x: 0, y: 0, width: 1920, height: 1040 })
+    const defaultSize = { width: 132, height: 132 }
     expect(computeDefaultBoundsForDisplay(display, [display], defaultSize, 'overlay')).toEqual({
-      x: 1920 - 150,
-      y: 40,
-      width: 150,
-      height: 300,
+      x: 1920 - 132 - OVERLAY_DEFAULT_RIGHT_OFFSET_DIP,
+      y: 1040 - 132 - OVERLAY_DEFAULT_BOTTOM_OFFSET_DIP,
+      width: 132,
+      height: 132,
+    })
+    expect(OVERLAY_DEFAULT_RIGHT_OFFSET_DIP).toBe(50)
+    expect(OVERLAY_DEFAULT_BOTTOM_OFFSET_DIP).toBe(100)
+  })
+
+  it('offsets the overlay from a non-zero work-area origin and applies density-scaled size on a secondary display', () => {
+    const anchor = makeDisplay(1, { x: 0, y: 0, width: 1920, height: 1080 }, undefined, 2)
+    const other = makeDisplay(
+      2,
+      { x: 1920, y: 0, width: 1920, height: 1080 },
+      { x: 2000, y: 40, width: 1840, height: 1040 },
+      1
+    )
+    expect(computeDefaultBoundsForDisplay(other, [anchor, other], { width: 132, height: 132 }, 'overlay')).toEqual({
+      x: 2000 + 1840 - 66 - 50,
+      y: 40 + 1040 - 66 - 100,
+      width: 66,
+      height: 66,
+    })
+  })
+
+  it('clamps the overlay inside a tiny work area so it never leaves the top-left', () => {
+    const display = makeDisplay(1, { x: 0, y: 0, width: 150, height: 150 }, { x: 10, y: 20, width: 150, height: 150 })
+    expect(computeDefaultBoundsForDisplay(display, [display], { width: 132, height: 132 }, 'overlay')).toEqual({
+      x: 10,
+      y: 20,
+      width: 132,
+      height: 132,
+    })
+  })
+
+  it('centers the chat window in a plain work area', () => {
+    const display = makeDisplay(1, { x: 0, y: 0, width: 1920, height: 1080 }, { x: 0, y: 0, width: 1920, height: 1040 })
+    expect(computeDefaultBoundsForDisplay(display, [display], { width: 290, height: 520 }, 'chat')).toEqual({
+      x: 815,
+      y: 260,
+      width: 290,
+      height: 520,
+    })
+  })
+})
+
+describe('computeAnchoredResizeBounds', () => {
+  const workArea = { x: 0, y: 0, width: 1920, height: 1040 }
+
+  it('keeps the bottom edge and the horizontal center when growing', () => {
+    expect(computeAnchoredResizeBounds({ x: 1000, y: 800, width: 132, height: 132 }, { width: 300, height: 500 }, workArea)).toEqual({
+      x: 916,
+      y: 432,
+      width: 300,
+      height: 500,
+    })
+  })
+
+  it('keeps the bottom edge and the horizontal center when shrinking', () => {
+    expect(computeAnchoredResizeBounds({ x: 900, y: 500, width: 300, height: 500 }, { width: 132, height: 132 }, workArea)).toEqual({
+      x: 984,
+      y: 868,
+      width: 132,
+      height: 132,
+    })
+  })
+
+  it('returns the same bounds when the size does not change', () => {
+    const bounds = { x: 300, y: 400, width: 132, height: 132 }
+    expect(computeAnchoredResizeBounds(bounds, { width: 132, height: 132 }, workArea)).toEqual(bounds)
+  })
+
+  it('pulls the window back inside the work area when growing would overflow it', () => {
+    expect(computeAnchoredResizeBounds({ x: 1850, y: 900, width: 132, height: 132 }, { width: 300, height: 500 }, workArea)).toEqual({
+      x: 1620,
+      y: 532,
+      width: 300,
+      height: 500,
+    })
+    expect(computeAnchoredResizeBounds({ x: 10, y: 20, width: 132, height: 132 }, { width: 300, height: 500 }, { x: 0, y: 0, width: 1920, height: 1040 })).toEqual({
+      x: 0,
+      y: 0,
+      width: 300,
+      height: 500,
+    })
+  })
+
+  it('never exceeds the work area size', () => {
+    expect(computeAnchoredResizeBounds({ x: 0, y: 0, width: 132, height: 132 }, { width: 3000, height: 2000 }, workArea)).toEqual({
+      x: 0,
+      y: 0,
+      width: 1920,
+      height: 1040,
+    })
+  })
+
+  it('restores an edge-docked window at the new width: widening re-centers and stays inside the work area', () => {
+    const secondary = { x: 1920, y: 0, width: 1920, height: 1040 }
+    expect(computeAnchoredResizeBounds({ x: 3708, y: 900, width: 132, height: 132 }, { width: 300, height: 500 }, secondary)).toEqual({
+      x: 3540,
+      y: 532,
+      width: 300,
+      height: 500,
+    })
+    expect(computeAnchoredResizeBounds({ x: 1000, y: 900, width: 132, height: 132 }, { width: 300, height: 500 }, workArea)).toEqual({
+      x: 916,
+      y: 532,
+      width: 300,
+      height: 500,
+    })
+  })
+
+  it('restores an edge-docked window at the new width: narrowing re-centers and stays inside the work area', () => {
+    expect(computeAnchoredResizeBounds({ x: 1620, y: 532, width: 300, height: 500 }, { width: 132, height: 132 }, workArea)).toEqual({
+      x: 1704,
+      y: 900,
+      width: 132,
+      height: 132,
+    })
+    expect(computeAnchoredResizeBounds({ x: 0, y: 532, width: 300, height: 500 }, { width: 132, height: 132 }, workArea)).toEqual({
+      x: 84,
+      y: 900,
+      width: 132,
+      height: 132,
     })
   })
 })

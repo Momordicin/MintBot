@@ -1,8 +1,14 @@
+// services/core/config/index.ts — 项目根 config.json 的读取、热重载缓存与按段写回（memory / modelProvider / backgroundModelProvider / windowBehavior / defaultPresetId）
+// 用法：index.ts 的 start() 调 startConfigWatcher；其余模块用 getXxxConfig()；routes/config.ts、routes/windowBehavior.ts 调 update*Config，session/index.ts 调 setDefaultPresetId
+// 形状：getMemoryConfig() -> MemoryConfig；getModelProviderConfig() -> ModelConfig；getWindowBehaviorConfig() -> WindowBehaviorConfig；getDefaultPresetId() -> string | undefined
+// 对应文件：services/core/index.ts / services/core/routes/config.ts / services/core/routes/windowBehavior.ts / services/core/session/index.ts / shared/windowBehavior.ts / services/core/config/index.test.ts
 import fs from 'fs'
 import path from 'path'
 import crypto from 'crypto'
 import chokidar from 'chokidar'
 import type { ModelConfig } from '../../../shared/types/index.js'
+import type { AppRule, AppRuleEffect, ChatPinMode, WindowBehaviorConfig } from '../../../shared/windowBehavior.js'
+import { errorCode } from '../../../shared/logFile.js'
 
 export interface SummaryTriggerConfig {
   pendingCountThreshold: number
@@ -28,20 +34,6 @@ export interface MemoryConfig {
   organizeWindowEndHour: number
   summaryTrigger: SummaryTriggerConfig
   contextBudget: ContextBudgetConfig
-}
-
-export type ChatPinMode = 'always' | 'smart' | 'off'
-export type AppRuleEffect = 'allow' | 'soft' | 'hard'
-
-export interface AppRule {
-  exeName: string
-  effect: AppRuleEffect
-}
-
-export interface WindowBehaviorConfig {
-  chatPinMode: ChatPinMode
-  petAvoidanceEnabled: boolean
-  appRules: AppRule[]
 }
 
 export const CONFIG_PATH = path.resolve(process.cwd(), 'config.json')
@@ -81,6 +73,9 @@ let currentMemoryConfig: MemoryConfig = DEFAULT_MEMORY_CONFIG
 let currentModelProviderConfig: ModelConfig | undefined
 let currentBackgroundModelProviderConfig: ModelConfig | undefined
 let currentWindowBehaviorConfig: WindowBehaviorConfig = DEFAULT_WINDOW_BEHAVIOR_CONFIG
+let windowBehaviorRevision = 1
+let windowBehaviorSignature = serializeWindowBehaviorConfig(DEFAULT_WINDOW_BEHAVIOR_CONFIG)
+let windowBehaviorSeeded = false
 let currentDefaultPresetId: string | undefined
 let loaded = false
 
@@ -196,24 +191,43 @@ function mergeWindowBehaviorConfig(raw: unknown): WindowBehaviorConfig {
   return { chatPinMode, petAvoidanceEnabled, appRules: mergeAppRules(windowBehavior) }
 }
 
-function load(): boolean {
+function serializeWindowBehaviorConfig(config: WindowBehaviorConfig): string {
+  return JSON.stringify([config.chatPinMode, config.petAvoidanceEnabled, config.appRules.map(rule => [rule.exeName, rule.effect])])
+}
+
+function applyWindowBehaviorConfig(next: WindowBehaviorConfig): boolean {
+  const signature = serializeWindowBehaviorConfig(next)
+  const changed = windowBehaviorSeeded && signature !== windowBehaviorSignature
+  currentWindowBehaviorConfig = next
+  windowBehaviorSignature = signature
+  windowBehaviorSeeded = true
+  if (changed) windowBehaviorRevision += 1
+  return changed
+}
+
+interface LoadResult {
+  ok: boolean
+  windowBehaviorChanged: boolean
+}
+
+function load(): LoadResult {
   let raw: unknown
   try {
     const text = fs.readFileSync(CONFIG_PATH, 'utf-8')
     raw = JSON.parse(text)
   } catch (err) {
     if (!loaded) {
-      console.warn('[Config] config.json 不存在或解析失败，全部字段使用默认值:', err)
+      console.warn('[Config] config.json 不存在或解析失败，全部字段使用默认值:', errorCode(err))
       currentMemoryConfig = mergeMemoryConfig(undefined)
       currentModelProviderConfig = undefined
       currentBackgroundModelProviderConfig = undefined
-      currentWindowBehaviorConfig = mergeWindowBehaviorConfig(undefined)
+      applyWindowBehaviorConfig(mergeWindowBehaviorConfig(undefined))
       currentDefaultPresetId = undefined
       loaded = true
     } else {
-      console.warn('[Config] config.json 重新加载失败，保留上一次的有效配置:', err)
+      console.warn('[Config] config.json 重新加载失败，保留上一次的有效配置:', errorCode(err))
     }
-    return false
+    return { ok: false, windowBehaviorChanged: false }
   }
 
   currentMemoryConfig = mergeMemoryConfig(raw)
@@ -232,24 +246,25 @@ function load(): boolean {
       ? (backgroundModelProviderRaw as ModelConfig)
       : undefined
 
-  currentWindowBehaviorConfig = mergeWindowBehaviorConfig(raw)
+  const windowBehaviorChanged = applyWindowBehaviorConfig(mergeWindowBehaviorConfig(raw))
 
   const defaultPresetIdRaw = (raw as Record<string, unknown>)?.defaultPresetId
   currentDefaultPresetId = typeof defaultPresetIdRaw === 'string' ? defaultPresetIdRaw : undefined
 
   loaded = true
-  return true
+  return { ok: true, windowBehaviorChanged }
 }
 
 function ensureLoaded(): void {
   if (!loaded) load()
 }
 
-export function startConfigWatcher(onReload?: () => void): void {
+export function startConfigWatcher(onReload?: (result: { windowBehaviorChanged: boolean }) => void): void {
   ensureLoaded()
   chokidar.watch(CONFIG_PATH).on('change', () => {
     console.log('[Config] Reloading config.json...')
-    if (load()) onReload?.()
+    const result = load()
+    if (result.ok) onReload?.({ windowBehaviorChanged: result.windowBehaviorChanged })
   })
 }
 
@@ -261,6 +276,11 @@ export function getMemoryConfig(): MemoryConfig {
 export function getWindowBehaviorConfig(): WindowBehaviorConfig {
   ensureLoaded()
   return currentWindowBehaviorConfig
+}
+
+export function getWindowBehaviorRevision(): number {
+  ensureLoaded()
+  return windowBehaviorRevision
 }
 
 export function getDefaultPresetId(): string | undefined {
@@ -354,7 +374,7 @@ export function updateWindowBehaviorConfig(partial: Partial<WindowBehaviorConfig
     merged.appRules = [...byExeName.values()]
   }
   writeConfigSection('windowBehavior', merged)
-  currentWindowBehaviorConfig = merged
+  applyWindowBehaviorConfig(merged)
   loaded = true
   return merged
 }

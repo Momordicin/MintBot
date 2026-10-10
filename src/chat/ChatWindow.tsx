@@ -1,3 +1,6 @@
+// src/chat/ChatWindow.tsx — 聊天窗口主界面：加载当前预设与历史消息，发送消息并读取回复，按预设显示配置应用壁纸、头像与主题色
+// 用法：App 渲染 <ChatWindow />；GET /state、/embedding-ready、/messages、/characters/:id/manifest.json，POST /chat（读 SSE：message_done / system），GET /events（preset-switched）；调用 electronAPI.setTitlebarOverlay
+// 对应文件：src/App.tsx / src/chat/MessageList.tsx / src/chat/InputBar.tsx / src/chat/TitleBar.tsx / src/chat/MessageBubble.tsx / src/chat/sse.ts / src/chat/theme.ts / src/eventsWatchdog.ts / services/core/index.ts / services/core/routes/chat.ts / services/core/routes/messages.ts / services/core/routes/status.ts / services/core/routes/events.ts / electron/main/index.ts（titlebar:set-overlay）
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { MessageList } from './MessageList'
 import { InputBar } from './InputBar'
@@ -11,10 +14,16 @@ import { createWatchdogEventSource } from '../eventsWatchdog.js'
 import type { AppState, PresetSnapshot } from '../../shared/types/index.js'
 import './chat.css'
 
-import { CORE_URL } from '../coreUrl.js'
+import { CORE_URL, resolveAssetUrl } from '../coreUrl.js'
 const DEFAULT_WALLPAPER_URL = `${CORE_URL}/wallpapers/bg.jpg`
 const INITIAL_HISTORY_LIMIT = 3
 const LOAD_MORE_HISTORY_LIMIT = 20
+
+let localMessageSeq = 0
+function nextLocalMessageId(): string {
+  localMessageSeq += 1
+  return `local-${localMessageSeq}`
+}
 
 interface HistoryMessage {
   id: number
@@ -45,31 +54,23 @@ function fetchEmbeddingReady(): Promise<boolean | undefined> {
     .catch(() => undefined)
 }
 
-async function fetchAvatarUrl(characterId: string, signal?: AbortSignal): Promise<string | undefined> {
-  try {
-    const res = await fetch(`${CORE_URL}/characters/${encodeURIComponent(characterId)}/manifest.json`, { signal })
-    if (!res.ok) return undefined
-
-    const manifest: { avatar?: string } = await res.json()
-    if (!manifest.avatar) return undefined
-
-    return `${CORE_URL}/characters/${encodeURIComponent(characterId)}/${encodeURIComponent(manifest.avatar)}`
-  } catch {
-    return undefined
-  }
+interface AvatarUrls {
+  avatarUrl?: string
+  userAvatarUrl?: string
 }
 
-async function fetchUserAvatarUrl(characterId: string, signal?: AbortSignal): Promise<string | undefined> {
+async function fetchAvatarUrls(characterId: string, signal?: AbortSignal): Promise<AvatarUrls> {
   try {
     const res = await fetch(`${CORE_URL}/characters/${encodeURIComponent(characterId)}/manifest.json`, { signal })
-    if (!res.ok) return undefined
+    if (!res.ok) return {}
 
-    const manifest: { userAvatar?: string } = await res.json()
-    if (!manifest.userAvatar) return undefined
-
-    return `${CORE_URL}/characters/${encodeURIComponent(characterId)}/${encodeURIComponent(manifest.userAvatar)}`
+    const manifest: { avatar?: string; userAvatar?: string } = await res.json()
+    return {
+      avatarUrl: manifest.avatar ? resolveAssetUrl(characterId, manifest.avatar) : undefined,
+      userAvatarUrl: manifest.userAvatar ? resolveAssetUrl(characterId, manifest.userAvatar) : undefined
+    }
   } catch {
-    return undefined
+    return {}
   }
 }
 
@@ -111,13 +112,10 @@ export function ChatWindow() {
         setEmbeddingReady(state.embeddingReady)
         setWallpaperUrl(wallpaperUrlFor(state.presetSnapshot))
         if (state.presetSnapshot?.characterId) {
-          fetchAvatarUrl(state.presetSnapshot.characterId, controller.signal).then(url => {
+          fetchAvatarUrls(state.presetSnapshot.characterId, controller.signal).then(urls => {
             if (controller.signal.aborted) return
-            setAvatarUrl(url)
-          })
-          fetchUserAvatarUrl(state.presetSnapshot.characterId, controller.signal).then(url => {
-            if (controller.signal.aborted) return
-            setUserAvatarUrl(url)
+            setAvatarUrl(urls.avatarUrl)
+            setUserAvatarUrl(urls.userAvatarUrl)
           })
         }
         if (state.sessionId) {
@@ -173,15 +171,12 @@ export function ChatWindow() {
           loadInitialMessages(state.sessionId, controller.signal)
         }
 
-        const nextAvatarUrl = state.presetSnapshot?.characterId
-          ? await fetchAvatarUrl(state.presetSnapshot.characterId, controller.signal)
-          : undefined
-        const nextUserAvatarUrl = state.presetSnapshot?.characterId
-          ? await fetchUserAvatarUrl(state.presetSnapshot.characterId, controller.signal)
-          : undefined
+        const nextUrls: AvatarUrls = state.presetSnapshot?.characterId
+          ? await fetchAvatarUrls(state.presetSnapshot.characterId, controller.signal)
+          : {}
         if (controller.signal.aborted) return
-        setAvatarUrl(nextAvatarUrl)
-        setUserAvatarUrl(nextUserAvatarUrl)
+        setAvatarUrl(nextUrls.avatarUrl)
+        setUserAvatarUrl(nextUrls.userAvatarUrl)
       } catch {
       }
     }
@@ -292,7 +287,7 @@ export function ChatWindow() {
 
   function addSystemMessage(content: string, isError = false) {
     setMessages(prev => [...prev, {
-      id: Date.now().toString(),
+      id: nextLocalMessageId(),
       role: 'system' as const,
       content,
       createdAt: Date.now(),
@@ -308,7 +303,7 @@ export function ChatWindow() {
     }
 
     setMessages(prev => [...prev, {
-      id: Date.now().toString(),
+      id: nextLocalMessageId(),
       role: 'user' as const,
       content: text,
       createdAt: Date.now(),
@@ -334,10 +329,10 @@ export function ChatWindow() {
         if (controller.signal.aborted) break
 
         if (event === 'message_done') {
-          const { text: replyText, sessionId: replySessionId } = data as { messageId: string; text: string; sessionId: string }
+          const { messageId, text: replyText, sessionId: replySessionId } = data as { messageId: string; text: string; sessionId: string }
           if (replySessionId !== appStateRef.current?.sessionId) continue
           setMessages(prev => [...prev, {
-            id: Date.now().toString(),
+            id: String(messageId),
             role: 'assistant' as const,
             content: replyText,
             createdAt: Date.now(),

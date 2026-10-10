@@ -17,11 +17,11 @@ function fakeManifest(overrides: Partial<CharacterManifest>): CharacterManifest 
     userAvatar: '',
     emotionVocabulary: [],
     emoteTagVocabulary: [],
-    portraits: { pixel: { fallback: '', emotions: {} }, illustration: { fallback: '', emotions: {} } },
-    interactionStates: {},
-    reservedStates: {},
+    portraits: {
+      pixel: { fallback: '', emotions: {}, interactionStates: {}, reservedStates: {} },
+      illustration: { fallback: '', emotions: {}, interactionStates: {}, reservedStates: {} },
+    },
     emotePool: [],
-    transitions: {},
     ...overrides,
   }
 }

@@ -1,4 +1,8 @@
-import { app, BrowserWindow, Menu, Tray, globalShortcut, powerMonitor, ipcMain, dialog, screen, nativeImage } from 'electron'
+// electron/main/index.ts — Electron 主进程入口：app ready 后创建聊天窗口、桌宠 overlay 与托盘，注册 IPC，启动前台窗口监控与 core /events 订阅，will-quit 时收尾
+// 用法：electron.vite.config.ts 的主进程 entry；第一条 import 为 logBootstrap；设置窗口按 open-settings-window IPC 按需创建
+// 对应文件：electron/preload/index.ts（暴露的 IPC 通道）/ electron/main/windowBehavior.ts / electron/main/coreEventsConsumer.ts / electron/main/activeWindowMonitor.ts / electron/main/windowDragMonitor.ts / electron/main/startupGate.ts / shared/windowBehavior.ts
+import './logBootstrap'
+import { app, BrowserWindow, Menu, Tray, powerMonitor, ipcMain, dialog, screen, nativeImage } from 'electron'
 import { join, basename } from 'path'
 import { readFile, stat } from 'fs/promises'
 import { is } from '@electron-toolkit/utils'
@@ -9,9 +13,13 @@ import { nextReconnectDelayMs, RECONNECT_BACKOFF_FLOOR_MS } from './reconnectBac
 import { EVENTS_CLIENT_TIMEOUT_MS } from './eventsGeneration'
 import { createCoreEventsConsumer } from './coreEventsConsumer'
 import { CORE_URL } from './coreUrl'
+import { appendLogLine } from '../../shared/logFile.js'
+import { windowNameFromUrl } from './logWindowName'
+import type { ChatPinMode, WindowBehaviorConfig, WindowBehaviorSnapshot } from '../../shared/windowBehavior.js'
 import {
   initWindowBehaviorConfig,
-  updateCachedWindowBehaviorConfig,
+  applyWindowBehaviorSnapshot,
+  getCachedWindowBehaviorConfig,
   evaluateDesktopPresence,
   handleWindowMoved,
   markProgrammaticWindowPlacement,
@@ -21,6 +29,7 @@ import {
   markTopologySettle,
   requestOverlayEdgeHover,
   sendCurrentPetPresenceOnReady,
+  applyOverlaySize,
   cancelProgrammaticMoveOnDragStart
 } from './windowBehavior'
 import {
@@ -38,7 +47,6 @@ import {
   setPreferredBounds,
   getEffectiveHomeDisplay,
   clampBoundsToWorkArea,
-  computeSizeForDisplay,
   computeDefaultBoundsForDisplay,
   DEFAULT_WINDOW_SIZE
 } from './windowPositions'
@@ -69,14 +77,6 @@ function stopActiveWindowMonitoring(): void {
   stopActiveWindowMonitor = null
   stopBlockerValidation?.()
   stopBlockerValidation = null
-}
-
-type ChatPinMode = 'always' | 'smart' | 'off'
-
-interface WindowBehaviorConfig {
-  chatPinMode: ChatPinMode
-  petAvoidanceEnabled: boolean
-  appRules: Array<{ exeName: string; effect: 'allow' | 'soft' | 'hard' }>
 }
 
 let tray: Tray | null = null
@@ -129,8 +129,8 @@ async function applyIconFromCurrentPreset(): Promise<void> {
 const coreEventsConsumer = createCoreEventsConsumer({
   converge,
   onPresetSwitched: applyIconFromCurrentPreset,
-  onWindowBehaviorChanged: config => {
-    updateCachedWindowBehaviorConfig(config, mainWindow, overlayWindow)
+  onWindowBehaviorChanged: snapshot => {
+    applyWindowBehaviorSnapshot(snapshot, mainWindow, overlayWindow)
     rebuildTrayMenu()
   },
   log: {
@@ -177,9 +177,8 @@ async function connectToCoreEvents(): Promise<boolean> {
 }
 
 function converge(): void {
-  initWindowBehaviorConfig(mainWindow, overlayWindow)
+  initWindowBehaviorConfig(mainWindow, overlayWindow).then(rebuildTrayMenu)
   applyIconFromCurrentPreset()
-  rebuildTrayMenu()
 }
 
 let isShuttingDownCoreEventsLoop = false
@@ -215,33 +214,26 @@ async function subscribeToCoreEvents(): Promise<void> {
   }
 }
 
-async function fetchWindowBehaviorConfig(): Promise<WindowBehaviorConfig | null> {
-  try {
-    const response = await fetch(`${CORE_URL}/config/window-behavior`)
-    if (!response.ok) return null
-    return await response.json()
-  } catch {
-    return null
-  }
-}
-
 async function patchWindowBehavior(partial: Partial<WindowBehaviorConfig>): Promise<void> {
   try {
-    await fetch(`${CORE_URL}/config/window-behavior`, {
+    const response = await fetch(`${CORE_URL}/config/window-behavior`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(partial),
     })
+    if (!response.ok) {
+      console.error('[Tray] Core rejected window behavior patch:', response.status)
+      return
+    }
+    applyWindowBehaviorSnapshot((await response.json()) as WindowBehaviorSnapshot, mainWindow, overlayWindow)
   } catch (err) {
     console.error('[Tray] Failed to patch window behavior config:', err)
   }
 }
 
-async function rebuildTrayMenu(): Promise<void> {
+function rebuildTrayMenu(): void {
   if (!tray) return
-  const config = await fetchWindowBehaviorConfig()
-  const currentChatPinMode: ChatPinMode = config?.chatPinMode ?? 'off'
-  const petAvoidanceEnabled = config?.petAvoidanceEnabled ?? true
+  const { chatPinMode: currentChatPinMode, petAvoidanceEnabled } = getCachedWindowBehaviorConfig()
 
   const menu = Menu.buildFromTemplate([
     {
@@ -293,12 +285,12 @@ async function rebuildTrayMenu(): Promise<void> {
 
 async function handleChatPinModeClick(chatPinMode: ChatPinMode): Promise<void> {
   await patchWindowBehavior({ chatPinMode })
-  await rebuildTrayMenu()
+  rebuildTrayMenu()
 }
 
 async function handlePetAvoidanceClick(petAvoidanceEnabled: boolean): Promise<void> {
   await patchWindowBehavior({ petAvoidanceEnabled })
-  await rebuildTrayMenu()
+  rebuildTrayMenu()
 }
 
 function createTray(): void {
@@ -486,22 +478,11 @@ const TITLEBAR_OVERLAY_COLOR = '#0f0f1400'
 const TITLEBAR_OVERLAY_SYMBOL_COLOR = '#e8e8f0'
 const TITLEBAR_OVERLAY_HEIGHT = 25
 
-function computeDefaultChatBounds(display: Electron.Display, displays: Electron.Display[]): Bounds {
-  const { width, height } = computeSizeForDisplay(display, displays, DEFAULT_WINDOW_SIZE.chat)
-  const { x: workAreaX, y: workAreaY, width: workAreaWidth, height: workAreaHeight } = display.workArea
-  return {
-    width,
-    height,
-    x: Math.round(workAreaX + (workAreaWidth - width) / 2),
-    y: Math.round(workAreaY + (workAreaHeight - height) / 2),
-  }
-}
-
 function resolveChatStartupBounds(): Bounds {
   const displays = screen.getAllDisplays()
   const targetDisplay = getEffectiveHomeDisplay(displays, 'chat')
   const stored = getPreferredBounds('chat', targetDisplay.id)
-  const bounds = stored ? clampBoundsToWorkArea(stored, targetDisplay.workArea) : computeDefaultChatBounds(targetDisplay, displays)
+  const bounds = stored ? clampBoundsToWorkArea(stored, targetDisplay.workArea) : computeDefaultBoundsForDisplay(targetDisplay, displays, DEFAULT_WINDOW_SIZE.chat, 'chat')
   if (!stored) {
     setPreferredBounds('chat', targetDisplay.id, bounds)
   }
@@ -579,6 +560,15 @@ ipcMain.on('overlay:presence-ready', () => {
   sendCurrentPetPresenceOnReady(overlayWindow)
 })
 
+ipcMain.on('overlay:set-size', (event, size: { width?: unknown; height?: unknown }) => {
+  if (!overlayWindow || event.sender !== overlayWindow.webContents) return
+  if (!Number.isFinite(size?.width) || !Number.isFinite(size?.height)) return
+  const width = Math.round(size.width as number)
+  const height = Math.round(size.height as number)
+  if (width < 1 || height < 1) return
+  applyOverlaySize(overlayWindow, { width, height })
+})
+
 ipcMain.on('titlebar:set-overlay', (_event, overlay: { color?: unknown; symbolColor?: unknown }) => {
   if (!mainWindow || mainWindow.isDestroyed()) return
   if (typeof overlay?.color !== 'string' || typeof overlay?.symbolColor !== 'string') return
@@ -590,6 +580,20 @@ ipcMain.on('titlebar:set-overlay', (_event, overlay: { color?: unknown; symbolCo
 })
 
 app.whenReady().then(() => {
+  app.on('browser-window-created', (_event, win) => {
+    win.webContents.on('before-input-event', (event, input) => {
+      if (input.type === 'keyDown' && (input.control || input.meta) && input.shift && input.code === 'KeyI') {
+        event.preventDefault()
+        win.webContents.openDevTools()
+      }
+    })
+    win.webContents.on('console-message', (details) => {
+      if (details.level !== 'warning' && details.level !== 'error') return
+      const source = windowNameFromUrl(win.webContents.getURL())
+      appendLogLine({ level: details.level === 'error' ? 'error' : 'warn', source, text: details.message })
+    })
+  })
+
   if (shouldDistrustHomeAtStartup(queryUserNotificationState())) {
     closeStartupGate()
     setTimeout(() => {
@@ -626,10 +630,6 @@ app.whenReady().then(() => {
   applyIconFromCurrentPreset()
   initWindowBehaviorConfig(mainWindow, overlayWindow)
   subscribeToCoreEvents()
-
-  globalShortcut.register('CommandOrControl+Shift+I', () => {
-    BrowserWindow.getFocusedWindow()?.webContents.openDevTools()
-  })
 
   powerMonitor.on('lock-screen', () => {
     notifySystemEvent('lock-screen')
@@ -668,7 +668,6 @@ app.whenReady().then(() => {
 })
 
 app.on('will-quit', () => {
-  globalShortcut.unregisterAll()
   stopActiveWindowMonitoring()
   screen.removeListener('display-added', handleDisplayTopologyChange)
   screen.removeListener('display-removed', handleDisplayTopologyChange)

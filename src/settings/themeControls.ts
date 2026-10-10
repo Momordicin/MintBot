@@ -1,3 +1,6 @@
+// src/settings/themeControls.ts — 设置页主题控件的数值换算：RGB 与 #rrggbb 互转、百分比与着色强度（0–1）互转
+// 用法：CharacterPanel 在取色器与着色强度滑块与 displayConfig 之间转换时调用 rgbToHex / hexToRgb / percentToTintStrength / tintStrengthToPercent
+// 对应文件：src/settings/CharacterPanel.tsx / src/settings/themeControls.test.ts
 export function rgbToHex([r, g, b]: [number, number, number]): string {
   return `#${[r, g, b].map(n => n.toString(16).padStart(2, '0')).join('')}`
 }

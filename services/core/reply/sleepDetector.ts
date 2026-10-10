@@ -1,3 +1,6 @@
+// services/core/reply/sleepDetector.ts — 判断角色回复里是否在说自己困了/想睡
+// 用法：detectSleepiness(replyText) 返回 boolean；POST /chat 在助手回复入库后调用，为 true 则 markExplicitSleep
+// 对应文件：services/core/routes/chat.ts / services/core/session/attention.ts / services/core/reply/sleepDetector.test.ts
 
 const NON_DROWSY_FORMS = [
   '困难', '困惑', '困扰', '困境', '困局', '贫困', '穷困', '围困', '受困', '困兽', '困顿',

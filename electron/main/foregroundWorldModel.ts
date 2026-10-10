@@ -1,3 +1,6 @@
+// electron/main/foregroundWorldModel.ts — 主进程持有的显示器阻挡表（模块内变量）及其更新与周期校验
+// 用法：updateDisplayStateMap(observation) 仅吸收 external 观测；startBlockerValidationLoop(onValidated) 每 1500ms 校验并回调（非 win32 为空操作）；revalidateBlockersNow({ forceConservative }) 立即校验一次；getDisplayStateMap() 读取
+// 对应文件：electron/main/index.ts / electron/main/windowBehavior.ts / electron/main/activeWindowMonitor.ts / electron/main/displayStateMap.ts / electron/main/dragActivity.ts / electron/main/foregroundWorldModel.test.ts
 import { probeBlockerWindow, getActiveWindowInfo } from './activeWindowMonitor'
 import type { ForegroundObservation } from './activeWindowMonitor'
 import { getWindowBehaviorRules } from './windowBehavior'
@@ -16,17 +19,21 @@ export function updateDisplayStateMap(observation: ForegroundObservation): void 
   displayStateMap = applyExternalObservation(displayStateMap, observation.info, getWindowBehaviorRules())
 }
 
-export function selectValidationMode(isSelfForeground: boolean, isDragInProgress: boolean): ValidationMode {
-  return isSelfForeground || isDragInProgress ? 'conservative' : 'standard'
+export function selectValidationMode(
+  isSelfForeground: boolean,
+  isDragInProgress: boolean,
+  forceConservative = false
+): ValidationMode {
+  return forceConservative || isSelfForeground || isDragInProgress ? 'conservative' : 'standard'
 }
 
-function runValidationPass(): void {
-  const mode = selectValidationMode(getActiveWindowInfo().kind === 'self', isWindowDragInProgress('overlay'))
+function runValidationPass(forceConservative = false): void {
+  const mode = selectValidationMode(getActiveWindowInfo().kind === 'self', isWindowDragInProgress('overlay'), forceConservative)
   displayStateMap = validateBlockers(displayStateMap, getWindowBehaviorRules(), probeBlockerWindow, mode)
 }
 
-export function revalidateBlockersNow(): void {
-  runValidationPass()
+export function revalidateBlockersNow(options?: { forceConservative?: boolean }): void {
+  runValidationPass(options?.forceConservative === true)
 }
 
 const BLOCKER_VALIDATION_INTERVAL_MS = 1500

@@ -84,6 +84,7 @@ export interface PresetDisplayConfig {
   themeMode: 'day' | 'night' | 'auto'   // 'auto' 解析成具体 'day'/'night' 是渲染层/主进程的职责，这一层原样存储
   accentRgb: [number, number, number]   // 0-255 整数，用户选择的唯一 accent 色，对应 theme.ts ThemeInput.accentRgb
   tintStrength: number                  // 0-1，0 = 纯参考发布值，对应 theme.ts ThemeInput.tintStrength
+  currentPortrait: 'pixel' | 'illustration'   // 桌宠当前形态，决定素材与窗口尺寸；桌宠读取，聊天窗口不使用
 }
 
 // Preset（可复用的配置模板，用户管理）

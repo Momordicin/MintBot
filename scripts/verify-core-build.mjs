@@ -1,68 +1,33 @@
-// 编译产物存活性检查（build:core 之后自动跑一次）：`services/core` 与 `shared/` 之间的边界
+// 编译产物静态解析检查（build:core 之后自动跑一次）：`services/core` 与 `shared/` 之间的边界
 // 此前只有类型层面的 import（`shared/` 曾经只放类型，编译期擦除，运行时从不真正解析这个
 // specifier），所以哪怕相对路径在编译产物里根本无法解析，`pnpm typecheck`/`pnpm test`（跑的
 // 都是源码或类型，不跑编译产物）也测不出来——直到 `shared/eventsLiveness.ts` 成为第一个从
 // `shared/` 导入运行时值的模块，这类"tsc 不改写相对路径、但编译产物的目录结构与源码不一致"
-// 的错误才会在 `node out/core/...` 真正加载时才炸出来（`ERR_MODULE_NOT_FOUND`）。这个脚本把
-// 这一验证挪到 build 时：动态 import 每一个编译产物里真正引用了 shared/ 的文件，用 Node 原生
-// ESM 解析（跟生产环境 `pm2 start ecosystem.config.cjs` 走的是同一套解析规则），编译产物一旦
-// 又出现无法解析的 shared/ 引用就会在这里立刻炸掉，而不是等到部署上线才发现
+// 的错误才会在 `node out/core/...` 真正加载时才炸出来（`ERR_MODULE_NOT_FOUND`）。
 //
-// 不 import 完整的 out/core/services/core/index.js：那个入口有真正的副作用（监听端口、
-// 初始化数据库、按需拉起 ollama/AI 子进程），不适合作为一次性检查跑；只 import 真正跨越
-// shared/ 边界的模块就足够验证"这条 import specifier 能否被 Node 原生解析"这件事本身
-import { readdir, readFile } from 'node:fs/promises'
-import path from 'node:path'
-import { pathToFileURL } from 'node:url'
-
-const OUT_CORE_DIR = path.resolve(import.meta.dirname, '..', 'out', 'core')
-const SHARED_IMPORT_PATTERN = /from\s+['"][^'"]*\/shared\/[^'"]+['"]/
-
-async function findCompiledFiles(dir) {
-  const entries = await readdir(dir, { withFileTypes: true })
-  const files = []
-  for (const entry of entries) {
-    const fullPath = path.join(dir, entry.name)
-    if (entry.isDirectory()) {
-      files.push(...(await findCompiledFiles(fullPath)))
-    } else if (entry.name.endsWith('.js') && !entry.name.endsWith('.test.js')) {
-      files.push(fullPath)
-    }
-  }
-  return files
-}
+// 这个脚本只做静态检查，绝不 import / 执行任何编译产物：扫描 out/core 下（services/core 与 shared 两份
+// 产物，跳过 *.test.js）每个 .js 里的相对 specifier（`from '...'`、`import '...'`、`export ... from '...'`、
+// 字符串字面量的 `import('...')`），按 Node ESM 对相对 specifier 的规则解析（不补扩展名、不查 index），
+// 目标不存在或不是普通文件就失败。bare 与 `node:` specifier 不在范围内。
+// 之所以不能执行：此前的版本动态 import 这些模块，而 db/index.ts 在模块顶层就会打开真实的
+// ./data/db.sqlite，一次 build 就碰到了真实数据库
+import { verifyCompiledImports } from './verifyCoreBuildCheck.mjs'
 
 async function main() {
-  const compiledFiles = await findCompiledFiles(OUT_CORE_DIR)
-  const filesImportingShared = []
-  for (const file of compiledFiles) {
-    const content = await readFile(file, 'utf-8')
-    if (SHARED_IMPORT_PATTERN.test(content)) filesImportingShared.push(file)
-  }
+  const { fileCount, sharedSpecifiers, errors } = await verifyCompiledImports()
 
-  if (filesImportingShared.length === 0) {
+  if (fileCount === 0 || sharedSpecifiers === 0) {
     console.error(
-      '[verify-core-build] Expected at least one compiled services/core file to import from shared/, found none. ' +
+      '[verify-core-build] Expected compiled files under out/core with at least one import crossing into shared/, found none. ' +
         'Either the shared/ boundary was removed (update this check) or the scan pattern is stale.',
     )
     process.exit(1)
   }
 
-  let failed = false
-  for (const file of filesImportingShared) {
-    const relPath = path.relative(process.cwd(), file)
-    try {
-      await import(pathToFileURL(file).href)
-      console.log(`[verify-core-build] OK: ${relPath}`)
-    } catch (err) {
-      failed = true
-      console.error(`[verify-core-build] FAILED to load ${relPath}:`, err)
-    }
-  }
-
-  if (failed) {
+  if (errors.length > 0) {
+    for (const message of errors) console.error(`[verify-core-build] FAILED: ${message}`)
     console.error(
-      '[verify-core-build] A compiled services/core module could not be loaded under plain Node ESM resolution. ' +
+      '[verify-core-build] A compiled module has a relative import that plain Node ESM resolution cannot find. ' +
         'This is the exact failure mode ecosystem.config.cjs hits in production (`pm2 start ecosystem.config.cjs` runs ' +
         'out/core/services/core/index.js with plain `node`). Check services/core/tsconfig.json rootDir/outDir and any ' +
         'relative imports crossing into shared/.',
@@ -70,7 +35,7 @@ async function main() {
     process.exit(1)
   }
 
-  console.log('[verify-core-build] All compiled services/core modules importing shared/ load cleanly.')
+  console.log(`[verify-core-build] OK: ${fileCount} compiled files, ${sharedSpecifiers} shared/ imports, all relative imports resolve.`)
 }
 
 main()

@@ -1,3 +1,7 @@
+// services/core/providers/ModelProvider.ts — 大语言模型调用封装：按配置类型（anthropic / openai / deepseek / ollama）发起流式 complete 或非流式 completeSync
+// 用法：routes/chat.ts 每次聊天用 createModelProviderForPreset(preset, 全局配置)（预设无模型覆盖则用全局配置）调 complete / completeSync；index.ts 与 routes/config.ts 用 createModelProvider 构建 fastify.modelProvider / backgroundModelProvider，后者的 completeSync 供 orchestrator 驱动 entityExtractor 与 summarizer
+// 形状：(BuiltContext, { maxTokens, signal, jsonMode }) -> AsyncIterable<string>（流式）| Promise<string>
+// 对应文件：services/core/routes/chat.ts / services/core/routes/config.ts / services/core/index.ts / services/core/memory/orchestrator.ts / shared/types/index.ts / services/core/providers/ModelProvider.test.ts
 import Anthropic from '@anthropic-ai/sdk'
 import type { ChatMessage, ModelConfig, CompletionOptions, BuiltContext, Preset } from '../../../shared/types/index.js'
 

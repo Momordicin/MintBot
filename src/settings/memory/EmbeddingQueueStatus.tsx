@@ -1,3 +1,6 @@
+// src/settings/memory/EmbeddingQueueStatus.tsx — "Embedding 状态"子面板：显示全局 embedding 待处理队列统计，有激活角色时附带该角色的排队情况
+// 用法：MemoryPanel 渲染 <EmbeddingQueueStatusView />（无 props，不依赖 sessionId）；挂载时与点击刷新时 GET /embedding-queue-status
+// 对应文件：src/settings/memory/MemoryPanel.tsx / services/core/routes/memory.ts
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 
 import { CORE_URL } from '../../coreUrl.js'

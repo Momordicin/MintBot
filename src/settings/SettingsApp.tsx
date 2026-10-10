@@ -1,3 +1,6 @@
+// src/settings/SettingsApp.tsx — 设置窗口根组件：加载当前预设并按其显示配置应用主题色，提供"角色设定 / 记忆管理 / 模型配置 / 窗口行为"四个标签页
+// 用法：settings/main.tsx 渲染 <SettingsApp />；GET /state；CharacterPanel 通过 onSwitched 回传新的 AppState，记忆管理标签把 sessionId 传给 MemoryPanel
+// 对应文件：src/settings/main.tsx / src/settings/CharacterPanel.tsx / src/settings/ModelConfigPanel.tsx / src/settings/WindowBehaviorPanel.tsx / src/settings/memory/MemoryPanel.tsx / src/settings/settings.css / src/chat/theme.ts / src/chat/themeVars.ts / services/core/index.ts / electron/main/index.ts（open-settings-window）
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { AppState } from '../../shared/types/index.js'
 import { deriveTheme } from '../chat/theme.js'

@@ -1,3 +1,6 @@
+// services/core/routes/memory.ts — 记忆浏览（实体、摘要）与向量化队列状态的只读路由
+// 用法：core/index.ts 里 fastify.register(memoryRoutes)；GET /entities（sessionId、type、limit、beforeId 分页）、GET /summaries（sessionId）、GET /embedding-queue-status
+// 对应文件：src/settings/memory/EntityList.tsx / src/settings/memory/SummaryList.tsx / src/settings/memory/EmbeddingQueueStatus.tsx / services/core/session/queries.ts / services/core/memory/orchestrator.ts / services/core/routes/memory.test.ts
 import type { FastifyInstance } from 'fastify'
 import { getCurrentEntitiesPage, getSummaries } from '../session/queries.js'
 import { computeEmbeddingQueueStatus } from '../memory/orchestrator.js'

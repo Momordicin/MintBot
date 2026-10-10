@@ -1,3 +1,7 @@
+// services/core/session/attention.ts — 记录各会话最近一次"被关注"的时间，以及角色是否已明说要睡
+// 用法：recordAttention(sessionId)（POST /chat 助手回复后、POST /internal/overlay-interaction 调用）；markExplicitSleep / isExplicitSleep（chat.ts、state.ts）；getLastAttentionAt（state.ts）
+// 形状：Map<sessionId, 毫秒时间戳> 与 Set<sessionId>
+// 对应文件：services/core/routes/chat.ts / services/core/routes/internal.ts / services/core/state.ts / services/core/session/queries.ts / services/core/session/attention.test.ts
 import { getMostRecentMessageTimeForSession } from './queries.js'
 
 const lastAttentionAt = new Map<string, number>()

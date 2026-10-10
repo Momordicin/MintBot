@@ -1,6 +1,12 @@
+// src/overlay/transitionState.ts — 桌宠转场（唤醒/戳一下/入睡）的纯函数：选转场触发点、判断是否播放入睡转场、解析并展开转场链、决定当前显示哪张立绘
+// 用法：OverlayApp 调用 selectTransitionTrigger、shouldPlayFallAsleep、parseTransitionChain（解析 GET /overlay/transition-chain 的响应）、resolveTransitionSteps、resolveOverlayDisplayFile
+// 形状：TransitionTrigger = 'wake-from-sleep' | 'wake-from-bored' | 'poke-neutral' | 'fall-asleep'；转场链步骤 { files, durationMs, pick }
+// 对应文件：src/overlay/OverlayApp.tsx / src/overlay/portraitState.ts / src/overlay/transitionState.test.ts / shared/transitionChain.ts / services/core/routes/transitionChain.ts
 
+import { TRANSITION_PICKS, type TransitionChainStep } from '../../shared/transitionChain.js'
 import {
   type OverlayManifest,
+  type PortraitFormName,
   type YState,
   pickRandom,
   resolveDisplayFile,
@@ -26,80 +32,46 @@ export function shouldPlayFallAsleep(params: {
   return params.previousY !== 'sleeping' && params.nextY === 'sleeping'
 }
 
-interface ParsedTransitionStep {
-  keys: string[]
-  durationMs: number
-}
-
-function normalizeFromKeys(from: unknown): string[] {
-  const entries: unknown[] = Array.isArray(from) ? from : from !== undefined ? [from] : []
-  const prefix = 'emotions.'
-  const keys: string[] = []
-  for (const entry of entries) {
-    if (typeof entry === 'string' && entry.startsWith(prefix) && entry.length > prefix.length) {
-      keys.push(entry.slice(prefix.length))
-    }
-  }
-  return keys
-}
-
-function parseTransitionSteps(manifest: OverlayManifest, trigger: TransitionTrigger): ParsedTransitionStep[] {
-  const raw = manifest.transitions?.[trigger]
-  if (!Array.isArray(raw)) return []
-
-  const steps: ParsedTransitionStep[] = []
-  for (const rawStep of raw) {
-    if (typeof rawStep !== 'object' || rawStep === null) continue
-    const durationMs = (rawStep as Record<string, unknown>).durationMs
-    if (typeof durationMs !== 'number' || !Number.isFinite(durationMs) || durationMs <= 0) continue
-
-    const keys = normalizeFromKeys((rawStep as Record<string, unknown>).from)
-    if (keys.length === 0) continue
-
-    steps.push({ keys, durationMs })
-  }
-  return steps
-}
-
 export interface ResolvedTransitionStep {
   file: string
   durationMs: number
 }
 
-function resolveStepFile(manifest: OverlayManifest, keys: string[]): string | null {
-  const emotions = manifest.portraits?.pixel?.emotions ?? {}
-  const usableKeys = keys.filter(key => (emotions[key]?.length ?? 0) > 0)
-  if (usableKeys.length === 0) return null
-  return pickRandom(emotions[pickRandom(usableKeys)])
-}
-
-export function resolveTransitionChain(
-  manifest: OverlayManifest | undefined,
-  trigger: TransitionTrigger,
-): ResolvedTransitionStep[] {
-  if (!manifest) return []
-
-  const parsedSteps = parseTransitionSteps(manifest, trigger)
-  const resolved: ResolvedTransitionStep[] = []
-  for (const step of parsedSteps) {
-    const file = resolveStepFile(manifest, step.keys)
-    if (file === null) continue
-    resolved.push({ file, durationMs: step.durationMs })
+export function selectTransitionFile(step: TransitionChainStep, random: <T>(items: T[]) => T = pickRandom): string {
+  switch (step.pick) {
+    case 'random':
+      return random(step.files)
   }
-  return resolved
 }
 
-export function transitionEndInstant(steps: ResolvedTransitionStep[], startedAt: number): number {
-  const totalMs = steps.reduce((sum, step) => sum + step.durationMs, 0)
-  return startedAt + totalMs
+function isValidTransitionStep(step: unknown): step is TransitionChainStep {
+  if (typeof step !== 'object' || step === null) return false
+  const { files, durationMs, pick } = step as Record<string, unknown>
+  return (
+    Array.isArray(files) &&
+    files.length > 0 &&
+    files.every(file => typeof file === 'string' && file !== '') &&
+    typeof durationMs === 'number' &&
+    Number.isFinite(durationMs) &&
+    durationMs > 0 &&
+    (TRANSITION_PICKS as readonly unknown[]).includes(pick)
+  )
 }
 
-export function isTransitionLocked(lockedUntil: number | null, now: number): boolean {
-  return lockedUntil !== null && now < lockedUntil
+export function parseTransitionChain(data: unknown): TransitionChainStep[] {
+  if (typeof data !== 'object' || data === null) return []
+  const { steps } = data as Record<string, unknown>
+  if (!Array.isArray(steps) || !steps.every(isValidTransitionStep)) return []
+  return steps
+}
+
+export function resolveTransitionSteps(chain: TransitionChainStep[]): ResolvedTransitionStep[] {
+  return chain.map(step => ({ file: selectTransitionFile(step), durationMs: step.durationMs }))
 }
 
 export function resolveOverlayDisplayFile(
   manifest: OverlayManifest | undefined,
+  form: PortraitFormName,
   transitionFile: string | null,
   isDragging: boolean,
   y: YState,
@@ -107,8 +79,8 @@ export function resolveOverlayDisplayFile(
 ): string | null {
   if (transitionFile !== null) return transitionFile
   if (isDragging) {
-    const dragFile = selectInteractionStateFile(manifest, 'drag')
+    const dragFile = selectInteractionStateFile(manifest, form, 'drag')
     if (dragFile !== null) return dragFile
   }
-  return resolveDisplayFile(manifest, y, x)
+  return resolveDisplayFile(manifest, form, y, x)
 }

@@ -1,3 +1,6 @@
+// src/eventsWatchdog.ts — 渲染进程订阅 core GET /events 的 EventSource 封装，带存活看门狗
+// 用法：createWatchdogEventSource({ url, listeners, onOpen }) 返回 { close }；ChatWindow、OverlayApp、WindowBehaviorPanel 使用
+// 对应文件：shared/eventsLiveness.ts / services/core/routes/events.ts / services/core/events/broadcast.ts
 import { EVENTS_CLIENT_TIMEOUT_MS } from '../shared/eventsLiveness.js'
 
 export interface WatchdogEventSourceOptions {

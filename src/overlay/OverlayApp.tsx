@@ -1,22 +1,29 @@
+// src/overlay/OverlayApp.tsx — 桌宠悬浮窗：按情绪与无聊/睡眠状态显示角色立绘，播放转场序列，处理点击唤出聊天窗口、拖动手柄与贴边悬停展开
+// 用法：overlay/main.tsx 渲染 <OverlayApp />；GET /state、/characters/:id/manifest.json、/overlay/transition-chain，POST /internal/overlay-interaction，GET /events（emotion、preset-switched、preset-portrait-changed）；调用 electronAPI 的桌宠相关方法
+// 对应文件：src/overlay/portraitState.ts / src/overlay/transitionState.ts / src/overlay/edgeHoverState.ts / src/overlay/overlay.css / src/eventsWatchdog.ts / shared/portraitForm.ts / shared/transitionChain.ts / services/core/index.ts / services/core/routes/internal.ts / services/core/routes/transitionChain.ts / electron/main/index.ts（overlay:* IPC）
 import React, { useEffect, useRef, useState } from 'react'
 import { createWatchdogEventSource } from '../eventsWatchdog.js'
 import type { AppState } from '../../shared/types/index.js'
+import type { TransitionChainStep } from '../../shared/transitionChain.js'
+import { resolveEffectiveForm } from '../../shared/portraitForm.js'
 import './overlay.css'
 import {
   type OverlayManifest,
+  type PortraitFormName,
   type YState,
+  computeOverlaySize,
   deriveY,
+  fallbackFirstFile,
   nextThresholdInstant,
 } from './portraitState.js'
 import {
   type ResolvedTransitionStep,
+  parseTransitionChain,
   type TransitionTrigger,
-  isTransitionLocked,
   resolveOverlayDisplayFile,
-  resolveTransitionChain,
+  resolveTransitionSteps,
   selectTransitionTrigger,
   shouldPlayFallAsleep,
-  transitionEndInstant,
 } from './transitionState.js'
 import {
   type EdgeHoverState,
@@ -30,9 +37,10 @@ import {
   isDragHandleSuppressedByEdge,
 } from './edgeHoverState.js'
 
-import { CORE_URL } from '../coreUrl.js'
+import { CORE_URL, resolveAssetUrl } from '../coreUrl.js'
 
 const CLICK_DISPLACEMENT_THRESHOLD_PX = 5
+const TRANSITION_CHAIN_TIMEOUT_MS = 500
 
 interface EmotionEventPayload {
   self?: { label: string; intensity: number } | null
@@ -48,16 +56,14 @@ interface DesktopPresencePayload {
   handleSuppressed: boolean
 }
 
-function resolveAssetUrl(characterId: string, relativePath: string): string {
-  const encodedPath = relativePath.split('/').map(encodeURIComponent).join('/')
-  return `${CORE_URL}/characters/${encodeURIComponent(characterId)}/${encodedPath}`
-}
-
 export function OverlayApp() {
   const [characterId, setCharacterId] = useState<string | null>(null)
   const [file, setFile] = useState<string | null>(null)
   const [isLocked, setIsLocked] = useState(false)
+  const [transitionStepKey, setTransitionStepKey] = useState('')
   const manifestRef = useRef<OverlayManifest | undefined>(undefined)
+  const formRef = useRef<PortraitFormName>('pixel')
+  const sizedKeyRef = useRef<string | null>(null)
   const yRef = useRef<YState>(null)
   const xRef = useRef<string | undefined>(undefined)
   const ownSessionIdRef = useRef<string | null>(null)
@@ -65,7 +71,11 @@ export function OverlayApp() {
   const loadGenRef = useRef(0)
   const transitionFileRef = useRef<string | null>(null)
   const transitionInProgressRef = useRef<TransitionTrigger | null>(null)
-  const transitionEndAtRef = useRef<number | null>(null)
+  const transitionLockedRef = useRef(false)
+  const transitionIdRef = useRef(0)
+  const transitionStepsRef = useRef<ResolvedTransitionStep[]>([])
+  const transitionStepIndexRef = useRef(0)
+  const characterIdRef = useRef<string | null>(null)
   const transitionTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const mouseDownPosRef = useRef<{ x: number; y: number } | null>(null)
   const isDraggingRef = useRef(false)
@@ -125,6 +135,34 @@ export function OverlayApp() {
     timerRef.current = setTimeout(() => loadCharacterAndPortrait(true), Math.max(0, next - Date.now()))
   }
 
+  function abortTransition() {
+    if (transitionTimerRef.current !== undefined) {
+      clearTimeout(transitionTimerRef.current)
+      transitionTimerRef.current = undefined
+    }
+    transitionIdRef.current++
+    transitionFileRef.current = null
+    transitionInProgressRef.current = null
+    transitionLockedRef.current = false
+    setIsLocked(false)
+  }
+
+  function sizeOverlayWindowOnce(id: string, form: PortraitFormName, manifest: OverlayManifest) {
+    const key = `${id}|${form}`
+    if (sizedKeyRef.current === key) return
+    const sizingFile = fallbackFirstFile(manifest.portraits?.[form])
+    if (sizingFile === null) return
+    sizedKeyRef.current = key
+
+    const probe = new Image()
+    probe.onload = () => {
+      if (sizedKeyRef.current !== key) return
+      if (probe.naturalWidth === 0 || probe.naturalHeight === 0) return
+      window.electronAPI.setOverlaySize(computeOverlaySize(form, probe.naturalWidth, probe.naturalHeight))
+    }
+    probe.src = resolveAssetUrl(id, sizingFile)
+  }
+
   function loadCharacterAndPortrait(calledByThresholdTimer: boolean) {
     const gen = ++loadGenRef.current
     const previousY = yRef.current
@@ -136,7 +174,10 @@ export function OverlayApp() {
         const id = state.presetSnapshot?.characterId
         if (!id) return
         setCharacterId(id)
+        characterIdRef.current = id
         ownSessionIdRef.current = state.sessionId
+
+        const savedForm = state.presetSnapshot?.displayConfig?.currentPortrait ?? 'pixel'
 
         yRef.current = deriveY({
           lastAttentionAt: state.lastAttentionAt,
@@ -150,7 +191,13 @@ export function OverlayApp() {
           .then(r => r.json())
           .then((manifest: OverlayManifest) => {
             if (gen !== loadGenRef.current) return
+            const form = resolveEffectiveForm(savedForm, manifest.portraits) ?? savedForm
+            if (form !== formRef.current) {
+              formRef.current = form
+              abortTransition()
+            }
             manifestRef.current = manifest
+            sizeOverlayWindowOnce(id, form, manifest)
             if (shouldPlayFallAsleep({
               calledByThresholdTimer,
               previousY,
@@ -160,7 +207,7 @@ export function OverlayApp() {
               startTransition('fall-asleep')
               return
             }
-            setFile(resolveOverlayDisplayFile(manifestRef.current, transitionFileRef.current, isDraggingRef.current, yRef.current, xRef.current))
+            setFile(resolveOverlayDisplayFile(manifestRef.current, formRef.current, transitionFileRef.current, isDraggingRef.current, yRef.current, xRef.current))
           })
       })
       .catch(() => {
@@ -173,7 +220,10 @@ export function OverlayApp() {
       return
     }
     const step = steps[index]
+    transitionStepsRef.current = steps
+    transitionStepIndexRef.current = index
     transitionFileRef.current = step.file
+    setTransitionStepKey(`${transitionIdRef.current}-${index}`)
     setFile(step.file)
     transitionTimerRef.current = setTimeout(() => playTransitionStep(steps, index + 1), step.durationMs)
   }
@@ -183,15 +233,35 @@ export function OverlayApp() {
       clearTimeout(transitionTimerRef.current)
       transitionTimerRef.current = undefined
     }
+    transitionIdRef.current++
     transitionFileRef.current = null
     transitionInProgressRef.current = null
-    transitionEndAtRef.current = null
+    transitionLockedRef.current = false
     setIsLocked(false)
     loadCharacterAndPortrait(false)
   }
 
+  function fetchTransitionChain(trigger: TransitionTrigger): Promise<TransitionChainStep[]> {
+    const id = characterIdRef.current
+    if (id === null) return Promise.resolve([])
+    const query = `characterId=${encodeURIComponent(id)}&trigger=${encodeURIComponent(trigger)}&form=${formRef.current}`
+    return fetch(`${CORE_URL}/overlay/transition-chain?${query}`, { signal: AbortSignal.timeout(TRANSITION_CHAIN_TIMEOUT_MS) })
+      .then(r => r.json())
+      .then(parseTransitionChain)
+      .catch(() => [])
+  }
+
+  function handleTransitionImageError() {
+    if (transitionFileRef.current === null) return
+    if (transitionTimerRef.current !== undefined) {
+      clearTimeout(transitionTimerRef.current)
+      transitionTimerRef.current = undefined
+    }
+    playTransitionStep(transitionStepsRef.current, transitionStepIndexRef.current + 1)
+  }
+
   function startTransition(trigger: TransitionTrigger) {
-    if (trigger === 'fall-asleep' && isTransitionLocked(transitionEndAtRef.current, Date.now())) {
+    if (trigger === 'fall-asleep' && transitionLockedRef.current) {
       return
     }
 
@@ -199,20 +269,16 @@ export function OverlayApp() {
       clearTimeout(transitionTimerRef.current)
       transitionTimerRef.current = undefined
     }
-    transitionInProgressRef.current = null
+    const transitionId = ++transitionIdRef.current
     transitionFileRef.current = null
-    transitionEndAtRef.current = null
-    setIsLocked(false)
-
-    const steps = resolveTransitionChain(manifestRef.current, trigger)
-    if (steps.length === 0) {
-      setFile(resolveOverlayDisplayFile(manifestRef.current, null, isDraggingRef.current, yRef.current, xRef.current))
-      return
-    }
     transitionInProgressRef.current = trigger
-    transitionEndAtRef.current = trigger === 'fall-asleep' ? null : transitionEndInstant(steps, Date.now())
-    setIsLocked(isTransitionLocked(transitionEndAtRef.current, Date.now()))
-    playTransitionStep(steps, 0)
+    transitionLockedRef.current = trigger !== 'fall-asleep'
+    setIsLocked(transitionLockedRef.current)
+
+    fetchTransitionChain(trigger).then(chain => {
+      if (transitionId !== transitionIdRef.current) return
+      playTransitionStep(resolveTransitionSteps(chain), 0)
+    })
   }
 
   function scheduleHandleHide() {
@@ -252,13 +318,14 @@ export function OverlayApp() {
       if (displaced) return 
     }
 
-    if (isTransitionLocked(transitionEndAtRef.current, Date.now())) return 
+    if (transitionLockedRef.current) return
 
     if (transitionInProgressRef.current === 'fall-asleep') {
       if (transitionTimerRef.current !== undefined) {
         clearTimeout(transitionTimerRef.current)
         transitionTimerRef.current = undefined
       }
+      transitionIdRef.current++
       transitionInProgressRef.current = null
       transitionFileRef.current = null
 
@@ -271,7 +338,7 @@ export function OverlayApp() {
       const now = Date.now()
       yRef.current = deriveY({ lastAttentionAt: now, explicitSleep: false, now })
       scheduleThresholdCheck(now)
-      setFile(resolveOverlayDisplayFile(manifestRef.current, null, isDraggingRef.current, yRef.current, xRef.current))
+      setFile(resolveOverlayDisplayFile(manifestRef.current, formRef.current, null, isDraggingRef.current, yRef.current, xRef.current))
       return
     }
 
@@ -300,6 +367,7 @@ export function OverlayApp() {
         clearTimeout(transitionTimerRef.current)
         transitionTimerRef.current = undefined
       }
+      transitionIdRef.current++
       transitionInProgressRef.current = null
       transitionFileRef.current = null
       yRef.current = null
@@ -307,7 +375,7 @@ export function OverlayApp() {
 
     dragStartYRef.current = yRef.current
     isDraggingRef.current = true
-    setFile(resolveOverlayDisplayFile(manifestRef.current, transitionFileRef.current, true, yRef.current, xRef.current))
+    setFile(resolveOverlayDisplayFile(manifestRef.current, formRef.current, transitionFileRef.current, true, yRef.current, xRef.current))
   }
 
   function handleDragEnd() {
@@ -333,6 +401,7 @@ export function OverlayApp() {
     loadCharacterAndPortrait(false)
     return () => {
       loadGenRef.current++
+      transitionIdRef.current++
       if (timerRef.current !== undefined) {
         clearTimeout(timerRef.current)
       }
@@ -355,7 +424,7 @@ export function OverlayApp() {
       if (transitionInProgressRef.current !== null) {
         endTransition()
       } else if (wasDragging) {
-        setFile(resolveOverlayDisplayFile(manifestRef.current, null, false, yRef.current, xRef.current))
+        setFile(resolveOverlayDisplayFile(manifestRef.current, formRef.current, null, false, yRef.current, xRef.current))
       }
     }
     document.addEventListener('visibilitychange', handleVisibilityChange)
@@ -413,7 +482,7 @@ export function OverlayApp() {
         scheduleThresholdCheck(now)
         dragStartYRef.current = null
 
-        setFile(resolveOverlayDisplayFile(manifestRef.current, transitionFileRef.current, isDraggingRef.current, yRef.current, xRef.current))
+        setFile(resolveOverlayDisplayFile(manifestRef.current, formRef.current, transitionFileRef.current, isDraggingRef.current, yRef.current, xRef.current))
       } catch {
       }
     }
@@ -427,9 +496,10 @@ export function OverlayApp() {
         clearTimeout(transitionTimerRef.current)
         transitionTimerRef.current = undefined
       }
+      transitionIdRef.current++
       transitionFileRef.current = null
       transitionInProgressRef.current = null
-      transitionEndAtRef.current = null
+      transitionLockedRef.current = false
       setIsLocked(false)
       isDraggingRef.current = false
       dragStartYRef.current = null
@@ -439,6 +509,8 @@ export function OverlayApp() {
       }
       setIsHandleVisible(false)
       manifestRef.current = undefined
+      sizedKeyRef.current = null
+      characterIdRef.current = null
       yRef.current = null
       xRef.current = undefined
       ownSessionIdRef.current = null
@@ -451,6 +523,7 @@ export function OverlayApp() {
       listeners: {
         emotion: handleEmotionEvent,
         'preset-switched': handlePresetSwitchedEvent,
+        'preset-portrait-changed': () => loadCharacterAndPortrait(false),
       },
       onOpen: () => {
         loadCharacterAndPortrait(false)
@@ -462,17 +535,20 @@ export function OverlayApp() {
     }
   }, [])
 
+  const imgKey = transitionFileRef.current !== null ? `transition-${transitionStepKey}` : 'portrait'
   const src = file && characterId ? resolveAssetUrl(characterId, file) : null
 
   return (
     <div className={`overlay-root${isLocked ? ' overlay-root--locked' : ''}`}>
       {src && (
         <img
+          key={imgKey}
           className="overlay-portrait"
           src={src}
           alt=""
           onMouseDown={handleMouseDown}
           onClick={handlePortraitClick}
+          onError={handleTransitionImageError}
           onMouseEnter={handlePortraitMouseEnter}
           onMouseLeave={handlePortraitMouseLeave}
         />

@@ -1,21 +1,28 @@
+// src/overlay/portraitState.ts — 桌宠立绘选择的纯函数：由最近互动时间推导无聊/睡眠状态，按形态、状态与情绪从 manifest 选立绘文件，按图片尺寸算悬浮窗大小
+// 用法：OverlayApp 调用 deriveY、nextThresholdInstant（下次状态切换时刻）、fallbackFirstFile、computeOverlaySize；transitionState.ts 调用 resolveDisplayFile、selectInteractionStateFile、pickRandom
+// 形状：OverlayManifest { portraits?: { pixel | illustration: { fallback, emotions?, interactionStates?, reservedStates? } } }；YState = 'boredom-idle' | 'sleeping' | null
+// 对应文件：src/overlay/OverlayApp.tsx / src/overlay/transitionState.ts / src/overlay/portraitState.test.ts / shared/portraitForm.ts
+import type { PortraitFormName } from '../../shared/portraitForm.js'
 
 export const BOREDOM_THRESHOLD_MS = 15 * 60 * 1000
 export const SLEEP_THRESHOLD_MS = 60 * 60 * 1000
 
 export type YState = 'boredom-idle' | 'sleeping' | null
 
+export type { PortraitFormName }
+
+export const PIXEL_MAX_SIDE_PX = 132
+export const ILLUSTRATION_MAX_HEIGHT_PX = 500
+
 export interface PortraitForm {
   fallback: string
   emotions?: Record<string, string[]>
+  interactionStates?: Record<string, string>
+  reservedStates?: Record<string, string[]>
 }
 
 export interface OverlayManifest {
-  portraits?: {
-    pixel?: PortraitForm
-  }
-  reservedStates?: Record<string, string[]>
-  interactionStates?: Record<string, string>
-  transitions?: Record<string, unknown>
+  portraits?: Partial<Record<PortraitFormName, PortraitForm>>
 }
 
 export function pickRandom<T>(items: T[]): T {
@@ -44,28 +51,54 @@ export function nextThresholdInstant(lastAttentionAt: number | null, now: number
   return null
 }
 
-function selectXFile(pixel: PortraitForm | undefined, x: string | undefined): string | null {
-  if (!pixel) return null
-  const emotions = pixel.emotions ?? {}
-  const candidates = (x ? emotions[x] : undefined) ?? emotions[pixel.fallback]
-  if (!candidates || candidates.length === 0) return null
-  return pickRandom(candidates)
+export function fallbackFirstFile(form: PortraitForm | undefined): string | null {
+  return form?.emotions?.[form.fallback]?.[0] ?? null
 }
 
-function selectYFile(manifest: OverlayManifest, y: YState): string | null {
-  if (y === null) return null
-  const candidates = manifest.reservedStates?.[y]
-  if (!candidates || candidates.length === 0) return null
-  return pickRandom(candidates)
+function selectXFile(form: PortraitForm | undefined, x: string | undefined): string | null {
+  if (!form) return null
+  const candidates = x ? form.emotions?.[x] : undefined
+  if (candidates && candidates.length > 0) return pickRandom(candidates)
+  return fallbackFirstFile(form)
 }
 
-export function selectInteractionStateFile(manifest: OverlayManifest | undefined, key: string): string | null {
-  return manifest?.interactionStates?.[key] ?? null
+function selectYFile(form: PortraitForm | undefined, y: YState): string | null {
+  if (y === null || !form) return null
+  const candidates = form.reservedStates?.[y]
+  if (candidates && candidates.length > 0) return pickRandom(candidates)
+  return fallbackFirstFile(form)
 }
 
-export function resolveDisplayFile(manifest: OverlayManifest | undefined, y: YState, x: string | undefined): string | null {
-  if (!manifest) return null
-  const yFile = y !== null ? selectYFile(manifest, y) : null
-  if (yFile) return yFile
-  return selectXFile(manifest.portraits?.pixel, x)
+export function selectInteractionStateFile(
+  manifest: OverlayManifest | undefined,
+  form: PortraitFormName,
+  key: string,
+): string | null {
+  const portraitForm = manifest?.portraits?.[form]
+  return portraitForm?.interactionStates?.[key] ?? fallbackFirstFile(portraitForm)
+}
+
+export function resolveDisplayFile(
+  manifest: OverlayManifest | undefined,
+  form: PortraitFormName,
+  y: YState,
+  x: string | undefined,
+): string | null {
+  const portraitForm = manifest?.portraits?.[form]
+  if (y !== null) return selectYFile(portraitForm, y)
+  return selectXFile(portraitForm, x)
+}
+
+export function computeOverlaySize(
+  form: PortraitFormName,
+  naturalWidth: number,
+  naturalHeight: number,
+): { width: number; height: number } {
+  const scale = form === 'pixel'
+    ? Math.min(1, PIXEL_MAX_SIDE_PX / Math.max(naturalWidth, naturalHeight))
+    : Math.min(1, ILLUSTRATION_MAX_HEIGHT_PX / naturalHeight)
+  return {
+    width: Math.max(1, Math.round(naturalWidth * scale)),
+    height: Math.max(1, Math.round(naturalHeight * scale)),
+  }
 }

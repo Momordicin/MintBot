@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { db, initDb } from '../db/index.js'
 import { appendMessage, insertEntity, indexMessageFts, upsertMessageEmbedding } from '../session/queries.js'
 import * as queries from '../session/queries.js'
@@ -7,16 +7,10 @@ import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
 
 initDb()
 
-const prevFlag = process.env.ENCRYPT_SENSITIVE_FIELDS
 beforeEach(() => {
-  // FTS 断言要求本地模式（encryptSensitiveFields=false，本地默认）
-  delete process.env.ENCRYPT_SENSITIVE_FIELDS
   db.exec(`
     DELETE FROM Messages; DELETE FROM message_embeddings; DELETE FROM message_fts; DELETE FROM MessageEntities;
   `)
-})
-afterEach(() => {
-  process.env.ENCRYPT_SENSITIVE_FIELDS = prevFlag
 })
 
 function addMessage(sessionId: string, content: string, createdAt = Date.now()): number {

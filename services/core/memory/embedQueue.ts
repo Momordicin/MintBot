@@ -1,3 +1,7 @@
+// services/core/memory/embedQueue.ts — 处理一批待嵌入消息：调 embedding provider 取向量，写入向量表与全文索引，并标记已嵌入
+// 用法：orchestrator.ts 的 runOrganizeModeTick 调 processEmbedQueue(provider, batchSize, batch)
+// 形状：(provider, batchSize, messages?) -> { processed, remaining }
+// 对应文件：services/core/memory/orchestrator.ts / services/core/providers/EmbeddingProvider.ts / services/core/session/queries.ts / services/core/memory/embedQueue.test.ts
 import {
   getPendingEmbeddingMessages,
   getPendingEmbeddingCount,

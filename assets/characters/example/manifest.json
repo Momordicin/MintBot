@@ -19,6 +19,16 @@
       "emotions": {
         "idle":  ["gifs/idle1.gif", "gifs/idle2.gif"],
         "happy": ["gifs/happy1.gif"]
+      },
+      "interactionStates": {
+        "drag": "gifs/drag.gif",
+        "move": "gifs/move.gif"
+      },
+      "reservedStates": {
+        "thinking":           ["gifs/thinking.gif"],
+        "listening-to-music": ["gifs/music.gif"],
+        "boredom-idle":       ["gifs/boredom.gif"],
+        "sleeping":           ["gifs/sleeping.gif"]
       }
     },
     "illustration": {
@@ -26,20 +36,18 @@
       "emotions": {
         "idle":  ["full-body.png"],
         "happy": ["half-body.png"]
+      },
+      "interactionStates": {
+        "drag": "gifs/drag.gif",
+        "move": "gifs/move.gif"
+      },
+      "reservedStates": {
+        "thinking":           ["gifs/thinking.gif"],
+        "listening-to-music": ["gifs/music.gif"],
+        "boredom-idle":       ["gifs/boredom.gif"],
+        "sleeping":           ["gifs/sleeping.gif"]
       }
     }
-  },
-
-  "interactionStates": {
-    "drag": "gifs/drag.gif",
-    "move": "gifs/move.gif"
-  },
-
-  "reservedStates": {
-    "thinking":           ["gifs/thinking.gif"],
-    "listening-to-music": ["gifs/music.gif"],
-    "boredom-idle":       ["gifs/boredom.gif"],
-    "sleeping":           ["gifs/sleeping.gif"]
   },
 
   "emotePool": [

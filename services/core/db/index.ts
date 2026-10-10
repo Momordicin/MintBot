@@ -1,9 +1,11 @@
+// services/core/db/index.ts — SQLite 数据库连接与建表/迁移（better-sqlite3 + sqlite-vec 向量扩展 + libsimple 分词扩展）
+// 用法：被 import 时即按 DB_PATH（缺省 ./data/db.sqlite）建目录、打开连接并启用 WAL，导出 db；index.ts 的 start() 与 db/seed.ts 调 initDb() 加载扩展、建表并执行 user_version 迁移，返回 { needsFtsBackfill }；session/queries.ts 直接用 db
+// 对应文件：services/core/index.ts / services/core/db/seed.ts / services/core/session/queries.ts / services/core/db/index.test.ts / services/core/db/guard.test.ts
 import DatabaseConstructor, { Database } from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec'
 import path from 'path'
 import fs from 'fs'
 import * as dotenv from 'dotenv'
-import { getEncryptSensitiveFields } from '../config/security.js'
 
 
 dotenv.config({ quiet: true })
@@ -251,12 +253,6 @@ export function initDb(): { needsFtsBackfill: boolean } {
   `)
  
   const { needsFtsBackfill } = runMigrations()
-  const encrypt = getEncryptSensitiveFields()
-  console.log(
-    encrypt
-      ? '[DB] encryptSensitiveFields = true (AES-256-GCM, FTS disabled)'
-      : '[DB] encryptSensitiveFields = false (plaintext at rest, FTS enabled)'
-  )
   console.log('[DB] Initialized')
   return { needsFtsBackfill }
 }

@@ -1,7 +1,12 @@
+// services/core/characters/manifest.ts — 读取 assets/characters/<角色ID>/manifest.json，与默认值合并成 CharacterManifest，并检查其素材文件与转场链
+// 用法：session/index.ts 的 loadSession 调 loadCharacterManifest(characterId)；导出 ASSET_ROOT / CHARACTERS_ROOT，index.ts 将后者挂为 /characters/ 静态目录
+// 对应文件：services/core/characters/transitionChain.ts / shared/portraitForm.ts / services/core/session/index.ts / services/core/routes/characterImport.ts / services/core/routes/transitionChain.ts / services/core/characters/manifest.test.ts
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
 import * as dotenv from 'dotenv'
+import { checkFileGroup, resolveTransitionChain } from './transitionChain.js'
+import { isPortraitFormAvailable } from '../../../shared/portraitForm.js'
 
 dotenv.config({ quiet: true })
 
@@ -15,17 +20,13 @@ if (process.env.VITEST && !ASSET_ROOT.startsWith(os.tmpdir() + path.sep)) {
 export interface PortraitForm {
   fallback: string
   emotions: Record<string, string[]>
+  interactionStates: Record<string, string>
+  reservedStates: Record<string, string[]>
 }
 
 export interface EmotePoolEntry {
   file: string
   tags: string[]
-}
-
-export interface TransitionStep {
-  from: string[]        
-  pick: 'random'
-  durationMs: number
 }
 
 export interface CharacterManifest {
@@ -45,10 +46,7 @@ export interface CharacterManifest {
     pixel: PortraitForm
     illustration: PortraitForm
   }
-  interactionStates: Record<string, string>
-  reservedStates: Record<string, string[]>
   emotePool: EmotePoolEntry[]
-  transitions: Record<string, TransitionStep[]>
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -117,11 +115,13 @@ function mergeStringArrayMap(value: unknown, label: string): Record<string, stri
 }
 
 function mergePortraitForm(value: unknown, label: string): PortraitForm {
-  if (value === undefined) return { fallback: '', emotions: {} }
+  if (value === undefined) return { fallback: '', emotions: {}, interactionStates: {}, reservedStates: {} }
   const source = value as Record<string, unknown>
   return {
     fallback: mergeOptionalString(source.fallback, `${label}.fallback`),
     emotions: mergeStringArrayMap(source.emotions, `${label}.emotions`),
+    interactionStates: mergeStringMap(source.interactionStates, `${label}.interactionStates`),
+    reservedStates: mergeStringArrayMap(source.reservedStates, `${label}.reservedStates`),
   }
 }
 
@@ -143,82 +143,16 @@ function mergeEmotePool(value: unknown): EmotePoolEntry[] {
   return result
 }
 
-const TRANSITION_FROM_PREFIX = 'emotions.'
-
-function normalizeTransitionFrom(value: unknown): string[] | null {
-  if (typeof value === 'string') return [value]
-  if (isStringArray(value) && value.length > 0) return value
-  return null
-}
-
-function mergeTransitionStep(
-  entry: unknown,
-  emotionVocabulary: string[],
-  label: string
-): TransitionStep | null {
-  if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
-    console.warn(`[CharacterManifest] ${label} 类型错误，应为对象，跳过该步`)
-    return null
-  }
-  const step = entry as Record<string, unknown>
-
-  const from = normalizeTransitionFrom(step.from)
-  if (from === null) {
-    console.warn(`[CharacterManifest] ${label}.from 缺失、类型错误或为空数组，应为非空字符串数组或单个字符串，跳过该步`)
-    return null
-  }
-
-  for (const source of from) {
-    const key = source.startsWith(TRANSITION_FROM_PREFIX) ? source.slice(TRANSITION_FROM_PREFIX.length) : null
-    if (key === null || !emotionVocabulary.includes(key)) {
-      console.warn(`[CharacterManifest] ${label}.from 引用了不存在的键 '${source}'，跳过该步`)
-      return null
-    }
-  }
-
-  let pick: TransitionStep['pick'] = 'random'
-  if (step.pick !== undefined && step.pick !== 'random') {
-    console.warn(`[CharacterManifest] ${label}.pick 类型错误，应为 'random'，使用默认值 'random'`)
-  }
-
-  if (typeof step.durationMs !== 'number' || !Number.isFinite(step.durationMs) || step.durationMs <= 0) {
-    console.warn(`[CharacterManifest] ${label}.durationMs 缺失或类型错误，应为正数，跳过该步`)
-    return null
-  }
-
-  return { from, pick, durationMs: step.durationMs }
-}
-
-function mergeTransitions(
-  value: unknown,
-  emotionVocabulary: string[],
-  label: string
-): Record<string, TransitionStep[]> {
-  if (value === undefined) return {}
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    console.warn(`[CharacterManifest] ${label} 类型错误，应为对象，使用默认值 {}`)
-    return {}
-  }
-  const result: Record<string, TransitionStep[]> = {}
-  for (const [chainName, chainValue] of Object.entries(value as Record<string, unknown>)) {
-    if (!Array.isArray(chainValue)) {
-      console.warn(`[CharacterManifest] ${label}.${chainName} 类型错误，应为数组，跳过该链`)
-      continue
-    }
-    const steps: TransitionStep[] = []
-    chainValue.forEach((entry, index) => {
-      const step = mergeTransitionStep(entry, emotionVocabulary, `${label}.${chainName}[${index}]`)
-      if (step) steps.push(step)
-    })
-    result[chainName] = steps
-  }
-  return result
-}
-
 function mergeManifest(raw: unknown): CharacterManifest {
   const source = (raw ?? {}) as Record<string, unknown>
   const portraits = (source.portraits ?? {}) as Record<string, unknown>
   const emotionVocabulary = mergeOptionalStringArray(source.emotionVocabulary, 'emotionVocabulary')
+
+  for (const legacyKey of ['interactionStates', 'reservedStates']) {
+    if (source[legacyKey] !== undefined) {
+      console.warn(`[CharacterManifest] 顶层 ${legacyKey} 是旧格式，已不再读取；请移到 portraits.<形态>.${legacyKey} 下`)
+    }
+  }
 
   return {
     schemaVersion: mergeOptionalNumber(source.schemaVersion, 1, 'schemaVersion'),
@@ -237,10 +171,33 @@ function mergeManifest(raw: unknown): CharacterManifest {
       pixel: mergePortraitForm(portraits.pixel, 'portraits.pixel'),
       illustration: mergePortraitForm(portraits.illustration, 'portraits.illustration'),
     },
-    interactionStates: mergeStringMap(source.interactionStates, 'interactionStates'),
-    reservedStates: mergeStringArrayMap(source.reservedStates, 'reservedStates'),
     emotePool: mergeEmotePool(source.emotePool),
-    transitions: mergeTransitions(source.transitions, emotionVocabulary, 'transitions'),
+  }
+}
+
+function checkManifestAssets(characterId: string, raw: unknown, manifest: CharacterManifest): void {
+  const characterDir = path.join(CHARACTERS_ROOT, characterId)
+  const label = `角色 ${characterId}`
+
+  for (const form of ['pixel', 'illustration'] as const) {
+    for (const [key, files] of Object.entries(manifest.portraits[form].emotions)) {
+      checkFileGroup(characterDir, files, `${label} portraits.${form}.emotions.${key}`)
+    }
+    for (const [key, file] of Object.entries(manifest.portraits[form].interactionStates)) {
+      checkFileGroup(characterDir, [file], `${label} portraits.${form}.interactionStates.${key}`)
+    }
+    for (const [key, files] of Object.entries(manifest.portraits[form].reservedStates)) {
+      checkFileGroup(characterDir, files, `${label} portraits.${form}.reservedStates.${key}`)
+    }
+  }
+
+  const transitions = (raw as Record<string, unknown> | null)?.transitions
+  if (typeof transitions !== 'object' || transitions === null || Array.isArray(transitions)) return
+  for (const trigger of Object.keys(transitions)) {
+    for (const form of ['pixel', 'illustration'] as const) {
+      if (!isPortraitFormAvailable(manifest.portraits[form])) continue
+      resolveTransitionChain({ characterId, characterDir, raw, trigger, form })
+    }
   }
 }
 
@@ -263,5 +220,7 @@ export function loadCharacterManifest(characterId: string): CharacterManifest | 
     return null
   }
 
-  return mergeManifest(raw)
+  const manifest = mergeManifest(raw)
+  checkManifestAssets(characterId, raw, manifest)
+  return manifest
 }

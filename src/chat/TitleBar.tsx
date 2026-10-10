@@ -1,3 +1,7 @@
+// src/chat/TitleBar.tsx — 聊天窗口顶部标题栏：当前角色头像（无头像时占位）与名称
+// 用法：ChatWindow 渲染 <TitleBar />
+// 形状：props { avatarUrl?, displayName }
+// 对应文件：src/chat/ChatWindow.tsx / src/chat/chat.css
 import React from 'react'
 
 interface TitleBarProps {

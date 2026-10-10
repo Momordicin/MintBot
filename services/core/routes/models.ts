@@ -1,3 +1,7 @@
+// services/core/routes/models.ts — 按提供商类型返回可选模型名列表
+// 用法：core/index.ts 里 fastify.register(modelsRoutes)；GET /models?type=ollama|anthropic|openai|deepseek；ollama 实时向 Ollama 查询，其余返回内置列表
+// 形状：{ models: string[] }；type 不合法返回 400
+// 对应文件：src/settings/CharacterPanel.tsx（调用方）/ services/core/providers/ollama.ts / services/core/config/index.ts / services/core/routes/models.test.ts
 import type { FastifyInstance } from 'fastify'
 import { listOllamaModels, getOllamaBaseUrl } from '../providers/ollama.js'
 import { getModelProviderConfig } from '../config/index.js'

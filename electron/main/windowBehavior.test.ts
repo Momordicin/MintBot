@@ -49,9 +49,10 @@ const testState = vi.hoisted(() => ({
   dragging: { overlay: false, chat: false } as Record<'overlay' | 'chat', boolean>,
 }))
 
-const { revalidateBlockersNowMock, setPreferredBoundsMock } = vi.hoisted(() => ({
+const { revalidateBlockersNowMock, setPreferredBoundsMock, getPreferredBoundsMock } = vi.hoisted(() => ({
   revalidateBlockersNowMock: vi.fn(),
   setPreferredBoundsMock: vi.fn(),
+  getPreferredBoundsMock: vi.fn((): unknown => null),
 }))
 
 vi.mock('electron', () => ({
@@ -62,8 +63,26 @@ vi.mock('electron', () => ({
   BrowserWindow: class {},
 }))
 
+const actualComputeAnchoredResizeBounds = vi.hoisted(() => (
+  bounds: { x: number; y: number; width: number; height: number },
+  size: { width: number; height: number },
+  workArea: { x: number; y: number; width: number; height: number }
+) => {
+  const width = Math.min(size.width, workArea.width)
+  const height = Math.min(size.height, workArea.height)
+  const x = Math.round(bounds.x + (bounds.width - size.width) / 2)
+  const y = bounds.y + bounds.height - size.height
+  return {
+    x: Math.min(Math.max(x, workArea.x), workArea.x + workArea.width - width),
+    y: Math.min(Math.max(y, workArea.y), workArea.y + workArea.height - height),
+    width,
+    height,
+  }
+})
+
 vi.mock('./windowPositions', () => ({
-  getPreferredBounds: () => null,
+  getPreferredBounds: getPreferredBoundsMock,
+  computeAnchoredResizeBounds: actualComputeAnchoredResizeBounds,
   setPreferredBounds: setPreferredBoundsMock,
   getEffectiveHomeDisplay: (displays: typeof testState.displays) => {
     const home = displays.find(d => d.id === testState.homeDisplayId)
@@ -136,13 +155,27 @@ import {
   handleWindowMoved,
   markProgrammaticWindowPlacement,
   markTopologySettle,
-  updateCachedWindowBehaviorConfig,
+  applyWindowBehaviorSnapshot,
+  initWindowBehaviorConfig,
+  getCachedWindowBehaviorConfig,
   requestOverlayEdgeHover,
   sendCurrentPetPresenceOnReady,
   closeStartupGate,
   openStartupGate,
   cancelProgrammaticMoveOnDragStart,
+  applyOverlaySize,
 } from './windowBehavior'
+
+let testRevision = 0
+
+function updateCachedWindowBehaviorConfig(
+  config: { chatPinMode: 'always' | 'smart' | 'off'; petAvoidanceEnabled: boolean; appRules: Array<{ exeName: string; effect: 'allow' | 'soft' | 'hard' }> },
+  mainWindow: Electron.BrowserWindow | null,
+  overlayWindow: Electron.BrowserWindow | null
+): void {
+  testRevision += 1
+  applyWindowBehaviorSnapshot({ generation: 'default-test-generation', revision: testRevision, config }, mainWindow, overlayWindow)
+}
 
 // Same durations as windowBehavior.ts. PERSIST_DEBOUNCE_MS is exported from windowPositions.ts
 // (Fix 4) and re-provided by this file's own vi.mock('./windowPositions', ...) above (kept equal
@@ -1567,6 +1600,7 @@ describe('drag-end 后主动收敛（不依赖 1500ms 轮询）', () => {
     // 一次收敛 = 一次 blocker 复查 + 一次重新求值。求值本身的可观测证据是拖拽尾巴已经被收掉：
     // endDragTail 之后 isWindowDragInProgress 为假，resolver 才可能求出非 ACTIVE 的 desired
     expect(revalidateBlockersNowMock).toHaveBeenCalledTimes(1)
+    expect(revalidateBlockersNowMock).toHaveBeenCalledWith({ forceConservative: true })
     expect(testState.dragging.overlay).toBe(false)
   })
 
@@ -1616,6 +1650,7 @@ describe('drag-end 后主动收敛（不依赖 1500ms 轮询）', () => {
 
     expect(commitHomeDisplayFromDragOutcome).not.toHaveBeenCalled()
     expect(revalidateBlockersNowMock).toHaveBeenCalledTimes(1)
+    expect(revalidateBlockersNowMock).toHaveBeenCalledWith({ forceConservative: true })
     expect(testState.dragging.overlay).toBe(false)
   })
 
@@ -1637,6 +1672,7 @@ describe('drag-end 后主动收敛（不依赖 1500ms 轮询）', () => {
     vi.advanceTimersByTime(PERSIST_DEBOUNCE_MS + 10)
 
     expect(revalidateBlockersNowMock).toHaveBeenCalledTimes(1)
+    expect(revalidateBlockersNowMock).toHaveBeenCalledWith({ forceConservative: true })
   })
 })
 
@@ -1956,6 +1992,133 @@ describe('非法 drop 的回滚接线', () => {
         // 回滚目标正是窗口此刻所在的 applied placement
         expect(win.getBounds().x).toBe(path.expectedX)
       })
+    }
+  })
+})
+
+describe('window behavior snapshot ordering', () => {
+  const CONFIG_A = { chatPinMode: 'always' as const, petAvoidanceEnabled: true, appRules: [] }
+  const CONFIG_B = { chatPinMode: 'off' as const, petAvoidanceEnabled: false, appRules: [{ exeName: 'x.exe', effect: 'hard' as const }] }
+
+  it('applies a newer revision and rejects an older or equal one from the same generation', () => {
+    expect(applyWindowBehaviorSnapshot({ generation: 'gen-order', revision: 5, config: CONFIG_A }, null, null)).toBe(true)
+    expect(getCachedWindowBehaviorConfig()).toEqual(CONFIG_A)
+
+    expect(applyWindowBehaviorSnapshot({ generation: 'gen-order', revision: 4, config: CONFIG_B }, null, null)).toBe(false)
+    expect(applyWindowBehaviorSnapshot({ generation: 'gen-order', revision: 5, config: CONFIG_B }, null, null)).toBe(false)
+    expect(getCachedWindowBehaviorConfig()).toEqual(CONFIG_A)
+
+    expect(applyWindowBehaviorSnapshot({ generation: 'gen-order', revision: 6, config: CONFIG_B }, null, null)).toBe(true)
+    expect(getCachedWindowBehaviorConfig()).toEqual(CONFIG_B)
+  })
+
+  it('accepts a different generation even with a lower revision', () => {
+    applyWindowBehaviorSnapshot({ generation: 'gen-old', revision: 9, config: CONFIG_B }, null, null)
+
+    expect(applyWindowBehaviorSnapshot({ generation: 'gen-new', revision: 1, config: CONFIG_A }, null, null)).toBe(true)
+    expect(getCachedWindowBehaviorConfig()).toEqual(CONFIG_A)
+  })
+
+  it('initWindowBehaviorConfig applies the fetched snapshot through the same ordering rule', async () => {
+    applyWindowBehaviorSnapshot({ generation: 'gen-init', revision: 7, config: CONFIG_A }, null, null)
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ generation: 'gen-init', revision: 3, config: CONFIG_B }) })
+      await initWindowBehaviorConfig(null, null)
+      expect(getCachedWindowBehaviorConfig()).toEqual(CONFIG_A)
+
+      fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ generation: 'gen-init', revision: 8, config: CONFIG_B }) })
+      await initWindowBehaviorConfig(null, null)
+      expect(getCachedWindowBehaviorConfig()).toEqual(CONFIG_B)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+})
+
+describe('applyOverlaySize', () => {
+  let fresh: typeof import('./windowBehavior')
+
+  beforeEach(async () => {
+    vi.resetModules()
+    fresh = await import('./windowBehavior')
+  })
+
+  function makeResizableOverlayWindow(bounds: { x: number; y: number; width: number; height: number }) {
+    return { ...makeFakeOverlayWindow(bounds), setBounds: vi.fn() }
+  }
+
+  it('keeps the bottom edge anchored and leaves x to the edge controller while docked at an edge', () => {
+    const display1 = makeDisplay(1, 0)
+    testState.displays = [display1]
+    testState.homeDisplayId = 1
+    testState.matchDisplay = () => display1
+    testState.blockerMap = new Map()
+
+    const win = makeResizableOverlayWindow({ x: -92, y: 900, width: 132, height: 132 })
+    fresh.evaluateDesktopPresence(null, win as unknown as Electron.BrowserWindow)
+    testState.blockerMap = new Map([
+      [1, { hwnd: 1n, pid: 1, exeName: null, displayId: 1, reasons: new Set(['user-rule']), severity: 'soft' }],
+    ])
+    fresh.evaluateDesktopPresence(null, win as unknown as Electron.BrowserWindow)
+    win.getBounds = () => ({ x: -92, y: 900, width: 132, height: 132 })
+    vi.clearAllMocks()
+
+    fresh.applyOverlaySize(win as unknown as Electron.BrowserWindow, { width: 300, height: 500 })
+
+    expect(win.setBounds).toHaveBeenCalledWith({ x: -92, y: 532, width: 300, height: 500 })
+  })
+
+  it('reads preferred bounds under the applied display, not the display the window mostly overlaps, and never writes them', () => {
+    const display1 = makeDisplay(1, 0)
+    const display2 = makeDisplay(2, 1920)
+    testState.displays = [display1, display2]
+    testState.homeDisplayId = 2
+    testState.matchDisplay = () => display1
+    testState.blockerMap = new Map()
+
+    const win = makeResizableOverlayWindow({ x: 2000, y: 900, width: 132, height: 132 })
+    fresh.evaluateDesktopPresence(null, win as unknown as Electron.BrowserWindow)
+    win.getBounds = () => ({ x: 2000, y: 900, width: 132, height: 132 })
+    vi.clearAllMocks()
+
+    fresh.applyOverlaySize(win as unknown as Electron.BrowserWindow, { width: 300, height: 500 })
+
+    expect(getPreferredBoundsMock).toHaveBeenCalledWith('overlay', 2)
+    expect(win.setBounds).toHaveBeenCalledWith({ x: 1920, y: 532, width: 300, height: 500 })
+    expect(setPreferredBoundsMock).not.toHaveBeenCalled()
+  })
+
+  it('returns to the exact original bounds after resizing larger and back, even when the larger size is clamped', () => {
+    const display1 = makeDisplay(1, 0)
+    testState.displays = [display1]
+    testState.homeDisplayId = 1
+    testState.matchDisplay = () => display1
+    testState.blockerMap = new Map()
+
+    const pixel = { x: 1920 - 132 - 100, y: 900, width: 132, height: 132 }
+    const win = makeResizableOverlayWindow(pixel)
+    fresh.evaluateDesktopPresence(null, win as unknown as Electron.BrowserWindow)
+    let current: { x: number; y: number; width: number; height: number } = { ...pixel }
+    win.getBounds = () => current
+    win.setBounds.mockImplementation((next: typeof current) => {
+      current = { ...next }
+    })
+    vi.clearAllMocks()
+    getPreferredBoundsMock.mockReturnValue({ ...pixel })
+
+    try {
+      for (const illustration of [{ width: 400, height: 500 }, { width: 401, height: 500 }]) {
+        fresh.applyOverlaySize(win as unknown as Electron.BrowserWindow, illustration)
+        expect(current.x).toBe(1920 - illustration.width)
+        fresh.applyOverlaySize(win as unknown as Electron.BrowserWindow, { width: 132, height: 132 })
+        expect(win.setBounds).toHaveBeenLastCalledWith(pixel)
+        expect(current).toEqual(pixel)
+      }
+      expect(setPreferredBoundsMock).not.toHaveBeenCalled()
+    } finally {
+      getPreferredBoundsMock.mockReturnValue(null)
     }
   })
 })

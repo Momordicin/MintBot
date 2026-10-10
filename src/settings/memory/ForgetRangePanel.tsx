@@ -1,3 +1,7 @@
+// src/settings/memory/ForgetRangePanel.tsx — "按时间段删除"子面板：选起止时间，先检查影响范围（消息数、重叠摘要），再二次确认后删除当前会话该时间段的记忆
+// 用法：MemoryPanel 渲染 <ForgetRangePanel sessionId />；POST /forget/check，POST /forget
+// 形状：props { sessionId: string }；删除结果含各类记录的删除条数
+// 对应文件：src/settings/memory/MemoryPanel.tsx / services/core/routes/forget.ts
 import React, { useEffect, useState } from 'react'
 
 import { CORE_URL } from '../../coreUrl.js'

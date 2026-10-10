@@ -22,6 +22,14 @@ describe('selectValidationMode (Fix 3 — conservative mode armed by the real ca
   it('is standard when neither condition holds', () => {
     expect(selectValidationMode(false, false)).toBe('standard')
   })
+
+  it('is conservative when forced, even with no self foreground and no drag', () => {
+    expect(selectValidationMode(false, false, true)).toBe('conservative')
+  })
+
+  it('stays standard when the force flag is explicitly false', () => {
+    expect(selectValidationMode(false, false, false)).toBe('standard')
+  })
 })
 
 describe('runValidationPass composition — only the overlay window drag arms conservative mode', () => {

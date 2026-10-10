@@ -1,3 +1,6 @@
+// src/settings/memory/SummaryList.tsx — "摘要列表"子面板：列出当前会话的全部摘要及其覆盖的消息范围
+// 用法：MemoryPanel 渲染 <SummaryList sessionId />；GET /summaries?sessionId
+// 对应文件：src/settings/memory/MemoryPanel.tsx / services/core/routes/memory.ts
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 
 import { CORE_URL } from '../../coreUrl.js'

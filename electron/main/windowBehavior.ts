@@ -1,3 +1,7 @@
+// electron/main/windowBehavior.ts — 窗口行为编排：缓存 window-behavior 配置快照，按显示器阻挡表为桌宠与聊天窗口套用迁移、置顶、显示/隐藏、贴边，并处理拖拽落点持久化与 overlay 尺寸
+// 用法：index.ts 启动与事件里调 initWindowBehaviorConfig / applyWindowBehaviorSnapshot / evaluateDesktopPresence / handleWindowMoved / requestOverlayEdgeHover / applyOverlaySize 等；向 overlay 发 desktop-presence:changed
+// 形状：输入 WindowBehaviorSnapshot（core GET/PATCH /config/window-behavior 与 SSE window-behavior-changed）和阻挡表；输出为对 BrowserWindow 的操作与 IPC 推送
+// 对应文件：electron/main/index.ts / electron/main/desktopPresence.ts / electron/main/foregroundWorldModel.ts / electron/main/windowPositions.ts / electron/main/windowAnimation.ts / shared/windowBehavior.ts / electron/main/windowBehavior.test.ts
 import { BrowserWindow, screen } from 'electron'
 import { animateTo } from './windowAnimation'
 import {
@@ -5,6 +9,7 @@ import {
   setPreferredBounds,
   getEffectiveHomeDisplay,
   computeDefaultBoundsForDisplay,
+  computeAnchoredResizeBounds,
   clampBoundsToWorkArea,
   DEFAULT_WINDOW_SIZE,
   PERSIST_DEBOUNCE_MS,
@@ -34,14 +39,8 @@ import {
 import type { EdgeSide, DesiredPetState, PetPresence, PetPresencePayload } from './desktopPresence'
 import { isWindowDragInProgress, endDragTail } from './dragActivity'
 import { CORE_URL } from './coreUrl'
-
-type ChatPinMode = 'always' | 'smart' | 'off'
-
-interface WindowBehaviorConfig {
-  chatPinMode: ChatPinMode
-  petAvoidanceEnabled: boolean
-  appRules: AppRule[]
-}
+import { isNewerSnapshot } from '../../shared/windowBehavior.js'
+import type { WindowBehaviorConfig, WindowBehaviorSnapshot } from '../../shared/windowBehavior.js'
 
 const PIN_LEVEL: NonNullable<Parameters<BrowserWindow['setAlwaysOnTop']>[1]> = 'screen-saver'
 
@@ -59,10 +58,24 @@ const DEFAULT_CONFIG: WindowBehaviorConfig = {
   appRules: [],
 }
 
-let cachedConfig: WindowBehaviorConfig = DEFAULT_CONFIG
+let cachedSnapshot: WindowBehaviorSnapshot | null = null
+
+function currentConfig(): WindowBehaviorConfig {
+  return cachedSnapshot?.config ?? DEFAULT_CONFIG
+}
+
+function acceptSnapshot(snapshot: WindowBehaviorSnapshot): boolean {
+  if (!isNewerSnapshot(cachedSnapshot, snapshot)) return false
+  cachedSnapshot = snapshot
+  return true
+}
+
+export function getCachedWindowBehaviorConfig(): WindowBehaviorConfig {
+  return currentConfig()
+}
 
 export function getWindowBehaviorRules(): { appRules: AppRule[] } {
-  return { appRules: cachedConfig.appRules }
+  return { appRules: currentConfig().appRules }
 }
 
 let startupGateOpen = true
@@ -83,7 +96,7 @@ export async function initWindowBehaviorConfig(mainWindow: BrowserWindow | null,
   try {
     const response = await fetch(`${CORE_URL}/config/window-behavior`)
     if (response.ok) {
-      cachedConfig = await response.json()
+      acceptSnapshot((await response.json()) as WindowBehaviorSnapshot)
     }
   } catch (err) {
     console.error('[WindowBehavior] Failed to fetch initial config, using defaults:', err)
@@ -95,13 +108,14 @@ export async function initWindowBehaviorConfig(mainWindow: BrowserWindow | null,
   }
 }
 
-export function updateCachedWindowBehaviorConfig(
-  config: WindowBehaviorConfig,
+export function applyWindowBehaviorSnapshot(
+  snapshot: WindowBehaviorSnapshot,
   mainWindow: BrowserWindow | null,
   overlayWindow: BrowserWindow | null
-): void {
-  cachedConfig = config
+): boolean {
+  if (!acceptSnapshot(snapshot)) return false
   evaluateDesktopPresence(mainWindow, overlayWindow)
+  return true
 }
 
 const programmaticMoveInFlight = new Set<WindowKey>()
@@ -182,10 +196,13 @@ function moveToDisplay(win: BrowserWindow, windowKey: WindowKey, targetDisplayId
 
   let bounds = getPreferredBounds(windowKey, target.id)
   if (!bounds) {
-    bounds = computeDefaultBoundsForDisplay(target, displays, DEFAULT_WINDOW_SIZE[windowKey], windowKey)
+    const defaultSize = windowKey === 'overlay' ? win.getBounds() : DEFAULT_WINDOW_SIZE[windowKey]
+    bounds = computeDefaultBoundsForDisplay(target, displays, { width: defaultSize.width, height: defaultSize.height }, windowKey)
     setPreferredBounds(windowKey, target.id, bounds)
   } else {
-    bounds = clampBoundsToWorkArea(bounds, target.workArea)
+    bounds = windowKey === 'overlay'
+      ? computeAnchoredResizeBounds(bounds, win.getBounds(), target.workArea)
+      : clampBoundsToWorkArea(bounds, target.workArea)
   }
   notePlacement(windowKey, target.id, bounds)
 
@@ -212,7 +229,10 @@ function computeEdgeFullBounds(
   displays: Electron.Display[],
   currentBounds: Electron.Rectangle
 ): Electron.Rectangle {
-  const fullBounds = getPreferredBounds('overlay', target.id) ?? computeDefaultBoundsForDisplay(target, displays, DEFAULT_WINDOW_SIZE.overlay, 'overlay')
+  const preferredBounds = getPreferredBounds('overlay', target.id)
+  const fullBounds = preferredBounds
+    ? computeAnchoredResizeBounds(preferredBounds, currentBounds, target.workArea)
+    : computeDefaultBoundsForDisplay(target, displays, { width: currentBounds.width, height: currentBounds.height }, 'overlay')
   return {
     x: fullBounds.x,
     y: currentBounds.y,
@@ -373,7 +393,7 @@ function reconcileAfterDragPlacement(
   mainWindow: BrowserWindow | null,
   overlayWindow: BrowserWindow | null
 ): void {
-  revalidateBlockersNow()
+  revalidateBlockersNow({ forceConservative: true })
   endDragTail(windowKey)
   evaluateDesktopPresence(mainWindow, overlayWindow)
 }
@@ -442,6 +462,32 @@ export function handleWindowMoved(
   }, PERSIST_DEBOUNCE_MS))
 }
 
+export function applyOverlaySize(
+  overlayWindow: BrowserWindow | null,
+  size: { width: number; height: number }
+): void {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return
+
+  const current = overlayWindow.getBounds()
+  if (current.width === size.width && current.height === size.height) return
+
+  activeAnimationCancelFor.get('overlay')?.()
+
+  const settled = overlayWindow.getBounds()
+  const appliedDisplayId = appliedDisplayIdFor('overlay')
+  const display =
+    screen.getAllDisplays().find(candidate => candidate.id === appliedDisplayId) ?? screen.getDisplayMatching(settled)
+  const remembered = getPreferredBounds('overlay', display.id) ?? settled
+  const anchored = computeAnchoredResizeBounds(remembered, size, display.workArea)
+
+  markProgrammaticQuiet('overlay', PROGRAMMATIC_MOVE_COOLDOWN_MS)
+  overlayWindow.setBounds(
+    appliedPetPresence === 'EDGE' ? { x: settled.x, y: anchored.y, width: size.width, height: size.height } : anchored
+  )
+  notePlacement('overlay', display.id, anchored)
+  evaluatePetPresence(overlayWindow)
+}
+
 let applyingPetVisibility = false
 
 function applyPetVisibility(overlayWindow: BrowserWindow, visibility: 'show' | 'hide' | null): void {
@@ -470,7 +516,7 @@ function evaluatePetPresence(overlayWindow: BrowserWindow | null): void {
     preferredDisplayId,
     getDisplayStateMap(),
     allDisplayIds,
-    cachedConfig.petAvoidanceEnabled
+    currentConfig().petAvoidanceEnabled
   )
 
   latestPetDesired = desired
@@ -496,7 +542,7 @@ function evaluateChatPresence(mainWindow: BrowserWindow | null): void {
   if (mainWindow.isMinimized()) return
   if (!mainWindow.isVisible() && appliedChatPresence !== 'SUPPRESSED') return
 
-  const { chatPinMode } = cachedConfig
+  const { chatPinMode } = currentConfig()
 
   if (chatPinMode !== 'smart') {
     if (appliedChatPresence === 'SUPPRESSED') mainWindow.showInactive()

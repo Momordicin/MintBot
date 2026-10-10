@@ -1,3 +1,7 @@
+// services/core/index.ts — core 服务进程入口：构建 Fastify 实例，在 start() 里装配依赖并注册路由，监听 CORE_PORT
+// 用法：作为独立进程运行；start() 装配 provider、配置监听、DB、定时任务、AI 服务、Ollama 与启动会话，再注册 CORS、静态目录与各 routes，监听 CORE_PORT；自带 GET /health、GET /state
+// 对应文件：services/core/logBootstrap.ts / services/core/config/ports.ts / services/core/logBootstrap.test.ts
+import './logBootstrap.js'
 import Fastify from 'fastify'
 import path from 'path'
 import fs from 'fs'
@@ -16,7 +20,8 @@ import { messageRoutes } from './routes/messages.js'
 import { forgetRoutes } from './routes/forget.js'
 import { memoryRoutes } from './routes/memory.js'
 import { configRoutes } from './routes/config.js'
-import { windowBehaviorRoutes } from './routes/windowBehavior.js'
+import { windowBehaviorRoutes, broadcastWindowBehaviorSnapshot } from './routes/windowBehavior.js'
+import { transitionChainRoutes } from './routes/transitionChain.js'
 import { createModelProvider, ModelProvider } from './providers/ModelProvider.js'
 import { BGEProvider, getAiBaseUrl, type EmbeddingProvider } from './providers/EmbeddingProvider.js'
 import { Bert4NerProvider, type NERProvider } from './providers/NERProvider.js'
@@ -91,7 +96,8 @@ async function start() {
     })
     .catch(err => console.error('[Startup] AI service startup / embedding warm-up failed:', err))
 
-  startConfigWatcher(() => {
+  startConfigWatcher(({ windowBehaviorChanged }) => {
+    if (windowBehaviorChanged) broadcastWindowBehaviorSnapshot()
     fastify.modelProvider = createModelProvider(getModelProviderConfig())
     fastify.backgroundModelProvider = createModelProvider(getBackgroundModelProviderConfig())
     fastify.streamingEnabled = readStreamingEnabled()
@@ -144,6 +150,7 @@ async function start() {
   await fastify.register(memoryRoutes)
   await fastify.register(configRoutes)
   await fastify.register(windowBehaviorRoutes)
+  await fastify.register(transitionChainRoutes)
   await fastify.listen({ port: PORT, host: LOOPBACK_HOST })
   console.log(`[Core] Running on port ${PORT}`)
 

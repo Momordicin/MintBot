@@ -1,3 +1,7 @@
+// services/core/providers/NERProvider.ts — NERProvider 接口及其 HTTP 实现 Bert4NerProvider：经 AI 服务的 /ner、/ner/unload 做命名实体识别与卸载模型
+// 用法：index.ts 的 start() 构造 new Bert4NerProvider(getAiBaseUrl()) 挂到 fastify.nerProvider；orchestrator 传给 entityExtractor.extractEntities 调 extractBatch，空闲时调 unload；每次 extract/extractBatch 调 recordActivity()
+// 形状：extractBatch(texts) -> NerEntity[][]；unload() -> boolean
+// 对应文件：services/ai/main.py / services/core/providers/aiActivity.ts / services/core/memory/entityExtractor.ts / services/core/config/ports.ts / services/core/providers/NERProvider.test.ts
 import type { NerEntity } from '../../../shared/types/index.js'
 import { recordActivity } from './aiActivity.js'
 import { AI_URL } from '../config/ports.js'

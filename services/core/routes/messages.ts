@@ -1,3 +1,6 @@
+// services/core/routes/messages.ts — 按会话分页读取历史消息的路由
+// 用法：core/index.ts 里 fastify.register(messageRoutes)；GET /messages?sessionId&limit&beforeId
+// 对应文件：src/chat/ChatWindow.tsx / src/settings/memory/MessageBrowser.tsx / services/core/session/queries.ts（getMessagesPage）/ services/core/routes/messages.test.ts
 import type { FastifyInstance } from 'fastify'
 import { getMessagesPage } from '../session/queries.js'
 

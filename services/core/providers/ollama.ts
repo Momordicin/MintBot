@@ -1,3 +1,6 @@
+// services/core/providers/ollama.ts — Ollama 本地模型服务的探测、模型列表查询，以及未运行时由 core 启动 `ollama serve`
+// 用法：index.ts 的 start() 在配置或任一预设使用 ollama 时调 ensureOllama(baseUrl)（等待至多 30 秒），SIGINT/SIGTERM 时调 stopOllamaIfManaged()（仅停止自己启动的进程）；routes/models.ts 调 listOllamaModels / getOllamaBaseUrl；state.ts 调 isOllamaRunning
+// 对应文件：services/core/index.ts / services/core/routes/models.ts / services/core/state.ts / services/core/providers/ollama.test.ts
 import { spawn, ChildProcess } from 'child_process'
 
 let ollamaProcess: ChildProcess | null = null

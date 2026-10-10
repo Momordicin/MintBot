@@ -748,6 +748,124 @@ describe('config/index — updateWindowBehaviorConfig', () => {
   })
 })
 
+describe('config/index — windowBehavior revision', () => {
+  function windowBehaviorFile(overrides: Record<string, unknown> = {}) {
+    return JSON.stringify({
+      windowBehavior: { chatPinMode: 'off', petAvoidanceEnabled: true, appRules: [], ...overrides },
+    })
+  }
+
+  async function startWatching() {
+    const onMock = vi.fn()
+    watchMock.mockReturnValue({ on: onMock })
+    const mod = await import('./index.js')
+    const onReload = vi.fn()
+    mod.startConfigWatcher(onReload)
+    const changeCallback = onMock.mock.calls.find(call => call[0] === 'change')?.[1] as () => void
+    return { mod, onReload, changeCallback }
+  }
+
+  it('首次加载的 revision 为 1，即使内容不是默认值', async () => {
+    readFileSyncMock.mockReturnValue(windowBehaviorFile({ chatPinMode: 'always' }))
+    const { mod } = await startWatching()
+
+    expect(mod.getWindowBehaviorRevision()).toBe(1)
+  })
+
+  it('config.json 缺失时首次加载的 revision 也是 1', async () => {
+    readFileSyncMock.mockImplementation(() => { throw new Error('ENOENT') })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { mod } = await startWatching()
+
+    expect(mod.getWindowBehaviorRevision()).toBe(1)
+  })
+
+  it('updateWindowBehaviorConfig 改变内容时 revision +1', async () => {
+    readFileSyncMock.mockReturnValue(windowBehaviorFile())
+    const { mod } = await startWatching()
+
+    mod.updateWindowBehaviorConfig({ chatPinMode: 'smart' })
+
+    expect(mod.getWindowBehaviorRevision()).toBe(2)
+  })
+
+  it('updateWindowBehaviorConfig 写入相同内容时 revision 不变', async () => {
+    readFileSyncMock.mockReturnValue(windowBehaviorFile({ chatPinMode: 'smart' }))
+    const { mod } = await startWatching()
+
+    mod.updateWindowBehaviorConfig({ chatPinMode: 'smart' })
+
+    expect(mod.getWindowBehaviorRevision()).toBe(1)
+  })
+
+  it('appRules 的顺序变化算内容变化', async () => {
+    const rules = [{ exeName: 'a.exe', effect: 'soft' }, { exeName: 'b.exe', effect: 'hard' }]
+    readFileSyncMock.mockReturnValue(windowBehaviorFile({ appRules: rules }))
+    const { mod } = await startWatching()
+
+    mod.updateWindowBehaviorConfig({ appRules: [...rules].reverse() as never })
+
+    expect(mod.getWindowBehaviorRevision()).toBe(2)
+  })
+
+  it('规则对象的键顺序不同但内容相同，不算变化', async () => {
+    readFileSyncMock.mockReturnValue(windowBehaviorFile({ appRules: [{ exeName: 'a.exe', effect: 'soft' }] }))
+    const { mod } = await startWatching()
+
+    mod.updateWindowBehaviorConfig({ appRules: [{ effect: 'soft', exeName: 'a.exe' }] })
+
+    expect(mod.getWindowBehaviorRevision()).toBe(1)
+  })
+
+  it('PATCH 之后 chokidar 读到同样内容的 reload：revision 不再变化，onReload 报告 windowBehaviorChanged=false', async () => {
+    readFileSyncMock.mockReturnValue(windowBehaviorFile())
+    const { mod, onReload, changeCallback } = await startWatching()
+
+    mod.updateWindowBehaviorConfig({ chatPinMode: 'always' })
+    readFileSyncMock.mockReturnValue(windowBehaviorFile({ chatPinMode: 'always' }))
+    changeCallback()
+
+    expect(mod.getWindowBehaviorRevision()).toBe(2)
+    expect(onReload).toHaveBeenCalledWith({ windowBehaviorChanged: false })
+  })
+
+  it('外部修改 windowBehavior 的 reload：revision +1，onReload 报告 windowBehaviorChanged=true', async () => {
+    readFileSyncMock.mockReturnValue(windowBehaviorFile())
+    const { mod, onReload, changeCallback } = await startWatching()
+
+    readFileSyncMock.mockReturnValue(windowBehaviorFile({ petAvoidanceEnabled: false }))
+    changeCallback()
+
+    expect(mod.getWindowBehaviorRevision()).toBe(2)
+    expect(mod.getWindowBehaviorConfig().petAvoidanceEnabled).toBe(false)
+    expect(onReload).toHaveBeenCalledWith({ windowBehaviorChanged: true })
+  })
+
+  it('外部修改的是其它 section 时 windowBehaviorChanged=false', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({ ...JSON.parse(windowBehaviorFile()), memory: { recentTrackMaxMessages: 60 } }))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { mod, onReload, changeCallback } = await startWatching()
+
+    readFileSyncMock.mockReturnValue(JSON.stringify({ ...JSON.parse(windowBehaviorFile()), memory: { recentTrackMaxMessages: 70 } }))
+    changeCallback()
+
+    expect(mod.getWindowBehaviorRevision()).toBe(1)
+    expect(onReload).toHaveBeenCalledWith({ windowBehaviorChanged: false })
+  })
+
+  it('reload 解析失败时不调用 onReload，revision 不变', async () => {
+    readFileSyncMock.mockReturnValue(windowBehaviorFile())
+    const { mod, onReload, changeCallback } = await startWatching()
+
+    readFileSyncMock.mockImplementation(() => { throw new Error('mid-write') })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    changeCallback()
+
+    expect(mod.getWindowBehaviorRevision()).toBe(1)
+    expect(onReload).not.toHaveBeenCalled()
+  })
+})
+
 describe('config/index — getDefaultPresetId', () => {
   it('config.json 里有合法字符串时按原样返回', async () => {
     readFileSyncMock.mockReturnValue(JSON.stringify({ defaultPresetId: 'preset-001' }))

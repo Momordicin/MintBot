@@ -1,3 +1,7 @@
+// src/chat/InputBar.tsx — 聊天窗口底部输入区：多行输入框（Enter 发送，Shift+Enter 换行）、发送按钮、设置按钮，以及 4 个禁用的占位工具按钮
+// 用法：ChatWindow 渲染 <InputBar onSend />；设置按钮调用 electronAPI.openSettingsWindow
+// 形状：props { onSend(text: string), disabled? }
+// 对应文件：src/chat/ChatWindow.tsx / electron/preload/index.ts / electron/main/index.ts（open-settings-window）
 import React, { useRef, useState } from 'react'
 import sendPlane from '../assets/paperplane.png'
 

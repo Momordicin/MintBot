@@ -1,3 +1,7 @@
+// electron/main/windowPositions.ts — 窗口位置持久化与几何计算：<userData>/window-positions.json 按窗口与显示器存 bounds 及主显示器，并提供默认位置、跨 DPI 尺寸、锚点缩放、工作区裁剪
+// 用法：index.ts 算启动 bounds；windowBehavior.ts 读写 getPreferredBounds / setPreferredBounds / getEffectiveHomeDisplay；homeDisplayCommit.ts 调 commitUserChosenHomeDisplay
+// 形状：WindowKey 为 'chat' | 'overlay'；Bounds 为 { x, y, width, height }（DIP）
+// 对应文件：electron/main/index.ts / electron/main/windowBehavior.ts / electron/main/homeDisplayCommit.ts / electron/main/dragActivity.ts（PERSIST_DEBOUNCE_MS）/ electron/main/windowPositions.test.ts / electron/main/windowPositionsCommitGuard.test.ts
 import { app } from 'electron'
 import fs from 'fs'
 import path from 'path'
@@ -99,6 +103,9 @@ export function commitUserChosenHomeDisplay(windowKey: WindowKey, displayId: num
 
 const SCALE_DIFF_RATIO_THRESHOLD = 0.2
 
+export const OVERLAY_DEFAULT_RIGHT_OFFSET_DIP = 50
+export const OVERLAY_DEFAULT_BOTTOM_OFFSET_DIP = 100
+
 function physicalPixelArea(display: Electron.Display): number {
   const physicalWidth = display.bounds.width * display.scaleFactor
   const physicalHeight = display.bounds.height * display.scaleFactor
@@ -140,18 +147,32 @@ export function computeDefaultBoundsForDisplay(
   display: Electron.Display,
   displays: Electron.Display[],
   defaultSize: { width: number; height: number },
-  windowKey?: WindowKey
+  windowKey: WindowKey
 ): Bounds {
   const { width, height } = computeSizeForDisplay(display, displays, defaultSize)
+  const workArea = display.workArea
 
-  const { x: workAreaX, y: workAreaY, width: workAreaWidth, height: workAreaHeight } = display.workArea
-  const y = windowKey === 'overlay' ? workAreaY : workAreaY + workAreaHeight - height
-  return {
-    x: workAreaX + workAreaWidth - width,
-    y,
-    width,
-    height,
+  if (windowKey === 'chat') {
+    return clampBoundsToWorkArea(
+      {
+        x: Math.round(workArea.x + (workArea.width - width) / 2),
+        y: Math.round(workArea.y + (workArea.height - height) / 2),
+        width,
+        height,
+      },
+      workArea
+    )
   }
+
+  return clampBoundsToWorkArea(
+    {
+      x: workArea.x + workArea.width - width - OVERLAY_DEFAULT_RIGHT_OFFSET_DIP,
+      y: workArea.y + workArea.height - height - OVERLAY_DEFAULT_BOTTOM_OFFSET_DIP,
+      width,
+      height,
+    },
+    workArea
+  )
 }
 
 export function pickLargestDisplay(displays: Electron.Display[]): Electron.Display {
@@ -168,6 +189,22 @@ export function resolveStartupDisplay(
 ): Electron.Display {
   const remembered = preferredDisplayId !== null ? displays.find(display => display.id === preferredDisplayId) : undefined
   return remembered ?? pickLargestDisplay(displays)
+}
+
+export function computeAnchoredResizeBounds(
+  bounds: Bounds,
+  size: { width: number; height: number },
+  workArea: Electron.Rectangle
+): Bounds {
+  return clampBoundsToWorkArea(
+    {
+      x: Math.round(bounds.x + (bounds.width - size.width) / 2),
+      y: bounds.y + bounds.height - size.height,
+      width: size.width,
+      height: size.height,
+    },
+    workArea
+  )
 }
 
 export function clampBoundsToWorkArea(bounds: Bounds, workArea: Electron.Rectangle): Bounds {

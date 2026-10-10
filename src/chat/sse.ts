@@ -1,3 +1,7 @@
+// src/chat/sse.ts — 把 fetch 返回的 SSE 响应流解析为事件序列
+// 用法：for await (const { event, data } of parseSSE(response))；ChatWindow 用它读取 POST /chat 的响应
+// 形状：parseSSE(response: Response) -> AsyncGenerator<{ event: string; data: unknown }>
+// 对应文件：src/chat/ChatWindow.tsx / services/core/routes/chat.ts
 export interface SSEEvent {
   event: string
   data: unknown

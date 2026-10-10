@@ -1,3 +1,7 @@
+// services/core/routes/characterImport.ts — 角色卡导入与角色文件夹写入的 HTTP 路由：列角色、解析角色卡、生成人设正文、写头像和 manifest 元数据
+// 用法：core/index.ts 里 fastify.register(characterImportRoutes)；GET /characters、POST /characters/import/parse、POST /characters/import/generate、POST /characters/:characterId/avatar、POST /characters/:characterId/metadata
+// 形状：角色文件夹 CHARACTERS_ROOT/<characterId>/ 下的头像与 manifest.json
+// 对应文件：src/settings/CharacterPanel.tsx（调用方）/ services/core/characters/cardImport.ts / services/core/characters/manifest.ts / services/core/routes/characterImport.test.ts
 import type { FastifyInstance } from 'fastify'
 import path from 'path'
 import fs from 'fs'

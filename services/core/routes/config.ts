@@ -1,3 +1,7 @@
+// services/core/routes/config.ts — 模型配置（主模型与后台模型）的读取与修改路由
+// 用法：core/index.ts 里 fastify.register(configRoutes)；GET /config/model、PATCH /config/model；PATCH 校验后写配置并重建 fastify.modelProvider / backgroundModelProvider
+// 形状：响应 { modelProvider, backgroundModelProvider }，均为 ModelConfigSummary（不含 API Key，只给 hasXxxApiKey 布尔）或 null
+// 对应文件：src/settings/ModelConfigPanel.tsx（调用方）/ services/core/config/index.ts / services/core/providers/ModelProvider.ts / services/core/routes/config.test.ts
 import type { FastifyInstance } from 'fastify'
 import {
   getModelProviderConfig,

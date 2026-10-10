@@ -1,3 +1,7 @@
+// services/core/memory/summarizer.ts — 对话摘要：判断何时该生成摘要，并调用后台模型把一个会话的待摘要消息压成一条 Summary 写库
+// 用法：orchestrator.ts 的 runOrganizeModeTick 调 shouldTriggerSummary({ messageCountSinceLastSummary, lockScreenMinutes, isLowActivityWindow }) 判断，再调 generateSummary(sessionId, { model })（model 即 backgroundModelProvider）
+// 形状：generateSummary -> { summaryId, fromMessageId, toMessageId } | null（无待摘要消息时为 null）
+// 对应文件：services/core/memory/orchestrator.ts / services/core/session/queries.ts / services/core/config/index.ts / services/core/memory/summarizer.test.ts
 import { getPendingSummaryMessages, insertSummaryAndMarkMessages } from '../session/queries.js'
 import type { Message, BuiltContext, CompletionOptions } from '../../../shared/types/index.js'
 import { getMemoryConfig } from '../config/index.js'

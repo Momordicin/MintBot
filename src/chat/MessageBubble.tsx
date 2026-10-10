@@ -1,3 +1,7 @@
+// src/chat/MessageBubble.tsx — 单条消息气泡：用户/助手气泡带头像与时间，system 消息渲染为居中提示
+// 用法：MessageList 逐条渲染 <MessageBubble />；同时导出 MessageData 类型，供 ChatWindow / MessageList 使用
+// 形状：props { message: MessageData, prevRole?, avatarUrl?, userAvatarUrl?, displayName? }；与上一条 role 相同时头像留空
+// 对应文件：src/chat/MessageList.tsx / src/chat/ChatWindow.tsx / src/chat/chat.css
 import React from 'react'
 
 export interface MessageData {

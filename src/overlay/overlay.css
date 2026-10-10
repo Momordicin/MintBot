@@ -8,6 +8,7 @@
      .overlay-drag-handle），不然它会去找更外层的定位祖先 */
   position: relative;
   -webkit-app-region: drag;
+  user-select: none;
   display: flex;
   align-items: center;
   justify-content: center;

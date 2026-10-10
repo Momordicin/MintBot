@@ -1,3 +1,7 @@
+// services/core/routes/forget.ts — "忘记某时间段记忆"的预检与执行路由
+// 用法：core/index.ts 里 fastify.register(forgetRoutes)；POST /forget/check（只算影响范围）、POST /forget（执行删除，可带 alsoDeleteAffectedSummaries；受影响摘要冲突时返回 409 + impact）
+// 形状：请求体 { sessionId, fromTime, toTime（毫秒时间戳）, alsoDeleteAffectedSummaries? }
+// 对应文件：src/settings/memory/ForgetRangePanel.tsx（调用方）/ services/core/memory/forget.ts / services/core/routes/forget.test.ts
 import type { FastifyInstance } from 'fastify'
 import { checkForgetImpact, forgetTimeRange, ForgetConflictError } from '../memory/forget.js'
 

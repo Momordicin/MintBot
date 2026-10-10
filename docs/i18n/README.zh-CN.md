@@ -112,9 +112,6 @@ pnpm setup:vendor
 cp .env.example .env
 cp config.example.json config.json
 # 编辑 config.json，填入 API Key 或配置本地 Ollama
-# 注意：config.json 里的 security 字段（encryptSensitiveFields / encryptionAlgorithm /
-# keyStorage）目前还没有真正接入——是否加密敏感字段实际由 .env 里的 ENCRYPT_SENSITIVE_FIELDS
-# 和 DB_ENCRYPTION_KEY 决定，config.json 的这几个字段只是 TDD 里记录的目标设计，尚未生效
 # 另外可选加一个 backgroundModelProvider 字段（结构同 modelProvider）：不配置时整理模式
 # （摘要生成、实体抽取）沿用 modelProvider 的模型；配置了则用独立模型，方便前台用便宜快的
 # 模型、后台摘要/实体抽取用更强的模型
@@ -205,8 +202,6 @@ assets/characters/my-character/
 
 - 所有对话数据存储在本地 SQLite，不上传任何服务器
 - 使用外部 API（Anthropic / OpenAI）时，对话内容会发送至对应服务商；隐私优先用户建议配置本地 Ollama
-- 敏感字段（消息内容、角色设定、实体信息、摘要）支持 AES-256-GCM 字段级加密，可通过配置开关，线上部署时启用
-- 加密密钥当前通过环境变量（`.env` 的 `DB_ENCRYPTION_KEY`）读取；由系统密钥链（Windows Credential Manager）托管密钥、不落磁盘明文的方案仍在规划中，尚未实现
 
 ---
 

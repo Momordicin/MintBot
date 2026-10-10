@@ -3,7 +3,6 @@ import Fastify from 'fastify'
 import fastifyCors from '@fastify/cors'
 import type { FastifyReply } from 'fastify'
 import { initDb, db } from '../db/index.js'
-import { decrypt } from '../db/crypto.js'
 import { upsertPreset, getEmotionState } from '../session/queries.js'
 import * as queries from '../session/queries.js'
 import { loadSession, getHistory } from '../session/index.js'
@@ -50,8 +49,11 @@ vi.mock('../characters/manifest.js', async importOriginal => {
     schemaVersion: 2, name: '', displayName: '', description: '', tags: [], creator: '', version: '', creatorNotes: '', avatar: '',
     userAvatar: '',
     emotionVocabulary: [], emoteTagVocabulary: [],
-    portraits: { pixel: { fallback: '', emotions: {} }, illustration: { fallback: '', emotions: {} } },
-    interactionStates: {}, reservedStates: {}, emotePool: [], transitions: {},
+    portraits: {
+      pixel: { fallback: '', emotions: {}, interactionStates: {}, reservedStates: {} },
+      illustration: { fallback: '', emotions: {}, interactionStates: {}, reservedStates: {} },
+    },
+    emotePool: [],
     ...overrides,
   })
   return {
@@ -780,7 +782,7 @@ describe('POST /chat', () => {
 
     const rows = db.prepare('SELECT role, content FROM Messages WHERE sessionId = ? ORDER BY id ASC')
       .all(session.sessionId) as Array<{ role: string; content: string }>
-    const ordered = rows.map(r => ({ role: r.role, content: decrypt(r.content) }))
+    const ordered = rows.map(r => ({ role: r.role, content: r.content }))
 
     expect(ordered).toEqual([
       { role: 'user', content: '第一条' },
@@ -834,7 +836,7 @@ describe('POST /chat', () => {
 
     const rows = db.prepare('SELECT role, content FROM Messages WHERE sessionId = ? ORDER BY id ASC')
       .all(session.sessionId) as Array<{ role: string; content: string }>
-    const ordered = rows.map(r => ({ role: r.role, content: decrypt(r.content) }))
+    const ordered = rows.map(r => ({ role: r.role, content: r.content }))
 
     expect(ordered).toEqual([
       { role: 'user', content: '第一条' },
