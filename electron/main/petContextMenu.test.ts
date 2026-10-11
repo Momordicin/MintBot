@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildPetMenu, parsePetMenuState } from './petContextMenu'
+import { buildPetMenu, isForwardedPetMenuAction, parsePetMenuState } from './petContextMenu'
 import type { PetMenuState } from './petContextMenu'
 import type { WindowBehaviorConfig } from '../../shared/windowBehavior.js'
 
@@ -41,17 +41,18 @@ describe('buildPetMenu', () => {
     expect(sizes.map(item => item.label)).toEqual(['50%', '75%', '100%', '125%', '150%'])
     expect(sizes.map(item => item.checked)).toEqual([false, false, false, true, false])
     expect(sizes.every(item => item.type === 'radio' && item.enabled === true)).toBe(true)
-    expect(sizes[0].action).toEqual({ kind: 'set-scale', value: 0.5 })
+    expect(sizes[0].action).toEqual({ kind: 'set-scale', presetId: 'p1', form: 'pixel', value: 0.5 })
   })
 
   it('checks the scale of the illustration form when that is the effective form', () => {
     const sizes = buildPetMenu('normal', CONFIG, { ...STATE, effectiveForm: 'illustration' })[1].submenu!
     expect(sizes.map(item => item.checked)).toEqual([false, true, false, false, false])
+    expect(sizes[2].action).toEqual({ kind: 'set-scale', presetId: 'p1', form: 'illustration', value: 1 })
   })
 
   it('offers the pixel switch while in illustration form', () => {
     const item = buildPetMenu('normal', CONFIG, { ...STATE, effectiveForm: 'illustration' })[3]
-    expect(item).toEqual({ label: '切换至像素', action: { kind: 'switch-form', form: 'pixel' } })
+    expect(item).toEqual({ label: '切换至像素', action: { kind: 'switch-form', presetId: 'p1', to: 'pixel' } })
   })
 
   it('disables the form item with an explanatory label when the other form is missing', () => {
@@ -64,13 +65,23 @@ describe('buildPetMenu', () => {
   it('disables the size submenu and form item when no menu state was reported yet', () => {
     const items = buildPetMenu('normal', CONFIG, null)
     expect(items[1].enabled).toBe(false)
-    expect(items[1].submenu!.every(item => item.enabled === false && item.checked === false)).toBe(true)
+    expect(items[1].submenu!.every(item => item.enabled === false && item.checked === false && item.action === undefined)).toBe(true)
     expect(items[3].enabled).toBe(false)
     expect(items[3].action).toBeUndefined()
   })
 
   it('hide item sets collapsed true', () => {
     expect(buildPetMenu('normal', CONFIG, STATE)[4].action).toEqual({ kind: 'set-collapsed', value: true })
+  })
+})
+
+describe('isForwardedPetMenuAction', () => {
+  it('is true only for the preset-bound actions', () => {
+    expect(isForwardedPetMenuAction({ kind: 'set-scale', presetId: 'p1', form: 'pixel', value: 1 })).toBe(true)
+    expect(isForwardedPetMenuAction({ kind: 'switch-form', presetId: 'p1', to: 'illustration' })).toBe(true)
+    expect(isForwardedPetMenuAction({ kind: 'set-click-through', value: true })).toBe(false)
+    expect(isForwardedPetMenuAction({ kind: 'set-avoidance', value: true })).toBe(false)
+    expect(isForwardedPetMenuAction({ kind: 'set-collapsed', value: true })).toBe(false)
   })
 })
 

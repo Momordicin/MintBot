@@ -16,6 +16,10 @@ export interface OverlayMenuState {
   petScale: { pixel: 0.5 | 0.75 | 1 | 1.25 | 1.5; illustration: 0.5 | 0.75 | 1 | 1.25 | 1.5 }
 }
 
+export type OverlayMenuAction =
+  | { kind: 'set-scale'; presetId: string; form: 'pixel' | 'illustration'; value: 0.5 | 0.75 | 1 | 1.25 | 1.5 }
+  | { kind: 'switch-form'; presetId: string; to: 'pixel' | 'illustration' }
+
 export interface ElectronAPI {
   platform: string
   selectWallpaperFile: () => Promise<{ data: Uint8Array<ArrayBuffer>; filename: string } | null>
@@ -28,8 +32,9 @@ export interface ElectronAPI {
   requestOverlayEdgeHover: (hovered: boolean) => void
   notifyOverlayReady: () => void
   setOverlaySize: (size: { width: number; height: number }) => void
-  setOverlayMenuState: (state: OverlayMenuState) => void
-  openOverlayContextMenu: () => void
+  openOverlayContextMenu: (state: OverlayMenuState | null) => void
+  onOverlayContextMenuRequested: (callback: () => void) => () => void
+  onOverlayMenuAction: (callback: (action: OverlayMenuAction) => void) => () => void
   startOverlayDrag: () => void
   openPetHandleContextMenu: () => void
   onDesktopPresenceChanged: (callback: (payload: DesktopPresencePayload) => void) => () => void

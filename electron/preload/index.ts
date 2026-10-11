@@ -24,13 +24,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
   requestOverlayEdgeHover: (hovered: boolean) => ipcRenderer.send('overlay:edge-hover', hovered),
   notifyOverlayReady: () => ipcRenderer.send('overlay:presence-ready'),
   setOverlaySize: (size: { width: number; height: number }) => ipcRenderer.send('overlay:set-size', size),
-  setOverlayMenuState: (state: {
+  openOverlayContextMenu: (state: {
     presetId: string
     effectiveForm: 'pixel' | 'illustration'
     otherFormAvailable: boolean
     petScale: { pixel: number; illustration: number }
-  }) => ipcRenderer.send('overlay:menu-state', state),
-  openOverlayContextMenu: () => ipcRenderer.send('overlay:context-menu'),
+  } | null) => ipcRenderer.send('overlay:context-menu', state),
+  onOverlayContextMenuRequested: (callback: () => void) => {
+    const listener = () => callback()
+    ipcRenderer.on('overlay:context-menu-requested', listener)
+    return () => ipcRenderer.removeListener('overlay:context-menu-requested', listener)
+  },
+  onOverlayMenuAction: (callback: (action: unknown) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, action: unknown) => callback(action)
+    ipcRenderer.on('overlay:menu-action', listener)
+    return () => ipcRenderer.removeListener('overlay:menu-action', listener)
+  },
   startOverlayDrag: () => ipcRenderer.send('overlay:start-drag'),
   openPetHandleContextMenu: () => ipcRenderer.send('pet-handle:context-menu'),
   onDesktopPresenceChanged: (callback: (payload: { presence: string; edgeSide: 'left' | 'right' | null; handleSuppressed: boolean; collapsed: boolean; clickThrough: boolean }) => void) => {

@@ -1,7 +1,7 @@
-// electron/main/petContextMenu.ts — 桌宠右键菜单的项描述生成与 overlay:menu-state 载荷校验
-// 用法：index.ts 在 overlay:context-menu IPC 与 overlay 窗口 system-context-menu 事件里调 buildPetMenu，把返回的描述转成 Electron Menu 并按 action 分派；overlay:menu-state IPC 用 parsePetMenuState 校验后缓存
-// 形状：buildPetMenu(PetMode, WindowBehaviorConfig, PetMenuState | null) -> PetMenuItem[]；parsePetMenuState(unknown) -> PetMenuState | null
-// 对应文件：electron/main/index.ts / electron/main/desktopPresence.ts / shared/portraitForm.ts / shared/windowBehavior.ts / electron/main/petContextMenu.test.ts
+// electron/main/petContextMenu.ts — 桌宠右键菜单的项描述生成与 overlay:context-menu 载荷校验
+// 用法：index.ts 在 overlay:context-menu IPC 里用 parsePetMenuState 校验渲染进程随请求发来的菜单状态，调 buildPetMenu 把返回的描述转成 Electron Menu；点击后窗口类 action 由 index.ts 处理，isForwardedPetMenuAction 判定的 action 转发回 overlay 渲染进程
+// 形状：buildPetMenu(PetMode, WindowBehaviorConfig, PetMenuState | null) -> PetMenuItem[]；parsePetMenuState(unknown) -> PetMenuState | null；set-scale / switch-form 的 action 携带 presetId
+// 对应文件：electron/main/index.ts / electron/main/desktopPresence.ts / shared/portraitForm.ts / shared/windowBehavior.ts / electron/main/petContextMenu.test.ts / src/overlay/petMenu.ts
 import { PET_SCALE_OPTIONS } from '../../shared/portraitForm.js'
 import type { PetScale, PortraitFormName } from '../../shared/portraitForm.js'
 import type { WindowBehaviorConfig } from '../../shared/windowBehavior.js'
@@ -16,10 +16,12 @@ export interface PetMenuState {
 
 export type PetMenuAction =
   | { kind: 'set-click-through'; value: boolean }
-  | { kind: 'set-scale'; value: PetScale }
+  | { kind: 'set-scale'; presetId: string; form: PortraitFormName; value: PetScale }
   | { kind: 'set-avoidance'; value: boolean }
-  | { kind: 'switch-form'; form: PortraitFormName }
+  | { kind: 'switch-form'; presetId: string; to: PortraitFormName }
   | { kind: 'set-collapsed'; value: boolean }
+
+export type ForwardedPetMenuAction = Extract<PetMenuAction, { kind: 'set-scale' | 'switch-form' }>
 
 export interface PetMenuItem {
   label: string
@@ -53,6 +55,10 @@ export function parsePetMenuState(payload: unknown): PetMenuState | null {
   }
 }
 
+export function isForwardedPetMenuAction(action: PetMenuAction): action is ForwardedPetMenuAction {
+  return action.kind === 'set-scale' || action.kind === 'switch-form'
+}
+
 function formatScale(scale: PetScale): string {
   return `${Math.round(scale * 100)}%`
 }
@@ -72,7 +78,9 @@ export function buildPetMenu(
     type: 'radio',
     checked: option === currentScale,
     enabled: state !== null,
-    action: { kind: 'set-scale', value: option },
+    action: state
+      ? { kind: 'set-scale', presetId: state.presetId, form: state.effectiveForm, value: option }
+      : undefined,
   }))
 
   let formItem: PetMenuItem
@@ -81,7 +89,7 @@ export function buildPetMenu(
   } else {
     const otherForm: PortraitFormName = state.effectiveForm === 'pixel' ? 'illustration' : 'pixel'
     formItem = state.otherFormAvailable
-      ? { label: `切换至${FORM_LABEL[otherForm]}`, action: { kind: 'switch-form', form: otherForm } }
+      ? { label: `切换至${FORM_LABEL[otherForm]}`, action: { kind: 'switch-form', presetId: state.presetId, to: otherForm } }
       : { label: `该角色没有${FORM_LABEL[otherForm]}`, enabled: false }
   }
 

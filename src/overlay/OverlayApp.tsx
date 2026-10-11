@@ -1,6 +1,6 @@
 // src/overlay/OverlayApp.tsx — 桌宠悬浮窗：按情绪与无聊/睡眠状态显示角色立绘，播放转场序列，处理点击唤出聊天窗口、拖动手柄与贴边悬停展开
-// 用法：overlay/main.tsx 渲染 <OverlayApp />；GET /state、/characters/:id/manifest.json、/overlay/transition-chain，POST /internal/overlay-interaction，GET /events（emotion、preset-switched、preset-pet-display-changed）；调用 electronAPI 的桌宠相关方法
-// 对应文件：src/overlay/portraitState.ts / src/overlay/transitionState.ts / src/overlay/edgeHoverState.ts / src/overlay/overlay.css / src/eventsWatchdog.ts / shared/portraitForm.ts / shared/transitionChain.ts / services/core/index.ts / services/core/routes/internal.ts / services/core/routes/transitionChain.ts / electron/main/index.ts（overlay:* IPC）
+// 用法：overlay/main.tsx 渲染 <OverlayApp />；GET /state、/characters/:id/manifest.json、/overlay/transition-chain，POST /internal/overlay-interaction，GET /events（emotion、preset-switched、preset-pet-display-changed），PATCH /presets/:id（右键菜单的缩放与形态动作）；调用 electronAPI 的桌宠相关方法
+// 对应文件：src/overlay/portraitState.ts / src/overlay/transitionState.ts / src/overlay/edgeHoverState.ts / src/overlay/petMenu.ts / src/overlay/overlay.css / src/eventsWatchdog.ts / shared/portraitForm.ts / shared/transitionChain.ts / services/core/index.ts / services/core/routes/internal.ts / services/core/routes/transitionChain.ts / electron/main/index.ts（overlay:* IPC）
 import React, { useEffect, useRef, useState } from 'react'
 import { createWatchdogEventSource } from '../eventsWatchdog.js'
 import type { AppState } from '../../shared/types/index.js'
@@ -37,6 +37,10 @@ import {
   isDragHandleSuppressedByEdge,
 } from './edgeHoverState.js'
 
+import { buildMenuState, resolveMenuActionPatch } from './petMenu.js'
+import type { PetScalePair } from './petMenu.js'
+import type { OverlayMenuAction } from '../electron-api.js'
+
 import { CORE_URL, resolveAssetUrl } from '../coreUrl.js'
 
 const CLICK_DISPLACEMENT_THRESHOLD_PX = 5
@@ -66,6 +70,8 @@ export function OverlayApp() {
   const [transitionStepKey, setTransitionStepKey] = useState('')
   const manifestRef = useRef<OverlayManifest | undefined>(undefined)
   const formRef = useRef<PortraitFormName>('pixel')
+  const presetIdRef = useRef<string | null>(null)
+  const petScaleRef = useRef<PetScalePair | null>(null)
   const sizedKeyRef = useRef<string | null>(null)
   const yRef = useRef<YState>(null)
   const xRef = useRef<string | undefined>(undefined)
@@ -204,6 +210,8 @@ export function OverlayApp() {
               abortTransition()
             }
             manifestRef.current = manifest
+            presetIdRef.current = state.presetSnapshot?.presetId ?? null
+            petScaleRef.current = state.presetSnapshot?.displayConfig?.petScale ?? null
             sizeOverlayWindowOnce(id, form, manifest)
             if (shouldPlayFallAsleep({
               calledByThresholdTimer,
@@ -358,9 +366,35 @@ export function OverlayApp() {
     clearHandlePress(event.currentTarget)
   }
 
-  function handleDragHandleContextMenu(event: React.MouseEvent) {
+  function liveMenuInput() {
+    return { presetId: presetIdRef.current, form: formRef.current, manifest: manifestRef.current, petScale: petScaleRef.current }
+  }
+
+  function currentMenuState() {
+    return buildMenuState(liveMenuInput())
+  }
+
+  function handleContextMenu(event: React.MouseEvent) {
     event.preventDefault()
-    window.electronAPI.openOverlayContextMenu()
+    window.electronAPI.openOverlayContextMenu(currentMenuState())
+  }
+
+  function handleMenuAction(action: OverlayMenuAction) {
+    const patch = resolveMenuActionPatch(action, liveMenuInput())
+    if (!patch) return
+    fetch(`${CORE_URL}/presets/${encodeURIComponent(patch.presetId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ displayConfig: patch.displayConfig }),
+    })
+      .then(async response => {
+        if (!response.ok) {
+          console.error('[PetMenu] Core rejected preset display config patch:', response.status, await response.text().catch(() => ''))
+        }
+      })
+      .catch(err => {
+        console.error('[PetMenu] Failed to patch preset display config:', err)
+      })
   }
 
   function handleMouseDown(event: React.MouseEvent) {
@@ -502,6 +536,17 @@ export function OverlayApp() {
   }, [])
 
   useEffect(() => {
+    const unsubscribeRequested = window.electronAPI.onOverlayContextMenuRequested(() => {
+      window.electronAPI.openOverlayContextMenu(currentMenuState())
+    })
+    const unsubscribeAction = window.electronAPI.onOverlayMenuAction(handleMenuAction)
+    return () => {
+      unsubscribeRequested()
+      unsubscribeAction()
+    }
+  }, [])
+
+  useEffect(() => {
     function handleDesktopPresenceChanged(payload: DesktopPresencePayload) {
       presenceRef.current = payload
       setCollapsed(payload.collapsed)
@@ -590,6 +635,8 @@ export function OverlayApp() {
       pointerOverPetRef.current = false
       handlePressRef.current = null
       manifestRef.current = undefined
+      presetIdRef.current = null
+      petScaleRef.current = null
       sizedKeyRef.current = null
       characterIdRef.current = null
       yRef.current = null
@@ -624,10 +671,7 @@ export function OverlayApp() {
       <div className="overlay-root overlay-root--collapsed">
         <div
           className="overlay-drag-handle overlay-drag-handle--collapsed"
-          onContextMenu={event => {
-            event.preventDefault()
-            window.electronAPI.openOverlayContextMenu()
-          }}
+          onContextMenu={handleContextMenu}
         />
       </div>
     )
@@ -646,6 +690,7 @@ export function OverlayApp() {
           onError={handleTransitionImageError}
           onMouseEnter={handlePortraitMouseEnter}
           onMouseLeave={handlePortraitMouseLeave}
+          onContextMenu={handleContextMenu}
         />
       )}
       {!clickThrough && (
@@ -664,7 +709,7 @@ export function OverlayApp() {
           onPointerUp={handleDragHandlePointerEnd}
           onPointerCancel={handleDragHandlePointerEnd}
           onLostPointerCapture={handleDragHandlePointerEnd}
-          onContextMenu={handleDragHandleContextMenu}
+          onContextMenu={handleContextMenu}
         />
       )}
     </div>

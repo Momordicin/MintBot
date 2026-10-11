@@ -37,7 +37,7 @@ import {
   setPetHandleWindow
 } from './windowBehavior'
 import { createPetHandleWindow, syncPetHandleBounds } from './petHandleWindow'
-import { buildPetMenu, parsePetMenuState } from './petContextMenu'
+import { buildPetMenu, isForwardedPetMenuAction, parsePetMenuState } from './petContextMenu'
 import type { PetMenuAction, PetMenuItem, PetMenuState } from './petContextMenu'
 import {
   queryUserNotificationState,
@@ -439,8 +439,6 @@ function resolveOverlayStartupBounds(): Bounds {
   return getCachedWindowBehaviorConfig().petCollapsed ? collapsedHandleBounds(bounds) : bounds
 }
 
-let petMenuState: PetMenuState | null = null
-
 function toMenuTemplate(items: PetMenuItem[]): MenuItemConstructorOptions[] {
   return items.map(item => {
     const option: MenuItemConstructorOptions = { label: item.label }
@@ -454,22 +452,13 @@ function toMenuTemplate(items: PetMenuItem[]): MenuItemConstructorOptions[] {
   })
 }
 
-async function patchPresetDisplayConfig(presetId: string, displayConfig: Record<string, unknown>): Promise<void> {
-  try {
-    const response = await fetch(`${CORE_URL}/presets/${encodeURIComponent(presetId)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ displayConfig }),
-    })
-    if (!response.ok) {
-      console.error('[PetMenu] Core rejected preset display config patch:', response.status, await response.text().catch(() => ''))
-    }
-  } catch (err) {
-    console.error('[PetMenu] Failed to patch preset display config:', err)
-  }
-}
-
 async function runPetMenuAction(action: PetMenuAction): Promise<void> {
+  if (isForwardedPetMenuAction(action)) {
+    if (overlayWindow && !overlayWindow.isDestroyed()) {
+      overlayWindow.webContents.send('overlay:menu-action', action)
+    }
+    return
+  }
   switch (action.kind) {
     case 'set-click-through':
       await patchWindowBehavior({ petClickThrough: action.value })
@@ -480,26 +469,31 @@ async function runPetMenuAction(action: PetMenuAction): Promise<void> {
     case 'set-collapsed':
       await patchWindowBehavior({ petCollapsed: action.value })
       break
-    case 'set-scale':
-      if (petMenuState) {
-        await patchPresetDisplayConfig(petMenuState.presetId, {
-          petScale: { ...petMenuState.petScale, [petMenuState.effectiveForm]: action.value },
-        })
-      }
-      break
-    case 'switch-form':
-      if (petMenuState) {
-        await patchPresetDisplayConfig(petMenuState.presetId, { currentPortrait: action.form })
-      }
-      break
   }
   rebuildTrayMenu()
 }
 
-function popUpPetContextMenu(anchor: BrowserWindow): void {
-  if (anchor.isDestroyed()) return
-  const items = buildPetMenu(getCurrentPetMode(), getCachedWindowBehaviorConfig(), petMenuState)
+function popUpPetContextMenu(state: PetMenuState | null): void {
+  const mode = getCurrentPetMode()
+  const anchor = mode === 'clickThrough' && petHandleWindow && !petHandleWindow.isDestroyed() && petHandleWindow.isVisible()
+    ? petHandleWindow
+    : overlayWindow
+  if (!anchor || anchor.isDestroyed()) return
+  const items = buildPetMenu(mode, getCachedWindowBehaviorConfig(), state)
   Menu.buildFromTemplate(toMenuTemplate(items)).popup({ window: anchor })
+}
+
+function requestOverlayContextMenu(): void {
+  if (
+    !overlayWindow ||
+    overlayWindow.isDestroyed() ||
+    overlayWindow.webContents.isLoading() ||
+    overlayWindow.webContents.isCrashed()
+  ) {
+    popUpPetContextMenu(null)
+    return
+  }
+  overlayWindow.webContents.send('overlay:context-menu-requested')
 }
 
 function createPetHandle(overlay: BrowserWindow): BrowserWindow {
@@ -562,7 +556,7 @@ function createOverlayWindow(): BrowserWindow {
 
   win.on('system-context-menu', event => {
     event.preventDefault()
-    popUpPetContextMenu(win)
+    requestOverlayContextMenu()
   })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
@@ -664,15 +658,13 @@ ipcMain.on('overlay:edge-hover', (_event, hovered: unknown) => {
   requestOverlayEdgeHover(overlayWindow, hovered === true)
 })
 
-ipcMain.on('overlay:menu-state', (event, payload: unknown) => {
-  if (!overlayWindow || event.sender !== overlayWindow.webContents) return
-  const state = parsePetMenuState(payload)
-  if (state) petMenuState = state
-})
-
-ipcMain.on('overlay:context-menu', event => {
-  if (!overlayWindow || event.sender !== overlayWindow.webContents) return
-  popUpPetContextMenu(overlayWindow)
+ipcMain.on('overlay:context-menu', (event, payload: unknown) => {
+  if (!overlayWindow || overlayWindow.isDestroyed() || event.sender !== overlayWindow.webContents) return
+  const state = payload == null ? null : parsePetMenuState(payload)
+  if (payload != null && state === null) {
+    console.warn('[PetMenu] invalid menu state from overlay renderer')
+  }
+  popUpPetContextMenu(state)
 })
 
 ipcMain.on('overlay:start-drag', event => {
@@ -683,7 +675,7 @@ ipcMain.on('overlay:start-drag', event => {
 
 ipcMain.on('pet-handle:context-menu', event => {
   if (!petHandleWindow || petHandleWindow.isDestroyed() || event.sender !== petHandleWindow.webContents) return
-  popUpPetContextMenu(petHandleWindow)
+  requestOverlayContextMenu()
 })
 
 ipcMain.on('overlay:presence-ready', () => {
