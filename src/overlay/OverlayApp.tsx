@@ -54,6 +54,8 @@ interface DesktopPresencePayload {
   presence: PetPresence
   edgeSide: 'left' | 'right' | null
   handleSuppressed: boolean
+  collapsed: boolean
+  clickThrough: boolean
 }
 
 export function OverlayApp() {
@@ -85,7 +87,9 @@ export function OverlayApp() {
   const [isDragHandleSuppressed, setIsDragHandleSuppressed] = useState(false)
   const handleHideTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
-  const presenceRef = useRef<DesktopPresencePayload>({ presence: 'AMBIENT', edgeSide: null, handleSuppressed: false })
+  const [collapsed, setCollapsed] = useState(false)
+  const [clickThrough, setClickThrough] = useState(false)
+  const presenceRef = useRef<DesktopPresencePayload>({ presence: 'AMBIENT', edgeSide: null, handleSuppressed: false, collapsed: false, clickThrough: false })
   const edgeHoverStateRef = useRef<EdgeHoverState>(INITIAL_EDGE_HOVER_STATE)
   const edgeHoverTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
@@ -445,6 +449,20 @@ export function OverlayApp() {
   useEffect(() => {
     function handleDesktopPresenceChanged(payload: DesktopPresencePayload) {
       presenceRef.current = payload
+      setCollapsed(payload.collapsed)
+      setClickThrough(payload.clickThrough)
+      if (payload.collapsed) {
+        if (edgeHoverTimerRef.current !== undefined) {
+          clearTimeout(edgeHoverTimerRef.current)
+          edgeHoverTimerRef.current = undefined
+        }
+        applyEdgeHoverState(resetEdgeHoverOnPresenceLeftEdge())
+        if (handleHideTimerRef.current !== undefined) {
+          clearTimeout(handleHideTimerRef.current)
+          handleHideTimerRef.current = undefined
+        }
+        setIsHandleVisible(false)
+      }
       if (payload.presence !== 'EDGE') {
         if (edgeHoverTimerRef.current !== undefined) {
           clearTimeout(edgeHoverTimerRef.current)
@@ -538,6 +556,20 @@ export function OverlayApp() {
   const imgKey = transitionFileRef.current !== null ? `transition-${transitionStepKey}` : 'portrait'
   const src = file && characterId ? resolveAssetUrl(characterId, file) : null
 
+  if (collapsed) {
+    return (
+      <div className="overlay-root overlay-root--collapsed">
+        <div
+          className="overlay-drag-handle overlay-drag-handle--collapsed"
+          onContextMenu={event => {
+            event.preventDefault()
+            window.electronAPI.openOverlayContextMenu()
+          }}
+        />
+      </div>
+    )
+  }
+
   return (
     <div className={`overlay-root${isLocked ? ' overlay-root--locked' : ''}`}>
       {src && (
@@ -553,15 +585,17 @@ export function OverlayApp() {
           onMouseLeave={handlePortraitMouseLeave}
         />
       )}
-      <div
-        className={`overlay-drag-handle${
-          isDragHandleSuppressed
-            ? ' overlay-drag-handle--edge-suppressed'
-            : isHandleVisible
-              ? ' overlay-drag-handle--visible'
-              : ''
-        }`}
-      />
+      {!clickThrough && (
+        <div
+          className={`overlay-drag-handle${
+            isDragHandleSuppressed
+              ? ' overlay-drag-handle--edge-suppressed'
+              : isHandleVisible
+                ? ' overlay-drag-handle--visible'
+                : ''
+          }`}
+        />
+      )}
     </div>
   )
 }

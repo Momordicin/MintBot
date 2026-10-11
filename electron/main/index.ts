@@ -33,9 +33,10 @@ import {
   applyOverlaySize,
   cancelProgrammaticMoveOnDragStart,
   getCurrentPetMode,
-  requestOverlayHandleHover,
-  noteOverlayCreatedCollapsed
+  noteOverlayCreatedCollapsed,
+  setPetHandleWindow
 } from './windowBehavior'
+import { createPetHandleWindow, syncPetHandleBounds } from './petHandleWindow'
 import { buildPetMenu, parsePetMenuState } from './petContextMenu'
 import type { PetMenuAction, PetMenuItem, PetMenuState } from './petContextMenu'
 import {
@@ -55,6 +56,7 @@ import {
   clampBoundsToWorkArea,
   collapsedHandleBounds,
   computeDefaultBoundsForDisplay,
+  COLLAPSED_SIZE,
   DEFAULT_WINDOW_SIZE
 } from './windowPositions'
 import type { Bounds } from './windowPositions'
@@ -424,6 +426,7 @@ ipcMain.handle('open-settings-window', () => {
 })
 
 let overlayWindow: BrowserWindow | null = null
+let petHandleWindow: BrowserWindow | null = null
 
 function resolveOverlayStartupBounds(): Bounds {
   const displays = screen.getAllDisplays()
@@ -495,10 +498,20 @@ async function runPetMenuAction(action: PetMenuAction): Promise<void> {
   rebuildTrayMenu()
 }
 
-function popUpPetContextMenu(): void {
-  if (!overlayWindow || overlayWindow.isDestroyed()) return
+function popUpPetContextMenu(anchor: BrowserWindow): void {
+  if (anchor.isDestroyed()) return
   const items = buildPetMenu(getCurrentPetMode(), getCachedWindowBehaviorConfig(), petMenuState)
-  Menu.buildFromTemplate(toMenuTemplate(items)).popup({ window: overlayWindow })
+  Menu.buildFromTemplate(toMenuTemplate(items)).popup({ window: anchor })
+}
+
+function createPetHandle(overlay: BrowserWindow): BrowserWindow {
+  const handle = createPetHandleWindow(overlay, PRELOAD_PATH)
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    handle.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/handle/index.html`)
+  } else {
+    handle.loadFile(join(__dirname, '../renderer/handle/index.html'))
+  }
+  return handle
 }
 
 function createOverlayWindow(): BrowserWindow {
@@ -525,7 +538,14 @@ function createOverlayWindow(): BrowserWindow {
     }
   })
 
+  if (getCachedWindowBehaviorConfig().petCollapsed) {
+    win.setShape([{ x: 0, y: 0, width: COLLAPSED_SIZE, height: COLLAPSED_SIZE }])
+  }
+
   win.on('closed', () => {
+    if (petHandleWindow && !petHandleWindow.isDestroyed()) petHandleWindow.destroy()
+    petHandleWindow = null
+    setPetHandleWindow(null)
     overlayWindow = null
     clearDragState('overlay')
   })
@@ -534,9 +554,17 @@ function createOverlayWindow(): BrowserWindow {
     handleWindowMoved('overlay', win, mainWindow, overlayWindow)
   })
 
+  win.on('move', () => {
+    if (petHandleWindow && !petHandleWindow.isDestroyed() && petHandleWindow.isVisible()) syncPetHandleBounds(petHandleWindow, win)
+  })
+
+  win.on('resize', () => {
+    if (petHandleWindow && !petHandleWindow.isDestroyed() && petHandleWindow.isVisible()) syncPetHandleBounds(petHandleWindow, win)
+  })
+
   win.on('system-context-menu', event => {
     event.preventDefault()
-    popUpPetContextMenu()
+    popUpPetContextMenu(win)
   })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
@@ -632,12 +660,6 @@ ipcMain.on('overlay:edge-hover', (_event, hovered: unknown) => {
   requestOverlayEdgeHover(overlayWindow, hovered === true)
 })
 
-ipcMain.on('overlay:handle-hover', (event, hovered: unknown) => {
-  if (!overlayWindow || event.sender !== overlayWindow.webContents) return
-  if (typeof hovered !== 'boolean') return
-  requestOverlayHandleHover(overlayWindow, hovered)
-})
-
 ipcMain.on('overlay:menu-state', (event, payload: unknown) => {
   if (!overlayWindow || event.sender !== overlayWindow.webContents) return
   const state = parsePetMenuState(payload)
@@ -646,7 +668,12 @@ ipcMain.on('overlay:menu-state', (event, payload: unknown) => {
 
 ipcMain.on('overlay:context-menu', event => {
   if (!overlayWindow || event.sender !== overlayWindow.webContents) return
-  popUpPetContextMenu()
+  popUpPetContextMenu(overlayWindow)
+})
+
+ipcMain.on('pet-handle:context-menu', event => {
+  if (!petHandleWindow || petHandleWindow.isDestroyed() || event.sender !== petHandleWindow.webContents) return
+  popUpPetContextMenu(petHandleWindow)
 })
 
 ipcMain.on('overlay:presence-ready', () => {
@@ -698,6 +725,8 @@ app.whenReady().then(() => {
   Menu.setApplicationMenu(null)
   const chatWindow = createWindow()
   overlayWindow = createOverlayWindow()
+  petHandleWindow = createPetHandle(overlayWindow)
+  setPetHandleWindow(petHandleWindow)
   startWindowDragMonitor(
     overlayWindow,
     () => {

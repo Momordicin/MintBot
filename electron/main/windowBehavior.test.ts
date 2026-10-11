@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
 
 // Second rework pass, Fix A / Fix C: these two regressions live in windowBehavior.ts's own
 // stateful orchestration (programmaticMoveInFlight/programmaticQuietUntil for Fix A,
@@ -84,6 +84,8 @@ vi.mock('./windowPositions', async () => {
   const actual = await vi.importActual<typeof import('./windowPositions')>('./windowPositions')
   return {
     collapsedHandleBounds: actual.collapsedHandleBounds,
+    petHandleBounds: actual.petHandleBounds,
+    COLLAPSED_SIZE: actual.COLLAPSED_SIZE,
     expandedBoundsFromHandle: actual.expandedBoundsFromHandle,
     getPreferredBounds: getPreferredBoundsMock,
     computeAnchoredResizeBounds: actualComputeAnchoredResizeBounds,
@@ -173,6 +175,19 @@ import {
 
 let testRevision = 0
 
+async function settleWindowBehaviorConfig(mod: { initWindowBehaviorConfig: typeof initWindowBehaviorConfig }): Promise<void> {
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false }))
+  try {
+    await mod.initWindowBehaviorConfig(null, null)
+  } finally {
+    vi.unstubAllGlobals()
+  }
+}
+
+beforeAll(async () => {
+  await settleWindowBehaviorConfig({ initWindowBehaviorConfig })
+})
+
 function updateCachedWindowBehaviorConfig(
   config: { chatPinMode: 'always' | 'smart' | 'off'; petAvoidanceEnabled: boolean; petClickThrough?: boolean; petCollapsed?: boolean; appRules: Array<{ exeName: string; effect: 'allow' | 'soft' | 'hard' }> },
   mainWindow: Electron.BrowserWindow | null,
@@ -204,6 +219,7 @@ function makeFakeOverlayWindow(bounds: { x: number; y: number; width: number; he
     isDestroyed: () => false,
     isVisible: () => false,
     isFocused: () => false,
+    getOpacity: () => 1,
     showInactive: vi.fn(),
     hide: vi.fn(),
     // evaluatePetPresence now applies the pet's always-on-top through the same PIN_LEVEL path as
@@ -278,6 +294,7 @@ describe('sendCurrentPetPresenceOnReady (Stage 3 part 2, FIX 2/FIX 3)', () => {
     // startupGate 模块状态，与其它测试使用的那份实例无关
     vi.resetModules()
     const fresh = await import('./windowBehavior')
+    await settleWindowBehaviorConfig(fresh)
     fresh.closeStartupGate()
 
     const win = makeFakeOverlayWindow({ x: 0, y: 0, width: 132, height: 132 })
@@ -1714,6 +1731,7 @@ describe('关闭 petAvoidanceEnabled 后退出托管状态（Controller 层）',
         visible = false
       }),
       setAlwaysOnTop: vi.fn(),
+      getOpacity: () => 1,
       getBounds: () => HOME_BOUNDS,
       webContents: { send: vi.fn() },
     }
@@ -2056,6 +2074,7 @@ describe('applyOverlaySize', () => {
   beforeEach(async () => {
     vi.resetModules()
     fresh = await import('./windowBehavior')
+    await settleWindowBehaviorConfig(fresh)
   })
 
   function makeResizableOverlayWindow(bounds: { x: number; y: number; width: number; height: number }) {
@@ -2145,6 +2164,7 @@ describe('pet interaction mode, collapsed handle geometry', () => {
   beforeEach(async () => {
     vi.resetModules()
     fresh = await import('./windowBehavior')
+    await settleWindowBehaviorConfig(fresh)
     revision = 0
     testState.displays = [makeDisplay(1, 0)]
     testState.homeDisplayId = 1
@@ -2158,11 +2178,16 @@ describe('pet interaction mode, collapsed handle geometry', () => {
   })
 
   function makeModeWindow(bounds: { x: number; y: number; width: number; height: number }) {
+    let opacity = 1
     const win = {
       ...makeFakeOverlayWindow(bounds),
       setBounds: vi.fn(),
+      setShape: vi.fn(),
       setIgnoreMouseEvents: vi.fn(),
-      setOpacity: vi.fn(),
+      getOpacity: () => opacity,
+      setOpacity: vi.fn((value: number) => {
+        opacity = value
+      }),
     }
     win.setBounds.mockImplementation((next: typeof bounds) => {
       win.getBounds = () => next
@@ -2202,7 +2227,7 @@ describe('pet interaction mode, collapsed handle geometry', () => {
     expect(win.setOpacity).not.toHaveBeenCalled()
   })
 
-  it('click-through ignores the mouse with forwarding and dims to 0.6 exactly once, then restores once on leaving it', () => {
+  it('click-through ignores the mouse as a whole window and dims to 0.6 exactly once, then restores once on leaving it', () => {
     const win = makeModeWindow({ ...PREFERRED })
     fresh.evaluateDesktopPresence(null, asWindow(win))
 
@@ -2210,7 +2235,7 @@ describe('pet interaction mode, collapsed handle geometry', () => {
     fresh.evaluateDesktopPresence(null, asWindow(win))
 
     expect(win.setIgnoreMouseEvents).toHaveBeenCalledTimes(1)
-    expect(win.setIgnoreMouseEvents).toHaveBeenCalledWith(true, { forward: true })
+    expect(win.setIgnoreMouseEvents).toHaveBeenCalledWith(true)
     expect(win.setOpacity).toHaveBeenCalledTimes(1)
     expect(win.setOpacity).toHaveBeenCalledWith(0.6)
 
@@ -2222,39 +2247,15 @@ describe('pet interaction mode, collapsed handle geometry', () => {
     expect(win.setOpacity).toHaveBeenLastCalledWith(1)
   })
 
-  it('collapsed ignores the mouse at full opacity, and wins over click-through', () => {
+  it('collapsed accepts the mouse at full opacity, and wins over click-through', () => {
     const win = makeModeWindow({ ...PREFERRED })
     fresh.evaluateDesktopPresence(null, asWindow(win))
 
     applyConfig(win, { petCollapsed: true, petClickThrough: true })
 
-    expect(win.setIgnoreMouseEvents).toHaveBeenCalledTimes(1)
-    expect(win.setIgnoreMouseEvents).toHaveBeenCalledWith(true, { forward: true })
-    expect(win.setOpacity).not.toHaveBeenCalled()
-  })
-
-  it('handle hover lifts the ignore in click-through and collapsed modes only, and a mode change resets it', () => {
-    const win = makeModeWindow({ ...PREFERRED })
-    fresh.evaluateDesktopPresence(null, asWindow(win))
-
-    fresh.requestOverlayHandleHover(asWindow(win), true)
     expect(win.setIgnoreMouseEvents).not.toHaveBeenCalled()
-
-    applyConfig(win, { petClickThrough: true })
-    win.setIgnoreMouseEvents.mockClear()
-
-    fresh.requestOverlayHandleHover(asWindow(win), true)
-    expect(win.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false)
-    fresh.requestOverlayHandleHover(asWindow(win), true)
-    expect(win.setIgnoreMouseEvents).toHaveBeenCalledTimes(1)
-    fresh.requestOverlayHandleHover(asWindow(win), false)
-    expect(win.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true, { forward: true })
-
-    fresh.requestOverlayHandleHover(asWindow(win), true)
-    win.setIgnoreMouseEvents.mockClear()
-    applyConfig(win, { petClickThrough: true, petCollapsed: true })
-    expect(win.setIgnoreMouseEvents).toHaveBeenCalledTimes(1)
-    expect(win.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true, { forward: true })
+    expect(win.setOpacity).not.toHaveBeenCalled()
+    expect(fresh.getCurrentPetMode()).toBe('collapsed')
   })
 
   it('moveToDisplay and edge animations end at the current mode target opacity', () => {
@@ -2394,6 +2395,190 @@ describe('pet interaction mode, collapsed handle geometry', () => {
     expect(win.webContents.send).toHaveBeenLastCalledWith(
       'desktop-presence:changed',
       expect.objectContaining({ collapsed: true, clickThrough: true })
+    )
+  })
+  function makeVisibleModeWindow(bounds: { x: number; y: number; width: number; height: number }) {
+    let visible = false
+    const win = makeModeWindow(bounds)
+    win.isVisible = () => visible
+    win.showInactive = vi.fn(() => {
+      visible = true
+    })
+    win.hide = vi.fn(() => {
+      visible = false
+    })
+    return win
+  }
+
+  function makeHandleWindow() {
+    let visible = false
+    return {
+      isDestroyed: () => false,
+      isVisible: () => visible,
+      showInactive: vi.fn(() => {
+        visible = true
+      }),
+      hide: vi.fn(() => {
+        visible = false
+      }),
+      setBounds: vi.fn(),
+    }
+  }
+
+  function attachHandle(handle: ReturnType<typeof makeHandleWindow>): void {
+    fresh.setPetHandleWindow(handle as unknown as Electron.BrowserWindow)
+  }
+
+  it('shows the handle window only while click-through and the pet window is visible', () => {
+    const win = makeVisibleModeWindow({ ...PREFERRED })
+    const handle = makeHandleWindow()
+    attachHandle(handle)
+
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+    expect(handle.showInactive).not.toHaveBeenCalled()
+
+    applyConfig(win, { petClickThrough: true })
+    expect(handle.showInactive).toHaveBeenCalledTimes(1)
+    expect(handle.setBounds).toHaveBeenLastCalledWith({ x: 1500 + 132 - 24, y: 600, width: 24, height: 24 })
+
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+    expect(handle.showInactive).toHaveBeenCalledTimes(1)
+
+    applyConfig(win, { petClickThrough: false })
+    expect(handle.hide).toHaveBeenCalledTimes(1)
+  })
+
+  it('hides the handle window while the pet window is hidden', () => {
+    const win = makeVisibleModeWindow({ ...PREFERRED })
+    const handle = makeHandleWindow()
+    attachHandle(handle)
+    applyConfig(win, { petClickThrough: true })
+    expect(handle.isVisible()).toBe(true)
+
+    testState.blockerMap = new Map([
+      [1, { hwnd: 1n, pid: 1, exeName: null, displayId: 1, reasons: new Set(['fullscreen']), severity: 'hard' }],
+    ])
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+
+    expect(win.hide).toHaveBeenCalled()
+    expect(handle.isVisible()).toBe(false)
+  })
+
+  it('hides the handle window when collapsed, since the pet window itself is the handle', () => {
+    const win = makeVisibleModeWindow({ ...PREFERRED })
+    const handle = makeHandleWindow()
+    attachHandle(handle)
+    applyConfig(win, { petClickThrough: true })
+    expect(handle.isVisible()).toBe(true)
+
+    applyConfig(win, { petClickThrough: true, petCollapsed: true })
+    expect(handle.isVisible()).toBe(false)
+  })
+
+  it('keeps the handle window shown during EDGE', () => {
+    const win = makeVisibleModeWindow({ ...PREFERRED })
+    const handle = makeHandleWindow()
+    attachHandle(handle)
+    applyConfig(win, { petClickThrough: true })
+
+    testState.blockerMap = new Map([
+      [1, { hwnd: 1n, pid: 1, exeName: null, displayId: 1, reasons: new Set(['user-rule']), severity: 'soft' }],
+    ])
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+
+    expect(win.webContents.send).toHaveBeenLastCalledWith(
+      'desktop-presence:changed',
+      expect.objectContaining({ presence: 'EDGE', handleSuppressed: true })
+    )
+    expect(handle.isVisible()).toBe(true)
+    expect(handle.hide).not.toHaveBeenCalled()
+  })
+
+  it('defers a collapse requested during an overlay drag until the drag ends', () => {
+    const win = makeModeWindow({ ...PREFERRED })
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+
+    testState.dragging = { overlay: true, chat: false }
+    applyConfig(win, { petCollapsed: true })
+
+    expect(fresh.getCurrentPetMode()).toBe('normal')
+    expect(win.setShape).not.toHaveBeenCalled()
+    expect(win.webContents.send).toHaveBeenLastCalledWith(
+      'desktop-presence:changed',
+      expect.objectContaining({ collapsed: false })
+    )
+
+    testState.dragging = { overlay: false, chat: false }
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+
+    expect(fresh.getCurrentPetMode()).toBe('collapsed')
+    expect(win.setShape).toHaveBeenLastCalledWith([{ x: 0, y: 0, width: 24, height: 24 }])
+    expect(win.webContents.send).toHaveBeenLastCalledWith(
+      'desktop-presence:changed',
+      expect.objectContaining({ collapsed: true })
+    )
+  })
+
+  it('clips the pet window to the 24x24 handle region on collapse and clears the shape on expand', () => {
+    const win = makeModeWindow({ ...PREFERRED })
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+    expect(win.setShape).not.toHaveBeenCalled()
+
+    applyConfig(win, { petCollapsed: true })
+    expect(win.setShape).toHaveBeenLastCalledWith([{ x: 0, y: 0, width: 24, height: 24 }])
+
+    applyConfig(win, { petCollapsed: false })
+    expect(win.setShape).toHaveBeenLastCalledWith([])
+  })
+})
+
+describe('startup gate on the first window-behavior config fetch', () => {
+  let fresh: typeof import('./windowBehavior')
+
+  beforeEach(async () => {
+    vi.resetModules()
+    fresh = await import('./windowBehavior')
+    testState.displays = [makeDisplay(1, 0)]
+    testState.homeDisplayId = 1
+    testState.matchDisplay = () => testState.displays[0]
+    testState.blockerMap = new Map()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('does not evaluate the pet before the first fetch settles', () => {
+    const win = makeFakeOverlayWindow({ x: 0, y: 0, width: 132, height: 132 })
+
+    fresh.evaluateDesktopPresence(null, win as unknown as Electron.BrowserWindow)
+
+    expect(win.showInactive).not.toHaveBeenCalled()
+    expect(win.webContents.send).not.toHaveBeenCalled()
+  })
+
+  it('proceeds with defaults after a failed or timed-out fetch, bounded by an abort signal', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error('aborted'))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const win = makeFakeOverlayWindow({ x: 0, y: 0, width: 132, height: 132 })
+
+    await fresh.initWindowBehaviorConfig(null, win as unknown as Electron.BrowserWindow)
+
+    expect(fetchMock.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal)
+    expect(win.showInactive).toHaveBeenCalled()
+  })
+
+  it('proceeds with the fetched config after a successful fetch', async () => {
+    const config = { chatPinMode: 'off', petAvoidanceEnabled: true, petClickThrough: true, petCollapsed: false, appRules: [] }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ generation: 'g', revision: 1, config }) }))
+    const win = makeFakeOverlayWindow({ x: 0, y: 0, width: 132, height: 132 })
+
+    await fresh.initWindowBehaviorConfig(null, win as unknown as Electron.BrowserWindow)
+
+    expect(win.webContents.send).toHaveBeenLastCalledWith(
+      'desktop-presence:changed',
+      expect.objectContaining({ clickThrough: true })
     )
   })
 })

@@ -787,7 +787,7 @@ describe('petModeIgnoresMouse / petModeTargetOpacity', () => {
   it('maps each mode to its mouse handling and opacity', () => {
     expect(petModeIgnoresMouse('normal')).toBe(false)
     expect(petModeIgnoresMouse('clickThrough')).toBe(true)
-    expect(petModeIgnoresMouse('collapsed')).toBe(true)
+    expect(petModeIgnoresMouse('collapsed')).toBe(false)
     expect(petModeTargetOpacity('normal')).toBe(1)
     expect(petModeTargetOpacity('clickThrough')).toBe(0.6)
     expect(petModeTargetOpacity('collapsed')).toBe(1)

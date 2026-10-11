@@ -1,9 +1,10 @@
 // electron/main/windowBehavior.ts — 窗口行为编排：缓存 window-behavior 配置快照，按显示器阻挡表为桌宠与聊天窗口套用迁移、置顶、显示/隐藏、贴边，并处理拖拽落点持久化、overlay 尺寸与收起手柄几何、穿透与透明度
-// 用法：index.ts 启动与事件里调 initWindowBehaviorConfig / applyWindowBehaviorSnapshot / evaluateDesktopPresence / handleWindowMoved / requestOverlayEdgeHover / requestOverlayHandleHover / applyOverlaySize / getCurrentPetMode / noteOverlayCreatedCollapsed 等；向 overlay 发 desktop-presence:changed
+// 用法：index.ts 启动与事件里调 initWindowBehaviorConfig / applyWindowBehaviorSnapshot / evaluateDesktopPresence / handleWindowMoved / requestOverlayEdgeHover / applyOverlaySize / getCurrentPetMode / noteOverlayCreatedCollapsed / setPetHandleWindow 等；向 overlay 发 desktop-presence:changed，并同步穿透手柄窗口的位置与显隐
 // 形状：输入 WindowBehaviorSnapshot（core GET/PATCH /config/window-behavior 与 SSE window-behavior-changed）和阻挡表；输出为对 BrowserWindow 的操作与 IPC 推送
-// 对应文件：electron/main/index.ts / electron/main/desktopPresence.ts / electron/main/foregroundWorldModel.ts / electron/main/windowPositions.ts / electron/main/windowAnimation.ts / shared/windowBehavior.ts / electron/main/windowBehavior.test.ts
+// 对应文件：electron/main/index.ts / electron/main/desktopPresence.ts / electron/main/foregroundWorldModel.ts / electron/main/windowPositions.ts / electron/main/windowAnimation.ts / electron/main/petHandleWindow.ts / shared/windowBehavior.ts / electron/main/windowBehavior.test.ts
 import { BrowserWindow, screen } from 'electron'
 import { animateTo } from './windowAnimation'
+import { syncPetHandleBounds, setPetHandleVisible } from './petHandleWindow'
 import {
   getPreferredBounds,
   setPreferredBounds,
@@ -12,6 +13,7 @@ import {
   computeAnchoredResizeBounds,
   collapsedHandleBounds,
   expandedBoundsFromHandle,
+  COLLAPSED_SIZE,
   clampBoundsToWorkArea,
   DEFAULT_WINDOW_SIZE,
   PERSIST_DEBOUNCE_MS,
@@ -82,8 +84,13 @@ export function getCachedWindowBehaviorConfig(): WindowBehaviorConfig {
 }
 
 export function getCurrentPetMode(): PetMode {
-  const { petCollapsed, petClickThrough } = currentConfig()
-  return petMode(petCollapsed, petClickThrough)
+  return petMode(appliedPetCollapsed, currentConfig().petClickThrough)
+}
+
+let petHandleWindow: BrowserWindow | null = null
+
+export function setPetHandleWindow(win: BrowserWindow | null): void {
+  petHandleWindow = win
 }
 
 function targetOpacityFor(windowKey: WindowKey): number {
@@ -95,6 +102,9 @@ export function getWindowBehaviorRules(): { appRules: AppRule[] } {
 }
 
 let startupGateOpen = true
+let windowBehaviorConfigSettled = false
+
+const WINDOW_BEHAVIOR_FETCH_TIMEOUT_MS = 3000
 
 export function closeStartupGate(): void {
   startupGateOpen = false
@@ -110,13 +120,14 @@ let appliedChatPresence: 'SHOWN' | 'NORMAL' | 'SUPPRESSED' | null = null
 
 export async function initWindowBehaviorConfig(mainWindow: BrowserWindow | null, overlayWindow: BrowserWindow | null): Promise<void> {
   try {
-    const response = await fetch(`${CORE_URL}/config/window-behavior`)
+    const response = await fetch(`${CORE_URL}/config/window-behavior`, { signal: AbortSignal.timeout(WINDOW_BEHAVIOR_FETCH_TIMEOUT_MS) })
     if (response.ok) {
       acceptSnapshot((await response.json()) as WindowBehaviorSnapshot)
     }
   } catch (err) {
     console.error('[WindowBehavior] Failed to fetch initial config, using defaults:', err)
   }
+  windowBehaviorConfigSettled = true
   try {
     evaluateDesktopPresence(mainWindow, overlayWindow)
   } catch (err) {
@@ -363,13 +374,12 @@ function broadcastPetPresenceIfChanged(overlayWindow: BrowserWindow, payload: Pe
 
 function currentPetPresencePayload(): PetPresencePayload {
   const presence = appliedPetPresence ?? 'AMBIENT'
-  const { petCollapsed, petClickThrough } = currentConfig()
   return {
     presence,
     edgeSide: presence === 'EDGE' ? appliedPetEdgeSide : null,
-    handleSuppressed: computeHandleSuppressed(latestPetDesired?.presence ?? presence, presence, petCollapsed),
-    collapsed: petCollapsed,
-    clickThrough: petClickThrough,
+    handleSuppressed: computeHandleSuppressed(latestPetDesired?.presence ?? presence, presence, appliedPetCollapsed),
+    collapsed: appliedPetCollapsed,
+    clickThrough: currentConfig().petClickThrough,
   }
 }
 
@@ -560,42 +570,25 @@ function syncPetCollapsedGeometry(win: BrowserWindow): void {
   appliedPetCollapsed = collapsed
   markProgrammaticQuiet('overlay', PROGRAMMATIC_MOVE_COOLDOWN_MS)
   win.setBounds(target)
+  win.setShape(collapsed ? [{ x: 0, y: 0, width: COLLAPSED_SIZE, height: COLLAPSED_SIZE }] : [])
   notePlacement('overlay', display.id, target)
 }
 
-let appliedPetMode: PetMode = 'normal'
 let appliedIgnoreMouse = false
-let appliedPetOpacity = 1
-let overlayHandleHovered = false
 
 function applyPetInteractionMode(overlayWindow: BrowserWindow): void {
   const mode = getCurrentPetMode()
-  if (mode !== appliedPetMode) {
-    appliedPetMode = mode
-    overlayHandleHovered = false
-  }
 
-  const ignoreMouse = petModeIgnoresMouse(mode) && !overlayHandleHovered
+  const ignoreMouse = petModeIgnoresMouse(mode)
   if (ignoreMouse !== appliedIgnoreMouse) {
-    if (ignoreMouse) overlayWindow.setIgnoreMouseEvents(true, { forward: true })
+    if (ignoreMouse) overlayWindow.setIgnoreMouseEvents(true)
     else overlayWindow.setIgnoreMouseEvents(false)
     appliedIgnoreMouse = ignoreMouse
   }
 
   if (programmaticMoveInFlight.has('overlay')) return
   const opacity = petModeTargetOpacity(mode)
-  if (opacity !== appliedPetOpacity) {
-    overlayWindow.setOpacity(opacity)
-    appliedPetOpacity = opacity
-  }
-}
-
-export function requestOverlayHandleHover(overlayWindow: BrowserWindow | null, hovered: boolean): void {
-  if (!overlayWindow || overlayWindow.isDestroyed()) return
-  if (getCurrentPetMode() === 'normal') return
-
-  overlayHandleHovered = hovered
-  applyPetInteractionMode(overlayWindow)
+  if (overlayWindow.getOpacity() !== opacity) overlayWindow.setOpacity(opacity)
 }
 
 let applyingPetVisibility = false
@@ -614,6 +607,7 @@ function applyPetVisibility(overlayWindow: BrowserWindow, visibility: 'show' | '
 function evaluatePetPresence(overlayWindow: BrowserWindow | null): void {
   if (!overlayWindow || overlayWindow.isDestroyed()) return
   if (!startupGateOpen) return
+  if (!windowBehaviorConfigSettled) return
 
   if (!isWindowDragInProgress('overlay')) syncPetCollapsedGeometry(overlayWindow)
 
@@ -641,6 +635,12 @@ function evaluatePetPresence(overlayWindow: BrowserWindow | null): void {
   applyAlwaysOnTop(overlayWindow, 'overlay', desired.alwaysOnTop)
 
   applyPetInteractionMode(overlayWindow)
+
+  if (petHandleWindow && !petHandleWindow.isDestroyed()) {
+    const handleVisible = getCurrentPetMode() === 'clickThrough' && overlayWindow.isVisible()
+    if (handleVisible) syncPetHandleBounds(petHandleWindow, overlayWindow)
+    setPetHandleVisible(petHandleWindow, handleVisible)
+  }
 
   if (transition.move !== null && !isInteracting) {
     appliedPetDisplayId = transition.move

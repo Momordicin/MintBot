@@ -1,0 +1,36 @@
+/* 穿透时桌宠手柄小窗口专属：整页 no-drag，只负责右键唤出菜单；视觉与 overlay.css 的 .overlay-drag-handle 保持一致 */
+html,
+body {
+  margin: 0;
+  background: transparent;
+  user-select: none;
+  -webkit-app-region: no-drag;
+  overflow: hidden;
+}
+
+.pet-handle {
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  width: 20px;
+  height: 20px;
+  -webkit-app-region: no-drag;
+  border-radius: 50%;
+  background-color: rgba(168, 170, 176, 0.85);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.5),
+    0 1px 3px rgba(0, 0, 0, 0.35);
+  background-image:
+    linear-gradient(rgba(24, 24, 28, 0.88), rgba(24, 24, 28, 0.88)),
+    linear-gradient(rgba(24, 24, 28, 0.88), rgba(24, 24, 28, 0.88)),
+    linear-gradient(rgba(24, 24, 28, 0.88), rgba(24, 24, 28, 0.88));
+  background-size: 10px 2px;
+  background-position: 5px 5px, 5px 9px, 5px 13px;
+  background-repeat: no-repeat;
+  opacity: 0.18;
+  transition: opacity 150ms ease;
+}
+
+.pet-handle:hover {
+  opacity: 0.95;
+}

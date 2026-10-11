@@ -89,3 +89,20 @@
   opacity: 0;
   -webkit-app-region: no-drag;
 }
+
+/* 收起态：窗口本身缩成手柄，不可拖、不穿透。Windows 会把窗口撑到约 25×28，故手柄左上锚定而非右上 */
+.overlay-root.overlay-root--collapsed {
+  -webkit-app-region: no-drag;
+}
+
+.overlay-drag-handle.overlay-drag-handle--collapsed {
+  left: 2px;
+  right: auto;
+  top: 2px;
+  -webkit-app-region: no-drag;
+  opacity: 0.18;
+}
+
+.overlay-drag-handle.overlay-drag-handle--collapsed:hover {
+  opacity: 0.95;
+}

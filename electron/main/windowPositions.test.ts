@@ -12,6 +12,7 @@ import {
   COLLAPSED_SIZE,
   collapsedHandleBounds,
   expandedBoundsFromHandle,
+  petHandleBounds,
 } from './windowPositions'
 
 // 只测新增的纯函数（显示器挑选 + bounds 夹紧）。getPreferredBounds/setPreferredBounds/
@@ -358,5 +359,33 @@ describe('expandedBoundsFromHandle', () => {
   it('inverts collapsedHandleBounds for a known pet size', () => {
     const expanded = { x: 321, y: 654, width: 300, height: 500 }
     expect(expandedBoundsFromHandle(collapsedHandleBounds(expanded), expanded)).toEqual(expanded)
+  })
+})
+
+describe('petHandleBounds', () => {
+  const workArea = { x: 0, y: 0, width: 1920, height: 1080 }
+
+  it('keeps the handle position when it lies inside the work area', () => {
+    expect(petHandleBounds({ x: 1500, y: 600, width: 132, height: 132 }, workArea)).toEqual({
+      x: 1500 + 132 - 24, y: 600, width: 24, height: 24,
+    })
+  })
+
+  it('pulls the handle back in when the pet is docked past the right edge', () => {
+    expect(petHandleBounds({ x: 1880, y: 600, width: 132, height: 132 }, workArea)).toEqual({
+      x: 1920 - 24, y: 600, width: 24, height: 24,
+    })
+  })
+
+  it('pulls the handle back in when the pet is docked past the left edge', () => {
+    expect(petHandleBounds({ x: -200, y: 600, width: 132, height: 132 }, workArea)).toEqual({
+      x: 0, y: 600, width: 24, height: 24,
+    })
+  })
+
+  it('pulls the handle down when the pet overflows the top edge', () => {
+    expect(petHandleBounds({ x: 1500, y: -50, width: 132, height: 132 }, workArea)).toEqual({
+      x: 1500 + 132 - 24, y: 0, width: 24, height: 24,
+    })
   })
 })

@@ -149,7 +149,7 @@ export function petMode(collapsed: boolean, clickThrough: boolean): PetMode {
 }
 
 export function petModeIgnoresMouse(mode: PetMode): boolean {
-  return mode !== 'normal'
+  return mode === 'clickThrough'
 }
 
 export const CLICK_THROUGH_OPACITY = 0.6
