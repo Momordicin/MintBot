@@ -1,5 +1,5 @@
 // electron/main/displayStateMap.ts — 显示器阻挡表（displayId -> DisplayBlocker）的纯函数：按全屏与用户应用规则（allow/soft/hard）归类前台窗口观测，并按探测结果校验、剔除失效阻挡者
-// 用法：foregroundWorldModel.ts 调 applyExternalObservation / validateBlockers 更新阻挡表；desktopPresence.ts 读取 DisplayStateMap
+// 用法：foregroundWorldModel.ts 调 applyExternalObservation / validateBlockers 更新阻挡表、用 displayStateMapsEqual 比较校验前后的表；desktopPresence.ts 读取 DisplayStateMap
 // 形状：DisplayBlocker { hwnd, pid, exeName, displayId, reasons, severity }；BlockerProbe 为单个阻挡窗口的探测结果
 // 对应文件：electron/main/foregroundWorldModel.ts / electron/main/desktopPresence.ts / electron/main/activeWindowMonitor.ts（ExternalWindowInfo、probeBlockerWindow）/ electron/main/displayStateMap.test.ts
 import type { ExternalWindowInfo } from './activeWindowMonitor'
@@ -133,6 +133,28 @@ export function pickPrecedentBlocker(a: DisplayBlocker, b: DisplayBlocker): Disp
     return a.reasons.size > b.reasons.size ? a : b
   }
   return a.pid <= b.pid ? a : b
+}
+
+export function displayStateMapsEqual(a: DisplayStateMap, b: DisplayStateMap): boolean {
+  if (a.size !== b.size) return false
+  for (const [displayId, blockerA] of a) {
+    const blockerB = b.get(displayId)
+    if (!blockerB) return false
+    if (
+      blockerA.hwnd !== blockerB.hwnd ||
+      blockerA.pid !== blockerB.pid ||
+      blockerA.exeName !== blockerB.exeName ||
+      blockerA.displayId !== blockerB.displayId ||
+      blockerA.severity !== blockerB.severity ||
+      blockerA.reasons.size !== blockerB.reasons.size
+    ) {
+      return false
+    }
+    for (const reason of blockerA.reasons) {
+      if (!blockerB.reasons.has(reason)) return false
+    }
+  }
+  return true
 }
 
 export function validateBlockers(

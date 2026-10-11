@@ -1,13 +1,12 @@
 // electron/main/index.ts — Electron 主进程入口：app ready 后创建聊天窗口、桌宠 overlay 与托盘，注册 IPC，启动前台窗口监控与 core /events 订阅，will-quit 时收尾
 // 用法：electron.vite.config.ts 的主进程 entry；第一条 import 为 logBootstrap；设置窗口按 open-settings-window IPC 按需创建
-// 对应文件：electron/preload/index.ts（暴露的 IPC 通道）/ electron/main/windowBehavior.ts / electron/main/petContextMenu.ts / electron/main/coreEventsConsumer.ts / electron/main/activeWindowMonitor.ts / electron/main/windowDragMonitor.ts / electron/main/startupGate.ts / shared/windowBehavior.ts
+// 对应文件：electron/preload/index.ts（暴露的 IPC 通道）/ electron/main/windowBehavior.ts / electron/main/petContextMenu.ts / electron/main/coreEventsConsumer.ts / electron/main/foregroundWorldModel.ts / electron/main/windowDragMonitor.ts / electron/main/startupGate.ts / shared/windowBehavior.ts
 import './logBootstrap'
 import { app, BrowserWindow, Menu, Tray, powerMonitor, ipcMain, dialog, screen, nativeImage } from 'electron'
 import type { MenuItemConstructorOptions } from 'electron'
 import { join, basename } from 'path'
 import { readFile, stat } from 'fs/promises'
 import { is } from '@electron-toolkit/utils'
-import { startActiveWindowMonitor } from './activeWindowMonitor'
 import { startWindowDragMonitor } from './windowDragMonitor'
 import { noteDragStart, noteDragEnd, clearDragState } from './dragActivity'
 import { nextReconnectDelayMs, RECONNECT_BACKOFF_FLOOR_MS } from './reconnectBackoff'
@@ -45,8 +44,7 @@ import {
   STARTUP_GATE_TIMEOUT_MS
 } from './startupGate'
 import {
-  updateDisplayStateMap,
-  startBlockerValidationLoop,
+  startDesktopObservation,
   revalidateBlockersNow
 } from './foregroundWorldModel'
 import {
@@ -61,8 +59,7 @@ import {
 } from './windowPositions'
 import type { Bounds } from './windowPositions'
 
-let stopActiveWindowMonitor: (() => void) | null = null
-let stopBlockerValidation: (() => void) | null = null
+let stopDesktopObservation: (() => void) | null = null
 
 const handleDisplayTopologyChange = (): void => {
   markTopologySettle()
@@ -72,20 +69,18 @@ const handleDisplayTopologyChange = (): void => {
 }
 
 function startActiveWindowMonitoring(): void {
-  if (stopActiveWindowMonitor) return
-  stopActiveWindowMonitor = startActiveWindowMonitor(observation => {
-    updateDisplayStateMap(observation)
-    if (observation.kind === 'external') openStartupGate()
-    evaluateDesktopPresence(mainWindow, overlayWindow)
-  })
-  stopBlockerValidation = startBlockerValidationLoop(() => evaluateDesktopPresence(mainWindow, overlayWindow))
+  if (stopDesktopObservation) return
+  stopDesktopObservation = startDesktopObservation(
+    observation => {
+      if (observation.kind === 'external') openStartupGate()
+    },
+    () => evaluateDesktopPresence(mainWindow, overlayWindow)
+  )
 }
 
 function stopActiveWindowMonitoring(): void {
-  stopActiveWindowMonitor?.()
-  stopActiveWindowMonitor = null
-  stopBlockerValidation?.()
-  stopBlockerValidation = null
+  stopDesktopObservation?.()
+  stopDesktopObservation = null
 }
 
 let tray: Tray | null = null
@@ -278,6 +273,7 @@ function rebuildTrayMenu(): void {
       label: '打开聊天窗口',
       click: () => {
         mainWindow?.show()
+        evaluateDesktopPresence(mainWindow, overlayWindow)
         mainWindow?.focus()
       },
     },
@@ -306,6 +302,7 @@ function createTray(): void {
   tray = new Tray(nativeImage.createEmpty())
   tray.on('double-click', () => {
     mainWindow?.show()
+    evaluateDesktopPresence(mainWindow, overlayWindow)
     mainWindow?.focus()
   })
   rebuildTrayMenu()
@@ -620,6 +617,11 @@ function createWindow(): BrowserWindow {
 
   win.on('ready-to-show', () => {
     win.show()
+    evaluateDesktopPresence(mainWindow, overlayWindow)
+  })
+
+  win.on('restore', () => {
+    evaluateDesktopPresence(mainWindow, overlayWindow)
   })
 
   win.on('closed', () => {
@@ -653,6 +655,7 @@ function createWindow(): BrowserWindow {
 
 ipcMain.on('overlay:activate', () => {
   mainWindow?.show()
+  evaluateDesktopPresence(mainWindow, overlayWindow)
   mainWindow?.focus()
 })
 

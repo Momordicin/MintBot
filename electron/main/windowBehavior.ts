@@ -20,7 +20,7 @@ import {
 } from './windowPositions'
 import type { Bounds, WindowKey } from './windowPositions'
 import { commitHomeDisplayFromDragOutcome } from './homeDisplayCommit'
-import { getDisplayStateMap, revalidateBlockersNow } from './foregroundWorldModel'
+import { getDisplayStateMap, revalidateBlockersNow, requestObservation } from './foregroundWorldModel'
 import type { AppRule } from './displayStateMap'
 import {
   resolvePetDesiredState,
@@ -128,6 +128,7 @@ export async function initWindowBehaviorConfig(mainWindow: BrowserWindow | null,
     console.error('[WindowBehavior] Failed to fetch initial config, using defaults:', err)
   }
   windowBehaviorConfigSettled = true
+  requestObservation({ force: true })
   try {
     evaluateDesktopPresence(mainWindow, overlayWindow)
   } catch (err) {
@@ -141,6 +142,7 @@ export function applyWindowBehaviorSnapshot(
   overlayWindow: BrowserWindow | null
 ): boolean {
   if (!acceptSnapshot(snapshot)) return false
+  requestObservation({ force: true })
   evaluateDesktopPresence(mainWindow, overlayWindow)
   return true
 }

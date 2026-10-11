@@ -49,8 +49,9 @@ const testState = vi.hoisted(() => ({
   dragging: { overlay: false, chat: false } as Record<'overlay' | 'chat', boolean>,
 }))
 
-const { revalidateBlockersNowMock, setPreferredBoundsMock, getPreferredBoundsMock } = vi.hoisted(() => ({
+const { revalidateBlockersNowMock, requestObservationMock, setPreferredBoundsMock, getPreferredBoundsMock } = vi.hoisted(() => ({
   revalidateBlockersNowMock: vi.fn(),
+  requestObservationMock: vi.fn(),
   setPreferredBoundsMock: vi.fn(),
   getPreferredBoundsMock: vi.fn((): unknown => null),
 }))
@@ -118,6 +119,7 @@ vi.mock('./homeDisplayCommit', () => ({
 vi.mock('./foregroundWorldModel', () => ({
   getDisplayStateMap: () => testState.blockerMap,
   revalidateBlockersNow: revalidateBlockersNowMock,
+  requestObservation: requestObservationMock,
 }))
 
 vi.mock('./windowAnimation', () => ({
@@ -2062,6 +2064,45 @@ describe('window behavior snapshot ordering', () => {
       fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ generation: 'gen-init', revision: 8, config: CONFIG_B }) })
       await initWindowBehaviorConfig(null, null)
       expect(getCachedWindowBehaviorConfig()).toEqual(CONFIG_B)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+})
+
+describe('window behavior config acceptance re-observes the desktop', () => {
+  const CONFIG = { chatPinMode: 'off' as const, petAvoidanceEnabled: true, petClickThrough: false, petCollapsed: false, appRules: [] }
+
+  beforeEach(() => {
+    requestObservationMock.mockClear()
+  })
+
+  it('applyWindowBehaviorSnapshot requests a forced observation when the snapshot is accepted', () => {
+    expect(applyWindowBehaviorSnapshot({ generation: 'gen-obs', revision: 1, config: CONFIG }, null, null)).toBe(true)
+    expect(requestObservationMock).toHaveBeenCalledTimes(1)
+    expect(requestObservationMock).toHaveBeenCalledWith({ force: true })
+  })
+
+  it('applyWindowBehaviorSnapshot does not request an observation for a rejected snapshot', () => {
+    applyWindowBehaviorSnapshot({ generation: 'gen-obs-rej', revision: 5, config: CONFIG }, null, null)
+    requestObservationMock.mockClear()
+    expect(applyWindowBehaviorSnapshot({ generation: 'gen-obs-rej', revision: 5, config: CONFIG }, null, null)).toBe(false)
+    expect(requestObservationMock).not.toHaveBeenCalled()
+  })
+
+  it('initWindowBehaviorConfig requests a forced observation once the fetch settles, success or failure', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ generation: 'gen-obs-init', revision: 1, config: CONFIG }) })
+      await initWindowBehaviorConfig(null, null)
+      expect(requestObservationMock).toHaveBeenCalledTimes(1)
+      expect(requestObservationMock).toHaveBeenLastCalledWith({ force: true })
+
+      fetchMock.mockRejectedValueOnce(new Error('down'))
+      await initWindowBehaviorConfig(null, null)
+      expect(requestObservationMock).toHaveBeenCalledTimes(2)
     } finally {
       vi.unstubAllGlobals()
     }
