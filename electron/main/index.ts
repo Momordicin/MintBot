@@ -1,6 +1,6 @@
 // electron/main/index.ts — Electron 主进程入口：app ready 后创建聊天窗口、桌宠 overlay 与托盘，注册 IPC，启动前台窗口监控与 core /events 订阅，will-quit 时收尾
 // 用法：electron.vite.config.ts 的主进程 entry；第一条 import 为 logBootstrap；设置窗口按 open-settings-window IPC 按需创建
-// 对应文件：electron/preload/index.ts（暴露的 IPC 通道）/ electron/main/windowBehavior.ts / electron/main/petContextMenu.ts / electron/main/coreEventsConsumer.ts / electron/main/foregroundWorldModel.ts / electron/main/windowDragMonitor.ts / electron/main/nativeWindowDrag.ts / electron/main/startupGate.ts / shared/windowBehavior.ts
+// 对应文件：electron/preload/index.ts（暴露的 IPC 通道）/ electron/main/windowBehavior.ts / electron/main/petContextMenu.ts / electron/main/coreEventsConsumer.ts / electron/main/foregroundWorldModel.ts / electron/main/windowDragMonitor.ts / electron/main/nativeWindowDrag.ts / electron/main/startupGate.ts / shared/windowBehavior.ts / shared/portraitForm.ts
 import './logBootstrap'
 import { app, BrowserWindow, Menu, Tray, powerMonitor, ipcMain, dialog, screen, nativeImage } from 'electron'
 import type { MenuItemConstructorOptions } from 'electron'
@@ -31,6 +31,7 @@ import {
   requestOverlayEdgeHover,
   sendCurrentPetPresenceOnReady,
   applyOverlaySize,
+  armPetSizeGate,
   cancelProgrammaticMoveOnDragStart,
   getCurrentPetMode,
   noteOverlayCreatedCollapsed,
@@ -59,6 +60,7 @@ import {
   DEFAULT_WINDOW_SIZE
 } from './windowPositions'
 import type { Bounds } from './windowPositions'
+import { PET_SCALE_OPTIONS } from '../../shared/portraitForm.js'
 
 let stopDesktopObservation: (() => void) | null = null
 
@@ -682,13 +684,14 @@ ipcMain.on('overlay:presence-ready', () => {
   sendCurrentPetPresenceOnReady(overlayWindow)
 })
 
-ipcMain.on('overlay:set-size', (event, size: { width?: unknown; height?: unknown }) => {
+ipcMain.on('overlay:set-size', (event, size: { baseWidth?: unknown; baseHeight?: unknown; scale?: unknown }) => {
   if (!overlayWindow || event.sender !== overlayWindow.webContents) return
-  if (!Number.isFinite(size?.width) || !Number.isFinite(size?.height)) return
-  const width = Math.round(size.width as number)
-  const height = Math.round(size.height as number)
-  if (width < 1 || height < 1) return
-  applyOverlaySize(overlayWindow, { width, height })
+  if (!Number.isFinite(size?.baseWidth) || !Number.isFinite(size?.baseHeight)) return
+  if (!(PET_SCALE_OPTIONS as readonly unknown[]).includes(size.scale)) return
+  const baseWidth = Math.round(size.baseWidth as number)
+  const baseHeight = Math.round(size.baseHeight as number)
+  if (baseWidth < 1 || baseHeight < 1) return
+  applyOverlaySize(overlayWindow, { baseWidth, baseHeight, scale: size.scale as number })
 })
 
 ipcMain.on('titlebar:set-overlay', (_event, overlay: { color?: unknown; symbolColor?: unknown }) => {
@@ -727,6 +730,7 @@ app.whenReady().then(() => {
   Menu.setApplicationMenu(null)
   const chatWindow = createWindow()
   overlayWindow = createOverlayWindow()
+  armPetSizeGate(overlayWindow)
   petHandleWindow = createPetHandle(overlayWindow)
   setPetHandleWindow(petHandleWindow)
   startWindowDragMonitor(

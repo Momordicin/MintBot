@@ -6,6 +6,7 @@ import { createWatchdogEventSource } from '../eventsWatchdog.js'
 import type { AppState } from '../../shared/types/index.js'
 import type { TransitionChainStep } from '../../shared/transitionChain.js'
 import { resolveEffectiveForm } from '../../shared/portraitForm.js'
+import type { PetScale } from '../../shared/portraitForm.js'
 import './overlay.css'
 import {
   type OverlayManifest,
@@ -67,6 +68,7 @@ export function OverlayApp() {
   const [characterId, setCharacterId] = useState<string | null>(null)
   const [file, setFile] = useState<string | null>(null)
   const [isLocked, setIsLocked] = useState(false)
+  const [currentForm, setCurrentForm] = useState<PortraitFormName>('pixel')
   const [transitionStepKey, setTransitionStepKey] = useState('')
   const manifestRef = useRef<OverlayManifest | undefined>(undefined)
   const formRef = useRef<PortraitFormName>('pixel')
@@ -160,8 +162,8 @@ export function OverlayApp() {
     setIsLocked(false)
   }
 
-  function sizeOverlayWindowOnce(id: string, form: PortraitFormName, manifest: OverlayManifest) {
-    const key = `${id}|${form}`
+  function sizeOverlayWindowOnce(id: string, form: PortraitFormName, manifest: OverlayManifest, scale: PetScale) {
+    const key = `${id}|${form}|${scale}`
     if (sizedKeyRef.current === key) return
     const sizingFile = fallbackFirstFile(manifest.portraits?.[form])
     if (sizingFile === null) return
@@ -171,7 +173,8 @@ export function OverlayApp() {
     probe.onload = () => {
       if (sizedKeyRef.current !== key) return
       if (probe.naturalWidth === 0 || probe.naturalHeight === 0) return
-      window.electronAPI.setOverlaySize(computeOverlaySize(form, probe.naturalWidth, probe.naturalHeight))
+      const base = computeOverlaySize(form, probe.naturalWidth, probe.naturalHeight)
+      window.electronAPI.setOverlaySize({ baseWidth: base.width, baseHeight: base.height, scale })
     }
     probe.src = resolveAssetUrl(id, sizingFile)
   }
@@ -207,12 +210,13 @@ export function OverlayApp() {
             const form = resolveEffectiveForm(savedForm, manifest.portraits) ?? savedForm
             if (form !== formRef.current) {
               formRef.current = form
+              setCurrentForm(form)
               abortTransition()
             }
             manifestRef.current = manifest
             presetIdRef.current = state.presetSnapshot?.presetId ?? null
             petScaleRef.current = state.presetSnapshot?.displayConfig?.petScale ?? null
-            sizeOverlayWindowOnce(id, form, manifest)
+            sizeOverlayWindowOnce(id, form, manifest, petScaleRef.current?.[form] ?? 1)
             if (shouldPlayFallAsleep({
               calledByThresholdTimer,
               previousY,
@@ -682,7 +686,7 @@ export function OverlayApp() {
       {src && (
         <img
           key={imgKey}
-          className="overlay-portrait"
+          className={`overlay-portrait${currentForm === 'pixel' ? ' overlay-portrait--pixel' : ''}`}
           src={src}
           alt=""
           onMouseDown={handleMouseDown}

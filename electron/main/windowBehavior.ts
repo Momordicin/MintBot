@@ -1,5 +1,5 @@
 // electron/main/windowBehavior.ts — 窗口行为编排：缓存 window-behavior 配置快照，按显示器阻挡表为桌宠与聊天窗口套用迁移、置顶、显示/隐藏、贴边，并处理拖拽落点持久化、overlay 尺寸与收起手柄几何、穿透与透明度
-// 用法：index.ts 启动与事件里调 initWindowBehaviorConfig / applyWindowBehaviorSnapshot / evaluateDesktopPresence / handleWindowMoved / requestOverlayEdgeHover / applyOverlaySize / getCurrentPetMode / noteOverlayCreatedCollapsed / setPetHandleWindow 等；向 overlay 发 desktop-presence:changed，并同步穿透手柄窗口的位置与显隐
+// 用法：index.ts 启动与事件里调 initWindowBehaviorConfig / applyWindowBehaviorSnapshot / evaluateDesktopPresence / handleWindowMoved / requestOverlayEdgeHover / applyOverlaySize / armPetSizeGate / getCurrentPetMode / noteOverlayCreatedCollapsed / setPetHandleWindow 等；向 overlay 发 desktop-presence:changed，并同步穿透手柄窗口的位置与显隐
 // 形状：输入 WindowBehaviorSnapshot（core GET/PATCH /config/window-behavior 与 SSE window-behavior-changed）和阻挡表；输出为对 BrowserWindow 的操作与 IPC 推送
 // 对应文件：electron/main/index.ts / electron/main/desktopPresence.ts / electron/main/foregroundWorldModel.ts / electron/main/windowPositions.ts / electron/main/windowAnimation.ts / electron/main/petHandleWindow.ts / shared/windowBehavior.ts / electron/main/windowBehavior.test.ts
 import { BrowserWindow, screen } from 'electron'
@@ -10,7 +10,8 @@ import {
   setPreferredBounds,
   getEffectiveHomeDisplay,
   computeDefaultBoundsForDisplay,
-  computeAnchoredResizeBounds,
+  petWindowBounds,
+  petPreferredFromWindow,
   collapsedHandleBounds,
   expandedBoundsFromHandle,
   COLLAPSED_SIZE,
@@ -104,7 +105,21 @@ export function getWindowBehaviorRules(): { appRules: AppRule[] } {
 let startupGateOpen = true
 let windowBehaviorConfigSettled = false
 
+let petSizeSettled = false
+let petSizeGateTimer: ReturnType<typeof setTimeout> | null = null
+
 const WINDOW_BEHAVIOR_FETCH_TIMEOUT_MS = 3000
+const PET_SIZE_GATE_TIMEOUT_MS = 3000
+
+export function armPetSizeGate(overlayWindow: BrowserWindow | null): void {
+  if (petSizeGateTimer) clearTimeout(petSizeGateTimer)
+  petSizeGateTimer = setTimeout(() => {
+    petSizeGateTimer = null
+    if (petSizeSettled) return
+    petSizeSettled = true
+    evaluatePetPresence(overlayWindow)
+  }, PET_SIZE_GATE_TIMEOUT_MS)
+}
 
 export function closeStartupGate(): void {
   startupGateOpen = false
@@ -223,19 +238,23 @@ function moveToDisplay(win: BrowserWindow, windowKey: WindowKey, targetDisplayId
   const target = displays.find(display => display.id === targetDisplayId)
   if (!target) return
 
-  let bounds = getPreferredBounds(windowKey, target.id)
-  const defaultSize = windowKey === 'overlay'
-    ? resolvePetSize(win.getBounds(), bounds, appliedPetCollapsed)
-    : DEFAULT_WINDOW_SIZE[windowKey]
-  if (!bounds) {
-    bounds = computeDefaultBoundsForDisplay(target, displays, { width: defaultSize.width, height: defaultSize.height }, windowKey)
-    setPreferredBounds(windowKey, target.id, bounds)
+  let bounds: Bounds
+  if (windowKey === 'overlay') {
+    const hadPreferred = getPreferredBounds('overlay', target.id) !== null
+    const expanded = expandedPetBounds(target, displays)
+    if (!hadPreferred) {
+      setPreferredBounds('overlay', target.id, petPreferredFromWindow(expanded, currentPetMetrics(null).base))
+    }
+    bounds = appliedPetCollapsed ? collapsedHandleBounds(expanded) : expanded
   } else {
-    bounds = windowKey === 'overlay'
-      ? computeAnchoredResizeBounds(bounds, defaultSize, target.workArea)
-      : clampBoundsToWorkArea(bounds, target.workArea)
+    const preferred = getPreferredBounds(windowKey, target.id)
+    if (preferred) {
+      bounds = clampBoundsToWorkArea(preferred, target.workArea)
+    } else {
+      bounds = computeDefaultBoundsForDisplay(target, displays, DEFAULT_WINDOW_SIZE[windowKey], windowKey)
+      setPreferredBounds(windowKey, target.id, bounds)
+    }
   }
-  if (windowKey === 'overlay' && appliedPetCollapsed) bounds = collapsedHandleBounds(bounds)
   notePlacement(windowKey, target.id, bounds)
 
   const { generation, onComplete } = beginProgrammaticMove(windowKey)
@@ -261,11 +280,7 @@ function computeEdgeFullBounds(
   displays: Electron.Display[],
   currentBounds: Electron.Rectangle
 ): Electron.Rectangle {
-  const preferredBounds = getPreferredBounds('overlay', target.id)
-  const petSize = resolvePetSize(currentBounds, preferredBounds, appliedPetCollapsed)
-  const expandedBounds = preferredBounds
-    ? computeAnchoredResizeBounds(preferredBounds, petSize, target.workArea)
-    : computeDefaultBoundsForDisplay(target, displays, { width: petSize.width, height: petSize.height }, 'overlay')
+  const expandedBounds = expandedPetBounds(target, displays)
   const fullBounds = appliedPetCollapsed ? collapsedHandleBounds(expandedBounds) : expandedBounds
   return {
     x: fullBounds.x,
@@ -472,12 +487,17 @@ function persistBoundsNow(
 
   commitHomeDisplayFromDragOutcome(windowKey, outcome)
   if (outcome.boundsWriteDisplayId !== null) {
-    const boundsToWrite = windowKey === 'overlay' && appliedPetCollapsed
-      ? expandedBoundsFromHandle(
-          bounds,
-          resolvePetSize(bounds, getPreferredBounds('overlay', outcome.boundsWriteDisplayId), true)
-        )
-      : bounds
+    let boundsToWrite = bounds
+    if (windowKey === 'overlay') {
+      const metrics = currentPetMetrics(getPreferredBounds('overlay', outcome.boundsWriteDisplayId))
+      const dropped = appliedPetCollapsed
+        ? expandedBoundsFromHandle(bounds, {
+            width: Math.round(metrics.base.width * metrics.scale),
+            height: Math.round(metrics.base.height * metrics.scale),
+          })
+        : bounds
+      boundsToWrite = petPreferredFromWindow(dropped, metrics.base)
+    }
     setPreferredBounds(windowKey, outcome.boundsWriteDisplayId, boundsToWrite)
   }
   notePlacement(windowKey, dropDisplayId, bounds)
@@ -506,49 +526,84 @@ export function handleWindowMoved(
 
 export function applyOverlaySize(
   overlayWindow: BrowserWindow | null,
-  size: { width: number; height: number }
+  size: { baseWidth: number; baseHeight: number; scale: number }
 ): void {
   if (!overlayWindow || overlayWindow.isDestroyed()) return
 
-  lastPetSize = { width: size.width, height: size.height }
-  if (appliedPetCollapsed) return
+  if (!petSizeSettled) {
+    if (petSizeGateTimer) clearTimeout(petSizeGateTimer)
+    petSizeGateTimer = null
+    petSizeSettled = true
+  }
+
+  lastPetMetrics = { base: { width: size.baseWidth, height: size.baseHeight }, scale: size.scale }
+
+  const displays = screen.getAllDisplays()
+  const appliedDisplayId = appliedDisplayIdFor('overlay')
+  const docked = appliedPetPresence === 'EDGE'
+
+  const targetFor = (settled: Electron.Rectangle): { display: Electron.Display; target: Bounds; placed: Bounds } => {
+    const display = displays.find(candidate => candidate.id === appliedDisplayId) ?? screen.getDisplayMatching(settled)
+    const expanded = expandedPetBounds(display, displays)
+    if (appliedPetCollapsed) {
+      const handle = collapsedHandleBounds(expanded)
+      const target = docked ? { x: settled.x, y: handle.y, width: COLLAPSED_SIZE, height: COLLAPSED_SIZE } : handle
+      return { display, target, placed: handle }
+    }
+    const target = docked ? { x: settled.x, y: expanded.y, width: expanded.width, height: expanded.height } : expanded
+    return { display, target, placed: expanded }
+  }
 
   const current = overlayWindow.getBounds()
-  if (current.width === size.width && current.height === size.height) return
+  const initial = targetFor(current)
+  const unchanged = appliedPetCollapsed
+    ? current.x === initial.target.x && current.y === initial.target.y
+    : boundsEqual(initial.target, current)
 
-  activeAnimationCancelFor.get('overlay')?.()
-
-  const settled = overlayWindow.getBounds()
-  const appliedDisplayId = appliedDisplayIdFor('overlay')
-  const display =
-    screen.getAllDisplays().find(candidate => candidate.id === appliedDisplayId) ?? screen.getDisplayMatching(settled)
-  const remembered = getPreferredBounds('overlay', display.id) ?? settled
-  const anchored = computeAnchoredResizeBounds(remembered, size, display.workArea)
-
-  markProgrammaticQuiet('overlay', PROGRAMMATIC_MOVE_COOLDOWN_MS)
-  overlayWindow.setBounds(
-    appliedPetPresence === 'EDGE' ? { x: settled.x, y: anchored.y, width: size.width, height: size.height } : anchored
-  )
-  notePlacement('overlay', display.id, anchored)
+  if (unchanged) {
+    notePlacement('overlay', initial.display.id, initial.placed)
+  } else {
+    activeAnimationCancelFor.get('overlay')?.()
+    const next = targetFor(overlayWindow.getBounds())
+    markProgrammaticQuiet('overlay', PROGRAMMATIC_MOVE_COOLDOWN_MS)
+    overlayWindow.setBounds(next.target)
+    notePlacement('overlay', next.display.id, next.placed)
+  }
   evaluatePetPresence(overlayWindow)
 }
 
-let lastPetSize: { width: number; height: number } | null = null
+interface PetMetrics {
+  base: { width: number; height: number }
+  scale: number
+}
+
+let lastPetMetrics: PetMetrics | null = null
 let appliedPetCollapsed = false
+
+function currentPetMetrics(preferred: Bounds | null): PetMetrics {
+  return lastPetMetrics ?? {
+    base: preferred ? { width: preferred.width, height: preferred.height } : DEFAULT_WINDOW_SIZE.overlay,
+    scale: 1,
+  }
+}
+
+function expandedPetBounds(display: Electron.Display, displays: Electron.Display[]): Bounds {
+  const preferred = getPreferredBounds('overlay', display.id)
+  const metrics = currentPetMetrics(preferred)
+  if (preferred) return petWindowBounds(preferred, metrics.base, metrics.scale, display.workArea)
+  return computeDefaultBoundsForDisplay(
+    display,
+    displays,
+    {
+      width: Math.round(metrics.base.width * metrics.scale),
+      height: Math.round(metrics.base.height * metrics.scale),
+    },
+    'overlay'
+  )
+}
 
 export function noteOverlayCreatedCollapsed(collapsed: boolean): void {
   appliedPetCollapsed = collapsed
-}
-
-function resolvePetSize(
-  currentBounds: Electron.Rectangle,
-  preferredBounds: Bounds | null,
-  layoutCollapsed: boolean
-): { width: number; height: number } {
-  if (!layoutCollapsed) return { width: currentBounds.width, height: currentBounds.height }
-  if (lastPetSize) return lastPetSize
-  if (preferredBounds) return { width: preferredBounds.width, height: preferredBounds.height }
-  return DEFAULT_WINDOW_SIZE.overlay
 }
 
 function syncPetCollapsedGeometry(win: BrowserWindow): void {
@@ -562,11 +617,7 @@ function syncPetCollapsedGeometry(win: BrowserWindow): void {
   const displays = screen.getAllDisplays()
   const appliedDisplayId = appliedDisplayIdFor('overlay')
   const display = displays.find(candidate => candidate.id === appliedDisplayId) ?? screen.getDisplayMatching(settled)
-  const preferred = getPreferredBounds('overlay', display.id)
-  const petSize = resolvePetSize(settled, preferred, appliedPetCollapsed)
-  const expanded = preferred
-    ? computeAnchoredResizeBounds(preferred, petSize, display.workArea)
-    : computeDefaultBoundsForDisplay(display, displays, petSize, 'overlay')
+  const expanded = expandedPetBounds(display, displays)
   const target = collapsed ? collapsedHandleBounds(expanded) : expanded
 
   appliedPetCollapsed = collapsed
@@ -610,6 +661,7 @@ function evaluatePetPresence(overlayWindow: BrowserWindow | null): void {
   if (!overlayWindow || overlayWindow.isDestroyed()) return
   if (!startupGateOpen) return
   if (!windowBehaviorConfigSettled) return
+  if (!petSizeSettled) return
 
   if (!isWindowDragInProgress('overlay')) syncPetCollapsedGeometry(overlayWindow)
 

@@ -64,23 +64,6 @@ vi.mock('electron', () => ({
   BrowserWindow: class {},
 }))
 
-const actualComputeAnchoredResizeBounds = vi.hoisted(() => (
-  bounds: { x: number; y: number; width: number; height: number },
-  size: { width: number; height: number },
-  workArea: { x: number; y: number; width: number; height: number }
-) => {
-  const width = Math.min(size.width, workArea.width)
-  const height = Math.min(size.height, workArea.height)
-  const x = Math.round(bounds.x + (bounds.width - size.width) / 2)
-  const y = bounds.y + bounds.height - size.height
-  return {
-    x: Math.min(Math.max(x, workArea.x), workArea.x + workArea.width - width),
-    y: Math.min(Math.max(y, workArea.y), workArea.y + workArea.height - height),
-    width,
-    height,
-  }
-})
-
 vi.mock('./windowPositions', async () => {
   const actual = await vi.importActual<typeof import('./windowPositions')>('./windowPositions')
   return {
@@ -89,7 +72,8 @@ vi.mock('./windowPositions', async () => {
     COLLAPSED_SIZE: actual.COLLAPSED_SIZE,
     expandedBoundsFromHandle: actual.expandedBoundsFromHandle,
     getPreferredBounds: getPreferredBoundsMock,
-    computeAnchoredResizeBounds: actualComputeAnchoredResizeBounds,
+    petWindowBounds: actual.petWindowBounds,
+    petPreferredFromWindow: actual.petPreferredFromWindow,
     setPreferredBounds: setPreferredBoundsMock,
     getEffectiveHomeDisplay: (displays: typeof testState.displays) => {
       const home = displays.find(d => d.id === testState.homeDisplayId)
@@ -98,11 +82,15 @@ vi.mock('./windowPositions', async () => {
       // a faithful-enough stand-in for this test's purposes, see windowPositions.ts.
       return displays.reduce((a, b) => (a.bounds.width * a.bounds.height >= b.bounds.width * b.bounds.height ? a : b))
     },
-    computeDefaultBoundsForDisplay: (display: { bounds: { x: number; y: number } }) => ({
+    computeDefaultBoundsForDisplay: (
+      display: { bounds: { x: number; y: number } },
+      _displays: unknown,
+      size: { width: number; height: number }
+    ) => ({
       x: display.bounds.x,
       y: display.bounds.y,
-      width: 132,
-      height: 132,
+      width: size.width,
+      height: size.height,
     }),
     DEFAULT_WINDOW_SIZE: { chat: { width: 290, height: 520 }, overlay: { width: 132, height: 132 } },
     // Fix 4 (second rework pass): windowBehavior.ts now imports this from windowPositions.ts
@@ -173,11 +161,12 @@ import {
   openStartupGate,
   cancelProgrammaticMoveOnDragStart,
   applyOverlaySize,
+  armPetSizeGate,
 } from './windowBehavior'
 
 let testRevision = 0
 
-async function settleWindowBehaviorConfig(mod: { initWindowBehaviorConfig: typeof initWindowBehaviorConfig }): Promise<void> {
+async function settleConfigOnly(mod: { initWindowBehaviorConfig: typeof initWindowBehaviorConfig }): Promise<void> {
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false }))
   try {
     await mod.initWindowBehaviorConfig(null, null)
@@ -186,8 +175,19 @@ async function settleWindowBehaviorConfig(mod: { initWindowBehaviorConfig: typeo
   }
 }
 
+async function settleWindowBehaviorConfig(
+  mod: { initWindowBehaviorConfig: typeof initWindowBehaviorConfig; armPetSizeGate: typeof armPetSizeGate }
+): Promise<void> {
+  await settleConfigOnly(mod)
+  const alreadyFake = vi.isFakeTimers()
+  if (!alreadyFake) vi.useFakeTimers()
+  mod.armPetSizeGate(null)
+  vi.advanceTimersByTime(3000)
+  if (!alreadyFake) vi.useRealTimers()
+}
+
 beforeAll(async () => {
-  await settleWindowBehaviorConfig({ initWindowBehaviorConfig })
+  await settleWindowBehaviorConfig({ initWindowBehaviorConfig, armPetSizeGate })
 })
 
 function updateCachedWindowBehaviorConfig(
@@ -2118,6 +2118,11 @@ describe('applyOverlaySize', () => {
     await settleWindowBehaviorConfig(fresh)
   })
 
+  afterEach(() => {
+    getPreferredBoundsMock.mockReset()
+    getPreferredBoundsMock.mockReturnValue(null)
+  })
+
   function makeResizableOverlayWindow(bounds: { x: number; y: number; width: number; height: number }) {
     return { ...makeFakeOverlayWindow(bounds), setBounds: vi.fn() }
   }
@@ -2137,10 +2142,55 @@ describe('applyOverlaySize', () => {
     fresh.evaluateDesktopPresence(null, win as unknown as Electron.BrowserWindow)
     win.getBounds = () => ({ x: -92, y: 900, width: 132, height: 132 })
     vi.clearAllMocks()
+    getPreferredBoundsMock.mockReturnValue({ x: -92, y: 900, width: 132, height: 132 })
 
-    fresh.applyOverlaySize(win as unknown as Electron.BrowserWindow, { width: 300, height: 500 })
+    fresh.applyOverlaySize(win as unknown as Electron.BrowserWindow, { baseWidth: 300, baseHeight: 500, scale: 1 })
 
     expect(win.setBounds).toHaveBeenCalledWith({ x: -92, y: 532, width: 300, height: 500 })
+  })
+
+  it('resizes the window by the scale about the center of the bottom-anchored base rectangle, without writing preferred bounds', () => {
+    const display1 = makeDisplay(1, 0)
+    testState.displays = [display1]
+    testState.homeDisplayId = 1
+    testState.matchDisplay = () => display1
+    testState.blockerMap = new Map()
+
+    const win = makeResizableOverlayWindow({ x: 1000, y: 800, width: 132, height: 132 })
+    fresh.evaluateDesktopPresence(null, win as unknown as Electron.BrowserWindow)
+    vi.clearAllMocks()
+    getPreferredBoundsMock.mockReturnValue({ x: 1000, y: 800, width: 132, height: 132 })
+
+    fresh.applyOverlaySize(win as unknown as Electron.BrowserWindow, { baseWidth: 132, baseHeight: 132, scale: 1.5 })
+
+    expect(win.setBounds).toHaveBeenCalledWith({ x: 967, y: 767, width: 198, height: 198 })
+    expect(setPreferredBoundsMock).not.toHaveBeenCalled()
+  })
+
+  it('moveToDisplay sizes the window on the destination display from the last reported base size and scale', () => {
+    const display1 = makeDisplay(1, 0)
+    const display2 = makeDisplay(2, 1920)
+    testState.displays = [display1, display2]
+    testState.homeDisplayId = 1
+    testState.matchDisplay = () => display1
+    testState.blockerMap = new Map()
+    getPreferredBoundsMock.mockImplementation(((_key: string, displayId: number) =>
+      displayId === 2 ? { x: 2600, y: 600, width: 132, height: 132 } : { x: 100, y: 600, width: 132, height: 132 }) as () => unknown)
+
+    const win = makeResizableOverlayWindow({ x: 100, y: 600, width: 132, height: 132 })
+    fresh.evaluateDesktopPresence(null, win as unknown as Electron.BrowserWindow)
+    fresh.applyOverlaySize(win as unknown as Electron.BrowserWindow, { baseWidth: 300, baseHeight: 500, scale: 1.5 })
+    vi.clearAllMocks()
+
+    testState.homeDisplayId = 2
+    fresh.evaluateDesktopPresence(null, win as unknown as Electron.BrowserWindow)
+
+    expect(animateTo).toHaveBeenLastCalledWith(
+      win,
+      { x: 2441, y: 107, width: 450, height: 750 },
+      expect.any(Function),
+      { finalOpacity: 1 }
+    )
   })
 
   it('reads preferred bounds under the applied display, not the display the window mostly overlaps, and never writes them', () => {
@@ -2155,8 +2205,9 @@ describe('applyOverlaySize', () => {
     fresh.evaluateDesktopPresence(null, win as unknown as Electron.BrowserWindow)
     win.getBounds = () => ({ x: 2000, y: 900, width: 132, height: 132 })
     vi.clearAllMocks()
+    getPreferredBoundsMock.mockReturnValue({ x: 2000, y: 900, width: 132, height: 132 })
 
-    fresh.applyOverlaySize(win as unknown as Electron.BrowserWindow, { width: 300, height: 500 })
+    fresh.applyOverlaySize(win as unknown as Electron.BrowserWindow, { baseWidth: 300, baseHeight: 500, scale: 1 })
 
     expect(getPreferredBoundsMock).toHaveBeenCalledWith('overlay', 2)
     expect(win.setBounds).toHaveBeenCalledWith({ x: 1920, y: 532, width: 300, height: 500 })
@@ -2183,9 +2234,9 @@ describe('applyOverlaySize', () => {
 
     try {
       for (const illustration of [{ width: 400, height: 500 }, { width: 401, height: 500 }]) {
-        fresh.applyOverlaySize(win as unknown as Electron.BrowserWindow, illustration)
+        fresh.applyOverlaySize(win as unknown as Electron.BrowserWindow, { baseWidth: illustration.width, baseHeight: illustration.height, scale: 1 })
         expect(current.x).toBe(1920 - illustration.width)
-        fresh.applyOverlaySize(win as unknown as Electron.BrowserWindow, { width: 132, height: 132 })
+        fresh.applyOverlaySize(win as unknown as Electron.BrowserWindow, { baseWidth: 132, baseHeight: 132, scale: 1 })
         expect(win.setBounds).toHaveBeenLastCalledWith(pixel)
         expect(current).toEqual(pixel)
       }
@@ -2329,19 +2380,149 @@ describe('pet interaction mode, collapsed handle geometry', () => {
     expect(setPreferredBoundsMock).not.toHaveBeenCalled()
   })
 
-  it('ignores set-size reports while collapsed but remembers the last one for the next expand', () => {
+  it('while collapsed a set-size report repositions only the handle and never expands the window', () => {
     const win = makeModeWindow({ ...PREFERRED })
     fresh.evaluateDesktopPresence(null, asWindow(win))
-    fresh.applyOverlaySize(asWindow(win), { width: 200, height: 200 })
+    fresh.applyOverlaySize(asWindow(win), { baseWidth: 200, baseHeight: 200, scale: 1 })
     applyConfig(win, { petCollapsed: true })
     win.setBounds.mockClear()
 
-    fresh.applyOverlaySize(asWindow(win), { width: 300, height: 300 })
+    fresh.applyOverlaySize(asWindow(win), { baseWidth: 300, baseHeight: 300, scale: 1 })
+    expect(win.setBounds).toHaveBeenCalledTimes(1)
+    expect(win.setBounds).toHaveBeenLastCalledWith({ x: 1500 + (132 - 300) / 2 + 300 - 24, y: 600 + 132 - 300, width: 24, height: 24 })
+
+    win.setBounds.mockClear()
+    fresh.applyOverlaySize(asWindow(win), { baseWidth: 300, baseHeight: 300, scale: 1 })
     expect(win.setBounds).not.toHaveBeenCalled()
 
     applyConfig(win, { petCollapsed: false })
     expect(win.setBounds).toHaveBeenCalledTimes(1)
     expect(win.setBounds).toHaveBeenLastCalledWith({ x: 1500 + (132 - 300) / 2, y: 600 + 132 - 300, width: 300, height: 300 })
+  })
+
+  it('while collapsed and docked at an edge a set-size report keeps the handle x and moves only y', () => {
+    const win = makeModeWindow({ ...PREFERRED })
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+    applyConfig(win, { petCollapsed: true })
+    testState.blockerMap = new Map([
+      [1, { hwnd: 1n, pid: 1, exeName: null, displayId: 1, reasons: new Set(['user-rule']), severity: 'soft' }],
+    ])
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+    win.setBounds.mockClear()
+
+    fresh.applyOverlaySize(asWindow(win), { baseWidth: 132, baseHeight: 132, scale: 1.5 })
+
+    expect(win.setBounds).toHaveBeenCalledWith({ x: 1920 - 40, y: 567, width: 24, height: 24 })
+  })
+
+  function relocateWithCancelSpy(win: ReturnType<typeof makeModeWindow>): { cancel: ReturnType<typeof vi.fn>; target: { x: number; y: number; width: number; height: number } } {
+    const cancel = vi.fn()
+    let target = { x: 0, y: 0, width: 0, height: 0 }
+    testState.displays = [makeDisplay(1, 0), makeDisplay(2, 1920)]
+    vi.mocked(animateTo).mockImplementationOnce((w, t, onComplete) => {
+      target = t as typeof target
+      ;(w as unknown as { getBounds: () => unknown }).getBounds = () => t
+      onComplete?.()
+      return cancel
+    })
+    testState.homeDisplayId = 2
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+    return { cancel, target }
+  }
+
+  it('a collapsed set-size report with the handle already at its x and y neither moves the window nor cancels the animation, even when Windows enlarged it to 27x28', () => {
+    const win = makeModeWindow({ ...PREFERRED })
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+    fresh.applyOverlaySize(asWindow(win), { baseWidth: 132, baseHeight: 132, scale: 1 })
+    applyConfig(win, { petCollapsed: true })
+    const { cancel, target } = relocateWithCancelSpy(win)
+    win.getBounds = () => ({ x: target.x, y: target.y, width: 27, height: 28 })
+    win.setBounds.mockClear()
+
+    fresh.applyOverlaySize(asWindow(win), { baseWidth: 132, baseHeight: 132, scale: 1 })
+
+    expect(win.setBounds).not.toHaveBeenCalled()
+    expect(cancel).not.toHaveBeenCalled()
+
+    fresh.applyOverlaySize(asWindow(win), { baseWidth: 200, baseHeight: 200, scale: 1 })
+
+    expect(cancel).toHaveBeenCalledTimes(1)
+    expect(win.setBounds).toHaveBeenCalledTimes(1)
+  })
+
+  it('an unchanged non-collapsed set-size report neither moves the window nor cancels the animation, but a changed one cancels it first', () => {
+    const win = makeModeWindow({ ...PREFERRED })
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+    fresh.applyOverlaySize(asWindow(win), { baseWidth: 132, baseHeight: 132, scale: 1 })
+    const { cancel } = relocateWithCancelSpy(win)
+    win.setBounds.mockClear()
+
+    fresh.applyOverlaySize(asWindow(win), { baseWidth: 132, baseHeight: 132, scale: 1 })
+
+    expect(win.setBounds).not.toHaveBeenCalled()
+    expect(cancel).not.toHaveBeenCalled()
+
+    fresh.applyOverlaySize(asWindow(win), { baseWidth: 132, baseHeight: 132, scale: 1.5 })
+
+    expect(cancel).toHaveBeenCalledTimes(1)
+    expect(win.setBounds).toHaveBeenCalledTimes(1)
+  })
+
+  it('a collapsed set-size report never writes preferred bounds', () => {
+    const win = makeModeWindow({ ...PREFERRED })
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+    applyConfig(win, { petCollapsed: true })
+    setPreferredBoundsMock.mockClear()
+
+    fresh.applyOverlaySize(asWindow(win), { baseWidth: 300, baseHeight: 300, scale: 1.5 })
+    fresh.applyOverlaySize(asWindow(win), { baseWidth: 200, baseHeight: 200, scale: 1 })
+
+    expect(win.setBounds).toHaveBeenCalled()
+    expect(setPreferredBoundsMock).not.toHaveBeenCalled()
+  })
+
+  it('moveToDisplay writes a missing remembered position whose size equals the reported base size', () => {
+    testState.displays = [makeDisplay(1, 0), makeDisplay(2, 1920)]
+    getPreferredBoundsMock.mockImplementation(((_key: string, displayId: number) =>
+      displayId === 2 ? null : { ...PREFERRED }) as () => unknown)
+    const win = makeModeWindow({ ...PREFERRED })
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+    fresh.applyOverlaySize(asWindow(win), { baseWidth: 300, baseHeight: 500, scale: 1.5 })
+    setPreferredBoundsMock.mockClear()
+
+    testState.homeDisplayId = 2
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+
+    expect(setPreferredBoundsMock).toHaveBeenCalledWith('overlay', 2, { x: 1995, y: 125, width: 300, height: 500 })
+  })
+
+  it('persists a dragged window as the unscaled remembered position', () => {
+    const win = makeModeWindow({ ...PREFERRED })
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+    fresh.applyOverlaySize(asWindow(win), { baseWidth: 132, baseHeight: 132, scale: 1.5 })
+    setPreferredBoundsMock.mockClear()
+
+    testState.dragging = { overlay: true, chat: false }
+    win.getBounds = () => ({ x: 1000, y: 300, width: 198, height: 198 })
+    fresh.handleWindowMoved('overlay', asWindow(win), null, null)
+    vi.advanceTimersByTime(PERSIST_DEBOUNCE_MS + 10)
+
+    expect(setPreferredBoundsMock).toHaveBeenCalledWith('overlay', 1, { x: 1033, y: 333, width: 132, height: 132 })
+  })
+
+  it('persists a dragged collapsed handle as the unscaled remembered position implied by the scaled window', () => {
+    const win = makeModeWindow({ ...PREFERRED })
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+    fresh.applyOverlaySize(asWindow(win), { baseWidth: 132, baseHeight: 132, scale: 1.5 })
+    applyConfig(win, { petCollapsed: true })
+    setPreferredBoundsMock.mockClear()
+
+    testState.dragging = { overlay: true, chat: false }
+    win.getBounds = () => ({ x: 1000, y: 300, width: 24, height: 24 })
+    fresh.handleWindowMoved('overlay', asWindow(win), null, null)
+    vi.advanceTimersByTime(PERSIST_DEBOUNCE_MS + 10)
+
+    expect(setPreferredBoundsMock).toHaveBeenCalledWith('overlay', 1, { x: 1000 - (198 - 24) + 33, y: 300 + 33, width: 132, height: 132 })
   })
 
   it('uses the preferred bounds size for the first expand when no size was ever reported', () => {
@@ -2579,6 +2760,8 @@ describe('startup gate on the first window-behavior config fetch', () => {
   beforeEach(async () => {
     vi.resetModules()
     fresh = await import('./windowBehavior')
+    fresh.armPetSizeGate(null)
+    vi.advanceTimersByTime(3000)
     testState.displays = [makeDisplay(1, 0)]
     testState.homeDisplayId = 1
     testState.matchDisplay = () => testState.displays[0]
@@ -2621,5 +2804,52 @@ describe('startup gate on the first window-behavior config fetch', () => {
       'desktop-presence:changed',
       expect.objectContaining({ clickThrough: true })
     )
+  })
+})
+
+describe('startup pet size gate', () => {
+  let fresh: typeof import('./windowBehavior')
+
+  beforeEach(async () => {
+    vi.resetModules()
+    fresh = await import('./windowBehavior')
+    await settleConfigOnly(fresh)
+    testState.displays = [makeDisplay(1, 0)]
+    testState.homeDisplayId = 1
+    testState.matchDisplay = () => testState.displays[0]
+    testState.blockerMap = new Map()
+  })
+
+  function makeSizedWindow() {
+    return { ...makeFakeOverlayWindow({ x: 100, y: 600, width: 132, height: 132 }), setBounds: vi.fn() }
+  }
+
+  it('does not show the overlay before the first size report, even with the config settled', () => {
+    const win = makeSizedWindow()
+    fresh.armPetSizeGate(win as unknown as Electron.BrowserWindow)
+
+    fresh.evaluateDesktopPresence(null, win as unknown as Electron.BrowserWindow)
+
+    expect(win.showInactive).not.toHaveBeenCalled()
+  })
+
+  it('shows the overlay once the first size report arrives', () => {
+    const win = makeSizedWindow()
+    fresh.armPetSizeGate(win as unknown as Electron.BrowserWindow)
+
+    fresh.applyOverlaySize(win as unknown as Electron.BrowserWindow, { baseWidth: 132, baseHeight: 132, scale: 1 })
+
+    expect(win.showInactive).toHaveBeenCalled()
+  })
+
+  it('shows the overlay at the current size when no size report arrives within 3000 ms', () => {
+    const win = makeSizedWindow()
+    fresh.armPetSizeGate(win as unknown as Electron.BrowserWindow)
+
+    vi.advanceTimersByTime(2999)
+    expect(win.showInactive).not.toHaveBeenCalled()
+
+    vi.advanceTimersByTime(1)
+    expect(win.showInactive).toHaveBeenCalled()
   })
 })

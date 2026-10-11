@@ -31,7 +31,7 @@ export interface ElectronAPI {
   onOverlayDragEnd: (callback: () => void) => () => void
   requestOverlayEdgeHover: (hovered: boolean) => void
   notifyOverlayReady: () => void
-  setOverlaySize: (size: { width: number; height: number }) => void
+  setOverlaySize: (size: { baseWidth: number; baseHeight: number; scale: 0.5 | 0.75 | 1 | 1.25 | 1.5 }) => void
   openOverlayContextMenu: (state: OverlayMenuState | null) => void
   onOverlayContextMenuRequested: (callback: () => void) => () => void
   onOverlayMenuAction: (callback: (action: OverlayMenuAction) => void) => () => void

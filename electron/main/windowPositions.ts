@@ -1,5 +1,5 @@
-// electron/main/windowPositions.ts — 窗口位置持久化与几何计算：<userData>/window-positions.json 按窗口与显示器存 bounds 及主显示器，并提供默认位置、跨 DPI 尺寸、锚点缩放、工作区裁剪
-// 用法：index.ts 算启动 bounds；windowBehavior.ts 读写 getPreferredBounds / setPreferredBounds / getEffectiveHomeDisplay；homeDisplayCommit.ts 调 commitUserChosenHomeDisplay；桌宠收起为手柄时 windowBehavior.ts 与 index.ts 用 collapsedHandleBounds / expandedBoundsFromHandle 在展开 bounds 与手柄 bounds 间换算；穿透手柄窗口由 petHandleWindow.ts 用 petHandleBounds 算出限制在工作区内的 bounds
+// electron/main/windowPositions.ts — 窗口位置持久化与几何计算：<userData>/window-positions.json 按窗口与显示器存 bounds 及主显示器，并提供默认位置、跨 DPI 尺寸、桌宠按形态底边居中再按比例围绕中心缩放的窗口 bounds（及落点反算）、工作区裁剪
+// 用法：index.ts 算启动 bounds；windowBehavior.ts 读写 getPreferredBounds / setPreferredBounds / getEffectiveHomeDisplay；homeDisplayCommit.ts 调 commitUserChosenHomeDisplay；桌宠收起为手柄时 windowBehavior.ts 与 index.ts 用 collapsedHandleBounds / expandedBoundsFromHandle 在展开 bounds 与手柄 bounds 间换算；桌宠窗口 bounds 由 petWindowBounds 从记住的 100% 位置推出，拖拽落点经 petPreferredFromWindow 还原后写回；穿透手柄窗口由 petHandleWindow.ts 用 petHandleBounds 算出限制在工作区内的 bounds
 // 形状：WindowKey 为 'chat' | 'overlay'；Bounds 为 { x, y, width, height }（DIP）
 // 对应文件：electron/main/index.ts / electron/main/windowBehavior.ts / electron/main/homeDisplayCommit.ts / electron/main/dragActivity.ts（PERSIST_DEBOUNCE_MS）/ electron/main/windowPositions.test.ts / electron/main/windowPositionsCommitGuard.test.ts
 import { app } from 'electron'
@@ -191,20 +191,34 @@ export function resolveStartupDisplay(
   return remembered ?? pickLargestDisplay(displays)
 }
 
-export function computeAnchoredResizeBounds(
-  bounds: Bounds,
-  size: { width: number; height: number },
+export function petWindowBounds(
+  preferred: Bounds,
+  base: { width: number; height: number },
+  scale: number,
   workArea: Electron.Rectangle
 ): Bounds {
+  const anchorX = preferred.x + (preferred.width - base.width) / 2
+  const anchorY = preferred.y + preferred.height - base.height
+  const width = Math.round(base.width * scale)
+  const height = Math.round(base.height * scale)
   return clampBoundsToWorkArea(
     {
-      x: Math.round(bounds.x + (bounds.width - size.width) / 2),
-      y: bounds.y + bounds.height - size.height,
-      width: size.width,
-      height: size.height,
+      x: Math.round(anchorX + (base.width - width) / 2),
+      y: Math.round(anchorY + (base.height - height) / 2),
+      width,
+      height,
     },
     workArea
   )
+}
+
+export function petPreferredFromWindow(window: Bounds, base: { width: number; height: number }): Bounds {
+  return {
+    x: Math.round(window.x + window.width / 2 - base.width / 2),
+    y: Math.round(window.y + window.height / 2 - base.height / 2),
+    width: base.width,
+    height: base.height,
+  }
 }
 
 export const HANDLE_SIZE = 20

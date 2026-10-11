@@ -23,7 +23,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   requestOverlayEdgeHover: (hovered: boolean) => ipcRenderer.send('overlay:edge-hover', hovered),
   notifyOverlayReady: () => ipcRenderer.send('overlay:presence-ready'),
-  setOverlaySize: (size: { width: number; height: number }) => ipcRenderer.send('overlay:set-size', size),
+  setOverlaySize: (size: { baseWidth: number; baseHeight: number; scale: number }) => ipcRenderer.send('overlay:set-size', size),
   openOverlayContextMenu: (state: {
     presetId: string
     effectiveForm: 'pixel' | 'illustration'
