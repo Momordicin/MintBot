@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     petScale: { pixel: number; illustration: number }
   }) => ipcRenderer.send('overlay:menu-state', state),
   openOverlayContextMenu: () => ipcRenderer.send('overlay:context-menu'),
+  startOverlayDrag: () => ipcRenderer.send('overlay:start-drag'),
   openPetHandleContextMenu: () => ipcRenderer.send('pet-handle:context-menu'),
   onDesktopPresenceChanged: (callback: (payload: { presence: string; edgeSide: 'left' | 'right' | null; handleSuppressed: boolean; collapsed: boolean; clickThrough: boolean }) => void) => {
     const listener = (

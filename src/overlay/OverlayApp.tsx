@@ -41,6 +41,7 @@ import { CORE_URL, resolveAssetUrl } from '../coreUrl.js'
 
 const CLICK_DISPLACEMENT_THRESHOLD_PX = 5
 const TRANSITION_CHAIN_TIMEOUT_MS = 500
+const HANDLE_DRAG_THRESHOLD_PX = 4
 
 interface EmotionEventPayload {
   self?: { label: string; intensity: number } | null
@@ -86,6 +87,8 @@ export function OverlayApp() {
   const [isHandleVisible, setIsHandleVisible] = useState(false)
   const [isDragHandleSuppressed, setIsDragHandleSuppressed] = useState(false)
   const handleHideTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const pointerOverPetRef = useRef(false)
+  const handlePressRef = useRef<{ x: number; y: number; pointerId: number } | null>(null)
 
   const [collapsed, setCollapsed] = useState(false)
   const [clickThrough, setClickThrough] = useState(false)
@@ -297,6 +300,7 @@ export function OverlayApp() {
   }
 
   function handlePortraitMouseEnter() {
+    pointerOverPetRef.current = true
     if (handleHideTimerRef.current !== undefined) {
       clearTimeout(handleHideTimerRef.current)
       handleHideTimerRef.current = undefined
@@ -306,8 +310,57 @@ export function OverlayApp() {
   }
 
   function handlePortraitMouseLeave() {
+    pointerOverPetRef.current = false
     scheduleHandleHide()
     handleEdgeHoverLeave()
+  }
+
+  function clearHandlePress(target: Element) {
+    const press = handlePressRef.current
+    handlePressRef.current = null
+    if (press && target.hasPointerCapture(press.pointerId)) {
+      target.releasePointerCapture(press.pointerId)
+    }
+  }
+
+  function handleDragHandlePointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) {
+      handlePressRef.current = null
+      return
+    }
+    if (transitionLockedRef.current || isDragHandleSuppressed) {
+      handlePressRef.current = null
+      return
+    }
+    event.preventDefault()
+    handlePressRef.current = { x: event.screenX, y: event.screenY, pointerId: event.pointerId }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  function handleDragHandlePointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    const press = handlePressRef.current
+    if (!press || press.pointerId !== event.pointerId) return
+    if ((event.buttons & 1) === 0) {
+      clearHandlePress(event.currentTarget)
+      return
+    }
+    if (Math.hypot(event.screenX - press.x, event.screenY - press.y) >= HANDLE_DRAG_THRESHOLD_PX) {
+      if (transitionLockedRef.current || isDragHandleSuppressed) {
+        clearHandlePress(event.currentTarget)
+        return
+      }
+      clearHandlePress(event.currentTarget)
+      window.electronAPI.startOverlayDrag()
+    }
+  }
+
+  function handleDragHandlePointerEnd(event: React.PointerEvent<HTMLDivElement>) {
+    clearHandlePress(event.currentTarget)
+  }
+
+  function handleDragHandleContextMenu(event: React.MouseEvent) {
+    event.preventDefault()
+    window.electronAPI.openOverlayContextMenu()
   }
 
   function handleMouseDown(event: React.MouseEvent) {
@@ -384,7 +437,7 @@ export function OverlayApp() {
 
   function handleDragEnd() {
     isDraggingRef.current = false
-    scheduleHandleHide()
+    if (!pointerOverPetRef.current) scheduleHandleHide()
     const capturedY = dragStartYRef.current
     dragStartYRef.current = null
 
@@ -421,6 +474,8 @@ export function OverlayApp() {
   useEffect(() => {
     function handleVisibilityChange() {
       if (document.visibilityState !== 'hidden') return
+      pointerOverPetRef.current = false
+      handlePressRef.current = null
       const wasDragging = isDraggingRef.current
       isDraggingRef.current = false
       dragStartYRef.current = null
@@ -451,6 +506,10 @@ export function OverlayApp() {
       presenceRef.current = payload
       setCollapsed(payload.collapsed)
       setClickThrough(payload.clickThrough)
+      if (payload.clickThrough) {
+        pointerOverPetRef.current = false
+        handlePressRef.current = null
+      }
       if (payload.collapsed) {
         if (edgeHoverTimerRef.current !== undefined) {
           clearTimeout(edgeHoverTimerRef.current)
@@ -462,6 +521,8 @@ export function OverlayApp() {
           handleHideTimerRef.current = undefined
         }
         setIsHandleVisible(false)
+        pointerOverPetRef.current = false
+        handlePressRef.current = null
       }
       if (payload.presence !== 'EDGE') {
         if (edgeHoverTimerRef.current !== undefined) {
@@ -526,6 +587,8 @@ export function OverlayApp() {
         handleHideTimerRef.current = undefined
       }
       setIsHandleVisible(false)
+      pointerOverPetRef.current = false
+      handlePressRef.current = null
       manifestRef.current = undefined
       sizedKeyRef.current = null
       characterIdRef.current = null
@@ -594,6 +657,14 @@ export function OverlayApp() {
                 ? ' overlay-drag-handle--visible'
                 : ''
           }`}
+          onMouseEnter={handlePortraitMouseEnter}
+          onMouseLeave={handlePortraitMouseLeave}
+          onPointerDown={handleDragHandlePointerDown}
+          onPointerMove={handleDragHandlePointerMove}
+          onPointerUp={handleDragHandlePointerEnd}
+          onPointerCancel={handleDragHandlePointerEnd}
+          onLostPointerCapture={handleDragHandlePointerEnd}
+          onContextMenu={handleDragHandleContextMenu}
         />
       )}
     </div>

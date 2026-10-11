@@ -30,6 +30,7 @@ export interface ElectronAPI {
   setOverlaySize: (size: { width: number; height: number }) => void
   setOverlayMenuState: (state: OverlayMenuState) => void
   openOverlayContextMenu: () => void
+  startOverlayDrag: () => void
   openPetHandleContextMenu: () => void
   onDesktopPresenceChanged: (callback: (payload: DesktopPresencePayload) => void) => () => void
   setTitlebarOverlay: (overlay: { color: string; symbolColor: string }) => void

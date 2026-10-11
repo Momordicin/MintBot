@@ -1,6 +1,6 @@
 // electron/main/index.ts — Electron 主进程入口：app ready 后创建聊天窗口、桌宠 overlay 与托盘，注册 IPC，启动前台窗口监控与 core /events 订阅，will-quit 时收尾
 // 用法：electron.vite.config.ts 的主进程 entry；第一条 import 为 logBootstrap；设置窗口按 open-settings-window IPC 按需创建
-// 对应文件：electron/preload/index.ts（暴露的 IPC 通道）/ electron/main/windowBehavior.ts / electron/main/petContextMenu.ts / electron/main/coreEventsConsumer.ts / electron/main/foregroundWorldModel.ts / electron/main/windowDragMonitor.ts / electron/main/startupGate.ts / shared/windowBehavior.ts
+// 对应文件：electron/preload/index.ts（暴露的 IPC 通道）/ electron/main/windowBehavior.ts / electron/main/petContextMenu.ts / electron/main/coreEventsConsumer.ts / electron/main/foregroundWorldModel.ts / electron/main/windowDragMonitor.ts / electron/main/nativeWindowDrag.ts / electron/main/startupGate.ts / shared/windowBehavior.ts
 import './logBootstrap'
 import { app, BrowserWindow, Menu, Tray, powerMonitor, ipcMain, dialog, screen, nativeImage } from 'electron'
 import type { MenuItemConstructorOptions } from 'electron'
@@ -8,6 +8,7 @@ import { join, basename } from 'path'
 import { readFile, stat } from 'fs/promises'
 import { is } from '@electron-toolkit/utils'
 import { startWindowDragMonitor } from './windowDragMonitor'
+import { startNativeWindowDrag } from './nativeWindowDrag'
 import { noteDragStart, noteDragEnd, clearDragState } from './dragActivity'
 import { nextReconnectDelayMs, RECONNECT_BACKOFF_FLOOR_MS } from './reconnectBackoff'
 import { EVENTS_CLIENT_TIMEOUT_MS } from './eventsGeneration'
@@ -672,6 +673,12 @@ ipcMain.on('overlay:menu-state', (event, payload: unknown) => {
 ipcMain.on('overlay:context-menu', event => {
   if (!overlayWindow || event.sender !== overlayWindow.webContents) return
   popUpPetContextMenu(overlayWindow)
+})
+
+ipcMain.on('overlay:start-drag', event => {
+  if (!overlayWindow || overlayWindow.isDestroyed() || event.sender !== overlayWindow.webContents) return
+  if (getCurrentPetMode() !== 'normal') return
+  startNativeWindowDrag(overlayWindow)
 })
 
 ipcMain.on('pet-handle:context-menu', event => {
