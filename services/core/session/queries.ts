@@ -1,7 +1,6 @@
-// services/core/session/queries.ts — SQLite 数据访问层：预设、会话、消息、向量与全文索引、实体、摘要、情绪状态的读写与检索
-// 用法：被 session/index.ts、state.ts、各 routes、context/buildContext.ts、memory/* 以同步函数直接调用，经 db/index.ts 的 better-sqlite3 连接；db/seed.ts 用 upsertPreset 写种子预设，core/index.ts 启动时按需 backfillMessageFts
-// 形状：表 Presets / Sessions / Messages / MessageEntities / Summaries / EmotionStates，虚表 message_embeddings（sqlite-vec）/ message_fts（FTS5）
-// 对应文件：services/core/db/index.ts（建表、连接与 checkpointTruncate）/ services/core/session/displayConfig.ts / services/core/memory/embedQueue.ts / services/core/memory/entityExtractor.ts / services/core/memory/forget.ts / services/core/memory/orchestrator.ts / services/core/memory/retrieval.ts / services/core/memory/summarizer.ts / services/core/context/buildContext.ts / services/core/session/queries.test.ts
+// services/core/session/queries.ts — SQLite 数据访问层
+// 用法：session、routes、memory、context 各模块直接调用同步读写函数
+// 对应文件：services/core/db/index.ts / services/core/session/queries.test.ts
 import { db, checkpointTruncate } from '../db/index.js'
 import { DEFAULT_DISPLAY_CONFIG, parseDisplayConfig } from './displayConfig.js'
 import type { Message, Session, Preset, PresetSnapshot, MessageEntity, Summary, EmotionState, PresetDisplayConfig } from '../../../shared/types/index.js'
@@ -192,19 +191,30 @@ export function getMessagesPage(
   limit: number,
   beforeId?: number
 ): { messages: Message[]; hasMore: boolean } {
-  const rows = (beforeId !== undefined
+  const anchor = beforeId !== undefined
+    ? db.prepare(`SELECT createdAt FROM Messages WHERE id = ? AND sessionId = ?`).get(beforeId, sessionId) as { createdAt: number } | undefined
+    : undefined
+
+  const rows = (beforeId === undefined
     ? db.prepare(`
         SELECT * FROM Messages
-        WHERE sessionId = ? AND visibleToUser = 1 AND id < ?
-        ORDER BY id DESC
-        LIMIT ?
-      `).all(sessionId, beforeId, limit + 1)
-    : db.prepare(`
-        SELECT * FROM Messages
         WHERE sessionId = ? AND visibleToUser = 1
-        ORDER BY id DESC
+        ORDER BY createdAt DESC, id DESC
         LIMIT ?
       `).all(sessionId, limit + 1)
+    : anchor
+      ? db.prepare(`
+          SELECT * FROM Messages
+          WHERE sessionId = ? AND visibleToUser = 1 AND (createdAt < ? OR (createdAt = ? AND id < ?))
+          ORDER BY createdAt DESC, id DESC
+          LIMIT ?
+        `).all(sessionId, anchor.createdAt, anchor.createdAt, beforeId, limit + 1)
+      : db.prepare(`
+          SELECT * FROM Messages
+          WHERE sessionId = ? AND visibleToUser = 1 AND id < ?
+          ORDER BY createdAt DESC, id DESC
+          LIMIT ?
+        `).all(sessionId, beforeId, limit + 1)
   ) as any[]
 
   const hasMore = rows.length > limit
@@ -236,6 +246,22 @@ export function appendMessage(msg: Omit<Message, 'id'>): number {
     visibleToUser: msg.visibleToUser ? 1 : 0,
   })
   return result.lastInsertRowid as number
+}
+
+export function appendExchange(
+  sessionId: string,
+  userContent: string,
+  userCreatedAt: number,
+  assistantContent: string
+): number {
+  const base = { sessionId, embedded: false, summarized: false, visibleToUser: true, trigger: 'user' as const, triggerEventId: null }
+  const run = db.transaction(() => {
+    appendMessage({ ...base, role: 'user', content: userContent, createdAt: userCreatedAt })
+    const assistantId = appendMessage({ ...base, role: 'assistant', content: assistantContent, createdAt: Date.now() })
+    touchSession(sessionId)
+    return assistantId
+  })
+  return run()
 }
 
 function toVecBuffer(vector: number[]): Buffer {

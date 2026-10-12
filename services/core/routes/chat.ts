@@ -1,14 +1,13 @@
-// services/core/routes/chat.ts — 一轮聊天：建上下文、调模型、解析回复，经 SSE 把结果回给发起请求的窗口
-// 用法：core/index.ts 里 fastify.register(chatRoutes)；POST /chat { message }，请求在模块级队列里串行执行；响应为 SSE 流，事件 message_done / emotion / system(error)；emotion 同时 broadcastEvent 到 GET /events
-// 形状：模型回复为 JSON { reply, emotion: { self }, emote }，经 parseJsonSalvage 解析；用户与助手消息写入 Messages，情绪写入 EmotionStates
-// 对应文件：src/chat/ChatWindow.tsx（POST /chat）/ src/overlay/OverlayApp.tsx（消费 /events 的 emotion）/ services/core/context/buildContext.ts / services/core/session/index.ts / services/core/session/emotion.ts / services/core/session/attention.ts / services/core/reply/interceptor.ts / services/core/reply/sleepDetector.ts / services/core/events/broadcast.ts / services/core/routes/chat.test.ts
+// services/core/routes/chat.ts — 一轮聊天：建上下文、调模型，经 SSE 把回复交给发起请求的窗口
+// 用法：core/index.ts 注册 chatRoutes；POST /chat { message }
+// 对应文件：src/chat/ChatWindow.tsx / services/core/context/buildContext.ts / services/core/routes/chat.test.ts
 import type { FastifyInstance } from 'fastify'
 import type { OutgoingHttpHeaders } from 'node:http'
-import { requireCurrentState, addMessage } from '../session/index.js'
+import { requireCurrentState } from '../session/index.js'
 import { buildContext } from '../context/buildContext.js'
 import { parseSelfEmotion, parseEmoteTag } from '../session/emotion.js'
 import { selectEmoteFile } from '../characters/emotePool.js'
-import { upsertEmotionState, sessionExists } from '../session/queries.js'
+import { upsertEmotionState, sessionExists, appendExchange } from '../session/queries.js'
 import { recordAttention, markExplicitSleep, isExplicitSleep } from '../session/attention.js'
 import { broadcastEvent } from '../events/broadcast.js'
 import { createModelProviderForPreset } from '../providers/ModelProvider.js'
@@ -22,7 +21,29 @@ let queueTail: Promise<void> = Promise.resolve()
 function enqueue<T>(task: () => Promise<T>): Promise<T> {
   const result = queueTail.then(task)
   queueTail = result.then(() => undefined, () => undefined) 
-  return result 
+  return result
+}
+
+const CONNECTION_ERROR_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'UND_ERR_CONNECT_TIMEOUT'])
+const CONFIG_ERROR_PATTERN = /^Unknown model provider type:|^\[ModelProvider\] .*(modelName is required|API key is not configured)|^Could not resolve authentication method|^\[Config\] modelProvider is not configured/
+
+function isModelStartupFailure(err: unknown): boolean {
+  if (err instanceof Error && CONFIG_ERROR_PATTERN.test(err.message)) return true
+  let current: unknown = err
+  for (let depth = 0; depth < 5 && current instanceof Error; depth++) {
+    const code = (current as { code?: unknown }).code
+    if (typeof code === 'string' && CONNECTION_ERROR_CODES.has(code)) return true
+    current = current.cause
+  }
+  return false
+}
+
+function logChatError(label: string, err: unknown, message: string): void {
+  if (isModelStartupFailure(err)) {
+    console.error(label, err)
+    return
+  }
+  console.error(label, err, `(userMessage=${JSON.stringify(message)})`)
 }
 
 export async function chatRoutes(fastify: FastifyInstance) {
@@ -43,6 +64,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
     }
 
     const sessionId = state.session.sessionId
+    const sentAt = Date.now()
 
     const abortController = new AbortController()
     reply.raw.once('close', () => abortController.abort())
@@ -86,7 +108,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
         if (reply.raw.destroyed || reply.raw.writableEnded || abortController.signal.aborted) {
           return
         }
-        console.error('[Chat] buildContext failed:', err)
+        logChatError('[Chat] buildContext failed:', err, message)
         return reply.status(500).send({ error: 'Failed to build context' })
       }
 
@@ -99,17 +121,15 @@ export async function chatRoutes(fastify: FastifyInstance) {
         return
       }
 
-      addMessage(sessionId, 'user', message, 'user')
-
-      const modelProviderConfig = getModelProviderConfig()
-      const modelProvider = createModelProviderForPreset(state.preset, modelProviderConfig)
-      const modelType = state.preset.modelType ?? modelProviderConfig.type
-
       openStream()
 
       const streaming = fastify.streamingEnabled
 
       try {
+        const modelProviderConfig = getModelProviderConfig()
+        const modelProvider = createModelProviderForPreset(state.preset, modelProviderConfig)
+        const modelType = state.preset.modelType ?? modelProviderConfig.type
+
         let fullReply = ''
 
         if (streaming) {
@@ -118,6 +138,10 @@ export async function chatRoutes(fastify: FastifyInstance) {
           }
         } else {
           fullReply = await modelProvider.completeSync(context, { maxTokens: modelProviderConfig.maxTokens, signal: abortController.signal, jsonMode: true })
+        }
+
+        if (abortController.signal.aborted) {
+          return
         }
 
         if (!sessionExists(sessionId)) {
@@ -133,13 +157,13 @@ export async function chatRoutes(fastify: FastifyInstance) {
         if (isEmptyReply(replyText)) {
           console.error(
             `[Chat] Empty reply body (sessionId=${sessionId}, modelType=${modelType}): ` +
-            JSON.stringify(fullReply.slice(0, 200))
+            JSON.stringify(fullReply)
           )
           send('system', { type: 'error', payload: { message: 'Model call failed' }, sessionId })
           return
         }
 
-        const messageId = addMessage(sessionId, 'assistant', replyText, 'user')
+        const messageId = appendExchange(sessionId, message, sentAt, replyText)
 
         recordAttention(sessionId)
 
@@ -178,7 +202,9 @@ export async function chatRoutes(fastify: FastifyInstance) {
         broadcastEvent('emotion', emotionPayload)
 
       } catch (err) {
-        console.error('[Chat] Error:', err)
+        if (!abortController.signal.aborted) {
+          logChatError('[Chat] Error:', err, message)
+        }
         send('system', { type: 'error', payload: { message: 'Model call failed' }, sessionId })
       } finally {
         if (!reply.raw.writableEnded && !reply.raw.destroyed) {

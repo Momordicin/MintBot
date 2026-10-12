@@ -15,6 +15,7 @@ import {
   getRecentMessages,
   getMessagesPage,
   appendMessage,
+  appendExchange,
   upsertMessageEmbedding,
   searchSimilarMessages,
   getPendingEmbeddingMessages,
@@ -352,6 +353,11 @@ describe('Messages', () => {
     expect(getRecentMessages('s1', 3)).toHaveLength(3)
   })
 
+  it('appendExchange 写助手回复失败时，用户消息一起回滚', () => {
+    expect(() => appendExchange('s1', '用户这句', 1000, null as unknown as string)).toThrow()
+    expect(db.prepare('SELECT COUNT(*) as count FROM Messages WHERE sessionId = ?').get('s1')).toEqual({ count: 0 })
+  })
+
   it('boolean 字段 0/1 转换正确', () => {
     appendMessage({ sessionId: 's1', role: 'user', content: '测试', createdAt: Date.now(), embedded: true, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
     const msgs = getRecentMessages('s1')
@@ -414,6 +420,25 @@ describe('getMessagesPage', () => {
     const { messages } = getMessagesPage('s1', 10)
     expect(messages).toHaveLength(1)
     expect(messages[0].content).toBe('可见')
+  })
+
+  it('按时间排序，时间相同按 id；写入顺序与时间不一致时翻页也按时间', () => {
+    const base = { sessionId: 's1', embedded: false, summarized: false, visibleToUser: true, trigger: 'user' as const, triggerEventId: null }
+    appendMessage({ ...base, role: 'user', content: 'Q1', createdAt: 1000 })
+    appendMessage({ ...base, role: 'assistant', content: 'A1', createdAt: 3000 })
+    appendMessage({ ...base, role: 'user', content: 'Q2', createdAt: 2000 })
+    appendMessage({ ...base, role: 'assistant', content: 'A2', createdAt: 4000 })
+    appendMessage({ ...base, role: 'user', content: 'Q3', createdAt: 4000 })
+
+    expect(getMessagesPage('s1', 10).messages.map(m => m.content)).toEqual(['Q1', 'Q2', 'A1', 'A2', 'Q3'])
+
+    const page1 = getMessagesPage('s1', 2)
+    expect(page1.messages.map(m => m.content)).toEqual(['A2', 'Q3'])
+    const page2 = getMessagesPage('s1', 2, page1.messages[0].id)
+    expect(page2.messages.map(m => m.content)).toEqual(['Q2', 'A1'])
+    const page3 = getMessagesPage('s1', 2, page2.messages[0].id)
+    expect(page3.messages.map(m => m.content)).toEqual(['Q1'])
+    expect(page3.hasMore).toBe(false)
   })
 
   it('多 session 隔离，不跨 session 泄漏', () => {
