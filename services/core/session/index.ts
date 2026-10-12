@@ -64,7 +64,6 @@ export function loadSession(presetId: string): SessionState {
 
 export function switchPreset(presetId: string): SessionState {
   console.log(`[Session] Switching to preset ${presetId}`)
-  current = null
   const state = loadSession(presetId)
 
   setDefaultPresetId(presetId)

@@ -94,6 +94,18 @@ describe('switchPreset', () => {
     expect(ConfigModule.setDefaultPresetId).toHaveBeenCalledTimes(1)
     expect(ConfigModule.setDefaultPresetId).toHaveBeenCalledWith('p2')
   })
+
+  it('切换到不存在的 preset 时抛错，当前会话保持不变，不广播也不持久化', () => {
+    const { session } = loadSession('p1')
+    vi.clearAllMocks()
+
+    expect(() => switchPreset('missing')).toThrow()
+
+    expect(getCurrentState()?.session.sessionId).toBe(session.sessionId)
+    expect(getCurrentState()?.preset.presetId).toBe('p1')
+    expect(BroadcastModule.broadcastEvent).not.toHaveBeenCalled()
+    expect(ConfigModule.setDefaultPresetId).not.toHaveBeenCalled()
+  })
 })
 
 describe('resolveStartupPresetId', () => {
