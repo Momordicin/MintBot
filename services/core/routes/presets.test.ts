@@ -12,11 +12,15 @@ import { loadSession, getCurrentState } from '../session/index.js'
 import { presetRoutes, WALLPAPER_DIR } from './presets.js'
 import { buildStatePayload } from '../state.js'
 import * as BroadcastModule from '../events/broadcast.js'
-import { setDefaultPresetId } from '../config/index.js'
 
 vi.mock('../events/broadcast.js', async importOriginal => {
   const actual = await importOriginal<typeof import('../events/broadcast.js')>()
   return { ...actual, broadcastEvent: vi.fn() }
+})
+
+vi.mock('../session/queries.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../session/queries.js')>()
+  return { ...actual, createSession: vi.fn(actual.createSession) }
 })
 
 // buildStatePayload 内部读取 getModelProviderConfig().ollamaBaseUrl，mock 掉独立 config
@@ -1201,12 +1205,11 @@ describe('DELETE /presets/:presetId', () => {
     fs.mkdirSync(WALLPAPER_DIR, { recursive: true })
     writtenFiles.push('p1-wallpaper.png')
     fs.writeFileSync(path.join(WALLPAPER_DIR, 'p1-wallpaper.png'), Buffer.from([1]))
-    makeSession('p2', 'sess-p2', 1000)
     const { session: p1Session } = loadSession('p1')
     seedSessionData(p1Session.sessionId)
     const p1Before = countRows(p1Session.sessionId)
-    vi.mocked(setDefaultPresetId).mockImplementationOnce(() => {
-      throw new Error('switch failed')
+    vi.mocked(createSession).mockImplementationOnce(() => {
+      throw new Error('db write failed')
     })
     const fastify = await buildTestApp()
 

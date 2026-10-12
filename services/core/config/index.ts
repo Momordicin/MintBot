@@ -314,11 +314,17 @@ export function getRawBackgroundModelProviderConfig(): ModelConfig | null {
 }
 
 function readRawConfig(): Record<string, unknown> {
+  let parsed: unknown
   try {
-    return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'))
-  } catch {
-    return {}
+    parsed = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'))
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {}
+    throw new Error(`[Config] config.json 无法读取或格式不正确，本次没有写入: ${err instanceof Error ? err.message : String(err)}`)
   }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('[Config] config.json 无法读取或格式不正确（顶层不是对象），本次没有写入')
+  }
+  return parsed as Record<string, unknown>
 }
 
 function readRawSection(section: 'modelProvider' | 'backgroundModelProvider' | 'windowBehavior'): Record<string, unknown> {

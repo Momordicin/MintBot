@@ -66,7 +66,11 @@ export function switchPreset(presetId: string): SessionState {
   console.log(`[Session] Switching to preset ${presetId}`)
   const state = loadSession(presetId)
 
-  setDefaultPresetId(presetId)
+  try {
+    setDefaultPresetId(presetId)
+  } catch (err) {
+    console.warn('[Session] 下次启动的默认角色未保存:', err)
+  }
 
   broadcastEvent('preset-switched', { sessionId: state.session.sessionId, presetId: state.session.presetId })
 

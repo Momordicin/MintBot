@@ -920,6 +920,73 @@ describe('config/index — getDefaultPresetId', () => {
   })
 })
 
+describe('config/index — config.json 无法读取或格式不正确时拒绝写入', () => {
+  const invalidContents: Array<[string, () => void]> = [
+    ['JSON 语法错误（多余逗号）', () => readFileSyncMock.mockReturnValue('{ "modelProvider": { "type": "ollama" }, }')],
+    ['顶层是数组', () => readFileSyncMock.mockReturnValue('[]')],
+    ['顶层是 null', () => readFileSyncMock.mockReturnValue('null')],
+    ['顶层是数字', () => readFileSyncMock.mockReturnValue('42')],
+    ['读取抛出非 ENOENT 错误', () => readFileSyncMock.mockImplementation(() => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }) })],
+  ]
+
+  for (const [label, arrange] of invalidContents) {
+    it(`${label}：setDefaultPresetId / updateWindowBehaviorConfig / updateModelProviderConfig / updateBackgroundModelProviderConfig 都抛错，不写临时文件也不 rename`, async () => {
+      arrange()
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const mod = await import('./index.js')
+
+      expect(() => mod.setDefaultPresetId('p2')).toThrow(/config\.json/)
+      expect(() => mod.updateWindowBehaviorConfig({ chatPinMode: 'always' })).toThrow(/config\.json/)
+      expect(() => mod.updateModelProviderConfig({ ollamaModel: 'llama3' })).toThrow(/config\.json/)
+      expect(() => mod.updateBackgroundModelProviderConfig({ modelName: 'x' })).toThrow(/config\.json/)
+
+      expect(writeFileSyncMock).not.toHaveBeenCalled()
+      expect(renameSyncMock).not.toHaveBeenCalled()
+    })
+  }
+
+  it('写入抛错时不修改内存缓存', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({ defaultPresetId: 'p1', windowBehavior: { chatPinMode: 'off', appRules: [] } }))
+    const mod = await import('./index.js')
+    expect(mod.getDefaultPresetId()).toBe('p1')
+    expect(mod.getWindowBehaviorConfig().chatPinMode).toBe('off')
+
+    readFileSyncMock.mockReturnValue('{ broken')
+    expect(() => mod.setDefaultPresetId('p2')).toThrow()
+    expect(() => mod.updateWindowBehaviorConfig({ chatPinMode: 'always' })).toThrow()
+
+    expect(mod.getDefaultPresetId()).toBe('p1')
+    expect(mod.getWindowBehaviorConfig().chatPinMode).toBe('off')
+    expect(mod.getWindowBehaviorRevision()).toBe(1)
+  })
+
+  it('readFileSync 抛 ENOENT 时照常写入，写入内容只有这一段', async () => {
+    readFileSyncMock.mockImplementation(() => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { setDefaultPresetId, getDefaultPresetId } = await import('./index.js')
+
+    setDefaultPresetId('p2')
+
+    expect(writeFileSyncMock).toHaveBeenCalledTimes(1)
+    expect(renameSyncMock).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(writeFileSyncMock.mock.calls[0][1] as string)).toEqual({ defaultPresetId: 'p2' })
+    expect(getDefaultPresetId()).toBe('p2')
+  })
+
+  it('文件合法时行为不变，其他段原样保留', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({ memory: { recentTrackMaxMessages: 200 }, modelProvider: { type: 'ollama' } }))
+    const { setDefaultPresetId } = await import('./index.js')
+
+    setDefaultPresetId('p2')
+
+    expect(JSON.parse(writeFileSyncMock.mock.calls[0][1] as string)).toEqual({
+      memory: { recentTrackMaxMessages: 200 },
+      modelProvider: { type: 'ollama' },
+      defaultPresetId: 'p2',
+    })
+  })
+})
+
 describe('config/index — setDefaultPresetId', () => {
   it('写入后 getDefaultPresetId 立即反映新值，不依赖 chokidar 的异步 reload，且不 clobber 其它顶层字段', async () => {
     readFileSyncMock.mockReturnValue(JSON.stringify({
