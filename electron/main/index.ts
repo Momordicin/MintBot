@@ -607,6 +607,8 @@ function createWindow(): BrowserWindow {
       height: TITLEBAR_OVERLAY_HEIGHT
     },
     maximizable: false,
+    minWidth: 240,
+    minHeight: 360,
     webPreferences: {
       preload: PRELOAD_PATH
     }
@@ -632,7 +634,7 @@ function createWindow(): BrowserWindow {
     handleWindowMoved('chat', win, mainWindow, overlayWindow)
   })
 
-  win.on('resize', () => {
+  win.on('resized', () => {
     handleWindowMoved('chat', win, mainWindow, overlayWindow)
   })
 
