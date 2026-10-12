@@ -155,8 +155,8 @@ export async function ensureAiService(baseUrl: string): Promise<boolean> {
 
   const proc = aiProcess
   proc.on('exit', (code, signal) => {
-    console.warn(`[AiService] Process exited (code=${code}, signal=${signal})`)
     if (aiProcess === proc) {
+      console.warn(`[AiService] Process exited (code=${code}, signal=${signal})`)
       aiProcess = null
       aiManagedByUs = false
     }
