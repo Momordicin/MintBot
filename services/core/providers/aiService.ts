@@ -69,10 +69,11 @@ export async function isAiServiceRunning(baseUrl: string): Promise<boolean> {
 
 const AI_SERVICE_STARTUP_TIMEOUT_MS = 90000
 
-async function waitForAiService(baseUrl: string, timeoutMs = AI_SERVICE_STARTUP_TIMEOUT_MS): Promise<boolean> {
+async function waitForAiService(baseUrl: string, proc: ChildProcess, timeoutMs = AI_SERVICE_STARTUP_TIMEOUT_MS): Promise<boolean> {
   const start = Date.now()
   while (Date.now() - start < timeoutMs) {
     if (await isAiServiceRunning(baseUrl)) return true
+    if (aiProcess !== proc) return false
     await new Promise(r => setTimeout(r, 1000))
   }
   return false
@@ -152,8 +153,25 @@ export async function ensureAiService(baseUrl: string): Promise<boolean> {
     console.error('[AiService] Failed to start:', err.message)
   })
 
+  const proc = aiProcess
+  proc.on('exit', (code, signal) => {
+    console.warn(`[AiService] Process exited (code=${code}, signal=${signal})`)
+    if (aiProcess === proc) {
+      aiProcess = null
+      aiManagedByUs = false
+    }
+  })
+
   aiManagedByUs = true
-  const ready = await waitForAiService(baseUrl)
+  const ready = await waitForAiService(baseUrl, proc)
+  if (aiProcess !== proc) {
+    if (ready && await isAiServiceRunning(baseUrl)) {
+      console.log(`[AiService] Port ${port} is already served by another MintBot AI service; using it (not managed)`)
+      return true
+    }
+    console.error('[AiService] Process exited before the AI service became ready')
+    return false
+  }
   if (!ready) {
     console.error('[AiService] Timed out waiting for AI service to start')
     return false
@@ -167,10 +185,13 @@ const FORCE_KILL_TIMEOUT_MS = 3000
 export async function stopAiServiceIfManaged(): Promise<void> {
   if (!aiManagedByUs || !aiProcess) return
 
-  console.log('[AiService] Stopping managed AI service process...')
   const proc = aiProcess
   aiProcess = null
   aiManagedByUs = false
+
+  if (proc.exitCode !== null || proc.signalCode !== null) return
+
+  console.log('[AiService] Stopping managed AI service process...')
 
   await new Promise<void>(resolve => {
     const forceKillTimer = setTimeout(() => proc.kill('SIGKILL'), FORCE_KILL_TIMEOUT_MS)

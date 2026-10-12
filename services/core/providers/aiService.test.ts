@@ -16,11 +16,18 @@ vi.mock('fs', () => ({ default: { existsSync: existsSyncMock } }))
 // 进程本身需要 .on('error', ...)/.once('exit', ...)/.kill(signal?)。用真实 EventEmitter
 // 承载事件部分，.kill 单独挂一个 vi.fn()
 function makeFakeChild() {
-  const child = new EventEmitter() as EventEmitter & { kill: ReturnType<typeof vi.fn> }
+  const child = new EventEmitter() as EventEmitter & { kill: ReturnType<typeof vi.fn>; exitCode: number | null; signalCode: string | null }
   ;(child as any).stdout = new EventEmitter()
   ;(child as any).stderr = new EventEmitter()
+  child.exitCode = null
+  child.signalCode = null
   child.kill = vi.fn()
   return child
+}
+
+function exitFakeChild(child: ReturnType<typeof makeFakeChild>, code = 1) {
+  child.exitCode = code
+  child.emit('exit', code, null)
 }
 
 function oursResponse() {
@@ -191,6 +198,59 @@ describe('ensureAiService', () => {
     await expect(promise).resolves.toBe(false)
   })
 
+  it('自己 spawn 的进程在就绪前退出，但端口上是别人的 MintBot AI service：返回 true 且不托管，stop 不 kill 且立即返回', async () => {
+    const fakeChild = makeFakeChild()
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new Error('timeout'))
+      .mockImplementationOnce(async () => {
+        exitFakeChild(fakeChild)
+        return oursResponse()
+      })
+      .mockResolvedValue(oursResponse())
+    vi.stubGlobal('fetch', fetchMock)
+    existsSyncMock.mockReturnValue(true)
+    spawnMock.mockReturnValue(fakeChild)
+    const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { ensureAiService, stopAiServiceIfManaged } = await import('./aiService.js')
+
+    const promise = ensureAiService(baseUrl)
+    await vi.advanceTimersByTimeAsync(1000)
+
+    await expect(promise).resolves.toBe(true)
+    const logged = consoleLogSpy.mock.calls.map(call => String(call[0]))
+    expect(logged.some(msg => msg.includes('Started and ready'))).toBe(false)
+    expect(logged.some(msg => msg.includes('Port 18765 is already served by another MintBot AI service; using it (not managed)'))).toBe(true)
+    expect(consoleWarnSpy.mock.calls.some(call => String(call[0]).startsWith('[AiService]'))).toBe(true)
+
+    await stopAiServiceIfManaged()
+    expect(fakeChild.kill).not.toHaveBeenCalled()
+    consoleLogSpy.mockRestore()
+    consoleWarnSpy.mockRestore()
+  })
+
+  it('自己 spawn 的进程在就绪前退出，且端口上不是我们的服务：返回 false', async () => {
+    const fakeChild = makeFakeChild()
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new Error('timeout'))
+      .mockImplementationOnce(async () => {
+        exitFakeChild(fakeChild)
+        return foreignJsonResponse()
+      })
+      .mockResolvedValue(foreignJsonResponse())
+    vi.stubGlobal('fetch', fetchMock)
+    existsSyncMock.mockReturnValue(true)
+    spawnMock.mockReturnValue(fakeChild)
+    const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { ensureAiService } = await import('./aiService.js')
+
+    await expect(ensureAiService(baseUrl)).resolves.toBe(false)
+    expect(consoleErrorSpy).toHaveBeenCalled()
+    consoleWarnSpy.mockRestore()
+    consoleErrorSpy.mockRestore()
+  })
+
   it('端口被外来服务占用（AnkiConnect 场景）：立即返回 false，不 spawn，不进入 90 秒等待', async () => {
     const fetchMock = vi.fn().mockResolvedValue(foreignJsonResponse())
     vi.stubGlobal('fetch', fetchMock)
@@ -308,6 +368,26 @@ describe('stopAiServiceIfManaged', () => {
     fakeChild.emit('exit')
     await stopPromise
     expect(resolved).toBe(true)
+  })
+
+  it('托管的进程已经退出后调用：立即 resolve，不 kill，不等待 exit 事件', async () => {
+    const { fakeChild, stopAiServiceIfManaged } = await setUpManagedRunningService()
+    const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    exitFakeChild(fakeChild)
+
+    await stopAiServiceIfManaged()
+    expect(fakeChild.kill).not.toHaveBeenCalled()
+    consoleWarnSpy.mockRestore()
+  })
+
+  it('进程已退出但 exit 事件早已错过（exitCode 已置位）：立即 resolve，不 kill', async () => {
+    const { fakeChild, stopAiServiceIfManaged } = await setUpManagedRunningService()
+
+    fakeChild.exitCode = 1
+
+    await stopAiServiceIfManaged()
+    expect(fakeChild.kill).not.toHaveBeenCalled()
   })
 
   it('超过 FORCE_KILL_TIMEOUT_MS 仍未退出时会追加 SIGKILL 强制结束', async () => {
