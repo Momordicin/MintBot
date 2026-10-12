@@ -945,6 +945,23 @@ describe('config/index — config.json 无法读取或格式不正确时拒绝�
     })
   }
 
+  it('JSON 语法错误时，错误信息不带出文件内容片段', async () => {
+    readFileSyncMock.mockReturnValue('{ "modelProvider": { "anthropicApiKey": sk-FAKESECRET12345 } }')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const mod = await import('./index.js')
+
+    let message = ''
+    try {
+      mod.setDefaultPresetId('p2')
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err)
+    }
+
+    expect(message).toMatch(/JSON 语法错误/)
+    expect(message).not.toMatch(/FAKESECRET/)
+    expect(message).not.toMatch(/sk-/)
+  })
+
   it('写入抛错时不修改内存缓存', async () => {
     readFileSyncMock.mockReturnValue(JSON.stringify({ defaultPresetId: 'p1', windowBehavior: { chatPinMode: 'off', appRules: [] } }))
     const mod = await import('./index.js')

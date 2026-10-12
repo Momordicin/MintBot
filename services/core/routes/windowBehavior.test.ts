@@ -1,13 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import Fastify from 'fastify'
 import { windowBehaviorRoutes } from './windowBehavior.js'
+import { ConfigFileUnreadableError, CONFIG_FILE_UNREADABLE_MESSAGE } from '../config/configFileError.js'
 
-// routes/windowBehavior.ts 只负责路由层的校验 + 广播，实际的读写职责在 config/index.ts——
-// mock 掉整个 config 模块和 broadcast 模块，测试聚焦于本文件自己的行为（校验规则、
-// 成功路径广播），不依赖真实 config.json，同 routes/config.test.ts 的既有模式。
-//
-// 两个枚举常量也要一并从 mock 里导出：路由的校验逻辑直接读它们，mock 漏掉会让
-// `VALID_*.includes(...)` 在 undefined 上抛错，把本该是 400 的用例变成 500
+// mock 掉 config 与 broadcast 模块，只测路由本身；校验逻辑会读 VALID_* 常量，mock 里必须一并导出
 const {
   getWindowBehaviorConfigMock,
   getWindowBehaviorRevisionMock,
@@ -90,8 +86,7 @@ describe('PATCH /config/window-behavior — 校验', () => {
     expect(broadcastEventMock).not.toHaveBeenCalled()
   })
 
-  // 旧的 pinMode 三个取值（off / dodge-fullscreen / always-on-top）在新枚举里全部不合法。
-  // 'off' 是两套枚举里唯一同名的值，因此不能用它来验证"旧值被拒"——这里挑一个只属于旧枚举的
+  // 'off' 新旧枚举都有，所以用只属于旧枚举的值
   it("旧枚举值 'dodge-fullscreen' 不再被接受，返回 400", async () => {
     const fastify = await buildTestApp()
 
@@ -298,5 +293,42 @@ describe('PATCH /config/window-behavior — 成功路径', () => {
     const updateOrder = updateWindowBehaviorConfigMock.mock.invocationCallOrder[0]
     const broadcastOrder = broadcastEventMock.mock.invocationCallOrder[0]
     expect(updateOrder).toBeLessThan(broadcastOrder)
+  })
+})
+
+describe('PATCH /config/window-behavior — config.json 无法读取', () => {
+  it('写入抛出 ConfigFileUnreadableError 时返回 500，error 为中文提示，不广播', async () => {
+    updateWindowBehaviorConfigMock.mockImplementation(() => {
+      throw new ConfigFileUnreadableError('Unexpected token')
+    })
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/config/window-behavior',
+      payload: { petAvoidanceEnabled: false },
+    })
+    errorSpy.mockRestore()
+
+    expect(response.statusCode).toBe(500)
+    expect(JSON.parse(response.payload)).toEqual({ error: CONFIG_FILE_UNREADABLE_MESSAGE })
+    expect(broadcastEventMock).not.toHaveBeenCalled()
+  })
+
+  it('其他错误照常向外抛出，不使用 config.json 的提示文字', async () => {
+    updateWindowBehaviorConfigMock.mockImplementation(() => {
+      throw new Error('unexpected')
+    })
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/config/window-behavior',
+      payload: { petAvoidanceEnabled: false },
+    })
+
+    expect(response.statusCode).toBe(500)
+    expect(JSON.parse(response.payload).error).not.toBe(CONFIG_FILE_UNREADABLE_MESSAGE)
   })
 })
