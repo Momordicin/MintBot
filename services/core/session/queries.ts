@@ -592,8 +592,15 @@ export function getSummaries(sessionId: string): Summary[] {
 
 export function getMessageIdsInTimeRange(sessionId: string, fromTime: number, toTime: number): number[] {
   const rows = db.prepare(`
-    SELECT id FROM Messages WHERE sessionId = ? AND createdAt >= ? AND createdAt <= ? ORDER BY id ASC
-  `).all(sessionId, fromTime, toTime) as { id: number }[]
+    SELECT id FROM Messages
+    WHERE sessionId = @sessionId AND role = 'user' AND createdAt >= @fromTime AND createdAt <= @toTime
+    UNION
+    SELECT r.id FROM Messages q
+    JOIN Messages r ON r.id = (SELECT MIN(n.id) FROM Messages n WHERE n.sessionId = q.sessionId AND n.id > q.id)
+    WHERE q.sessionId = @sessionId AND q.role = 'user' AND q.createdAt >= @fromTime AND q.createdAt <= @toTime
+      AND r.role = 'assistant'
+    ORDER BY id ASC
+  `).all({ sessionId, fromTime, toTime }) as { id: number }[]
   return rows.map(row => row.id)
 }
 

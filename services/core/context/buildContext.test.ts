@@ -82,9 +82,11 @@ describe('buildContext', () => {
   })
 
   it('有历史消息时正确拼入', async () => {
-    const { addMessage } = await import('../session/index.js')
     const sessionId = getCurrentState()!.session.sessionId
-    addMessage(sessionId, 'user', '历史消息', 'user')
+    appendMessage({
+      sessionId, role: 'user', content: '历史消息', createdAt: Date.now(),
+      embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null,
+    })
     const ctx = await buildContext('新消息', { embedding: fakeEmbeddingProvider() })
     expect(ctx.messages).toHaveLength(2)
     expect(ctx.messages[0].content).toBe('历史消息')
