@@ -55,6 +55,7 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
   const renameInputRef = useRef<HTMLInputElement | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<{ presetId: string; name: string } | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [isSwitchingPreset, setIsSwitchingPreset] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const [createName, setCreateName] = useState('')
   const [createCharacterId, setCreateCharacterId] = useState('')
@@ -254,6 +255,7 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
     wallpaperControllerRef.current?.abort()
     const controller = new AbortController()
     switchPresetControllerRef.current = controller
+    setIsSwitchingPreset(true)
     setErrorMessage(null)
 
     try {
@@ -275,6 +277,10 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
     } catch (err) {
       if (!(err instanceof DOMException && err.name === 'AbortError')) {
         setErrorMessage('切换角色失败，请稍后重试')
+      }
+    } finally {
+      if (switchPresetControllerRef.current === controller && !controller.signal.aborted) {
+        setIsSwitchingPreset(false)
       }
     }
   }, [onSwitched])
@@ -408,6 +414,14 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
     if (!deleteTarget) return
     const presetId = deleteTarget.presetId
 
+    if (pendingDisplayConfigRef.current?.presetId === presetId) {
+      if (displayConfigDebounceRef.current) {
+        clearTimeout(displayConfigDebounceRef.current)
+        displayConfigDebounceRef.current = null
+      }
+      pendingDisplayConfigRef.current = null
+    }
+
     deleteControllerRef.current?.abort()
     const controller = new AbortController()
     deleteControllerRef.current = controller
@@ -437,8 +451,10 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
       if (err instanceof DOMException && err.name === 'AbortError') return
       setErrorMessage('删除失败，请稍后重试')
     } finally {
-      setIsDeleting(false)
-      setDeleteTarget(null)
+      if (deleteControllerRef.current === controller && !controller.signal.aborted) {
+        setIsDeleting(false)
+        setDeleteTarget(null)
+      }
     }
   }, [deleteTarget, onSwitched])
 
@@ -955,26 +971,18 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
           )
         )}
         {presets.length > 0 && (
-          deleteTarget ? (
-            <>
-              <span>删除『{deleteTarget.name}』？该角色的全部聊天记录和记忆都会删除，无法恢复。</span>
-              <button className="rename-btn" onClick={handleDeleteCancel} disabled={isDeleting}>
-                取消
-              </button>
-              <button className="rename-btn" onClick={handleDeleteConfirm} disabled={isDeleting}>
-                {isDeleting ? '删除中…' : '确认删除'}
-              </button>
-            </>
-          ) : (
-            <button
-              className="rename-btn"
-              onClick={handleDeleteStart}
-              disabled={presets.length <= 1 || isRenaming || isCreating || isSavingRename || isSavingCreate || isUploadingWallpaper || isSwitchingPortrait}
-              title="删除当前角色"
-            >
-              删除
-            </button>
-          )
+          <button
+            className="rename-btn"
+            onClick={handleDeleteStart}
+            disabled={
+              deleteTarget !== null || presets.length <= 1 || isRenaming || isCreating || isSavingRename || isSavingCreate ||
+              isUploadingWallpaper || isSwitchingPortrait || isImportingCard || isGeneratingSystemPrompt ||
+              systemPromptStep === 'saving' || modelOverrideStep === 'saving' || isSwitchingPreset
+            }
+            title="删除当前角色"
+          >
+            删除
+          </button>
         )}
         {presets.length > 0 && (
           <button
@@ -1009,6 +1017,17 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
           </button>
         )}
       </div>
+      {deleteTarget && (
+        <div className="character-panel__confirm-row">
+          <span>删除『{deleteTarget.name}』？该角色的全部聊天记录和记忆都会删除，无法恢复。</span>
+          <button className="rename-btn" onClick={handleDeleteCancel} disabled={isDeleting}>
+            取消
+          </button>
+          <button className="rename-btn" onClick={handleDeleteConfirm} disabled={isDeleting}>
+            {isDeleting ? '删除中…' : '确认删除'}
+          </button>
+        </div>
+      )}
       {presets.length === 0 && !isCreating && (
         <div className="character-panel__hint">还没有角色，创建一个开始</div>
       )}

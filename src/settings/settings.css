@@ -171,6 +171,13 @@
   gap: 6px;
 }
 
+.character-panel__confirm-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 .character-panel select {
   border-radius: 6px;
   padding: 4px 8px;

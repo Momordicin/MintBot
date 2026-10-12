@@ -106,7 +106,11 @@ export async function presetRoutes(fastify: FastifyInstance) {
     }
 
     if (getCurrentState()?.session.presetId === presetId) {
-      switchPreset(getMostRecentOtherPresetId(presetId)!)
+      try {
+        switchPreset(getMostRecentOtherPresetId(presetId)!)
+      } catch {
+        return reply.status(404).send({ error: 'Preset not found' })
+      }
     }
 
     deletePresetWithData(presetId)

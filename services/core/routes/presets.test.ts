@@ -12,6 +12,7 @@ import { loadSession, getCurrentState } from '../session/index.js'
 import { presetRoutes, WALLPAPER_DIR } from './presets.js'
 import { buildStatePayload } from '../state.js'
 import * as BroadcastModule from '../events/broadcast.js'
+import { setDefaultPresetId } from '../config/index.js'
 
 vi.mock('../events/broadcast.js', async importOriginal => {
   const actual = await importOriginal<typeof import('../events/broadcast.js')>()
@@ -1194,6 +1195,29 @@ describe('DELETE /presets/:presetId', () => {
 
     expect(response.statusCode).toBe(200)
     expect(JSON.parse(response.payload).presetSnapshot.presetId).toBe('p3')
+  })
+
+  it('删除当前角色时切换到最近活跃角色失败：返回 404，不删除任何数据也不删壁纸', async () => {
+    fs.mkdirSync(WALLPAPER_DIR, { recursive: true })
+    writtenFiles.push('p1-wallpaper.png')
+    fs.writeFileSync(path.join(WALLPAPER_DIR, 'p1-wallpaper.png'), Buffer.from([1]))
+    makeSession('p2', 'sess-p2', 1000)
+    const { session: p1Session } = loadSession('p1')
+    seedSessionData(p1Session.sessionId)
+    const p1Before = countRows(p1Session.sessionId)
+    vi.mocked(setDefaultPresetId).mockImplementationOnce(() => {
+      throw new Error('switch failed')
+    })
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({ method: 'DELETE', url: '/presets/p1' })
+
+    expect(response.statusCode).toBe(404)
+    expect(JSON.parse(response.payload)).toEqual({ error: 'Preset not found' })
+    expect(getPresetById('p1')).not.toBeNull()
+    expect(getPresetById('p2')).not.toBeNull()
+    expect(countRows(p1Session.sessionId)).toEqual(p1Before)
+    expect(fs.existsSync(path.join(WALLPAPER_DIR, 'p1-wallpaper.png'))).toBe(true)
   })
 
   it('删除时移除该角色的壁纸文件，不动其他角色的壁纸', async () => {
