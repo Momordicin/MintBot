@@ -352,7 +352,7 @@ export function ChatWindow() {
       }
     } finally {
       activeControllersRef.current.delete(controller)
-      setIsReplying(false)
+      setIsReplying(activeControllersRef.current.size > 0)
     }
   }, [])
 
