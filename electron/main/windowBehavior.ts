@@ -138,9 +138,11 @@ export async function initWindowBehaviorConfig(mainWindow: BrowserWindow | null,
     const response = await fetch(`${CORE_URL}/config/window-behavior`, { signal: AbortSignal.timeout(WINDOW_BEHAVIOR_FETCH_TIMEOUT_MS) })
     if (response.ok) {
       acceptSnapshot((await response.json()) as WindowBehaviorSnapshot)
+    } else {
+      console.error('[WindowBehavior] Core rejected window behavior config fetch:', response.status)
     }
   } catch (err) {
-    console.error('[WindowBehavior] Failed to fetch initial config, using defaults:', err)
+    console.error('[WindowBehavior] Failed to fetch window behavior config:', err)
   }
   windowBehaviorConfigSettled = true
   requestObservation({ force: true })

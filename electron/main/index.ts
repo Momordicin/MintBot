@@ -231,12 +231,12 @@ async function patchWindowBehavior(partial: Partial<WindowBehaviorConfig>): Prom
       body: JSON.stringify(partial),
     })
     if (!response.ok) {
-      console.error('[Tray] Core rejected window behavior patch:', response.status)
+      console.error('[WindowBehavior] Core rejected window behavior patch:', response.status)
       return
     }
     applyWindowBehaviorSnapshot((await response.json()) as WindowBehaviorSnapshot, mainWindow, overlayWindow)
   } catch (err) {
-    console.error('[Tray] Failed to patch window behavior config:', err)
+    console.error('[WindowBehavior] Failed to patch window behavior config:', err)
   }
 }
 
