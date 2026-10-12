@@ -170,12 +170,9 @@ export async function presetRoutes(fastify: FastifyInstance) {
       return reply.status(400).send({ error: 'name, displayConfig, systemPrompt, modelType or modelName is required' })
     }
 
-    if (name !== undefined) {
-      const trimmedName = name.trim()
-      if (!trimmedName) {
-        return reply.status(400).send({ error: 'name is required' })
-      }
-      updatePresetName(presetId, trimmedName)
+    const trimmedName = name?.trim()
+    if (name !== undefined && !trimmedName) {
+      return reply.status(400).send({ error: 'name is required' })
     }
 
     if (displayConfig !== undefined) {
@@ -200,7 +197,41 @@ export async function presetRoutes(fastify: FastifyInstance) {
       if (displayConfig.petScale !== undefined && !isValidPetScale(displayConfig.petScale)) {
         return reply.status(400).send({ error: 'petScale must be an object with pixel and illustration each one of 0.5, 0.75, 1, 1.25, 1.5' })
       }
+    }
 
+    const trimmedSystemPrompt = systemPrompt?.trim()
+    if (systemPrompt !== undefined && !trimmedSystemPrompt) {
+      return reply.status(400).send({ error: 'systemPrompt is required' })
+    }
+
+    if ((modelType !== undefined) !== (modelName !== undefined)) {
+      return reply.status(400).send({ error: 'modelType and modelName must be provided together' })
+    }
+
+    let modelConfig: { modelType: 'anthropic' | 'openai' | 'ollama' | 'deepseek' | null; modelName: string | null } | undefined
+    if (modelType !== undefined) {
+      if (modelType === null) {
+        if (modelName !== null) {
+          return reply.status(400).send({ error: 'modelName must be null when modelType is null' })
+        }
+        modelConfig = { modelType: null, modelName: null }
+      } else {
+        if (!VALID_MODEL_TYPES.includes(modelType)) {
+          return reply.status(400).send({ error: 'modelType must be one of anthropic, openai, ollama, deepseek, or null' })
+        }
+        const trimmedModelName = (modelName ?? '').trim()
+        if (!trimmedModelName) {
+          return reply.status(400).send({ error: 'modelName is required when modelType is set' })
+        }
+        modelConfig = { modelType, modelName: trimmedModelName }
+      }
+    }
+
+    if (trimmedName !== undefined) {
+      updatePresetName(presetId, trimmedName)
+    }
+
+    if (displayConfig !== undefined) {
       const portraitChanged = displayConfig.currentPortrait !== undefined
         && displayConfig.currentPortrait !== preset.displayConfig.currentPortrait
       const petScaleChanged = displayConfig.petScale !== undefined
@@ -223,34 +254,12 @@ export async function presetRoutes(fastify: FastifyInstance) {
       if (portraitChanged || petScaleChanged) broadcastEvent('preset-pet-display-changed', { presetId })
     }
 
-    if (systemPrompt !== undefined) {
-      const trimmedSystemPrompt = systemPrompt.trim()
-      if (!trimmedSystemPrompt) {
-        return reply.status(400).send({ error: 'systemPrompt is required' })
-      }
+    if (trimmedSystemPrompt !== undefined) {
       updatePresetSystemPrompt(presetId, trimmedSystemPrompt)
     }
 
-    if ((modelType !== undefined) !== (modelName !== undefined)) {
-      return reply.status(400).send({ error: 'modelType and modelName must be provided together' })
-    }
-
-    if (modelType !== undefined) {
-      if (modelType === null) {
-        if (modelName !== null) {
-          return reply.status(400).send({ error: 'modelName must be null when modelType is null' })
-        }
-        updatePresetModelConfig(presetId, null, null)
-      } else {
-        if (!VALID_MODEL_TYPES.includes(modelType)) {
-          return reply.status(400).send({ error: 'modelType must be one of anthropic, openai, ollama, deepseek, or null' })
-        }
-        const trimmedModelName = (modelName ?? '').trim()
-        if (!trimmedModelName) {
-          return reply.status(400).send({ error: 'modelName is required when modelType is set' })
-        }
-        updatePresetModelConfig(presetId, modelType, trimmedModelName)
-      }
+    if (modelConfig !== undefined) {
+      updatePresetModelConfig(presetId, modelConfig.modelType, modelConfig.modelName)
     }
 
     if (applyNow === true) {

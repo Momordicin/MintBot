@@ -1012,6 +1012,50 @@ describe('PATCH /presets/:presetId', () => {
     expect(response.statusCode).toBe(200)
     expect(getEmotionState(session.sessionId)).toEqual({ self: { label: 'happy', intensity: 0.7 }, perceived_user: null })
   })
+
+  it('合法 name + 非法 displayConfig 时返回 400，name 不被写入', async () => {
+    const fastify = await buildTestApp()
+    const nameBefore = getPresetById('p1')!.name
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { name: '不应写入的名字', displayConfig: { themeMode: 'x' } },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(getPresetById('p1')!.name).toBe(nameBefore)
+  })
+
+  it('合法 displayConfig + 全空白 systemPrompt 时返回 400，displayConfig 不变且不广播', async () => {
+    loadSession('p1')
+    const fastify = await buildTestApp()
+    vi.mocked(BroadcastModule.broadcastEvent).mockClear()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { displayConfig: { currentPortrait: 'illustration' }, systemPrompt: '   ' },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(getPresetById('p1')!.displayConfig).toEqual(DEFAULT_DISPLAY_CONFIG)
+    expect(BroadcastModule.broadcastEvent).not.toHaveBeenCalled()
+  })
+
+  it('合法 systemPrompt + 只给 modelType 不给 modelName 时返回 400，systemPrompt 不被写入', async () => {
+    const fastify = await buildTestApp()
+    const systemPromptBefore = getPresetById('p1')!.systemPrompt
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { systemPrompt: '不应写入的人设', modelType: 'openai' },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(getPresetById('p1')!.systemPrompt).toBe(systemPromptBefore)
+  })
 })
 
 // ─── buildStatePayload — displayConfig 现查覆盖（与 wallpaperPath/name 同款行为）────

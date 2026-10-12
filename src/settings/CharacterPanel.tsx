@@ -50,6 +50,9 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
   const [isRenaming, setIsRenaming] = useState(false)
   const [renameValue, setRenameValue] = useState('')
   const [isSavingRename, setIsSavingRename] = useState(false)
+  const [renameInputWidth, setRenameInputWidth] = useState<number | null>(null)
+  const presetSelectRef = useRef<HTMLSelectElement | null>(null)
+  const renameInputRef = useRef<HTMLInputElement | null>(null)
   const [isCreating, setIsCreating] = useState(false)
   const [createName, setCreateName] = useState('')
   const [createCharacterId, setCreateCharacterId] = useState('')
@@ -315,10 +318,22 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
   }, [isUploadingWallpaper, onSwitched])
 
   const handleRenameStart = useCallback(() => {
+    const selectWidth = presetSelectRef.current?.offsetWidth
+    setRenameInputWidth(selectWidth ? selectWidth : null)
     setRenameValue(presetSnapshotRef.current?.name ?? '')
     setErrorMessage(null)
     setIsRenaming(true)
   }, [])
+
+  useEffect(() => {
+    if (!isRenaming) return
+    renameInputRef.current?.focus()
+    renameInputRef.current?.select()
+  }, [isRenaming])
+
+  useEffect(() => {
+    if (isRenaming && !isSavingRename) renameInputRef.current?.focus()
+  }, [isRenaming, isSavingRename])
 
   const handleRenameCancel = useCallback(() => {
     setIsRenaming(false)
@@ -838,8 +853,9 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
   return (
     <div className="character-panel">
       <div className="character-panel__row">
-        {presets.length > 0 && (
+        {presets.length > 0 && !isRenaming && (
           <select
+            ref={presetSelectRef}
             value={presetSnapshot?.presetId ?? ''}
             onChange={e => switchPreset(e.target.value)}
           >
@@ -848,15 +864,24 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
             ))}
           </select>
         )}
+        {presets.length > 0 && isRenaming && (
+          <input
+            ref={renameInputRef}
+            className="character-panel__rename-input"
+            style={renameInputWidth ? { width: renameInputWidth } : undefined}
+            value={renameValue}
+            onChange={e => setRenameValue(e.target.value)}
+            onKeyDown={e => {
+              if (isSavingRename || e.nativeEvent.isComposing) return
+              if (e.key === 'Enter') handleRenameSave()
+              else if (e.key === 'Escape') handleRenameCancel()
+            }}
+            disabled={isSavingRename}
+          />
+        )}
         {presets.length > 0 && (
           isRenaming ? (
             <>
-              <input
-                className="character-panel__rename-input"
-                value={renameValue}
-                onChange={e => setRenameValue(e.target.value)}
-                disabled={isSavingRename}
-              />
               <button className="rename-btn" onClick={handleRenameCancel} disabled={isSavingRename}>
                 取消
               </button>
