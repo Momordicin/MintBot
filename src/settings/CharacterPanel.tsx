@@ -1,5 +1,5 @@
-// src/settings/CharacterPanel.tsx — 设置窗口的"角色设定"面板：切换/新建/重命名预设、导入角色卡、换壁纸、聊天界面主题与立绘形态、人设提示词、预设级模型覆盖
-// 用法：SettingsApp 渲染 <CharacterPanel presetSnapshot onSwitched />；GET /presets、/characters、/models、/characters/:id/manifest.json，POST /switch-preset、/presets、/presets/:id/wallpaper、/characters/import/{parse,generate}、/characters/:id/{avatar,metadata}，PATCH /presets/:id；electronAPI.selectWallpaperFile / selectCharacterCardFile
+// src/settings/CharacterPanel.tsx — 设置窗口的"角色设定"面板：切换/新建/重命名/删除预设、导入角色卡、换壁纸、聊天界面主题与立绘形态、人设提示词、预设级模型覆盖
+// 用法：SettingsApp 渲染 <CharacterPanel presetSnapshot onSwitched />；GET /presets、/characters、/models、/characters/:id/manifest.json，POST /switch-preset、/presets、/presets/:id/wallpaper、/characters/import/{parse,generate}、/characters/:id/{avatar,metadata}，PATCH /presets/:id，DELETE /presets/:id；electronAPI.selectWallpaperFile / selectCharacterCardFile
 // 形状：props { presetSnapshot: PresetSnapshot | null, onSwitched(state: AppState) }
 // 对应文件：src/settings/SettingsApp.tsx / src/settings/themeControls.ts / src/chat/theme.ts / src/chat/themeVars.ts / shared/portraitForm.ts / services/core/index.ts / services/core/routes/presets.ts / services/core/routes/characterImport.ts / services/core/routes/models.ts / electron/main/index.ts（select-wallpaper-file、select-character-card-file）
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -53,6 +53,8 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
   const [renameInputWidth, setRenameInputWidth] = useState<number | null>(null)
   const presetSelectRef = useRef<HTMLSelectElement | null>(null)
   const renameInputRef = useRef<HTMLInputElement | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<{ presetId: string; name: string } | null>(null)
+  const [isDeleting, setIsDeleting] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const [createName, setCreateName] = useState('')
   const [createCharacterId, setCreateCharacterId] = useState('')
@@ -88,6 +90,7 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
   const wallpaperControllerRef = useRef<AbortController | null>(null)
   const renameControllerRef = useRef<AbortController | null>(null)
   const createControllerRef = useRef<AbortController | null>(null)
+  const deleteControllerRef = useRef<AbortController | null>(null)
   const importControllerRef = useRef<AbortController | null>(null)
   const generateControllerRef = useRef<AbortController | null>(null)
   const avatarUploadControllerRef = useRef<AbortController | null>(null)
@@ -123,6 +126,11 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
   useEffect(() => {
     presetSnapshotRef.current = presetSnapshot
   }, [presetSnapshot])
+
+  useEffect(() => {
+    if (isDeleting) return
+    if (deleteTarget && deleteTarget.presetId !== presetSnapshot?.presetId) setDeleteTarget(null)
+  }, [presetSnapshot?.presetId, deleteTarget, isDeleting])
 
   useEffect(() => {
     setChatBgOpacity(presetSnapshot?.displayConfig?.chatBgOpacity ?? DEFAULT_DISPLAY_CONFIG.chatBgOpacity)
@@ -171,6 +179,7 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
       wallpaperControllerRef.current?.abort()
       renameControllerRef.current?.abort()
       createControllerRef.current?.abort()
+      deleteControllerRef.current?.abort()
       displayConfigControllerRef.current?.abort()
       systemPromptControllerRef.current?.abort()
       modelOverrideControllerRef.current?.abort()
@@ -383,6 +392,55 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
       setIsSavingRename(false)
     }
   }, [renameValue, onSwitched])
+
+  const handleDeleteStart = useCallback(() => {
+    const current = presetSnapshotRef.current
+    if (!current) return
+    setErrorMessage(null)
+    setDeleteTarget({ presetId: current.presetId, name: current.name })
+  }, [])
+
+  const handleDeleteCancel = useCallback(() => {
+    setDeleteTarget(null)
+  }, [])
+
+  const handleDeleteConfirm = useCallback(async () => {
+    if (!deleteTarget) return
+    const presetId = deleteTarget.presetId
+
+    deleteControllerRef.current?.abort()
+    const controller = new AbortController()
+    deleteControllerRef.current = controller
+    setIsDeleting(true)
+    setErrorMessage(null)
+
+    try {
+      const response = await fetch(`${CORE_URL}/presets/${encodeURIComponent(presetId)}`, {
+        method: 'DELETE',
+        signal: controller.signal,
+      })
+
+      if (response.status === 409) {
+        setErrorMessage('至少需要保留一个角色')
+        return
+      }
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
+      }
+
+      const state: AppState = await response.json()
+      if (controller.signal.aborted) return
+
+      onSwitched(state)
+      setPresets(prev => prev.filter(p => p.presetId !== presetId))
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return
+      setErrorMessage('删除失败，请稍后重试')
+    } finally {
+      setIsDeleting(false)
+      setDeleteTarget(null)
+    }
+  }, [deleteTarget, onSwitched])
 
   const handleCreateStart = useCallback(() => {
     setCreateName('')
@@ -858,6 +916,7 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
             ref={presetSelectRef}
             value={presetSnapshot?.presetId ?? ''}
             onChange={e => switchPreset(e.target.value)}
+            disabled={deleteTarget !== null || isDeleting}
           >
             {presets.map(p => (
               <option key={p.presetId} value={p.presetId}>{p.name}</option>
@@ -890,8 +949,30 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
               </button>
             </>
           ) : (
-            <button className="rename-btn" onClick={handleRenameStart} title="重命名当前角色">
+            <button className="rename-btn" onClick={handleRenameStart} disabled={deleteTarget !== null || isDeleting} title="重命名当前角色">
               编辑
+            </button>
+          )
+        )}
+        {presets.length > 0 && (
+          deleteTarget ? (
+            <>
+              <span>删除『{deleteTarget.name}』？该角色的全部聊天记录和记忆都会删除，无法恢复。</span>
+              <button className="rename-btn" onClick={handleDeleteCancel} disabled={isDeleting}>
+                取消
+              </button>
+              <button className="rename-btn" onClick={handleDeleteConfirm} disabled={isDeleting}>
+                {isDeleting ? '删除中…' : '确认删除'}
+              </button>
+            </>
+          ) : (
+            <button
+              className="rename-btn"
+              onClick={handleDeleteStart}
+              disabled={presets.length <= 1 || isRenaming || isCreating || isSavingRename || isSavingCreate || isUploadingWallpaper || isSwitchingPortrait}
+              title="删除当前角色"
+            >
+              删除
             </button>
           )
         )}
@@ -899,7 +980,7 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
           <button
             className="wallpaper-btn"
             onClick={handleWallpaperPick}
-            disabled={isUploadingWallpaper}
+            disabled={isUploadingWallpaper || deleteTarget !== null || isDeleting}
             title="更换壁纸"
           >
             {isUploadingWallpaper ? '更换中…' : '更换壁纸'}
@@ -909,7 +990,7 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
           <button
             className="rename-btn"
             onClick={handlePortraitToggle}
-            disabled={!canSwitchPortrait || isSwitchingPortrait}
+            disabled={!canSwitchPortrait || isSwitchingPortrait || deleteTarget !== null || isDeleting}
             title={portraitForms !== null && !canSwitchPortrait
               ? `该角色没有${PORTRAIT_FORM_LABELS[otherPortrait]}`
               : '切换桌宠形态'}
@@ -918,12 +999,12 @@ export function CharacterPanel({ presetSnapshot, onSwitched }: CharacterPanelPro
           </button>
         )}
         {!isCreating && (
-          <button className="rename-btn" onClick={handleCreateStart} disabled={isImportingCard} title="创建新角色">
+          <button className="rename-btn" onClick={handleCreateStart} disabled={isImportingCard || deleteTarget !== null || isDeleting} title="创建新角色">
             创建角色
           </button>
         )}
         {!isCreating && (
-          <button className="rename-btn" onClick={handleImportCardPick} disabled={isImportingCard} title="从 SillyTavern character card v2 导入">
+          <button className="rename-btn" onClick={handleImportCardPick} disabled={isImportingCard || deleteTarget !== null || isDeleting} title="导入角色卡">
             {isImportingCard ? '导入中…' : '导入角色卡'}
           </button>
         )}

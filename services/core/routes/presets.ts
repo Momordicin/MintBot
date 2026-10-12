@@ -1,6 +1,6 @@
 // services/core/routes/presets.ts — 预设（角色人设档案）的增删改、切换与壁纸上传路由
-// 用法：core/index.ts 里 fastify.register(presetRoutes)，并取其导出的 WALLPAPER_DIR 作 /wallpapers/ 静态目录；GET /presets、POST /presets、POST /switch-preset、POST /presets/:presetId/wallpaper、PATCH /presets/:presetId；广播 preset-pet-display-changed
-// 形状：切换、壁纸、PATCH 的响应为 buildStatePayload() 的状态载荷
+// 用法：core/index.ts 里 fastify.register(presetRoutes)，并取其导出的 WALLPAPER_DIR 作 /wallpapers/ 静态目录；GET /presets、POST /presets、POST /switch-preset、POST /presets/:presetId/wallpaper、PATCH /presets/:presetId、DELETE /presets/:presetId；广播 preset-pet-display-changed
+// 形状：切换、壁纸、PATCH、DELETE 的响应为 buildStatePayload() 的状态载荷
 // 对应文件：src/settings/CharacterPanel.tsx（调用方）/ src/overlay/OverlayApp.tsx（消费 preset-pet-display-changed）/ services/core/session/queries.ts / services/core/session/index.ts / services/core/session/displayConfig.ts / services/core/state.ts / services/core/routes/presets.test.ts / services/core/routes/wallpaperGuard.test.ts
 import type { FastifyInstance } from 'fastify'
 import path from 'path'
@@ -8,8 +8,8 @@ import os from 'os'
 import fs from 'fs'
 import crypto from 'crypto'
 import * as dotenv from 'dotenv'
-import { getAllPresets, getPresetById, createPreset, updatePresetWallpaper, updatePresetName, updatePresetDisplayConfig, updatePresetSystemPrompt, updatePresetModelConfig } from '../session/queries.js'
-import { switchPreset, refreshCurrentPresetIfActive } from '../session/index.js'
+import { getAllPresets, getPresetById, createPreset, updatePresetWallpaper, updatePresetName, updatePresetDisplayConfig, updatePresetSystemPrompt, updatePresetModelConfig, deletePresetWithData, getMostRecentOtherPresetId } from '../session/queries.js'
+import { switchPreset, refreshCurrentPresetIfActive, getCurrentState } from '../session/index.js'
 import { buildStatePayload } from '../state.js'
 import { broadcastEvent } from '../events/broadcast.js'
 import {
@@ -92,6 +92,34 @@ export async function presetRoutes(fastify: FastifyInstance) {
     }
 
     return buildStatePayload()
+  })
+
+  fastify.delete<{
+    Params: { presetId: string }
+  }>('/presets/:presetId', async (request, reply) => {
+    const { presetId } = request.params
+    if (!getPresetById(presetId)) {
+      return reply.status(404).send({ error: 'Preset not found' })
+    }
+    if (getAllPresets().length <= 1) {
+      return reply.status(409).send({ error: 'Cannot delete the last preset' })
+    }
+
+    if (getCurrentState()?.session.presetId === presetId) {
+      switchPreset(getMostRecentOtherPresetId(presetId)!)
+    }
+
+    deletePresetWithData(presetId)
+
+    for (const ext of ALLOWED_WALLPAPER_EXTENSIONS) {
+      try {
+        fs.rmSync(path.join(WALLPAPER_DIR, `${presetId}-wallpaper.${ext}`), { force: true })
+      } catch (err) {
+        request.log.error(err, 'Failed to remove wallpaper')
+      }
+    }
+
+    return await buildStatePayload()
   })
 
   fastify.addContentTypeParser('application/octet-stream', { parseAs: 'buffer' }, (_request, body, done) => {

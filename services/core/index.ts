@@ -124,7 +124,7 @@ async function start() {
 
   await fastify.register(fastifyCors, {
   origin: [...RENDERER_ORIGINS],
-  methods: ['GET', 'HEAD', 'POST', 'PATCH'],
+  methods: ['GET', 'HEAD', 'POST', 'PATCH', 'DELETE'],
   })
 
   await fastify.register(fastifyStatic, {

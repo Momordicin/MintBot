@@ -3,7 +3,10 @@ import Fastify from 'fastify'
 import fs from 'fs'
 import path from 'path'
 import { initDb, db } from '../db/index.js'
-import { upsertPreset, getPresetById, updatePresetDisplayConfig, updatePresetSystemPrompt, updatePresetModelConfig, getEmotionState, upsertEmotionState } from '../session/queries.js'
+import {
+  upsertPreset, getPresetById, updatePresetDisplayConfig, updatePresetSystemPrompt, updatePresetModelConfig, getEmotionState, upsertEmotionState,
+  createSession, appendMessage, upsertMessageEmbedding, indexMessageFts, insertEntity, insertSummary,
+} from '../session/queries.js'
 import { DEFAULT_DISPLAY_CONFIG } from '../session/displayConfig.js'
 import { loadSession, getCurrentState } from '../session/index.js'
 import { presetRoutes, WALLPAPER_DIR } from './presets.js'
@@ -1055,6 +1058,157 @@ describe('PATCH /presets/:presetId', () => {
 
     expect(response.statusCode).toBe(400)
     expect(getPresetById('p1')!.systemPrompt).toBe(systemPromptBefore)
+  })
+})
+
+describe('DELETE /presets/:presetId', () => {
+  const writtenFiles: string[] = []
+
+  afterEach(() => {
+    for (const filename of writtenFiles) {
+      fs.rmSync(path.join(WALLPAPER_DIR, filename), { force: true })
+    }
+    writtenFiles.length = 0
+  })
+
+  function makeSession(presetId: string, sessionId: string, lastActiveAt: number): string {
+    const preset = getPresetById(presetId)!
+    createSession({
+      sessionId,
+      presetId,
+      presetSnapshot: {
+        presetId,
+        name: preset.name,
+        characterId: preset.characterId,
+        modelType: preset.modelType,
+        modelName: preset.modelName,
+        wallpaperPath: preset.wallpaperPath,
+        displayConfig: preset.displayConfig,
+        systemPrompt: preset.systemPrompt,
+      },
+      title: undefined,
+      createdAt: lastActiveAt,
+      lastActiveAt,
+    })
+    return sessionId
+  }
+
+  function seedSessionData(sessionId: string): void {
+    const messageId = appendMessage({
+      sessionId, role: 'user', content: `内容 ${sessionId}`, createdAt: 1000,
+      embedded: true, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null,
+    })
+    upsertMessageEmbedding(messageId, sessionId, new Array(1024).fill(0.5))
+    indexMessageFts(messageId, sessionId, `内容 ${sessionId}`)
+    insertEntity({ messageId, sessionId, type: 'preference', value: '喜欢猫', validFrom: 1000 })
+    insertSummary({ sessionId, content: '摘要', fromMessageId: messageId, toMessageId: messageId })
+    upsertEmotionState(sessionId, { self: { label: 'happy', intensity: 0.5 }, perceived_user: null })
+  }
+
+  function countRows(sessionId: string): Record<string, number> {
+    const count = (sql: string) => (db.prepare(sql).get(sessionId) as { c: number }).c
+    return {
+      sessions: count('SELECT COUNT(*) AS c FROM Sessions WHERE sessionId = ?'),
+      messages: count('SELECT COUNT(*) AS c FROM Messages WHERE sessionId = ?'),
+      embeddings: count('SELECT COUNT(*) AS c FROM message_embeddings WHERE session_id = ?'),
+      fts: count('SELECT COUNT(*) AS c FROM message_fts WHERE session_id = ?'),
+      entities: count('SELECT COUNT(*) AS c FROM MessageEntities WHERE sessionId = ?'),
+      summaries: count('SELECT COUNT(*) AS c FROM Summaries WHERE sessionId = ?'),
+      emotions: count('SELECT COUNT(*) AS c FROM EmotionStates WHERE sessionId = ?'),
+    }
+  }
+
+  it('presetId 不存在时返回 404', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({ method: 'DELETE', url: '/presets/does-not-exist' })
+
+    expect(response.statusCode).toBe(404)
+  })
+
+  it('只剩一个角色时返回 409，该角色不被删除', async () => {
+    db.prepare('DELETE FROM Presets WHERE presetId = ?').run('p2')
+    loadSession('p1')
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({ method: 'DELETE', url: '/presets/p1' })
+
+    expect(response.statusCode).toBe(409)
+    expect(getPresetById('p1')).not.toBeNull()
+  })
+
+  it('删除非当前角色：该角色及其全部数据被删除，当前角色不变且不广播切换，其他角色数据不受影响', async () => {
+    const p2Session = makeSession('p2', 'sess-p2', 1000)
+    seedSessionData(p2Session)
+    const { session: p1Session } = loadSession('p1')
+    seedSessionData(p1Session.sessionId)
+    const p1Before = countRows(p1Session.sessionId)
+    expect(p1Before).toEqual({ sessions: 1, messages: 1, embeddings: 1, fts: 1, entities: 1, summaries: 1, emotions: 1 })
+    expect(countRows(p2Session).messages).toBe(1)
+    vi.mocked(BroadcastModule.broadcastEvent).mockClear()
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({ method: 'DELETE', url: '/presets/p2' })
+    const body = JSON.parse(response.payload)
+
+    expect(response.statusCode).toBe(200)
+    expect(body.presetSnapshot.presetId).toBe('p1')
+    expect(getPresetById('p2')).toBeNull()
+    expect(countRows(p2Session)).toEqual({ sessions: 0, messages: 0, embeddings: 0, fts: 0, entities: 0, summaries: 0, emotions: 0 })
+    expect(countRows(p1Session.sessionId)).toEqual(p1Before)
+    expect(getPresetById('p1')).not.toBeNull()
+    expect(BroadcastModule.broadcastEvent).not.toHaveBeenCalled()
+  })
+
+  it('删除当前角色：先切换到最近活跃（最新会话 lastActiveAt 最大）的其他角色，再删除，响应为切换后的状态', async () => {
+    upsertPreset({ presetId: 'p3', name: '角色三', characterId: 'char-003', modelType: 'ollama', modelName: 'qwen3', systemPrompt: '你是角色三' })
+    upsertPreset({ presetId: 'p4', name: '角色四', characterId: 'char-004', modelType: 'ollama', modelName: 'qwen3', systemPrompt: '你是角色四' })
+    makeSession('p2', 'sess-p2', 1000)
+    makeSession('p3', 'sess-p3', 5000)
+    const { session: p1Session } = loadSession('p1')
+    seedSessionData(p1Session.sessionId)
+    vi.mocked(BroadcastModule.broadcastEvent).mockClear()
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({ method: 'DELETE', url: '/presets/p1' })
+    const body = JSON.parse(response.payload)
+
+    expect(response.statusCode).toBe(200)
+    expect(body.presetSnapshot.presetId).toBe('p3')
+    expect(getCurrentState()!.preset.presetId).toBe('p3')
+    expect(BroadcastModule.broadcastEvent).toHaveBeenCalledWith('preset-switched', { sessionId: 'sess-p3', presetId: 'p3' })
+    expect(getPresetById('p1')).toBeNull()
+    expect(countRows(p1Session.sessionId)).toEqual({ sessions: 0, messages: 0, embeddings: 0, fts: 0, entities: 0, summaries: 0, emotions: 0 })
+    expect(getPresetById('p2')).not.toBeNull()
+    expect(getPresetById('p4')).not.toBeNull()
+  })
+
+  it('其他角色都没有会话时，切换到 createdAt 最新的那个', async () => {
+    upsertPreset({ presetId: 'p3', name: '角色三', characterId: 'char-003', modelType: 'ollama', modelName: 'qwen3', systemPrompt: '你是角色三' })
+    db.prepare('UPDATE Presets SET createdAt = ? WHERE presetId = ?').run(1000, 'p2')
+    db.prepare('UPDATE Presets SET createdAt = ? WHERE presetId = ?').run(2000, 'p3')
+    loadSession('p1')
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({ method: 'DELETE', url: '/presets/p1' })
+
+    expect(response.statusCode).toBe(200)
+    expect(JSON.parse(response.payload).presetSnapshot.presetId).toBe('p3')
+  })
+
+  it('删除时移除该角色的壁纸文件，不动其他角色的壁纸', async () => {
+    fs.mkdirSync(WALLPAPER_DIR, { recursive: true })
+    writtenFiles.push('p2-wallpaper.png', 'p1-wallpaper.png')
+    fs.writeFileSync(path.join(WALLPAPER_DIR, 'p2-wallpaper.png'), Buffer.from([1]))
+    fs.writeFileSync(path.join(WALLPAPER_DIR, 'p1-wallpaper.png'), Buffer.from([2]))
+    loadSession('p1')
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({ method: 'DELETE', url: '/presets/p2' })
+
+    expect(response.statusCode).toBe(200)
+    expect(fs.existsSync(path.join(WALLPAPER_DIR, 'p2-wallpaper.png'))).toBe(false)
+    expect(fs.existsSync(path.join(WALLPAPER_DIR, 'p1-wallpaper.png'))).toBe(true)
   })
 })
 

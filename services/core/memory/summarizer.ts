@@ -2,7 +2,7 @@
 // 用法：orchestrator.ts 的 runOrganizeModeTick 调 shouldTriggerSummary({ messageCountSinceLastSummary, lockScreenMinutes, isLowActivityWindow }) 判断，再调 generateSummary(sessionId, { model })（model 即 backgroundModelProvider）
 // 形状：generateSummary -> { summaryId, fromMessageId, toMessageId } | null（无待摘要消息时为 null）
 // 对应文件：services/core/memory/orchestrator.ts / services/core/session/queries.ts / services/core/config/index.ts / services/core/memory/summarizer.test.ts
-import { getPendingSummaryMessages, insertSummaryAndMarkMessages } from '../session/queries.js'
+import { getPendingSummaryMessages, insertSummaryAndMarkMessages, getMessageCreatedAtByIds } from '../session/queries.js'
 import type { Message, BuiltContext, CompletionOptions } from '../../../shared/types/index.js'
 import { getMemoryConfig } from '../config/index.js'
 
@@ -51,9 +51,12 @@ export async function generateSummary(
   const context = buildSummaryContext(pending)
   const content = await deps.model.completeSync(context)
 
+  const pendingIds = pending.map(m => m.id)
+  if (getMessageCreatedAtByIds(pendingIds).size !== pendingIds.length) return null
+
   const fromMessageId = pending[0].id
   const toMessageId = pending[pending.length - 1].id
-  const summaryId = insertSummaryAndMarkMessages({ sessionId, content, fromMessageId, toMessageId }, pending.map(m => m.id))
+  const summaryId = insertSummaryAndMarkMessages({ sessionId, content, fromMessageId, toMessageId }, pendingIds)
 
   return { summaryId, fromMessageId, toMessageId }
 }

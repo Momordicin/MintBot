@@ -13,7 +13,7 @@ async function buildTestApp() {
   const fastify = Fastify()
   await fastify.register(fastifyCors, {
     origin: [...RENDERER_ORIGINS],
-    methods: ['GET', 'HEAD', 'POST', 'PATCH'],
+    methods: ['GET', 'HEAD', 'POST', 'PATCH', 'DELETE'],
   })
   fastify.patch('/presets/:presetId', async () => ({ ok: true }))
   return fastify
@@ -34,5 +34,21 @@ describe('CORS 预检 (OPTIONS)', () => {
 
     expect(response.statusCode).toBe(204)
     expect(response.headers['access-control-allow-methods']).toContain('PATCH')
+  })
+
+  it('允许的 origin 对 DELETE 方法的预检请求，响应头包含 DELETE', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'OPTIONS',
+      url: '/presets/p1',
+      headers: {
+        origin: RENDERER_ORIGIN,
+        'access-control-request-method': 'DELETE',
+      },
+    })
+
+    expect(response.statusCode).toBe(204)
+    expect(response.headers['access-control-allow-methods']).toContain('DELETE')
   })
 })

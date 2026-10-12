@@ -8,7 +8,7 @@ import { requireCurrentState, addMessage } from '../session/index.js'
 import { buildContext } from '../context/buildContext.js'
 import { parseSelfEmotion, parseEmoteTag } from '../session/emotion.js'
 import { selectEmoteFile } from '../characters/emotePool.js'
-import { upsertEmotionState } from '../session/queries.js'
+import { upsertEmotionState, sessionExists } from '../session/queries.js'
 import { recordAttention, markExplicitSleep, isExplicitSleep } from '../session/attention.js'
 import { broadcastEvent } from '../events/broadcast.js'
 import { createModelProviderForPreset } from '../providers/ModelProvider.js'
@@ -52,6 +52,33 @@ export async function chatRoutes(fastify: FastifyInstance) {
         return
       }
 
+      const send = (event: string, data: unknown) => {
+        if (reply.raw.writableEnded || reply.raw.destroyed) return
+        reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+      }
+
+      const openStream = () => {
+        reply.hijack()
+        reply.raw.writeHead(200, {
+          ...(reply.getHeaders() as OutgoingHttpHeaders),
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        })
+        reply.raw.flushHeaders()
+      }
+
+      const rejectDeletedSession = () => {
+        openStream()
+        send('system', { type: 'error', payload: { message: 'Session deleted' }, sessionId })
+        reply.raw.end()
+      }
+
+      if (!sessionExists(sessionId)) {
+        rejectDeletedSession()
+        return
+      }
+
       let context
       try {
         context = await buildContext(message, { embedding: fastify.embeddingProvider, signal: abortController.signal })
@@ -67,25 +94,18 @@ export async function chatRoutes(fastify: FastifyInstance) {
         return
       }
 
+      if (!sessionExists(sessionId)) {
+        rejectDeletedSession()
+        return
+      }
+
       addMessage(sessionId, 'user', message, 'user')
 
       const modelProviderConfig = getModelProviderConfig()
       const modelProvider = createModelProviderForPreset(state.preset, modelProviderConfig)
       const modelType = state.preset.modelType ?? modelProviderConfig.type
 
-      reply.hijack()
-      reply.raw.writeHead(200, {
-        ...(reply.getHeaders() as OutgoingHttpHeaders),
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-      })
-      reply.raw.flushHeaders()
-
-      const send = (event: string, data: unknown) => {
-        if (reply.raw.writableEnded || reply.raw.destroyed) return
-        reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
-      }
+      openStream()
 
       const streaming = fastify.streamingEnabled
 
@@ -98,6 +118,11 @@ export async function chatRoutes(fastify: FastifyInstance) {
           }
         } else {
           fullReply = await modelProvider.completeSync(context, { maxTokens: modelProviderConfig.maxTokens, signal: abortController.signal, jsonMode: true })
+        }
+
+        if (!sessionExists(sessionId)) {
+          send('system', { type: 'error', payload: { message: 'Session deleted' }, sessionId })
+          return
         }
 
         let replyText = fullReply

@@ -727,6 +727,7 @@ describe('POST /chat', () => {
   })
 
   it('buildContext 因非断连原因失败，但连接仍然存活：照常返回 500（守卫只在连接已死时才跳过发送）', async () => {
+    loadSession('p1')
     const buildContextSpy = vi.spyOn(BuildContextModule, 'buildContext').mockRejectedValue(new Error('boom'))
 
     try {
@@ -843,6 +844,74 @@ describe('POST /chat', () => {
       { role: 'assistant', content: '第一条回复' },
     ])
   })
+
+  function deleteSessionRows(sessionId: string) {
+    db.prepare('DELETE FROM Messages WHERE sessionId = ?').run(sessionId)
+    db.prepare('DELETE FROM EmotionStates WHERE sessionId = ?').run(sessionId)
+    db.prepare('DELETE FROM Sessions WHERE sessionId = ?').run(sessionId)
+  }
+
+  it('模型返回前会话已被删除：不写回复、不写情绪、不广播情绪，向该请求的 SSE 流发 system error（Session deleted）', async () => {
+    const { session } = loadSession('p1')
+    const broadcastCalls = (BroadcastModule.broadcastEvent as unknown as { mock: { calls: unknown[][] } }).mock.calls
+    const emotionBroadcastsBefore = broadcastCalls.filter(c => c[0] === 'emotion').length
+
+    const fastify = Fastify()
+    fastify.decorate('streamingEnabled', false)
+    fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
+    vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
+      completeSync: async () => {
+        deleteSessionRows(session.sessionId)
+        return JSON.stringify({ reply: '你好呀', emotion: { self: { label: 'happy', intensity: 0.8 } } })
+      },
+    } as unknown as ModelProvider)
+    await fastify.register(chatRoutes)
+
+    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+    const events = parseSSE(response.payload)
+
+    expect(events.find(e => e.event === 'message_done')).toBeUndefined()
+    expect(events.find(e => e.event === 'emotion')).toBeUndefined()
+    expect(events.find(e => e.event === 'system')?.data).toMatchObject({ type: 'error', payload: { message: 'Session deleted' } })
+    expect(db.prepare('SELECT COUNT(*) as count FROM Messages WHERE sessionId = ?').get(session.sessionId)).toEqual({ count: 0 })
+    expect(getEmotionState(session.sessionId)).toBeNull()
+    expect(broadcastCalls.filter(c => c[0] === 'emotion').length).toBe(emotionBroadcastsBefore)
+  })
+
+  it('排队等待期间会话已被删除：轮到该请求时不写用户消息、不调模型，向该请求的 SSE 流发 system error（Session deleted）', async () => {
+    const { session } = loadSession('p1')
+
+    let resolveFirstComplete: (v: string) => void
+    const firstCompletePromise = new Promise<string>(resolve => { resolveFirstComplete = resolve })
+    let signalFirstCalled: () => void
+    const firstCalledPromise = new Promise<void>(resolve => { signalFirstCalled = resolve })
+    const completeSyncMock = vi.fn(async () => {
+      signalFirstCalled()
+      return firstCompletePromise
+    })
+    vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
+      completeSync: completeSyncMock,
+    } as unknown as ModelProvider)
+
+    const fastify = Fastify()
+    fastify.decorate('streamingEnabled', false)
+    fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
+    await fastify.register(chatRoutes)
+
+    const p1 = fastify.inject({ method: 'POST', url: '/chat', payload: { message: '第一条' } })
+    await firstCalledPromise
+    const p2 = fastify.inject({ method: 'POST', url: '/chat', payload: { message: '第二条' } })
+    await new Promise(resolve => setImmediate(resolve))
+
+    deleteSessionRows(session.sessionId)
+    resolveFirstComplete!(JSON.stringify({ reply: '第一条回复' }))
+    const [, second] = await Promise.all([p1, p2])
+    const events = parseSSE(second.payload)
+
+    expect(completeSyncMock).toHaveBeenCalledTimes(1)
+    expect(events.find(e => e.event === 'system')?.data).toMatchObject({ type: 'error', payload: { message: 'Session deleted' } })
+    expect(db.prepare('SELECT COUNT(*) as count FROM Messages').get()).toEqual({ count: 0 })
+  })
 })
 
 describe('POST /chat — CORS 头由 @fastify/cors 插件唯一决定', () => {
@@ -942,6 +1011,7 @@ describe('POST /chat — JSON 解析兜底（parseJsonSalvage，本地模型/Dee
   })
 
   it('模型回复真的不是 JSON（无花括号）时，仍降级为原文兜底，不报错', async () => {
+    loadSession('p1')
     const { fastify } = await buildTestApp('这不是 JSON 的普通回复')
 
     const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
@@ -1021,6 +1091,7 @@ describe('POST /chat — 表情包挑选（emote 字段，TDD §3.9「表情包�
   })
 
   it('角色包缺失 manifest（如 char-001）时，即使模型输出了 emote 字段，也不附带表情', async () => {
+    loadSession('p1')
     const { fastify } = await buildTestApp(JSON.stringify({
       reply: '好呀',
       emotion: { self: { label: 'happy', intensity: 0.5 } },
