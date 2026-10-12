@@ -986,6 +986,23 @@ describe('forgetMessages', () => {
     expect(getCurrentEntities('s1')).toEqual([])
   })
 
+  it('被删消息独有的词既搜不到，也不再残留在 message_fts_data 的字节里', () => {
+    const term = '938274615027'
+    const ftsDataContains = (): boolean => {
+      const rows = db.prepare(`SELECT block FROM message_fts_data`).all() as { block: Buffer }[]
+      return rows.some(row => row.block.includes(Buffer.from(term)))
+    }
+    const id1 = appendMessage({ sessionId: 's1', role: 'user', content: `前缀 ${term} 后缀`, createdAt: 1000, embedded: true, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    indexMessageFts(id1, 's1', `前缀 ${term} 后缀`)
+    expect(searchMessagesFts(term)).toHaveLength(1)
+    expect(ftsDataContains()).toBe(true)
+
+    forgetMessages({ sessionId: 's1', messageIds: [id1], summaryIdsToDelete: [] })
+
+    expect(searchMessagesFts(term)).toEqual([])
+    expect(ftsDataContains()).toBe(false)
+  })
+
   it('不在 summaryIdsToDelete 里的摘要不受影响', () => {
     const id1 = appendMessage({ sessionId: 's1', role: 'user', content: '待删', createdAt: 1000, embedded: false, summarized: true, visibleToUser: true, trigger: 'user', triggerEventId: null })
     const summaryId = insertSummary({ sessionId: 's1', content: '摘要', fromMessageId: id1, toMessageId: id1 })

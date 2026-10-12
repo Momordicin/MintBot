@@ -1,5 +1,5 @@
 // services/core/db/index.ts — SQLite 数据库连接与建表/迁移（better-sqlite3 + sqlite-vec 向量扩展 + libsimple 分词扩展）
-// 用法：被 import 时即按 DB_PATH（缺省 ./data/db.sqlite）建目录、打开连接并启用 WAL，导出 db；index.ts 的 start() 与 db/seed.ts 调 initDb() 加载扩展、建表并执行 user_version 迁移，返回 { needsFtsBackfill }；session/queries.ts 直接用 db
+// 用法：被 import 时即按 DB_PATH（缺省 ./data/db.sqlite）建目录、打开连接并启用 WAL，导出 db；index.ts 的 start() 与 db/seed.ts 调 initDb() 加载扩展、建表并执行 user_version 迁移，返回 { needsFtsBackfill }；session/queries.ts 直接用 db，并在删除事务提交后调 checkpointTruncate(logPrefix)
 // 对应文件：services/core/index.ts / services/core/db/seed.ts / services/core/session/queries.ts / services/core/db/index.test.ts / services/core/db/guard.test.ts
 import DatabaseConstructor, { Database } from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec'
@@ -24,6 +24,7 @@ if (!fs.existsSync(dbDir)) {
 export const db: Database = new DatabaseConstructor(DB_PATH);
  
 db.pragma('journal_mode = WAL')
+db.pragma('secure_delete = ON')
  
 function runMigrations(): { needsFtsBackfill: boolean } {
   const current = db.pragma('user_version', { simple: true }) as number
@@ -182,7 +183,30 @@ function runMigrations(): { needsFtsBackfill: boolean } {
     console.log('[DB] Migration v10: Presets.modelType CHECK constraint now allows deepseek')
   }
 
+  if (current < 11) {
+    db.transaction(() => {
+      db.exec(`INSERT INTO message_fts(message_fts, rank) VALUES('secure-delete', 1)`)
+      db.exec(`INSERT INTO message_fts(message_fts) VALUES('optimize')`)
+    })()
+    db.exec('VACUUM')
+    checkpointTruncate('[DB]')
+    db.pragma('user_version = 11')
+    console.log('[DB] Migration v11: enabled message_fts secure-delete, rewrote the database file to purge deleted content')
+  }
+
   return { needsFtsBackfill }
+}
+
+export function checkpointTruncate(logPrefix: string): void {
+  try {
+    const rows = db.pragma('wal_checkpoint(TRUNCATE)') as { busy: number; log: number; checkpointed: number }[]
+    const { busy, log, checkpointed } = rows[0]
+    if (busy !== 0 || (log > 0 && checkpointed < log)) {
+      console.warn(`${logPrefix} WAL checkpoint(TRUNCATE) did not complete (busy=${busy}, log=${log}, checkpointed=${checkpointed}); deleted content may remain in the -wal file`)
+    }
+  } catch (err) {
+    console.warn(`${logPrefix} WAL checkpoint(TRUNCATE) failed; deleted content may remain in the -wal file:`, err)
+  }
 }
 
 function getLibsimplePath(): string {

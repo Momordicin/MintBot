@@ -1,15 +1,15 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { db, initDb } from './index.js'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { db, initDb, checkpointTruncate } from './index.js'
 
 // initDb() 已在 queries.test.ts 等文件里被调用过一次（同一进程内的 db 单例），这里只
-// 断言迁移链跑完之后的最终状态：user_version 到 10，Presets 表带 displayConfig/addressForms 列。
-// 不单独模拟从 v6 升到 v7/v8/v9/v10 的中间态——runMigrations() 里每一级迁移都是纯 SQL DDL，
-// 真正需要验证的是"全新库从 0 跑到 10"与"列确实存在"，这与 v1/v5 等既有迁移目前
+// 断言迁移链跑完之后的最终状态：user_version 到 11，Presets 表带 displayConfig/addressForms 列。
+// 不单独模拟从 v6 升到 v7/v8/v9/v10 的中间态——runMigrations() 里每一级迁移都是 SQL DDL 或数据库维护命令，
+// 真正需要验证的是"全新库从 0 跑到 11"与"列确实存在"，这与 v1/v5 等既有迁移目前
 // 在仓库里的验证深度一致（没有专门 mock user_version 起点的迁移测试先例）
 describe('DB 迁移 (runMigrations)', () => {
-  it('迁移链跑完后 user_version 为 10', () => {
+  it('迁移链跑完后 user_version 为 11', () => {
     initDb()
-    expect(db.pragma('user_version', { simple: true })).toBe(10)
+    expect(db.pragma('user_version', { simple: true })).toBe(11)
   })
 
   it('Presets 表带 displayConfig 列（migration v7）', () => {
@@ -58,6 +58,59 @@ describe('DB 迁移 v9 (Presets.addressForms)', () => {
 
     const row = db.prepare(`SELECT addressForms FROM Presets WHERE presetId = ?`).get('p2') as { addressForms: string | null }
     expect(JSON.parse(row.addressForms!)).toEqual(['小明', '笨蛋'])
+  })
+})
+
+describe('DB 彻底删除（secure_delete / migration v11 / checkpointTruncate）', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('连接的 PRAGMA secure_delete 为 1', () => {
+    initDb()
+    expect(db.pragma('secure_delete', { simple: true })).toBe(1)
+  })
+
+  it('message_fts 的 secure-delete 配置为 1', () => {
+    initDb()
+    const row = db.prepare(`SELECT v FROM message_fts_config WHERE k = 'secure-delete'`).get() as { v: number } | undefined
+    expect(row?.v).toBe(1)
+  })
+
+  it('checkpointTruncate 在 busy 非 0 时只 console.warn、不抛错', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(db, 'pragma').mockReturnValue([{ busy: 1, log: 5, checkpointed: 2 }])
+
+    expect(() => checkpointTruncate('[Test]')).not.toThrow()
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0][0])).toContain('[Test]')
+  })
+
+  it('checkpointTruncate 未能截断（log > checkpointed）时只 console.warn、不抛错', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(db, 'pragma').mockReturnValue([{ busy: 0, log: 5, checkpointed: 2 }])
+
+    expect(() => checkpointTruncate('[Test]')).not.toThrow()
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('checkpointTruncate 的 pragma 抛错时只 console.warn、不抛错', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(db, 'pragma').mockImplementation(() => { throw new Error('locked') })
+
+    expect(() => checkpointTruncate('[Test]')).not.toThrow()
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('checkpointTruncate 成功（busy=0、log=0）或非 WAL 连接（log=-1）时不告警', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const pragma = vi.spyOn(db, 'pragma')
+    pragma.mockReturnValueOnce([{ busy: 0, log: 0, checkpointed: 0 }])
+    pragma.mockReturnValueOnce([{ busy: 0, log: -1, checkpointed: -1 }])
+
+    checkpointTruncate('[Test]')
+    checkpointTruncate('[Test]')
+    expect(warn).not.toHaveBeenCalled()
   })
 })
 
