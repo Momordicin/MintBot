@@ -374,11 +374,8 @@ export function OverlayApp() {
       return
     }
     if (Math.hypot(event.screenX - press.x, event.screenY - press.y) >= HANDLE_DRAG_THRESHOLD_PX) {
-      if (transitionLockedRef.current || isDragHandleSuppressed) {
-        clearHandlePress(event.currentTarget)
-        return
-      }
       clearHandlePress(event.currentTarget)
+      if (transitionLockedRef.current || isDragHandleSuppressed) return
       window.electronAPI.startOverlayDrag()
     }
   }
