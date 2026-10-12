@@ -99,11 +99,10 @@ describe('resolvePetDesiredState', () => {
     expect(resolvePetDesiredState(NOT_INTERACTING, UNUSED_CURRENT_DISPLAY_ID, 1, map, [1])).toEqual({ presence: 'HIDDEN', displayId: 1, alwaysOnTop: false })
   })
 
-  // "已确认的推论"（TDD 原文）：用户在避难期间把小人拖到 D，A 的冲突一旦解除，它仍会飞回 A——
-  // 这里直接验证其结构性原因：resolver（在不交互时）完全不吃"当前实际所在显示器"这个参数，
-  // 只吃 preferredDisplayId + 当前 blocker 状态，所以无论上一次实际停在哪，一旦 home 空出来，
-  // 下一次 resolve 恒定重新指向 home
-  it('always re-derives from home, independent of wherever it was last relocated to (drag-to-D-then-conflict-ends still returns home)', () => {
+  // 验证：home 空闲时，resolver 恒定返回 home，与当前所在显示器无关（home 被挡住时才会
+  // 优先停留在空闲的当前副屏，见下方用例）。999（UNUSED_CURRENT_DISPLAY_ID）是刻意取的
+  // 非真实显示器 id，用来保证这里断言的结果不依赖 currentDisplayId
+  it('returns home whenever home is free, regardless of the current display (drag-to-D-then-conflict-ends still returns home)', () => {
     const blockedAtHome = makeMap([[1, {}]])
     const relocated = resolvePetDesiredState(NOT_INTERACTING, UNUSED_CURRENT_DISPLAY_ID, 1, blockedAtHome, [1, 2])
     expect(relocated).toEqual({ presence: 'AMBIENT', displayId: 2, alwaysOnTop: true })
@@ -121,6 +120,28 @@ describe('resolvePetDesiredState', () => {
       [2, {}],
     ])
     expect(resolvePetDesiredState(NOT_INTERACTING, UNUSED_CURRENT_DISPLAY_ID, 1, map, [1, 2, 3])).toEqual({ presence: 'AMBIENT', displayId: 3, alwaysOnTop: true })
+  })
+
+  it('stays on the current free non-home display when a lower-id free display exists', () => {
+    const map = makeMap([[1, {}]])
+    expect(resolvePetDesiredState(NOT_INTERACTING, 3, 1, map, [1, 2, 3])).toEqual({ presence: 'AMBIENT', displayId: 3, alwaysOnTop: true })
+  })
+
+  it('relocates to the lowest-id free display when the current display becomes blocked', () => {
+    const map = makeMap([[1, {}], [3, {}]])
+    expect(resolvePetDesiredState(NOT_INTERACTING, 3, 1, map, [1, 2, 3, 4])).toEqual({ presence: 'AMBIENT', displayId: 2, alwaysOnTop: true })
+  })
+
+  it('returns home when home is free, even if the current display is another free one', () => {
+    expect(resolvePetDesiredState(NOT_INTERACTING, 3, 1, makeMap([]), [1, 2, 3])).toEqual({ presence: 'AMBIENT', displayId: 1, alwaysOnTop: true })
+  })
+
+  it('relocates to the lowest-id free display when the current display equals home and home is blocked', () => {
+    expect(resolvePetDesiredState(NOT_INTERACTING, 1, 1, makeMap([[1, {}]]), [1, 2, 3])).toEqual({ presence: 'AMBIENT', displayId: 2, alwaysOnTop: true })
+  })
+
+  it('relocates to the lowest-id free display when the current display id is not in the display list', () => {
+    expect(resolvePetDesiredState(NOT_INTERACTING, 99, 1, makeMap([[1, {}]]), [1, 2, 3])).toEqual({ presence: 'AMBIENT', displayId: 2, alwaysOnTop: true })
   })
 })
 
@@ -257,6 +278,40 @@ describe('resolveChatDesiredState', () => {
       [2, {}],
     ])
     expect(resolveChatDesiredState(1, map, [1, 2, 3])).toEqual({ presence: 'SHOWN', displayId: 3, alwaysOnTop: true })
+  })
+
+  it('stays on the current free non-home display when a lower-id free display exists', () => {
+    const map = makeMap([[1, {}]])
+    expect(resolveChatDesiredState(1, map, [1, 2, 3], 3)).toEqual({ presence: 'SHOWN', displayId: 3, alwaysOnTop: true })
+  })
+
+  it('relocates to the lowest-id free display when the current display becomes blocked', () => {
+    const map = makeMap([[1, {}], [3, {}]])
+    expect(resolveChatDesiredState(1, map, [1, 2, 3, 4], 3)).toEqual({ presence: 'SHOWN', displayId: 2, alwaysOnTop: true })
+  })
+
+  it('returns home when home is free, even if the current display is another free one', () => {
+    expect(resolveChatDesiredState(1, makeMap([]), [1, 2, 3], 3)).toEqual({ presence: 'SHOWN', displayId: 1, alwaysOnTop: true })
+  })
+
+  it('relocates to the lowest-id free display when the current display equals home and home is blocked', () => {
+    const map = makeMap([[1, {}]])
+    expect(resolveChatDesiredState(1, map, [1, 2, 3], 1)).toEqual({ presence: 'SHOWN', displayId: 2, alwaysOnTop: true })
+  })
+
+  it('relocates to the lowest-id free display when the current display id is not in the display list', () => {
+    const map = makeMap([[1, {}]])
+    expect(resolveChatDesiredState(1, map, [1, 2, 3], 99)).toEqual({ presence: 'SHOWN', displayId: 2, alwaysOnTop: true })
+  })
+
+  it('relocates to the lowest-id free display when the current display is null and home is blocked', () => {
+    const map = makeMap([[1, {}]])
+    expect(resolveChatDesiredState(1, map, [1, 2, 3], null)).toEqual({ presence: 'SHOWN', displayId: 2, alwaysOnTop: true })
+  })
+
+  it('relocates to the lowest-id free display when the current display is omitted and home is blocked', () => {
+    const map = makeMap([[1, {}]])
+    expect(resolveChatDesiredState(1, map, [1, 2, 3])).toEqual({ presence: 'SHOWN', displayId: 2, alwaysOnTop: true })
   })
 })
 

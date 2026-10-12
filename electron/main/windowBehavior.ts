@@ -723,7 +723,7 @@ function evaluateChatPresence(mainWindow: BrowserWindow | null): void {
   const displays = screen.getAllDisplays()
   const preferredDisplayId = getEffectiveHomeDisplay(displays, 'chat').id
   const allDisplayIds = displays.map(display => display.id)
-  const desired = resolveChatDesiredState(preferredDisplayId, getDisplayStateMap(), allDisplayIds)
+  const desired = resolveChatDesiredState(preferredDisplayId, getDisplayStateMap(), allDisplayIds, appliedDisplayIdFor('chat'))
   const transition = diffChatState(desired, appliedDisplayIdFor('chat'), mainWindow.isVisible())
 
   if (transition.move !== null && !isWindowDragInProgress('chat')) {
