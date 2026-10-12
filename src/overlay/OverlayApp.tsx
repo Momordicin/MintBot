@@ -162,21 +162,37 @@ export function OverlayApp() {
     setIsLocked(false)
   }
 
-  function sizeOverlayWindowOnce(id: string, form: PortraitFormName, manifest: OverlayManifest, scale: PetScale) {
-    const key = `${id}|${form}|${scale}`
-    if (sizedKeyRef.current === key) return
-    const sizingFile = fallbackFirstFile(manifest.portraits?.[form])
-    if (sizingFile === null) return
-    sizedKeyRef.current = key
+  function applyCurrentDisplayFile() {
+    setFile(resolveOverlayDisplayFile(manifestRef.current, formRef.current, transitionFileRef.current, isDraggingRef.current, yRef.current, xRef.current))
+  }
 
+  function sizeOverlayWindowOnce(id: string, form: PortraitFormName, manifest: OverlayManifest, scale: PetScale, allowDeferSwap: boolean): boolean {
+    const key = `${id}|${form}|${scale}`
+    const previousKey = sizedKeyRef.current
+    if (previousKey === key) return false
+    const sizingFile = fallbackFirstFile(manifest.portraits?.[form])
+    if (sizingFile === null) return false
+    sizedKeyRef.current = key
+    const deferSwap = allowDeferSwap && !(previousKey !== null && previousKey.startsWith(`${id}|${form}|`))
+
+    const swapIfCurrent = () => {
+      if (deferSwap) applyCurrentDisplayFile()
+    }
     const probe = new Image()
     probe.onload = () => {
       if (sizedKeyRef.current !== key) return
-      if (probe.naturalWidth === 0 || probe.naturalHeight === 0) return
-      const base = computeOverlaySize(form, probe.naturalWidth, probe.naturalHeight)
-      window.electronAPI.setOverlaySize({ baseWidth: base.width, baseHeight: base.height, scale })
+      if (probe.naturalWidth !== 0 && probe.naturalHeight !== 0) {
+        const base = computeOverlaySize(form, probe.naturalWidth, probe.naturalHeight)
+        window.electronAPI.setOverlaySize({ baseWidth: base.width, baseHeight: base.height, scale })
+      }
+      swapIfCurrent()
+    }
+    probe.onerror = () => {
+      if (sizedKeyRef.current !== key) return
+      swapIfCurrent()
     }
     probe.src = resolveAssetUrl(id, sizingFile)
+    return deferSwap
   }
 
   function loadCharacterAndPortrait(calledByThresholdTimer: boolean) {
@@ -216,17 +232,18 @@ export function OverlayApp() {
             manifestRef.current = manifest
             presetIdRef.current = state.presetSnapshot?.presetId ?? null
             petScaleRef.current = state.presetSnapshot?.displayConfig?.petScale ?? null
-            sizeOverlayWindowOnce(id, form, manifest, petScaleRef.current?.[form] ?? 1)
-            if (shouldPlayFallAsleep({
+            const playFallAsleep = shouldPlayFallAsleep({
               calledByThresholdTimer,
               previousY,
               nextY: yRef.current,
               explicitSleep: state.explicitSleep,
-            })) {
+            })
+            const swapDeferred = sizeOverlayWindowOnce(id, form, manifest, petScaleRef.current?.[form] ?? 1, !playFallAsleep)
+            if (playFallAsleep) {
               startTransition('fall-asleep')
               return
             }
-            setFile(resolveOverlayDisplayFile(manifestRef.current, formRef.current, transitionFileRef.current, isDraggingRef.current, yRef.current, xRef.current))
+            if (!swapDeferred) applyCurrentDisplayFile()
           })
       })
       .catch(() => {
