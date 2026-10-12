@@ -14,10 +14,54 @@ import {
   collapsedHandleBounds,
   expandedBoundsFromHandle,
   petHandleBounds,
+  parseWindowPositionsStore,
 } from './windowPositions'
 
+describe('parseWindowPositionsStore', () => {
+  const empty = { version: 2, chat: {}, overlay: {}, lastDisplayKey: { chat: null, overlay: null } }
+
+  it('returns an empty store for the old format without version', () => {
+    const legacy = {
+      chat: { '1': { x: 1, y: 2, width: 3, height: 4 } },
+      overlay: {},
+      lastDisplayId: { chat: 1, overlay: null },
+    }
+    expect(parseWindowPositionsStore(legacy)).toEqual(empty)
+  })
+
+  it('returns an empty store for a non-2 version, null and non-object input', () => {
+    expect(parseWindowPositionsStore({ ...empty, version: 3 })).toEqual(empty)
+    expect(parseWindowPositionsStore(null)).toEqual(empty)
+    expect(parseWindowPositionsStore('text')).toEqual(empty)
+  })
+
+  it('keeps a valid version 2 store unchanged', () => {
+    const store = {
+      version: 2,
+      chat: { 'DEVICE-A': { x: 10, y: 20, width: 290, height: 520 } },
+      overlay: { 'id:7': { x: 5, y: 6, width: 132, height: 132 } },
+      lastDisplayKey: { chat: 'DEVICE-A', overlay: 'id:7' },
+    }
+    expect(parseWindowPositionsStore(store)).toEqual(store)
+  })
+
+  it('treats corrupted fields as empty', () => {
+    const corrupted = {
+      version: 2,
+      chat: 'oops',
+      overlay: [1, 2],
+      lastDisplayKey: { chat: 5, overlay: 'id:7' },
+    }
+    expect(parseWindowPositionsStore(corrupted)).toEqual({
+      ...empty,
+      lastDisplayKey: { chat: null, overlay: 'id:7' },
+    })
+    expect(parseWindowPositionsStore({ version: 2, lastDisplayKey: null })).toEqual(empty)
+  })
+})
+
 // 只测新增的纯函数（显示器挑选 + bounds 夹紧）。getPreferredBounds/setPreferredBounds/
-// getPreferredDisplayId/commitUserChosenHomeDisplay 依赖 electron 的 app.getPath，需要真实
+// getEffectiveHomeDisplay/commitUserChosenHomeDisplay 依赖 electron 的 app.getPath 与 screen，需要真实
 // Electron 运行时才能验证磁盘读写，这里不测（见任务说明：需要真实 BrowserWindow/screen
 // 的部分不在这个测试文件覆盖范围内）。commitUserChosenHomeDisplay 的 import 边界守卫见
 // windowPositionsCommitGuard.test.ts
