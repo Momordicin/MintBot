@@ -416,13 +416,244 @@ describe('POST /chat', () => {
     expect(systemEvent?.data.sessionId).toBe(session.sessionId)
     expect(errorSpy).toHaveBeenCalled()
 
-    // 用户消息仍照常入库（发生在拦截判定之前），但没有对应的 assistant 消息——
-    // 「不入库」只挡这一轮的空回复，不影响已经写入的用户消息
-    const history = getHistory(50)
-    expect(history.some(m => m.role === 'assistant')).toBe(false)
-    expect(history.some(m => m.role === 'user')).toBe(true)
+    expect(getHistory(50)).toEqual([])
 
     errorSpy.mockRestore()
+  })
+
+  function loggedText(spy: { mock: { calls: unknown[][] } }): string {
+    return spy.mock.calls.map(args => args.map(String).join(' ')).join('\n')
+  }
+
+  async function buildThrowingApp(error: unknown) {
+    const fastify = Fastify()
+    vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
+      completeSync: async () => { throw error },
+    } as unknown as ModelProvider)
+    fastify.decorate('streamingEnabled', false)
+    fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
+    await fastify.register(chatRoutes)
+    return fastify
+  }
+
+  function connectionRefusedError() {
+    return Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:11434'), { code: 'ECONNREFUSED' }) })
+  }
+
+  it('模型调用抛错时：用户消息不入库（没有得到回复的消息不保存）', async () => {
+    const { session } = loadSession('p1')
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fastify = await buildThrowingApp(new Error('model boom'))
+
+    await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+
+    expect(db.prepare('SELECT COUNT(*) as count FROM Messages WHERE sessionId = ?').get(session.sessionId)).toEqual({ count: 0 })
+  })
+
+  it('请求被中止时：用户消息不入库，也不按错误记 [Chat] 日志', async () => {
+    const { session } = loadSession('p1')
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    let capturedReply: { raw: import('http').ServerResponse } | undefined
+    let onRequestDone: () => void
+    const onRequestPromise = new Promise<void>(resolve => { onRequestDone = resolve })
+    let completeSyncCalled: () => void
+    const completeSyncCalledPromise = new Promise<void>(resolve => { completeSyncCalled = resolve })
+
+    const fastify = Fastify()
+    fastify.decorate('streamingEnabled', false)
+    fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
+    fastify.addHook('onRequest', (_request, reply, done) => {
+      capturedReply = reply
+      onRequestDone()
+      done()
+    })
+    vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
+      completeSync: (_context: unknown, options: { signal?: AbortSignal }) => {
+        completeSyncCalled()
+        return new Promise((_resolve, reject) => {
+          options.signal?.addEventListener('abort', () => {
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+          })
+        })
+      },
+    } as unknown as ModelProvider)
+    await fastify.register(chatRoutes)
+
+    const injectPromise = fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+    injectPromise.catch(() => {})
+    await onRequestPromise
+    await completeSyncCalledPromise
+
+    Object.defineProperty(capturedReply!.raw, 'destroyed', { value: true, configurable: true })
+    capturedReply!.raw.emit('close')
+    await new Promise(resolve => setImmediate(resolve))
+    await new Promise(resolve => setImmediate(resolve))
+
+    expect(db.prepare('SELECT COUNT(*) as count FROM Messages WHERE sessionId = ?').get(session.sessionId)).toEqual({ count: 0 })
+    expect(errorSpy).not.toHaveBeenCalled()
+  })
+
+  it('请求被中止且模型仍返回了完整回复：不入库，也不记 [Chat] 日志', async () => {
+    const { session } = loadSession('p1')
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    let capturedReply: { raw: import('http').ServerResponse } | undefined
+    let onRequestDone: () => void
+    const onRequestPromise = new Promise<void>(resolve => { onRequestDone = resolve })
+    let completeSyncCalled: () => void
+    const completeSyncCalledPromise = new Promise<void>(resolve => { completeSyncCalled = resolve })
+    let release: (v: string) => void
+    const releasePromise = new Promise<string>(resolve => { release = resolve })
+
+    const fastify = Fastify()
+    fastify.decorate('streamingEnabled', false)
+    fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
+    fastify.addHook('onRequest', (_request, reply, done) => {
+      capturedReply = reply
+      onRequestDone()
+      done()
+    })
+    vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
+      completeSync: () => {
+        completeSyncCalled()
+        return releasePromise
+      },
+    } as unknown as ModelProvider)
+    await fastify.register(chatRoutes)
+
+    const injectPromise = fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+    injectPromise.catch(() => {})
+    await onRequestPromise
+    await completeSyncCalledPromise
+
+    capturedReply!.raw.emit('close')
+    release!(JSON.stringify({ reply: '你好呀' }))
+    await new Promise(resolve => setImmediate(resolve))
+    await new Promise(resolve => setImmediate(resolve))
+
+    expect(db.prepare('SELECT COUNT(*) as count FROM Messages WHERE sessionId = ?').get(session.sessionId)).toEqual({ count: 0 })
+    expect(errorSpy).not.toHaveBeenCalled()
+  })
+
+  it('成功时：用户消息与助手回复都入库，用户消息在前且 createdAt 为发送时刻，助手回复为写入时刻', async () => {
+    const { session } = loadSession('p1')
+    const sentAt = new Date('2026-01-01T00:00:00.000Z').getTime()
+    const repliedAt = sentAt + 5000
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(sentAt)
+
+    try {
+      const fastify = Fastify()
+      vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
+        completeSync: async () => {
+          vi.setSystemTime(repliedAt)
+          return JSON.stringify({ reply: '你好呀' })
+        },
+      } as unknown as ModelProvider)
+      fastify.decorate('streamingEnabled', false)
+      fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
+      await fastify.register(chatRoutes)
+
+      const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+      const messageDone = parseSSE(response.payload).find(e => e.event === 'message_done')
+
+      const rows = db.prepare('SELECT id, role, content, createdAt FROM Messages WHERE sessionId = ? ORDER BY id ASC')
+        .all(session.sessionId) as Array<{ id: number; role: string; content: string; createdAt: number }>
+      expect(rows.map(r => ({ role: r.role, content: r.content, createdAt: r.createdAt }))).toEqual([
+        { role: 'user', content: '你好', createdAt: sentAt },
+        { role: 'assistant', content: '你好呀', createdAt: repliedAt },
+      ])
+      expect(messageDone?.data.messageId).toBe(String(rows[1].id))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('回复为空时：日志记录 fullReply 全文，不截取前 200 字', async () => {
+    loadSession('p1')
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fullReply = JSON.stringify({ reply: '   ', padding: 'x'.repeat(300), tail: 'END-OF-REPLY' })
+    const { fastify } = await buildTestApp(fullReply)
+
+    await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+
+    expect(fullReply.length).toBeGreaterThan(200)
+    expect(loggedText(errorSpy)).toContain(JSON.stringify(fullReply))
+  })
+
+  it('模型调用失败（非启动失败）时：日志带上用户消息全文', async () => {
+    loadSession('p1')
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fastify = await buildThrowingApp(new Error('OpenAI API error: 500 Internal Server Error'))
+
+    await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '用户消息-内容-甲' } })
+
+    expect(loggedText(errorSpy)).toContain('用户消息-内容-甲')
+  })
+
+  it.each([
+    ['回复中途连接被重置（ECONNRESET）', Object.assign(new TypeError('terminated'), { cause: Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }) })],
+    ['回复中途超时（ETIMEDOUT）', Object.assign(new Error('read ETIMEDOUT'), { code: 'ETIMEDOUT' })],
+    ['fetch failed 但原因不是连接被拒', Object.assign(new TypeError('fetch failed'), { cause: new Error('other socket error') })],
+    ['请求未被中止却抛出 AbortError', Object.assign(new Error('aborted internally'), { name: 'AbortError' })],
+  ])('非启动失败（%s）：日志带上用户消息', async (_label, error) => {
+    loadSession('p1')
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fastify = await buildThrowingApp(error)
+
+    await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '用户消息-内容-戊' } })
+
+    expect(loggedText(errorSpy)).toContain('用户消息-内容-戊')
+  })
+
+  it.each([
+    ['连接被拒绝（fetch failed / ECONNREFUSED）', connectionRefusedError()],
+    ['未配置模型', new Error('[Config] modelProvider is not configured')],
+    ['未知的模型类型', new Error('Unknown model provider type: foo')],
+    ['缺少模型名', new Error('[ModelProvider] modelName is required in config')],
+    ['API Key 未配置', new Error('[ModelProvider] OpenAI API key is not configured')],
+  ])('模型启动失败（%s）：日志只记错误本身，不带用户消息，响应仍为 Model call failed', async (_label, error) => {
+    const { session } = loadSession('p1')
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fastify = await buildThrowingApp(error)
+
+    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '用户消息-内容-乙' } })
+
+    expect(errorSpy).toHaveBeenCalled()
+    expect(loggedText(errorSpy)).not.toContain('用户消息-内容-乙')
+    expect(parseSSE(response.payload).find(e => e.event === 'system')?.data).toMatchObject({ payload: { message: 'Model call failed' }, sessionId: session.sessionId })
+    expect(db.prepare('SELECT COUNT(*) as count FROM Messages WHERE sessionId = ?').get(session.sessionId)).toEqual({ count: 0 })
+  })
+
+  it('createModelProviderForPreset 构造时抛配置错误：走同一条失败路径（SSE system error、不入库、日志不带用户消息）', async () => {
+    const { session } = loadSession('p1')
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockImplementation(() => {
+      throw new Error('Unknown model provider type: foo')
+    })
+    const fastify = Fastify()
+    fastify.decorate('streamingEnabled', false)
+    fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
+    await fastify.register(chatRoutes)
+
+    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '用户消息-内容-丙' } })
+
+    expect(response.statusCode).toBe(200)
+    expect(parseSSE(response.payload).find(e => e.event === 'system')?.data).toMatchObject({ payload: { message: 'Model call failed' }, sessionId: session.sessionId })
+    expect(loggedText(errorSpy)).not.toContain('用户消息-内容-丙')
+    expect(db.prepare('SELECT COUNT(*) as count FROM Messages WHERE sessionId = ?').get(session.sessionId)).toEqual({ count: 0 })
+  })
+
+  it('buildContext 失败（非启动失败）时：日志带上用户消息全文', async () => {
+    loadSession('p1')
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(BuildContextModule, 'buildContext').mockRejectedValue(new Error('boom'))
+    const { fastify } = await buildTestApp(JSON.stringify({ reply: '嗯嗯' }))
+
+    await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '用户消息-内容-丁' } })
+
+    expect(loggedText(errorSpy)).toContain('用户消息-内容-丁')
   })
 
   it('reply 正文命中困意检测规则时置显式睡着标记，且照常入库（TDD §3.8「回复检查」文本检测类，不依赖 emotion.label）', async () => {
@@ -727,6 +958,7 @@ describe('POST /chat', () => {
   })
 
   it('buildContext 因非断连原因失败，但连接仍然存活：照常返回 500（守卫只在连接已死时才跳过发送）', async () => {
+    loadSession('p1')
     const buildContextSpy = vi.spyOn(BuildContextModule, 'buildContext').mockRejectedValue(new Error('boom'))
 
     try {
@@ -843,6 +1075,74 @@ describe('POST /chat', () => {
       { role: 'assistant', content: '第一条回复' },
     ])
   })
+
+  function deleteSessionRows(sessionId: string) {
+    db.prepare('DELETE FROM Messages WHERE sessionId = ?').run(sessionId)
+    db.prepare('DELETE FROM EmotionStates WHERE sessionId = ?').run(sessionId)
+    db.prepare('DELETE FROM Sessions WHERE sessionId = ?').run(sessionId)
+  }
+
+  it('模型返回前会话已被删除：不写回复、不写情绪、不广播情绪，向该请求的 SSE 流发 system error（Session deleted）', async () => {
+    const { session } = loadSession('p1')
+    const broadcastCalls = (BroadcastModule.broadcastEvent as unknown as { mock: { calls: unknown[][] } }).mock.calls
+    const emotionBroadcastsBefore = broadcastCalls.filter(c => c[0] === 'emotion').length
+
+    const fastify = Fastify()
+    fastify.decorate('streamingEnabled', false)
+    fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
+    vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
+      completeSync: async () => {
+        deleteSessionRows(session.sessionId)
+        return JSON.stringify({ reply: '你好呀', emotion: { self: { label: 'happy', intensity: 0.8 } } })
+      },
+    } as unknown as ModelProvider)
+    await fastify.register(chatRoutes)
+
+    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+    const events = parseSSE(response.payload)
+
+    expect(events.find(e => e.event === 'message_done')).toBeUndefined()
+    expect(events.find(e => e.event === 'emotion')).toBeUndefined()
+    expect(events.find(e => e.event === 'system')?.data).toMatchObject({ type: 'error', payload: { message: 'Session deleted' } })
+    expect(db.prepare('SELECT COUNT(*) as count FROM Messages WHERE sessionId = ?').get(session.sessionId)).toEqual({ count: 0 })
+    expect(getEmotionState(session.sessionId)).toBeNull()
+    expect(broadcastCalls.filter(c => c[0] === 'emotion').length).toBe(emotionBroadcastsBefore)
+  })
+
+  it('排队等待期间会话已被删除：轮到该请求时不写用户消息、不调模型，向该请求的 SSE 流发 system error（Session deleted）', async () => {
+    const { session } = loadSession('p1')
+
+    let resolveFirstComplete: (v: string) => void
+    const firstCompletePromise = new Promise<string>(resolve => { resolveFirstComplete = resolve })
+    let signalFirstCalled: () => void
+    const firstCalledPromise = new Promise<void>(resolve => { signalFirstCalled = resolve })
+    const completeSyncMock = vi.fn(async () => {
+      signalFirstCalled()
+      return firstCompletePromise
+    })
+    vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
+      completeSync: completeSyncMock,
+    } as unknown as ModelProvider)
+
+    const fastify = Fastify()
+    fastify.decorate('streamingEnabled', false)
+    fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
+    await fastify.register(chatRoutes)
+
+    const p1 = fastify.inject({ method: 'POST', url: '/chat', payload: { message: '第一条' } })
+    await firstCalledPromise
+    const p2 = fastify.inject({ method: 'POST', url: '/chat', payload: { message: '第二条' } })
+    await new Promise(resolve => setImmediate(resolve))
+
+    deleteSessionRows(session.sessionId)
+    resolveFirstComplete!(JSON.stringify({ reply: '第一条回复' }))
+    const [, second] = await Promise.all([p1, p2])
+    const events = parseSSE(second.payload)
+
+    expect(completeSyncMock).toHaveBeenCalledTimes(1)
+    expect(events.find(e => e.event === 'system')?.data).toMatchObject({ type: 'error', payload: { message: 'Session deleted' } })
+    expect(db.prepare('SELECT COUNT(*) as count FROM Messages').get()).toEqual({ count: 0 })
+  })
 })
 
 describe('POST /chat — CORS 头由 @fastify/cors 插件唯一决定', () => {
@@ -942,6 +1242,7 @@ describe('POST /chat — JSON 解析兜底（parseJsonSalvage，本地模型/Dee
   })
 
   it('模型回复真的不是 JSON（无花括号）时，仍降级为原文兜底，不报错', async () => {
+    loadSession('p1')
     const { fastify } = await buildTestApp('这不是 JSON 的普通回复')
 
     const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
@@ -1021,6 +1322,7 @@ describe('POST /chat — 表情包挑选（emote 字段，TDD §3.9「表情包�
   })
 
   it('角色包缺失 manifest（如 char-001）时，即使模型输出了 emote 字段，也不附带表情', async () => {
+    loadSession('p1')
     const { fastify } = await buildTestApp(JSON.stringify({
       reply: '好呀',
       emotion: { self: { label: 'happy', intensity: 0.5 } },

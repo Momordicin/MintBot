@@ -1,4 +1,4 @@
-// electron/preload/index.ts — 渲染进程预加载脚本：经 contextBridge 暴露 window.electronAPI（文件选择、设置窗口、桌宠拖拽 / 贴边 / 存在状态、标题栏配色）
+// electron/preload/index.ts — 渲染进程预加载脚本：经 contextBridge 暴露 window.electronAPI（文件选择、设置窗口、桌宠拖拽 / 贴边 / 存在状态 / 右键菜单（含穿透手柄窗口）、标题栏配色）
 // 用法：electron/main/index.ts 创建聊天、overlay、设置窗口时作为 webPreferences.preload（构建产物 index.cjs）；渲染进程调 window.electronAPI.*
 // 形状：暴露只读 platform 与各 electronAPI 方法；每个方法对应一个 ipcRenderer.invoke / send / on 通道，on 类方法返回取消监听函数
 // 对应文件：electron/main/index.ts（ipcMain 处理端、拖拽事件发送端）/ electron/main/windowBehavior.ts（desktop-presence:changed 发送端）/ src/electron-api.d.ts / electron.vite.config.ts
@@ -23,11 +23,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   requestOverlayEdgeHover: (hovered: boolean) => ipcRenderer.send('overlay:edge-hover', hovered),
   notifyOverlayReady: () => ipcRenderer.send('overlay:presence-ready'),
-  setOverlaySize: (size: { width: number; height: number }) => ipcRenderer.send('overlay:set-size', size),
-  onDesktopPresenceChanged: (callback: (payload: { presence: string; edgeSide: 'left' | 'right' | null; handleSuppressed: boolean }) => void) => {
+  setOverlaySize: (size: { baseWidth: number; baseHeight: number; scale: number }) => ipcRenderer.send('overlay:set-size', size),
+  openOverlayContextMenu: (state: {
+    presetId: string
+    effectiveForm: 'pixel' | 'illustration'
+    otherFormAvailable: boolean
+    petScale: { pixel: number; illustration: number }
+  } | null) => ipcRenderer.send('overlay:context-menu', state),
+  onOverlayContextMenuRequested: (callback: () => void) => {
+    const listener = () => callback()
+    ipcRenderer.on('overlay:context-menu-requested', listener)
+    return () => ipcRenderer.removeListener('overlay:context-menu-requested', listener)
+  },
+  onOverlayMenuAction: (callback: (action: unknown) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, action: unknown) => callback(action)
+    ipcRenderer.on('overlay:menu-action', listener)
+    return () => ipcRenderer.removeListener('overlay:menu-action', listener)
+  },
+  startOverlayDrag: () => ipcRenderer.send('overlay:start-drag'),
+  openPetHandleContextMenu: () => ipcRenderer.send('pet-handle:context-menu'),
+  onDesktopPresenceChanged: (callback: (payload: { presence: string; edgeSide: 'left' | 'right' | null; handleSuppressed: boolean; collapsed: boolean; clickThrough: boolean }) => void) => {
     const listener = (
       _event: Electron.IpcRendererEvent,
-      payload: { presence: string; edgeSide: 'left' | 'right' | null; handleSuppressed: boolean }
+      payload: { presence: string; edgeSide: 'left' | 'right' | null; handleSuppressed: boolean; collapsed: boolean; clickThrough: boolean }
     ) => callback(payload)
     ipcRenderer.on('desktop-presence:changed', listener)
     return () => ipcRenderer.removeListener('desktop-presence:changed', listener)

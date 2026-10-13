@@ -1,9 +1,13 @@
 // shared/portraitForm.ts — 桌宠形态（像素/立绘）"是否可用"与"有效形态"的唯一判定，三处调用方共用
 // 用途：一种形态可用 = 它的 fallback 指向的情绪组非空；有效形态 = 保存的形态可用就用它，否则用另一种可用的形态，都不可用则为 null
 // 用法：services/core/characters/manifest.ts、src/overlay/OverlayApp.tsx、src/settings/CharacterPanel.tsx 从这里 import
+//   另导出桌宠缩放档位 PET_SCALE_OPTIONS / PetScale
 // 配套文件：shared/portraitForm.test.ts / src/overlay/portraitState.ts
 
 export type PortraitFormName = 'pixel' | 'illustration'
+
+export const PET_SCALE_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5] as const
+export type PetScale = typeof PET_SCALE_OPTIONS[number]
 
 export interface PortraitFormShape {
   fallback?: string

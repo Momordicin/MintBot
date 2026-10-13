@@ -22,7 +22,8 @@ export interface DesiredChatState {
   alwaysOnTop: boolean
 }
 
-function pickFreeDisplay(allDisplayIds: readonly number[], excludeDisplayId: number, map: DisplayStateMap): number | null {
+function pickFreeDisplay(allDisplayIds: readonly number[], excludeDisplayId: number, map: DisplayStateMap, preferId: number | null): number | null {
+  if (preferId !== null && preferId !== excludeDisplayId && allDisplayIds.includes(preferId) && !map.has(preferId)) return preferId
   let best: number | null = null
   for (const id of allDisplayIds) {
     if (id === excludeDisplayId || map.has(id)) continue
@@ -51,7 +52,7 @@ export function resolvePetDesiredState(
     return { presence: 'AMBIENT', displayId: preferredDisplayId, alwaysOnTop: true }
   }
 
-  const free = pickFreeDisplay(allDisplayIds, preferredDisplayId, displayStateMap)
+  const free = pickFreeDisplay(allDisplayIds, preferredDisplayId, displayStateMap, currentDisplayId)
   if (free !== null) {
     return { presence: 'AMBIENT', displayId: free, alwaysOnTop: true }
   }
@@ -66,14 +67,15 @@ export function resolvePetDesiredState(
 export function resolveChatDesiredState(
   preferredDisplayId: number,
   displayStateMap: DisplayStateMap,
-  allDisplayIds: readonly number[]
+  allDisplayIds: readonly number[],
+  currentDisplayId: number | null = null
 ): DesiredChatState {
   const blocker = displayStateMap.get(preferredDisplayId)
   if (!blocker) {
     return { presence: 'SHOWN', displayId: preferredDisplayId, alwaysOnTop: true }
   }
 
-  const free = pickFreeDisplay(allDisplayIds, preferredDisplayId, displayStateMap)
+  const free = pickFreeDisplay(allDisplayIds, preferredDisplayId, displayStateMap, currentDisplayId)
   if (free !== null) {
     return { presence: 'SHOWN', displayId: free, alwaysOnTop: true }
   }
@@ -141,13 +143,37 @@ export function resolveEdgeHoverBounds(edgeBounds: Bounds, fullBounds: Bounds, h
   return hovered ? fullBounds : edgeBounds
 }
 
+export type PetMode = 'normal' | 'clickThrough' | 'collapsed'
+
+export function petMode(collapsed: boolean, clickThrough: boolean): PetMode {
+  if (collapsed) return 'collapsed'
+  return clickThrough ? 'clickThrough' : 'normal'
+}
+
+export function petModeIgnoresMouse(mode: PetMode): boolean {
+  return mode === 'clickThrough'
+}
+
+export const CLICK_THROUGH_OPACITY = 0.6
+
+export function petModeTargetOpacity(mode: PetMode): number {
+  return mode === 'clickThrough' ? CLICK_THROUGH_OPACITY : 1
+}
+
 export interface PetPresencePayload {
   presence: PetPresence
   edgeSide: EdgeSide | null
   handleSuppressed: boolean
+  collapsed: boolean
+  clickThrough: boolean
 }
 
-export function computeHandleSuppressed(latestDesiredPresence: PetPresence, appliedPresence: PetPresence): boolean {
+export function computeHandleSuppressed(
+  latestDesiredPresence: PetPresence,
+  appliedPresence: PetPresence,
+  collapsed: boolean = false
+): boolean {
+  if (collapsed) return false
   return latestDesiredPresence === 'EDGE' || appliedPresence === 'EDGE'
 }
 
@@ -156,7 +182,9 @@ export function presencePayloadChanged(previous: PetPresencePayload | null, next
   return (
     previous.presence !== next.presence ||
     previous.edgeSide !== next.edgeSide ||
-    previous.handleSuppressed !== next.handleSuppressed
+    previous.handleSuppressed !== next.handleSuppressed ||
+    previous.collapsed !== next.collapsed ||
+    previous.clickThrough !== next.clickThrough
   )
 }
 

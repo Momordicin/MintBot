@@ -461,4 +461,49 @@ describe('animateTo', () => {
       expect(onComplete).toHaveBeenCalledTimes(1)
     })
   })
+
+  describe('options.finalOpacity', () => {
+    it('instant path ends at finalOpacity', () => {
+      const win = makeFakeWindow({ x: 0, y: 0, width: 132, height: 132 })
+
+      animateTo(win as unknown as Electron.BrowserWindow, { x: -92, y: 0, width: 132, height: 132 }, undefined, { instant: true, finalOpacity: 0.6 })
+
+      expect(win.getOpacity()).toBe(0.6)
+    })
+
+    it('same-display tween ends at finalOpacity, and a mid-tween cancel snaps to it', () => {
+      const start = { x: 0, y: 0, width: 132, height: 132 }
+      const target = { x: -92, y: 0, width: 132, height: 132 }
+      const done = makeFakeWindow(start)
+      animateTo(done as unknown as Electron.BrowserWindow, target, undefined, { finalOpacity: 0.6 })
+      vi.advanceTimersByTime(SAME_DISPLAY_TWEEN_DURATION_MS * 2)
+      expect(done.getOpacity()).toBe(0.6)
+
+      const cancelled = makeFakeWindow(start)
+      const cancel = animateTo(cancelled as unknown as Electron.BrowserWindow, target, undefined, { finalOpacity: 0.6 })
+      vi.advanceTimersByTime(Math.floor(SAME_DISPLAY_TWEEN_DURATION_MS / 3))
+      cancel()
+      expect(cancelled.getOpacity()).toBe(0.6)
+    })
+
+    it('cross-display fades finalOpacity -> 0 -> finalOpacity and never exceeds it', () => {
+      const start = { x: 100, y: 100, width: 300, height: 500 }
+      const target = { x: 2020, y: 100, width: 300, height: 500 }
+      testState.displayForBounds = (bounds) =>
+        bounds.x < 1920
+          ? { id: 1, workArea: { x: 0, y: 0, width: 1920, height: 1080 } }
+          : { id: 2, workArea: { x: 1920, y: 0, width: 1920, height: 1080 } }
+      const win = makeFakeWindow(start)
+      win.setOpacity(0.6)
+      win.setOpacity.mockClear()
+
+      animateTo(win as unknown as Electron.BrowserWindow, target, undefined, { finalOpacity: 0.6 })
+      vi.advanceTimersByTime(1000)
+
+      const values = win.setOpacity.mock.calls.map(call => call[0] as number)
+      expect(Math.max(...values)).toBeLessThanOrEqual(0.6)
+      expect(values).toContain(0)
+      expect(win.getOpacity()).toBe(0.6)
+    })
+  })
 })

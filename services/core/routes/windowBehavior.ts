@@ -1,8 +1,8 @@
-// services/core/routes/windowBehavior.ts — 窗口行为配置（置顶模式、桌宠避让、应用规则）的读取与修改路由，及其变更广播
-// 用法：core/index.ts 里 fastify.register(windowBehaviorRoutes)；GET /config/window-behavior、PATCH /config/window-behavior（校验后写配置，revision 变化时广播 window-behavior-changed）；导出 buildWindowBehaviorSnapshot / broadcastWindowBehaviorSnapshot，配置文件监听变更时 core/index.ts 也调用后者
-// 形状：响应与广播载荷均为 WindowBehaviorSnapshot { generation, revision, config }
-// 对应文件：shared/windowBehavior.ts（快照契约）/ src/settings/WindowBehaviorPanel.tsx / electron/main/windowBehavior.ts / electron/main/index.ts / services/core/routes/windowBehavior.test.ts
+// services/core/routes/windowBehavior.ts — 窗口行为配置的读取、修改与变更广播路由
+// 用法：core/index.ts 注册 windowBehaviorRoutes；GET、PATCH /config/window-behavior；配置文件变更时 core/index.ts 调 broadcastWindowBehaviorSnapshot
+// 对应文件：shared/windowBehavior.ts / src/settings/WindowBehaviorPanel.tsx / services/core/routes/windowBehavior.test.ts
 import type { FastifyInstance } from 'fastify'
+import { ConfigFileUnreadableError, CONFIG_FILE_UNREADABLE_MESSAGE } from '../config/configFileError.js'
 import {
   getWindowBehaviorConfig,
   getWindowBehaviorRevision,
@@ -32,6 +32,12 @@ function validateWindowBehaviorPartial(partial: Partial<WindowBehaviorConfig>): 
   if (partial.petAvoidanceEnabled !== undefined && typeof partial.petAvoidanceEnabled !== 'boolean') {
     return 'petAvoidanceEnabled must be a boolean'
   }
+  if (partial.petClickThrough !== undefined && typeof partial.petClickThrough !== 'boolean') {
+    return 'petClickThrough must be a boolean'
+  }
+  if (partial.petCollapsed !== undefined && typeof partial.petCollapsed !== 'boolean') {
+    return 'petCollapsed must be a boolean'
+  }
   if (partial.appRules !== undefined) {
     if (!Array.isArray(partial.appRules)) {
       return 'appRules must be an array'
@@ -58,7 +64,13 @@ export async function windowBehaviorRoutes(fastify: FastifyInstance) {
     }
 
     const revisionBefore = getWindowBehaviorRevision()
-    updateWindowBehaviorConfig(request.body)
+    try {
+      updateWindowBehaviorConfig(request.body)
+    } catch (err) {
+      if (!(err instanceof ConfigFileUnreadableError)) throw err
+      console.error(err.message)
+      return reply.status(500).send({ error: CONFIG_FILE_UNREADABLE_MESSAGE })
+    }
     if (getWindowBehaviorRevision() !== revisionBefore) broadcastWindowBehaviorSnapshot()
     return buildWindowBehaviorSnapshot()
   })

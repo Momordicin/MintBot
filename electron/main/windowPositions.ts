@@ -1,11 +1,12 @@
-// electron/main/windowPositions.ts — 窗口位置持久化与几何计算：<userData>/window-positions.json 按窗口与显示器存 bounds 及主显示器，并提供默认位置、跨 DPI 尺寸、锚点缩放、工作区裁剪
-// 用法：index.ts 算启动 bounds；windowBehavior.ts 读写 getPreferredBounds / setPreferredBounds / getEffectiveHomeDisplay；homeDisplayCommit.ts 调 commitUserChosenHomeDisplay
+// electron/main/windowPositions.ts — 窗口位置持久化与几何计算：<userData>/window-positions.json 按窗口与显示器稳定键存 bounds 及主显示器，并提供默认位置、跨 DPI 尺寸、桌宠按形态底边居中再按比例围绕中心缩放的窗口 bounds（及落点反算）、工作区裁剪
+// 用法：index.ts 算启动 bounds；按屏记录与主显示器的键由 displayIdentity.ts 的 getStableDisplayKey 生成，存储格式为 version 2，parseWindowPositionsStore 解析；windowBehavior.ts 读写 getPreferredBounds / setPreferredBounds / getEffectiveHomeDisplay；homeDisplayCommit.ts 调 commitUserChosenHomeDisplay；桌宠收起为手柄时 windowBehavior.ts 与 index.ts 用 collapsedHandleBounds / expandedBoundsFromHandle 在展开 bounds 与手柄 bounds 间换算；桌宠窗口 bounds 由 petWindowBounds 从记住的 100% 位置推出，拖拽落点经 petPreferredFromWindow 还原后写回；穿透手柄窗口由 petHandleWindow.ts 用 petHandleBounds 算出限制在工作区内的 bounds
 // 形状：WindowKey 为 'chat' | 'overlay'；Bounds 为 { x, y, width, height }（DIP）
-// 对应文件：electron/main/index.ts / electron/main/windowBehavior.ts / electron/main/homeDisplayCommit.ts / electron/main/dragActivity.ts（PERSIST_DEBOUNCE_MS）/ electron/main/windowPositions.test.ts / electron/main/windowPositionsCommitGuard.test.ts
-import { app } from 'electron'
+// 对应文件：electron/main/index.ts / electron/main/displayIdentity.ts / electron/main/windowBehavior.ts / electron/main/homeDisplayCommit.ts / electron/main/dragActivity.ts（PERSIST_DEBOUNCE_MS）/ electron/main/windowPositions.test.ts / electron/main/windowPositionsCommitGuard.test.ts
+import { app, screen } from 'electron'
 import fs from 'fs'
 import path from 'path'
 import crypto from 'crypto'
+import { getStableDisplayKey, fallbackDisplayKey } from './displayIdentity'
 
 export type WindowKey = 'chat' | 'overlay'
 
@@ -23,10 +24,35 @@ export const DEFAULT_WINDOW_SIZE: Record<WindowKey, { width: number; height: num
   overlay: { width: 132, height: 132 },
 }
 
-interface WindowPositionsStore {
+export interface WindowPositionsStore {
+  version: 2
   chat: Record<string, Bounds>
   overlay: Record<string, Bounds>
-  lastDisplayId: { chat: number | null; overlay: number | null }
+  lastDisplayKey: { chat: string | null; overlay: string | null }
+}
+
+function emptyStore(): WindowPositionsStore {
+  return { version: 2, chat: {}, overlay: {}, lastDisplayKey: { chat: null, overlay: null } }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null
+}
+
+export function parseWindowPositionsStore(raw: unknown): WindowPositionsStore {
+  const root = asRecord(raw)
+  if (!root || root.version !== 2) return emptyStore()
+
+  const rawLastDisplayKey = asRecord(root.lastDisplayKey) ?? {}
+  return {
+    version: 2,
+    chat: (asRecord(root.chat) ?? {}) as Record<string, Bounds>,
+    overlay: (asRecord(root.overlay) ?? {}) as Record<string, Bounds>,
+    lastDisplayKey: {
+      chat: typeof rawLastDisplayKey.chat === 'string' ? rawLastDisplayKey.chat : null,
+      overlay: typeof rawLastDisplayKey.overlay === 'string' ? rawLastDisplayKey.overlay : null,
+    },
+  }
 }
 
 function getFilePath(): string {
@@ -39,18 +65,9 @@ function load(): WindowPositionsStore {
   if (cache) return cache
 
   try {
-    const raw = JSON.parse(fs.readFileSync(getFilePath(), 'utf-8'))
-    const rawLastDisplayId = raw && typeof raw.lastDisplayId === 'object' && raw.lastDisplayId !== null ? raw.lastDisplayId : {}
-    cache = {
-      chat: raw && typeof raw.chat === 'object' && raw.chat !== null ? raw.chat : {},
-      overlay: raw && typeof raw.overlay === 'object' && raw.overlay !== null ? raw.overlay : {},
-      lastDisplayId: {
-        chat: typeof rawLastDisplayId.chat === 'number' ? rawLastDisplayId.chat : null,
-        overlay: typeof rawLastDisplayId.overlay === 'number' ? rawLastDisplayId.overlay : null,
-      },
-    }
+    cache = parseWindowPositionsStore(JSON.parse(fs.readFileSync(getFilePath(), 'utf-8')))
   } catch {
-    cache = { chat: {}, overlay: {}, lastDisplayId: { chat: null, overlay: null } }
+    cache = emptyStore()
   }
 
   return cache
@@ -71,29 +88,31 @@ function persist(store: WindowPositionsStore): void {
   }
 }
 
+function displayKeyForId(displayId: number): string {
+  const display = screen.getAllDisplays().find(candidate => candidate.id === displayId)
+  return display ? getStableDisplayKey(display) : fallbackDisplayKey(displayId)
+}
+
 export function getPreferredBounds(windowKey: WindowKey, displayId: number): Bounds | null {
   const store = load()
-  return store[windowKey][String(displayId)] ?? null
+  return store[windowKey][displayKeyForId(displayId)] ?? null
 }
 
 export function setPreferredBounds(windowKey: WindowKey, displayId: number, bounds: Bounds): void {
   const store = load()
-  store[windowKey][String(displayId)] = bounds
+  store[windowKey][displayKeyForId(displayId)] = bounds
   persist(store)
 }
 
-function getPreferredDisplayId(windowKey: WindowKey): number | null {
-  const store = load()
-  return store.lastDisplayId[windowKey]
-}
-
 export function getEffectiveHomeDisplay(displays: Electron.Display[], windowKey: WindowKey): Electron.Display {
-  return resolveStartupDisplay(displays, getPreferredDisplayId(windowKey))
+  const homeKey = load().lastDisplayKey[windowKey]
+  const home = homeKey !== null ? displays.find(display => getStableDisplayKey(display) === homeKey) : undefined
+  return resolveStartupDisplay(displays, home ? home.id : null)
 }
 
 function writeHomeDisplayId(windowKey: WindowKey, displayId: number): void {
   const store = load()
-  store.lastDisplayId[windowKey] = displayId
+  store.lastDisplayKey[windowKey] = displayKeyForId(displayId)
   persist(store)
 }
 
@@ -191,20 +210,67 @@ export function resolveStartupDisplay(
   return remembered ?? pickLargestDisplay(displays)
 }
 
-export function computeAnchoredResizeBounds(
-  bounds: Bounds,
-  size: { width: number; height: number },
+export function petWindowBounds(
+  preferred: Bounds,
+  base: { width: number; height: number },
+  scale: number,
   workArea: Electron.Rectangle
 ): Bounds {
+  const anchorX = preferred.x + (preferred.width - base.width) / 2
+  const anchorY = preferred.y + preferred.height - base.height
+  const width = Math.round(base.width * scale)
+  const height = Math.round(base.height * scale)
   return clampBoundsToWorkArea(
     {
-      x: Math.round(bounds.x + (bounds.width - size.width) / 2),
-      y: bounds.y + bounds.height - size.height,
-      width: size.width,
-      height: size.height,
+      x: Math.round(anchorX + (base.width - width) / 2),
+      y: Math.round(anchorY + (base.height - height) / 2),
+      width,
+      height,
     },
     workArea
   )
+}
+
+export function petPreferredFromWindow(window: Bounds, base: { width: number; height: number }): Bounds {
+  return {
+    x: Math.round(window.x + window.width / 2 - base.width / 2),
+    y: Math.round(window.y + window.height / 2 - base.height / 2),
+    width: base.width,
+    height: base.height,
+  }
+}
+
+export const HANDLE_SIZE = 20
+export const HANDLE_INSET = 2
+export const COLLAPSED_MARGIN = 2
+export const COLLAPSED_SIZE = HANDLE_SIZE + 2 * COLLAPSED_MARGIN
+
+export function collapsedHandleBounds(expanded: Bounds): Bounds {
+  return {
+    x: expanded.x + expanded.width - HANDLE_INSET - HANDLE_SIZE - COLLAPSED_MARGIN,
+    y: expanded.y + HANDLE_INSET - COLLAPSED_MARGIN,
+    width: COLLAPSED_SIZE,
+    height: COLLAPSED_SIZE,
+  }
+}
+
+export function petHandleBounds(pet: Bounds, wa: Electron.Rectangle): Bounds {
+  const r = collapsedHandleBounds(pet)
+  return {
+    x: Math.min(Math.max(r.x, wa.x), wa.x + wa.width - COLLAPSED_SIZE),
+    y: Math.min(Math.max(r.y, wa.y), wa.y + wa.height - COLLAPSED_SIZE),
+    width: COLLAPSED_SIZE,
+    height: COLLAPSED_SIZE,
+  }
+}
+
+export function expandedBoundsFromHandle(handle: Bounds, size: { width: number; height: number }): Bounds {
+  return {
+    x: handle.x - (size.width - HANDLE_INSET - HANDLE_SIZE - COLLAPSED_MARGIN),
+    y: handle.y - HANDLE_INSET + COLLAPSED_MARGIN,
+    width: size.width,
+    height: size.height,
+  }
 }
 
 export function clampBoundsToWorkArea(bounds: Bounds, workArea: Electron.Rectangle): Bounds {

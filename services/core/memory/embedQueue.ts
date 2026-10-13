@@ -5,9 +5,7 @@
 import {
   getPendingEmbeddingMessages,
   getPendingEmbeddingCount,
-  upsertMessageEmbedding,
-  indexMessageFts,
-  markMessageEmbedded,
+  embedMessageIfExists,
 } from '../session/queries.js'
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
 import type { Message } from '../../../shared/types/index.js'
@@ -33,10 +31,7 @@ export async function processEmbedQueue(
   let processed = 0
   for (let i = 0; i < pending.length; i++) {
     const msg = pending[i]
-    upsertMessageEmbedding(msg.id, msg.sessionId, embeddings[i])
-    indexMessageFts(msg.id, msg.sessionId, msg.content)
-    markMessageEmbedded(msg.id)
-    processed++
+    if (embedMessageIfExists(msg.id, msg.sessionId, msg.content, embeddings[i])) processed++
   }
 
   return { processed, remaining: getPendingEmbeddingCount() }

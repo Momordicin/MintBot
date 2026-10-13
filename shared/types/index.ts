@@ -1,3 +1,5 @@
+import type { PetScale } from '../portraitForm.js'
+
 // 建议索引（写 SQLite schema 时建立）：
 // CREATE INDEX idx_messages_session ON Messages(sessionId, createdAt)
 // CREATE INDEX idx_messages_visible ON Messages(sessionId, visibleToUser)
@@ -85,6 +87,7 @@ export interface PresetDisplayConfig {
   accentRgb: [number, number, number]   // 0-255 整数，用户选择的唯一 accent 色，对应 theme.ts ThemeInput.accentRgb
   tintStrength: number                  // 0-1，0 = 纯参考发布值，对应 theme.ts ThemeInput.tintStrength
   currentPortrait: 'pixel' | 'illustration'   // 桌宠当前形态，决定素材与窗口尺寸；桌宠读取，聊天窗口不使用
+  petScale: { pixel: PetScale; illustration: PetScale }   // 桌宠按形态分别记忆的缩放档位
 }
 
 // Preset（可复用的配置模板，用户管理）

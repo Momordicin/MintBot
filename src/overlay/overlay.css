@@ -23,27 +23,31 @@
 }
 
 .overlay-portrait {
-  max-width: 100%;
-  max-height: 100%;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
   -webkit-user-drag: none;
   -webkit-app-region: no-drag;
   cursor: pointer;
 }
 
-/* 专属拖拽手柄（docs/MintBot_TDD.md §3.7 附「拖拽的实现方式」⚠️「透明拖拽带可能没有
-   宽度」的风险已在真机确认发生：近方形立绘吃满 max-width/height 100% 时，root 上没被
-   立绘盖住的可拖区宽度为 0，悬浮窗完全拖不动）。固定 20px 圆形、钉在右上角，始终挂载在
-   DOM 里，只用 opacity 在基线 0.18 / 醒目 0.95 之间切换——不透明度不影响 -webkit-app-region 的命中区，
-   淡出后原地仍可拖，可见度只是提示不是开关。可见状态由 OverlayApp.tsx 的 isHandleVisible
-   state + 这个 class 驱动，不用 :hover——手柄本身是 drag 区域，:hover 命中在到达 DOM 之前
-   就被 WM_NCHITTEST 拦成 HTCAPTION，:hover 伪类完全不会触发（electron#13534） */
+.overlay-portrait.overlay-portrait--pixel {
+  image-rendering: pixelated;
+}
+
+/* 专属拖拽手柄（立绘以 width/height 100% + object-fit: contain 填满窗口，root 上没有剩余的可拖区，
+   所以需要一个固定的拖动抓手）。固定 20px 圆形、钉在右上角，始终挂载在 DOM 里，只用 opacity
+   在基线 0.18 / 醒目 0.95 之间切换，淡出后原地仍可拖，可见度只是提示不是开关。手柄是 no-drag：
+   鼠标事件正常到达 DOM，按住后指针移出一个小阈值，OverlayApp.tsx 才经 overlay:start-drag
+   交给主进程发起系统原生移动循环。可见状态由 OverlayApp.tsx 的 isHandleVisible state + 这个 class 驱动，
+   手柄上的 mouseenter/mouseleave 与立绘共用同一套 handlePortraitMouseEnter/Leave */
 .overlay-drag-handle {
   position: absolute;
   top: 2px;
   right: 2px;
   width: 20px;
   height: 20px;
-  -webkit-app-region: drag;
+  -webkit-app-region: no-drag;
   border-radius: 50%;
   /* 灰底 + 一圈白边 + 一层投影：灰底在白桌面上靠自身明度立住，白边在深色桌面上勾出轮廓，
      两种极端桌面底色下都不会消失。旧版是纯白方块，白底桌面上等于隐形——那不是高亮不够，
@@ -52,9 +56,8 @@
   box-shadow:
     0 0 0 1px rgba(255, 255, 255, 0.5),
     0 1px 3px rgba(0, 0, 0, 0.35);
-  /* 三道横杠用三层 background-image 画，不额外引入伪元素或 svg——手柄是 drag 区域，
-     结构越简单越不容易在命中测试上出意外。杠宽 10px、杠高 2px、间距 2px，纵向占
-     5~15px，在 20px 的圆里正好居中 */
+  /* 三道横杠用三层 background-image 画，不额外引入伪元素或 svg，结构保持简单。
+     杠宽 10px、杠高 2px、间距 2px，纵向占 5~15px，在 20px 的圆里正好居中 */
   background-image:
     linear-gradient(rgba(24, 24, 28, 0.88), rgba(24, 24, 28, 0.88)),
     linear-gradient(rgba(24, 24, 28, 0.88), rgba(24, 24, 28, 0.88)),
@@ -70,22 +73,31 @@
   opacity: 0.95;
 }
 
-/* 交互锁期间手柄也必须变回 no-drag：锁的目的是「转场进行中禁止拖拽」（见上方
-   .overlay-root--locked 的注释），子元素单独声明 drag 会覆盖父元素的 no-drag，若不加这条
-   手柄就会在锁着的时候凿穿这道禁令，让窗口在转场播放中仍然可拖 */
-.overlay-root.overlay-root--locked .overlay-drag-handle {
+/* 贴边未展开时抑制手柄（纯判断见 src/overlay/edgeHoverState.ts isDragHandleSuppressedByEdge
+   定义处注释）：手柄固定在右上角 20×20px，几乎整个手柄都落在贴边可视条带
+   （EDGE_VISIBLE_SLIVER_PX，40px）内，贴边未展开时隐藏，OverlayApp.tsx 的手柄按下
+   不发起拖动，悬停隐藏的手柄也会像立绘一样展开贴边的桌宠。由 OverlayApp.tsx 按
+   isDragHandleSuppressedByEdge 的结果二选一挂上这个 class 或 --visible（两者互斥，
+   不会同时出现在同一个元素上），因此这里不需要跟 --visible 比谁的优先级更高。
+   一旦 hover 展开或彻底离开 EDGE，OverlayApp.tsx 会摘掉这个 class，手柄恢复正常行为——
+   用户仍可以先 hover 展开、再拖走 */
+.overlay-drag-handle.overlay-drag-handle--edge-suppressed {
+  opacity: 0;
+}
+
+/* 收起态：窗口本身缩成手柄，不可拖、不穿透。Windows 会把窗口撑到约 25×28，故手柄左上锚定而非右上 */
+.overlay-root.overlay-root--collapsed {
   -webkit-app-region: no-drag;
 }
 
-/* 贴边未展开时抑制手柄（第二次 rework FIX 1，纯判断见 src/overlay/edgeHoverState.ts
-   isDragHandleSuppressedByEdge 定义处注释）：手柄固定在右上角 20×20px，几乎整个手柄都落在
-   贴边可视条带（EDGE_VISIBLE_SLIVER_PX，40px）内——用户从贴边条带的自然方向（顶部，正是
-   手柄占据的方向）靠近时，手柄的 drag 区在 WM_NCHITTEST 层面吞掉指针事件（electron#13534），
-   hover 展开永远触发不了。由 OverlayApp.tsx 按 isDragHandleSuppressedByEdge 的结果二选一挂上
-   这个 class 或 --visible（两者互斥，不会同时出现在同一个元素上），因此这里不需要跟
-   --visible 比谁的优先级更高。一旦 hover 展开或彻底离开 EDGE，OverlayApp.tsx 会摘掉这个
-   class，手柄恢复正常行为——用户仍可以先 hover 展开、再拖走 */
-.overlay-drag-handle.overlay-drag-handle--edge-suppressed {
-  opacity: 0;
+.overlay-drag-handle.overlay-drag-handle--collapsed {
+  left: 2px;
+  right: auto;
+  top: 2px;
   -webkit-app-region: no-drag;
+  opacity: 0.18;
+}
+
+.overlay-drag-handle.overlay-drag-handle--collapsed:hover {
+  opacity: 0.95;
 }

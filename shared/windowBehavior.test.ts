@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { isNewerSnapshot, type WindowBehaviorSnapshot } from './windowBehavior.js'
 
 function snapshot(generation: string, revision: number): WindowBehaviorSnapshot {
-  return { generation, revision, config: { chatPinMode: 'off', petAvoidanceEnabled: true, appRules: [] } }
+  return { generation, revision, config: { chatPinMode: 'off', petAvoidanceEnabled: true, petClickThrough: false, petCollapsed: false, appRules: [] } }
 }
 
 describe('isNewerSnapshot', () => {

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { db, initDb } from '../db/index.js'
-import { appendMessage, insertEntity, getCurrentEntities } from '../session/queries.js'
+import { appendMessage, forgetMessages, insertEntity, getCurrentEntities } from '../session/queries.js'
 import { extractEntities, type EntityModelProvider } from './entityExtractor.js'
 import type { NERProvider } from '../providers/NERProvider.js'
 import type { Message, NerEntity } from '../../../shared/types/index.js'
@@ -294,5 +294,40 @@ describe('extractEntities — Layer 3 候选实体收窄（selectLayer3Candidate
     await extractEntities([msgA, msgB], { ner: emptyNer(), model: capturingModel })
 
     expect(capturedSystem).toContain('B实体最新')
+  })
+})
+
+describe('extractEntities — 来源消息在模型返回前被删除', () => {
+  function deletingModel(msg: Message, json: string): EntityModelProvider {
+    return {
+      async completeSync() {
+        forgetMessages({ sessionId: msg.sessionId, messageIds: [msg.id], summaryIdsToDelete: [] })
+        return json
+      },
+    }
+  }
+
+  it('规则层候选的来源消息已不存在：丢弃，不插入实体', async () => {
+    const msg = addMessage('s1', '我喜欢猫')
+
+    const result = await extractEntities([msg], { ner: emptyNer(), model: deletingModel(msg, '{"changes":[]}') })
+
+    expect(result).toEqual({ inserted: 0, closed: 0 })
+    expect(getCurrentEntities('s1')).toHaveLength(0)
+  })
+
+  it('Layer 3 变更的来源消息已不存在：不关闭旧实体，也不插入新值', async () => {
+    const oldId = insertEntity({ messageId: 1, sessionId: 's1', type: 'other', value: '工作单位:旧公司', validFrom: 1000 })
+    const msg = addMessage('s1', '我现在在新公司工作了', 5000)
+    const changeJson = JSON.stringify({
+      changes: [{ messageId: msg.id, type: 'other', oldValue: '工作单位:旧公司', newValue: '工作单位:新公司' }],
+    })
+
+    const result = await extractEntities([msg], { ner: emptyNer(), model: deletingModel(msg, changeJson) })
+
+    expect(result).toEqual({ inserted: 0, closed: 0 })
+    const oldRow = db.prepare(`SELECT * FROM MessageEntities WHERE id = ?`).get(oldId) as any
+    expect(oldRow.validUntil).toBeNull()
+    expect(getCurrentEntities('s1')).toHaveLength(1)
   })
 })

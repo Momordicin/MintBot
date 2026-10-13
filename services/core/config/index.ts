@@ -1,11 +1,11 @@
-// services/core/config/index.ts — 项目根 config.json 的读取、热重载缓存与按段写回（memory / modelProvider / backgroundModelProvider / windowBehavior / defaultPresetId）
-// 用法：index.ts 的 start() 调 startConfigWatcher；其余模块用 getXxxConfig()；routes/config.ts、routes/windowBehavior.ts 调 update*Config，session/index.ts 调 setDefaultPresetId
-// 形状：getMemoryConfig() -> MemoryConfig；getModelProviderConfig() -> ModelConfig；getWindowBehaviorConfig() -> WindowBehaviorConfig；getDefaultPresetId() -> string | undefined
-// 对应文件：services/core/index.ts / services/core/routes/config.ts / services/core/routes/windowBehavior.ts / services/core/session/index.ts / shared/windowBehavior.ts / services/core/config/index.test.ts
+// services/core/config/index.ts — config.json 的读取、热重载与按段写回
+// 用法：core/index.ts 调 startConfigWatcher；其余模块用 getXxxConfig() 读取，用 update*Config / setDefaultPresetId 写回
+// 对应文件：services/core/config/configFileError.ts / services/core/config/index.test.ts
 import fs from 'fs'
 import path from 'path'
 import crypto from 'crypto'
 import chokidar from 'chokidar'
+import { ConfigFileUnreadableError } from './configFileError.js'
 import type { ModelConfig } from '../../../shared/types/index.js'
 import type { AppRule, AppRuleEffect, ChatPinMode, WindowBehaviorConfig } from '../../../shared/windowBehavior.js'
 
@@ -62,6 +62,8 @@ const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
 const DEFAULT_WINDOW_BEHAVIOR_CONFIG: WindowBehaviorConfig = {
   chatPinMode: 'off',
   petAvoidanceEnabled: true,
+  petClickThrough: false,
+  petCollapsed: false,
   appRules: [],
 }
 
@@ -187,11 +189,19 @@ function mergeWindowBehaviorConfig(raw: unknown): WindowBehaviorConfig {
   const petAvoidanceEnabled =
     typeof petAvoidanceValue === 'boolean' ? petAvoidanceValue : DEFAULT_WINDOW_BEHAVIOR_CONFIG.petAvoidanceEnabled
 
-  return { chatPinMode, petAvoidanceEnabled, appRules: mergeAppRules(windowBehavior) }
+  const petClickThroughValue = section?.petClickThrough
+  const petClickThrough =
+    typeof petClickThroughValue === 'boolean' ? petClickThroughValue : DEFAULT_WINDOW_BEHAVIOR_CONFIG.petClickThrough
+
+  const petCollapsedValue = section?.petCollapsed
+  const petCollapsed =
+    typeof petCollapsedValue === 'boolean' ? petCollapsedValue : DEFAULT_WINDOW_BEHAVIOR_CONFIG.petCollapsed
+
+  return { chatPinMode, petAvoidanceEnabled, petClickThrough, petCollapsed, appRules: mergeAppRules(windowBehavior) }
 }
 
 function serializeWindowBehaviorConfig(config: WindowBehaviorConfig): string {
-  return JSON.stringify([config.chatPinMode, config.petAvoidanceEnabled, config.appRules.map(rule => [rule.exeName, rule.effect])])
+  return JSON.stringify([config.chatPinMode, config.petAvoidanceEnabled, config.petClickThrough, config.petCollapsed, config.appRules.map(rule => [rule.exeName, rule.effect])])
 }
 
 function applyWindowBehaviorConfig(next: WindowBehaviorConfig): boolean {
@@ -303,12 +313,26 @@ export function getRawBackgroundModelProviderConfig(): ModelConfig | null {
   return currentBackgroundModelProviderConfig ?? null
 }
 
-function readRawConfig(): Record<string, unknown> {
-  try {
-    return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'))
-  } catch {
-    return {}
+function describeReadError(err: unknown): string {
+  if (err instanceof SyntaxError) {
+    const position = err.message.match(/at position \d+(?: \(line \d+ column \d+\))?/)
+    return position ? `JSON 语法错误（${position[0]}）` : 'JSON 语法错误'
   }
+  return err instanceof Error ? err.message : String(err)
+}
+
+function readRawConfig(): Record<string, unknown> {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'))
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {}
+    throw new ConfigFileUnreadableError(describeReadError(err))
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new ConfigFileUnreadableError('顶层不是对象')
+  }
+  return parsed as Record<string, unknown>
 }
 
 function readRawSection(section: 'modelProvider' | 'backgroundModelProvider' | 'windowBehavior'): Record<string, unknown> {

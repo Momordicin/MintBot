@@ -1,6 +1,6 @@
 // electron/main/activeWindowMonitor.ts — Windows 前台窗口探测：经 koffi 调 user32/dwmapi/kernel32 读取前台窗口（标题、类名、exe、所在显示器、是否全屏），并探测已记录阻挡窗口是否仍存活
-// 用法：startActiveWindowMonitor(onChange) 每 500ms 轮询，观测指纹变化才回调 ForegroundObservation（external / self / unavailable）；probeBlockerWindow(hwnd, pid) 返回 BlockerProbe；非 win32 平台为空操作或 unavailable
-// 对应文件：electron/main/index.ts（startActiveWindowMonitoring）/ electron/main/foregroundWorldModel.ts / electron/main/displayStateMap.ts（BlockerProbe、ExternalWindowInfo 的使用方）/ electron/main/activeWindowMonitor.test.ts
+// 用法：foregroundWorldModel.ts 调 getActiveWindowInfo() 取 ForegroundObservation（external / self / unavailable）、observationFingerprint 取观测指纹；probeBlockerWindow(hwnd, pid) 返回 BlockerProbe；非 win32 平台为空操作或 unavailable
+// 对应文件：electron/main/foregroundWorldModel.ts / electron/main/displayStateMap.ts（BlockerProbe、ExternalWindowInfo 的使用方）/ electron/main/activeWindowMonitor.test.ts
 import koffi from 'koffi'
 import path from 'path'
 import { screen } from 'electron'
@@ -202,26 +202,6 @@ export function observationFingerprint(observation: ForegroundObservation): stri
   if (observation.kind !== 'external') return observation.kind
   const { hwnd, isFullscreen, exeName, displayId } = observation.info
   return `external:${hwnd}:${isFullscreen}:${exeName}:${displayId}`
-}
-
-export function startActiveWindowMonitor(onChange: (observation: ForegroundObservation) => void): () => void {
-  if (process.platform !== 'win32') {
-    return () => {}
-  }
-
-  let previousFingerprint: string | null = null
-
-  const handle = setInterval(() => {
-    const current = getActiveWindowInfo()
-    const currentFingerprint = observationFingerprint(current)
-
-    if (currentFingerprint !== previousFingerprint) {
-      previousFingerprint = currentFingerprint
-      onChange(current)
-    }
-  }, 500)
-
-  return () => clearInterval(handle)
 }
 
 const hwndsWithLoggedProbeError = new Set<bigint>()

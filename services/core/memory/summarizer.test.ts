@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { db, initDb } from '../db/index.js'
-import { appendMessage } from '../session/queries.js'
+import { appendMessage, forgetMessages } from '../session/queries.js'
 import { shouldTriggerSummary, generateSummary, type SummaryModelProvider } from './summarizer.js'
 
 // lockScreenMinutes / messageCountThreshold 现在来自独立 config 模块，mock 成与迁移前硬编码
@@ -130,5 +130,25 @@ describe('generateSummary', () => {
     const messages = db.prepare(`SELECT * FROM Messages WHERE sessionId = ?`).all(sessionId) as any[]
     expect(messages.every(m => m.summarized === 0)).toBe(true)
     expect(db.prepare(`SELECT COUNT(*) as count FROM Summaries`).get() as any).toEqual({ count: 0 })
+  })
+
+  it('model 返回前有被摘要的消息已被删除：丢弃这次摘要，不写 Summaries，其余消息保持 summarized=0', async () => {
+    const sessionId = 's1'
+    const id1 = addMessage(sessionId, '我喜欢猫', 1000)
+    addMessage(sessionId, '我在阿里巴巴工作', 2000)
+    const model: SummaryModelProvider = {
+      async completeSync() {
+        forgetMessages({ sessionId, messageIds: [id1], summaryIdsToDelete: [] })
+        return '摘要'
+      },
+    }
+
+    const result = await generateSummary(sessionId, { model })
+
+    expect(result).toBeNull()
+    expect(db.prepare(`SELECT COUNT(*) as count FROM Summaries`).get() as any).toEqual({ count: 0 })
+    const messages = db.prepare(`SELECT * FROM Messages WHERE sessionId = ?`).all(sessionId) as any[]
+    expect(messages).toHaveLength(1)
+    expect(messages[0].summarized).toBe(0)
   })
 })

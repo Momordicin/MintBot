@@ -1,15 +1,15 @@
 // services/core/routes/presets.ts — 预设（角色人设档案）的增删改、切换与壁纸上传路由
-// 用法：core/index.ts 里 fastify.register(presetRoutes)，并取其导出的 WALLPAPER_DIR 作 /wallpapers/ 静态目录；GET /presets、POST /presets、POST /switch-preset、POST /presets/:presetId/wallpaper、PATCH /presets/:presetId；广播 preset-portrait-changed
-// 形状：切换、壁纸、PATCH 的响应为 buildStatePayload() 的状态载荷
-// 对应文件：src/settings/CharacterPanel.tsx（调用方）/ src/overlay/OverlayApp.tsx（消费 preset-portrait-changed）/ services/core/session/queries.ts / services/core/session/index.ts / services/core/session/displayConfig.ts / services/core/state.ts / services/core/routes/presets.test.ts / services/core/routes/wallpaperGuard.test.ts
+// 用法：core/index.ts 里 fastify.register(presetRoutes)，并取其导出的 WALLPAPER_DIR 作 /wallpapers/ 静态目录；GET /presets、POST /presets、POST /switch-preset、POST /presets/:presetId/wallpaper、PATCH /presets/:presetId、DELETE /presets/:presetId；广播 preset-pet-display-changed
+// 形状：切换、壁纸、PATCH、DELETE 的响应为 buildStatePayload() 的状态载荷
+// 对应文件：src/settings/CharacterPanel.tsx（调用方）/ src/overlay/OverlayApp.tsx（消费 preset-pet-display-changed）/ services/core/session/queries.ts / services/core/session/index.ts / services/core/session/displayConfig.ts / services/core/state.ts / services/core/routes/presets.test.ts / services/core/routes/wallpaperGuard.test.ts
 import type { FastifyInstance } from 'fastify'
 import path from 'path'
 import os from 'os'
 import fs from 'fs'
 import crypto from 'crypto'
 import * as dotenv from 'dotenv'
-import { getAllPresets, getPresetById, createPreset, updatePresetWallpaper, updatePresetName, updatePresetDisplayConfig, updatePresetSystemPrompt, updatePresetModelConfig } from '../session/queries.js'
-import { switchPreset, refreshCurrentPresetIfActive } from '../session/index.js'
+import { getAllPresets, getPresetById, createPreset, updatePresetWallpaper, updatePresetName, updatePresetDisplayConfig, updatePresetSystemPrompt, updatePresetModelConfig, deletePresetWithData, getMostRecentOtherPresetId } from '../session/queries.js'
+import { switchPreset, refreshCurrentPresetIfActive, getCurrentState } from '../session/index.js'
 import { buildStatePayload } from '../state.js'
 import { broadcastEvent } from '../events/broadcast.js'
 import {
@@ -19,6 +19,7 @@ import {
   isValidAccentRgb,
   isValidTintStrength,
   isValidCurrentPortrait,
+  isValidPetScale,
   clampTintStrength,
   DEFAULT_DISPLAY_CONFIG,
 } from '../session/displayConfig.js'
@@ -91,6 +92,38 @@ export async function presetRoutes(fastify: FastifyInstance) {
     }
 
     return buildStatePayload()
+  })
+
+  fastify.delete<{
+    Params: { presetId: string }
+  }>('/presets/:presetId', async (request, reply) => {
+    const { presetId } = request.params
+    if (!getPresetById(presetId)) {
+      return reply.status(404).send({ error: 'Preset not found' })
+    }
+    if (getAllPresets().length <= 1) {
+      return reply.status(409).send({ error: 'Cannot delete the last preset' })
+    }
+
+    if (getCurrentState()?.session.presetId === presetId) {
+      try {
+        switchPreset(getMostRecentOtherPresetId(presetId)!)
+      } catch {
+        return reply.status(404).send({ error: 'Preset not found' })
+      }
+    }
+
+    deletePresetWithData(presetId)
+
+    for (const ext of ALLOWED_WALLPAPER_EXTENSIONS) {
+      try {
+        fs.rmSync(path.join(WALLPAPER_DIR, `${presetId}-wallpaper.${ext}`), { force: true })
+      } catch (err) {
+        request.log.error(err, 'Failed to remove wallpaper')
+      }
+    }
+
+    return await buildStatePayload()
   })
 
   fastify.addContentTypeParser('application/octet-stream', { parseAs: 'buffer' }, (_request, body, done) => {
@@ -169,12 +202,9 @@ export async function presetRoutes(fastify: FastifyInstance) {
       return reply.status(400).send({ error: 'name, displayConfig, systemPrompt, modelType or modelName is required' })
     }
 
-    if (name !== undefined) {
-      const trimmedName = name.trim()
-      if (!trimmedName) {
-        return reply.status(400).send({ error: 'name is required' })
-      }
-      updatePresetName(presetId, trimmedName)
+    const trimmedName = name?.trim()
+    if (name !== undefined && !trimmedName) {
+      return reply.status(400).send({ error: 'name is required' })
     }
 
     if (displayConfig !== undefined) {
@@ -196,9 +226,49 @@ export async function presetRoutes(fastify: FastifyInstance) {
       if (displayConfig.currentPortrait !== undefined && !isValidCurrentPortrait(displayConfig.currentPortrait)) {
         return reply.status(400).send({ error: 'currentPortrait must be one of pixel, illustration' })
       }
+      if (displayConfig.petScale !== undefined && !isValidPetScale(displayConfig.petScale)) {
+        return reply.status(400).send({ error: 'petScale must be an object with pixel and illustration each one of 0.5, 0.75, 1, 1.25, 1.5' })
+      }
+    }
 
+    const trimmedSystemPrompt = systemPrompt?.trim()
+    if (systemPrompt !== undefined && !trimmedSystemPrompt) {
+      return reply.status(400).send({ error: 'systemPrompt is required' })
+    }
+
+    if ((modelType !== undefined) !== (modelName !== undefined)) {
+      return reply.status(400).send({ error: 'modelType and modelName must be provided together' })
+    }
+
+    let modelConfig: { modelType: 'anthropic' | 'openai' | 'ollama' | 'deepseek' | null; modelName: string | null } | undefined
+    if (modelType !== undefined) {
+      if (modelType === null) {
+        if (modelName !== null) {
+          return reply.status(400).send({ error: 'modelName must be null when modelType is null' })
+        }
+        modelConfig = { modelType: null, modelName: null }
+      } else {
+        if (!VALID_MODEL_TYPES.includes(modelType)) {
+          return reply.status(400).send({ error: 'modelType must be one of anthropic, openai, ollama, deepseek, or null' })
+        }
+        const trimmedModelName = (modelName ?? '').trim()
+        if (!trimmedModelName) {
+          return reply.status(400).send({ error: 'modelName is required when modelType is set' })
+        }
+        modelConfig = { modelType, modelName: trimmedModelName }
+      }
+    }
+
+    if (trimmedName !== undefined) {
+      updatePresetName(presetId, trimmedName)
+    }
+
+    if (displayConfig !== undefined) {
       const portraitChanged = displayConfig.currentPortrait !== undefined
         && displayConfig.currentPortrait !== preset.displayConfig.currentPortrait
+      const petScaleChanged = displayConfig.petScale !== undefined
+        && (displayConfig.petScale.pixel !== preset.displayConfig.petScale.pixel
+          || displayConfig.petScale.illustration !== preset.displayConfig.petScale.illustration)
 
       updatePresetDisplayConfig(presetId, {
         chatBgRgb: displayConfig.chatBgRgb ?? preset.displayConfig.chatBgRgb,
@@ -209,38 +279,19 @@ export async function presetRoutes(fastify: FastifyInstance) {
           ? clampTintStrength(displayConfig.tintStrength)
           : preset.displayConfig.tintStrength,
         currentPortrait: displayConfig.currentPortrait ?? preset.displayConfig.currentPortrait,
+        petScale: displayConfig.petScale
+          ? { pixel: displayConfig.petScale.pixel, illustration: displayConfig.petScale.illustration }
+          : preset.displayConfig.petScale,
       })
-      if (portraitChanged) broadcastEvent('preset-portrait-changed', { presetId })
+      if (portraitChanged || petScaleChanged) broadcastEvent('preset-pet-display-changed', { presetId })
     }
 
-    if (systemPrompt !== undefined) {
-      const trimmedSystemPrompt = systemPrompt.trim()
-      if (!trimmedSystemPrompt) {
-        return reply.status(400).send({ error: 'systemPrompt is required' })
-      }
+    if (trimmedSystemPrompt !== undefined) {
       updatePresetSystemPrompt(presetId, trimmedSystemPrompt)
     }
 
-    if ((modelType !== undefined) !== (modelName !== undefined)) {
-      return reply.status(400).send({ error: 'modelType and modelName must be provided together' })
-    }
-
-    if (modelType !== undefined) {
-      if (modelType === null) {
-        if (modelName !== null) {
-          return reply.status(400).send({ error: 'modelName must be null when modelType is null' })
-        }
-        updatePresetModelConfig(presetId, null, null)
-      } else {
-        if (!VALID_MODEL_TYPES.includes(modelType)) {
-          return reply.status(400).send({ error: 'modelType must be one of anthropic, openai, ollama, deepseek, or null' })
-        }
-        const trimmedModelName = (modelName ?? '').trim()
-        if (!trimmedModelName) {
-          return reply.status(400).send({ error: 'modelName is required when modelType is set' })
-        }
-        updatePresetModelConfig(presetId, modelType, trimmedModelName)
-      }
+    if (modelConfig !== undefined) {
+      updatePresetModelConfig(presetId, modelConfig.modelType, modelConfig.modelName)
     }
 
     if (applyNow === true) {

@@ -1,5 +1,5 @@
 // electron/main/windowAnimation.ts — BrowserWindow 位置移动动画：同显示器内补间，跨显示器则滑出淡出、瞬移、滑入淡入
-// 用法：animateTo(win, target, onComplete, { instant }) 返回 cancel 函数（立即落到目标并回调 onComplete）；窗口 minimize / hide / close 时同样落到目标；isAnimating(win) 查询
+// 用法：animateTo(win, target, onComplete, { instant, finalOpacity }) 返回 cancel 函数（立即落到目标并回调 onComplete）；窗口 minimize / hide / close 时同样落到目标；isAnimating(win) 查询
 // 对应文件：electron/main/windowBehavior.ts（moveToDisplay、贴边移动、拖拽回滚）/ electron/main/windowAnimation.test.ts
 import { BrowserWindow, screen } from 'electron'
 
@@ -82,8 +82,9 @@ export function animateTo(
   win: BrowserWindow,
   target: Electron.Rectangle,
   onComplete?: () => void,
-  options?: { instant?: boolean }
+  options?: { instant?: boolean; finalOpacity?: number }
 ): () => void {
+  const finalOpacity = options?.finalOpacity ?? 1
   const existingCancel = activeCancels.get(win)
   if (existingCancel) {
     existingCancel()
@@ -105,7 +106,7 @@ export function animateTo(
         `target=${target.width}x${target.height}@${target.x},${target.y}`
     )
     win.setBounds(target)
-    win.setOpacity(1)
+    win.setOpacity(finalOpacity)
     cancelled = true
     onComplete?.()
     return () => {}
@@ -146,7 +147,7 @@ export function animateTo(
     }
     try {
       win.setBounds(target)
-      win.setOpacity(1)
+      win.setOpacity(finalOpacity)
     } catch (err) {
       console.error('[WindowAnimation] Failed to snap to target:', err)
     }
@@ -175,7 +176,7 @@ export function animateTo(
 
         if (t >= 1) {
           win.setBounds(target)
-          win.setOpacity(1)
+          win.setOpacity(finalOpacity)
           stopAndUntrack()
           cancelled = true
           onComplete?.()
@@ -216,7 +217,7 @@ export function animateTo(
 
       const { x, y, opacity } = interpolateFrame(start, exitEnd, t, easeEntrance)
       win.setBounds({ x, y, width: start.width, height: start.height })
-      win.setOpacity(1 - opacity)
+      win.setOpacity(finalOpacity * (1 - opacity))
       timer = setTimeout(exitFrame, FRAME_MS)
     } catch (err) {
       console.error('[WindowAnimation] exit frame failed, snapping to target:', err)
@@ -255,7 +256,7 @@ export function animateTo(
 
         if (t >= 1) {
           win.setBounds(target)
-          win.setOpacity(1)
+          win.setOpacity(finalOpacity)
           stopAndUntrack()
           cancelled = true
           onComplete?.()
@@ -264,7 +265,7 @@ export function animateTo(
 
         const { x, y, opacity } = interpolateFrame(settledStart, target, t, easeEntrance)
         win.setBounds({ x, y, width: target.width, height: target.height })
-        win.setOpacity(opacity)
+        win.setOpacity(finalOpacity * opacity)
         timer = setTimeout(entranceFrame, FRAME_MS)
       } catch (err) {
         console.error('[WindowAnimation] entrance frame failed, snapping to target:', err)

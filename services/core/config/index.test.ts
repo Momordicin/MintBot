@@ -449,14 +449,14 @@ describe('config/index — updateBackgroundModelProviderConfig', () => {
 
 // ─── 桌面呈现配置（chatPinMode / petAvoidanceEnabled / appRules）────────────
 describe('config/index — getWindowBehaviorConfig', () => {
-  it('config.json 不存在时，回退到默认值 { chatPinMode: off, petAvoidanceEnabled: true, appRules: [] }', async () => {
+  it('config.json 不存在时，回退到默认值 { chatPinMode: off, petAvoidanceEnabled: true, petClickThrough: false, petCollapsed: false, appRules: [] }', async () => {
     readFileSyncMock.mockImplementation(() => { throw new Error('ENOENT') })
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { startConfigWatcher, getWindowBehaviorConfig } = await import('./index.js')
 
     startConfigWatcher()
 
-    expect(getWindowBehaviorConfig()).toEqual({ chatPinMode: 'off', petAvoidanceEnabled: true, appRules: [] })
+    expect(getWindowBehaviorConfig()).toEqual({ chatPinMode: 'off', petAvoidanceEnabled: true, petClickThrough: false, petCollapsed: false, appRules: [] })
   })
 
   it('完整合法的 windowBehavior 按原样使用', async () => {
@@ -464,6 +464,8 @@ describe('config/index — getWindowBehaviorConfig', () => {
       windowBehavior: {
         chatPinMode: 'smart',
         petAvoidanceEnabled: false,
+        petClickThrough: true,
+        petCollapsed: true,
         appRules: [{ exeName: 'chrome.exe', effect: 'allow' }, { exeName: 'game.exe', effect: 'hard' }],
       },
     }))
@@ -474,6 +476,8 @@ describe('config/index — getWindowBehaviorConfig', () => {
     expect(getWindowBehaviorConfig()).toEqual({
       chatPinMode: 'smart',
       petAvoidanceEnabled: false,
+      petClickThrough: true,
+      petCollapsed: true,
       appRules: [{ exeName: 'chrome.exe', effect: 'allow' }, { exeName: 'game.exe', effect: 'hard' }],
     })
   })
@@ -487,7 +491,7 @@ describe('config/index — getWindowBehaviorConfig', () => {
 
     startConfigWatcher()
 
-    expect(getWindowBehaviorConfig()).toEqual({ chatPinMode: 'off', petAvoidanceEnabled: false, appRules: [] })
+    expect(getWindowBehaviorConfig()).toEqual({ chatPinMode: 'off', petAvoidanceEnabled: false, petClickThrough: false, petCollapsed: false, appRules: [] })
     expect(warnSpy).toHaveBeenCalled()
   })
 
@@ -500,6 +504,18 @@ describe('config/index — getWindowBehaviorConfig', () => {
     startConfigWatcher()
 
     expect(getWindowBehaviorConfig().petAvoidanceEnabled).toBe(true)
+  })
+
+  it('petClickThrough / petCollapsed 缺失或不是布尔值时回退到默认的 false', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      windowBehavior: { chatPinMode: 'off', petAvoidanceEnabled: true, petClickThrough: 'yes', petCollapsed: 1, appRules: [] },
+    }))
+    const { startConfigWatcher, getWindowBehaviorConfig } = await import('./index.js')
+
+    startConfigWatcher()
+
+    expect(getWindowBehaviorConfig().petClickThrough).toBe(false)
+    expect(getWindowBehaviorConfig().petCollapsed).toBe(false)
   })
 
   it('appRules 里不合法的条目被单独丢弃并 warn，不连累其它合法条目', async () => {
@@ -551,7 +567,7 @@ describe('config/index — getWindowBehaviorConfig', () => {
 
     startConfigWatcher()
 
-    expect(getWindowBehaviorConfig()).toEqual({ chatPinMode: 'off', petAvoidanceEnabled: true, appRules: [] })
+    expect(getWindowBehaviorConfig()).toEqual({ chatPinMode: 'off', petAvoidanceEnabled: true, petClickThrough: false, petCollapsed: false, appRules: [] })
   })
 })
 
@@ -665,6 +681,8 @@ describe('config/index — updateWindowBehaviorConfig', () => {
     expect(result).toEqual({
       chatPinMode: 'smart',
       petAvoidanceEnabled: false,
+      petClickThrough: false,
+      petCollapsed: false,
       appRules: [{ exeName: 'chrome.exe', effect: 'allow' }],
     })
 
@@ -677,6 +695,8 @@ describe('config/index — updateWindowBehaviorConfig', () => {
     expect(writtenJson.windowBehavior).toEqual({
       chatPinMode: 'smart',
       petAvoidanceEnabled: false,
+      petClickThrough: false,
+      petCollapsed: false,
       appRules: [{ exeName: 'chrome.exe', effect: 'allow' }],
     })
     expect(writtenJson.memory).toEqual({ recentTrackMaxMessages: 200 })
@@ -734,6 +754,8 @@ describe('config/index — updateWindowBehaviorConfig', () => {
     expect(result).toEqual({
       chatPinMode: 'smart',
       petAvoidanceEnabled: false,
+      petClickThrough: false,
+      petCollapsed: false,
       appRules: [{ exeName: 'game.exe', effect: 'hard' }],
     })
 
@@ -743,6 +765,8 @@ describe('config/index — updateWindowBehaviorConfig', () => {
     expect(writtenJson.windowBehavior).toEqual({
       chatPinMode: 'smart',
       petAvoidanceEnabled: false,
+      petClickThrough: false,
+      petCollapsed: false,
       appRules: [{ exeName: 'game.exe', effect: 'hard' }],
     })
   })
@@ -796,6 +820,20 @@ describe('config/index — windowBehavior revision', () => {
     mod.updateWindowBehaviorConfig({ chatPinMode: 'smart' })
 
     expect(mod.getWindowBehaviorRevision()).toBe(1)
+  })
+
+  it('petClickThrough 或 petCollapsed 变化时 revision +1，写入相同值时不变', async () => {
+    readFileSyncMock.mockReturnValue(windowBehaviorFile())
+    const { mod } = await startWatching()
+
+    mod.updateWindowBehaviorConfig({ petClickThrough: false, petCollapsed: false })
+    expect(mod.getWindowBehaviorRevision()).toBe(1)
+
+    mod.updateWindowBehaviorConfig({ petClickThrough: true })
+    expect(mod.getWindowBehaviorRevision()).toBe(2)
+
+    mod.updateWindowBehaviorConfig({ petCollapsed: true })
+    expect(mod.getWindowBehaviorRevision()).toBe(3)
   })
 
   it('appRules 的顺序变化算内容变化', async () => {
@@ -879,6 +917,90 @@ describe('config/index — getDefaultPresetId', () => {
     const { getDefaultPresetId } = await import('./index.js')
 
     expect(getDefaultPresetId()).toBeUndefined()
+  })
+})
+
+describe('config/index — config.json 无法读取或格式不正确时拒绝写入', () => {
+  const invalidContents: Array<[string, () => void]> = [
+    ['JSON 语法错误（多余逗号）', () => readFileSyncMock.mockReturnValue('{ "modelProvider": { "type": "ollama" }, }')],
+    ['顶层是数组', () => readFileSyncMock.mockReturnValue('[]')],
+    ['顶层是 null', () => readFileSyncMock.mockReturnValue('null')],
+    ['顶层是数字', () => readFileSyncMock.mockReturnValue('42')],
+    ['读取抛出非 ENOENT 错误', () => readFileSyncMock.mockImplementation(() => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }) })],
+  ]
+
+  for (const [label, arrange] of invalidContents) {
+    it(`${label}：setDefaultPresetId / updateWindowBehaviorConfig / updateModelProviderConfig / updateBackgroundModelProviderConfig 都抛错，不写临时文件也不 rename`, async () => {
+      arrange()
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const mod = await import('./index.js')
+
+      expect(() => mod.setDefaultPresetId('p2')).toThrow(/config\.json/)
+      expect(() => mod.updateWindowBehaviorConfig({ chatPinMode: 'always' })).toThrow(/config\.json/)
+      expect(() => mod.updateModelProviderConfig({ ollamaModel: 'llama3' })).toThrow(/config\.json/)
+      expect(() => mod.updateBackgroundModelProviderConfig({ modelName: 'x' })).toThrow(/config\.json/)
+
+      expect(writeFileSyncMock).not.toHaveBeenCalled()
+      expect(renameSyncMock).not.toHaveBeenCalled()
+    })
+  }
+
+  it('JSON 语法错误时，错误信息不带出文件内容片段', async () => {
+    readFileSyncMock.mockReturnValue('{ "modelProvider": { "anthropicApiKey": sk-FAKESECRET12345 } }')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const mod = await import('./index.js')
+
+    let message = ''
+    try {
+      mod.setDefaultPresetId('p2')
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err)
+    }
+
+    expect(message).toMatch(/JSON 语法错误/)
+    expect(message).not.toMatch(/FAKESECRET/)
+    expect(message).not.toMatch(/sk-/)
+  })
+
+  it('写入抛错时不修改内存缓存', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({ defaultPresetId: 'p1', windowBehavior: { chatPinMode: 'off', appRules: [] } }))
+    const mod = await import('./index.js')
+    expect(mod.getDefaultPresetId()).toBe('p1')
+    expect(mod.getWindowBehaviorConfig().chatPinMode).toBe('off')
+
+    readFileSyncMock.mockReturnValue('{ broken')
+    expect(() => mod.setDefaultPresetId('p2')).toThrow()
+    expect(() => mod.updateWindowBehaviorConfig({ chatPinMode: 'always' })).toThrow()
+
+    expect(mod.getDefaultPresetId()).toBe('p1')
+    expect(mod.getWindowBehaviorConfig().chatPinMode).toBe('off')
+    expect(mod.getWindowBehaviorRevision()).toBe(1)
+  })
+
+  it('readFileSync 抛 ENOENT 时照常写入，写入内容只有这一段', async () => {
+    readFileSyncMock.mockImplementation(() => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { setDefaultPresetId, getDefaultPresetId } = await import('./index.js')
+
+    setDefaultPresetId('p2')
+
+    expect(writeFileSyncMock).toHaveBeenCalledTimes(1)
+    expect(renameSyncMock).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(writeFileSyncMock.mock.calls[0][1] as string)).toEqual({ defaultPresetId: 'p2' })
+    expect(getDefaultPresetId()).toBe('p2')
+  })
+
+  it('文件合法时行为不变，其他段原样保留', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({ memory: { recentTrackMaxMessages: 200 }, modelProvider: { type: 'ollama' } }))
+    const { setDefaultPresetId } = await import('./index.js')
+
+    setDefaultPresetId('p2')
+
+    expect(JSON.parse(writeFileSyncMock.mock.calls[0][1] as string)).toEqual({
+      memory: { recentTrackMaxMessages: 200 },
+      modelProvider: { type: 'ollama' },
+      defaultPresetId: 'p2',
+    })
   })
 })
 

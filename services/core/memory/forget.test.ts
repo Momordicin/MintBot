@@ -130,3 +130,94 @@ describe('forgetTimeRange', () => {
     expect(result).toEqual({ deletedMessages: 0, deletedEntities: 0, deletedSummaries: 0, deletedEmbeddings: 0, deletedFts: 0 })
   })
 })
+
+function addAssistant(sessionId: string, content: string, createdAt: number): number {
+  return appendMessage({
+    sessionId, role: 'assistant', content, createdAt,
+    embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null,
+  })
+}
+
+describe('按问题为准的范围选择', () => {
+  it('问题在范围内则连同回复一起删，回复在范围内而问题不在则保留', () => {
+    const q1 = addMessage('s1', 'q1', 1000)
+    const a1 = addAssistant('s1', 'a1', 3000)
+    const q2 = addMessage('s1', 'q2', 2000)
+    const a2 = addAssistant('s1', 'a2', 5000)
+    const q3 = addMessage('s1', 'q3', 4000)
+    const a3 = addAssistant('s1', 'a3', 6000)
+
+    const result = forgetTimeRange('s1', 1000, 3000, { alsoDeleteAffectedSummaries: false })
+
+    expect(result.deletedMessages).toBe(4)
+    expect(getMessagesByIds([q1, a1, q2, a2])).toEqual([])
+    expect(getMessagesByIds([q3, a3]).map(m => m.id)).toEqual([q3, a3])
+  })
+
+  it('范围只覆盖回复时什么都不删', () => {
+    const q1 = addMessage('s1', 'q1', 1000)
+    const a1 = addAssistant('s1', 'a1', 3000)
+
+    const impact = checkForgetImpact('s1', 2500, 3500)
+    const result = forgetTimeRange('s1', 2500, 3500, { alsoDeleteAffectedSummaries: false })
+
+    expect(impact.messageIds).toEqual([])
+    expect(result.deletedMessages).toBe(0)
+    expect(getMessagesByIds([q1, a1])).toHaveLength(2)
+  })
+
+  it('没有回复的问题（后面紧跟另一个问题）只删它自己', () => {
+    const q1 = addMessage('s1', 'q1', 1000)
+    const q2 = addMessage('s1', 'q2', 2000)
+    const a2 = addAssistant('s1', 'a2', 3000)
+
+    const result = forgetTimeRange('s1', 1000, 1000, { alsoDeleteAffectedSummaries: false })
+
+    expect(result.deletedMessages).toBe(1)
+    expect(getMessagesByIds([q1])).toEqual([])
+    expect(getMessagesByIds([q2, a2])).toHaveLength(2)
+  })
+
+  it('最后一个问题没有任何后续消息时只删它自己', () => {
+    const q1 = addMessage('s1', 'q1', 1000)
+
+    expect(checkForgetImpact('s1', 1000, 1000).messageIds).toEqual([q1])
+  })
+
+  it('不会把别的会话的消息当作回复', () => {
+    const q1 = addMessage('s1', 'q1', 1000)
+    const other = addAssistant('s2', 'x', 1500)
+    const a1 = addAssistant('s1', 'a1', 2000)
+
+    expect(checkForgetImpact('s1', 1000, 1000).messageIds).toEqual([q1, a1])
+    expect(getMessagesByIds([other])).toHaveLength(1)
+  })
+
+  it('预览的消息数等于实际删除的条数', () => {
+    addMessage('s1', 'q1', 1000)
+    addAssistant('s1', 'a1', 3000)
+    addMessage('s1', 'q2', 2000)
+    addAssistant('s1', 'a2', 5000)
+    addMessage('s1', 'q3', 4000)
+    addAssistant('s1', 'a3', 6000)
+
+    const impact = checkForgetImpact('s1', 1000, 3000)
+    const result = forgetTimeRange('s1', 1000, 3000, { alsoDeleteAffectedSummaries: false })
+
+    expect(impact.messageIds).toHaveLength(4)
+    expect(result.deletedMessages).toBe(impact.messageIds.length)
+  })
+
+  it('重叠摘要按被删消息 id 的最小值和最大值判断', () => {
+    addMessage('s1', 'q1', 1000)
+    addAssistant('s1', 'a1', 1500)
+    const q2 = addMessage('s1', 'q2', 2000)
+    const a2 = addAssistant('s1', 'a2', 2500)
+    const summaryId = insertSummary({ sessionId: 's1', content: '摘要', fromMessageId: a2, toMessageId: a2 + 1 })
+
+    const impact = checkForgetImpact('s1', 2000, 2000)
+
+    expect(impact.messageIds).toEqual([q2, a2])
+    expect(impact.affectedSummaries.map(s => s.id)).toEqual([summaryId])
+  })
+})

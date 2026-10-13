@@ -3,6 +3,7 @@
 // 形状：PresetDisplayConfig（定义在 shared/types/index.ts）
 // 对应文件：services/core/routes/presets.ts / services/core/session/queries.ts / shared/types/index.ts / services/core/session/displayConfig.test.ts
 import type { PresetDisplayConfig } from '../../../shared/types/index.js'
+import { PET_SCALE_OPTIONS, type PetScale } from '../../../shared/portraitForm.js'
 
 export const DEFAULT_DISPLAY_CONFIG: PresetDisplayConfig = {
   chatBgRgb: [15, 15, 20],
@@ -11,6 +12,7 @@ export const DEFAULT_DISPLAY_CONFIG: PresetDisplayConfig = {
   accentRgb: [0, 122, 255],
   tintStrength: 0,
   currentPortrait: 'pixel',
+  petScale: { pixel: 1, illustration: 1 },
 }
 
 export function isValidChatBgRgb(value: unknown): value is [number, number, number] {
@@ -37,6 +39,16 @@ export function isValidCurrentPortrait(value: unknown): value is 'pixel' | 'illu
   return value === 'pixel' || value === 'illustration'
 }
 
+function isValidPetScaleValue(value: unknown): value is PetScale {
+  return (PET_SCALE_OPTIONS as readonly unknown[]).includes(value)
+}
+
+export function isValidPetScale(value: unknown): value is PresetDisplayConfig['petScale'] {
+  if (typeof value !== 'object' || value === null) return false
+  const record = value as Record<string, unknown>
+  return isValidPetScaleValue(record.pixel) && isValidPetScaleValue(record.illustration)
+}
+
 export function isValidTintStrength(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }
@@ -53,6 +65,7 @@ function mergeDisplayConfig(source: unknown): PresetDisplayConfig {
   const accentRgb = record?.accentRgb
   const tintStrength = record?.tintStrength
   const currentPortrait = record?.currentPortrait
+  const petScale = record?.petScale
 
   if (!isValidChatBgRgb(chatBgRgb)) {
     console.warn(`[DisplayConfig] chatBgRgb 缺失或类型错误，使用默认值 ${JSON.stringify(DEFAULT_DISPLAY_CONFIG.chatBgRgb)}`)
@@ -76,6 +89,11 @@ function mergeDisplayConfig(source: unknown): PresetDisplayConfig {
     console.warn(`[DisplayConfig] currentPortrait 类型错误，使用默认值 ${DEFAULT_DISPLAY_CONFIG.currentPortrait}`)
   }
 
+  const petScaleRecord = typeof petScale === 'object' && petScale !== null ? petScale as Record<string, unknown> : undefined
+  if (petScale !== undefined && !isValidPetScale(petScale)) {
+    console.warn(`[DisplayConfig] petScale 类型错误，无效的形态使用默认值 ${JSON.stringify(DEFAULT_DISPLAY_CONFIG.petScale)}`)
+  }
+
   return {
     chatBgRgb: resolvedChatBgRgb,
     chatBgOpacity: isValidChatBgOpacity(chatBgOpacity) ? chatBgOpacity : DEFAULT_DISPLAY_CONFIG.chatBgOpacity,
@@ -83,6 +101,10 @@ function mergeDisplayConfig(source: unknown): PresetDisplayConfig {
     accentRgb: isValidAccentRgb(accentRgb) ? accentRgb : DEFAULT_DISPLAY_CONFIG.accentRgb,
     tintStrength: isValidTintStrength(tintStrength) ? clampTintStrength(tintStrength) : DEFAULT_DISPLAY_CONFIG.tintStrength,
     currentPortrait: isValidCurrentPortrait(currentPortrait) ? currentPortrait : DEFAULT_DISPLAY_CONFIG.currentPortrait,
+    petScale: {
+      pixel: isValidPetScaleValue(petScaleRecord?.pixel) ? petScaleRecord.pixel : DEFAULT_DISPLAY_CONFIG.petScale.pixel,
+      illustration: isValidPetScaleValue(petScaleRecord?.illustration) ? petScaleRecord.illustration : DEFAULT_DISPLAY_CONFIG.petScale.illustration,
+    },
   }
 }
 

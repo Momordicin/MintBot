@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import Fastify from 'fastify'
 import { configRoutes } from './config.js'
+import { ConfigFileUnreadableError, CONFIG_FILE_UNREADABLE_MESSAGE } from '../config/configFileError.js'
 
 // routes/config.ts 只负责路由层的校验 + 响应整形，实际的读写职责在 config/index.ts——
 // mock 掉整个 config 模块，测试聚焦于本文件自己的行为（校验规则、key 脱敏、undefined/null
@@ -434,5 +435,43 @@ describe('PATCH /config/model — 成功路径', () => {
       hasOpenaiApiKey: false,
       hasDeepseekApiKey: false,
     })
+  })
+})
+
+describe('PATCH /config/model — config.json 无法读取', () => {
+  it('写入抛出 ConfigFileUnreadableError 时返回 500，error 为中文提示', async () => {
+    getModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'qwen3' })
+    updateModelProviderConfigMock.mockImplementation(() => {
+      throw new ConfigFileUnreadableError('Unexpected token')
+    })
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/config/model',
+      payload: { modelProvider: { ollamaModel: 'llama3' } },
+    })
+    errorSpy.mockRestore()
+
+    expect(response.statusCode).toBe(500)
+    expect(JSON.parse(response.payload)).toEqual({ error: CONFIG_FILE_UNREADABLE_MESSAGE })
+  })
+
+  it('其他错误照常向外抛出，不使用 config.json 的提示文字', async () => {
+    getModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'qwen3' })
+    updateModelProviderConfigMock.mockImplementation(() => {
+      throw new Error('unexpected')
+    })
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'PATCH',
+      url: '/config/model',
+      payload: { modelProvider: { ollamaModel: 'llama3' } },
+    })
+
+    expect(response.statusCode).toBe(500)
+    expect(JSON.parse(response.payload).error).not.toBe(CONFIG_FILE_UNREADABLE_MESSAGE)
   })
 })

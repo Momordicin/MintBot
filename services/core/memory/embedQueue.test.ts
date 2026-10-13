@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { db, initDb } from '../db/index.js'
-import { appendMessage, getPendingEmbeddingCount, searchSimilarMessages, searchMessagesFts } from '../session/queries.js'
+import { appendMessage, forgetMessages, getPendingEmbeddingCount, searchSimilarMessages, searchMessagesFts } from '../session/queries.js'
 import { processEmbedQueue } from './embedQueue.js'
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
 
@@ -93,5 +93,26 @@ describe('processEmbedQueue', () => {
 
     expect(result).toEqual({ processed: 0, remaining: 2 })
     expect(getPendingEmbeddingCount()).toBe(2)
+  })
+
+  it('embedBatch 返回前消息已被删除：丢弃该条结果，不写向量与全文索引，其余消息照常写入', async () => {
+    const deletedId = addPendingMessage('s1', 'cat likes fish', 1000)
+    const keptId = addPendingMessage('s1', 'dog likes bones', 2000)
+
+    const provider: EmbeddingProvider = {
+      ...fakeProvider(),
+      async embedBatch(texts: string[]) {
+        forgetMessages({ sessionId: 's1', messageIds: [deletedId], summaryIdsToDelete: [] })
+        return texts.map(() => new Array(1024).fill(1))
+      },
+    }
+
+    const result = await processEmbedQueue(provider)
+
+    expect(result).toEqual({ processed: 1, remaining: 0 })
+    expect(searchMessagesFts('cat')).toHaveLength(0)
+    expect(searchMessagesFts('dog').map(r => r.messageId)).toEqual([keptId])
+    const vecIds = searchSimilarMessages(new Array(1024).fill(1), 10).map(r => r.messageId)
+    expect(vecIds).toEqual([keptId])
   })
 })

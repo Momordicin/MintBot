@@ -5,6 +5,7 @@ import {
   decideBlockerAfterValidation,
   validateBlockers,
   pickPrecedentBlocker,
+  displayStateMapsEqual,
 } from './displayStateMap'
 import type { BlockerProbe, BlockingRules, DisplayBlocker, DisplayStateMap, AppRule } from './displayStateMap'
 import type { ExternalWindowInfo } from './activeWindowMonitor'
@@ -499,5 +500,41 @@ describe('validateBlockers', () => {
       expect(nextA.get(9)).toMatchObject({ pid: 111 })
       expect(nextB.get(9)).toMatchObject({ pid: 111 })
     })
+  })
+})
+
+describe('displayStateMapsEqual', () => {
+  function mapOf(...blockers: DisplayBlocker[]): DisplayStateMap {
+    return new Map(blockers.map(b => [b.displayId, b]))
+  }
+
+  it('is true for structurally equal maps, including two empty maps', () => {
+    expect(displayStateMapsEqual(new Map(), new Map())).toBe(true)
+    expect(displayStateMapsEqual(mapOf(makeBlocker()), mapOf(makeBlocker()))).toBe(true)
+  })
+
+  it('is false when the sizes differ', () => {
+    expect(displayStateMapsEqual(mapOf(makeBlocker()), new Map())).toBe(false)
+    expect(displayStateMapsEqual(mapOf(makeBlocker()), mapOf(makeBlocker(), makeBlocker({ displayId: 2 })))).toBe(false)
+  })
+
+  it('is false when the display-id keys differ', () => {
+    expect(displayStateMapsEqual(mapOf(makeBlocker({ displayId: 1 })), mapOf(makeBlocker({ displayId: 2 })))).toBe(false)
+  })
+
+  it.each([
+    ['hwnd', { hwnd: 2000n }],
+    ['pid', { pid: 222 }],
+    ['exeName', { exeName: 'other.exe' }],
+    ['severity', { severity: 'soft' as const }],
+  ])('is false when %s differs', (_name, override) => {
+    expect(displayStateMapsEqual(mapOf(makeBlocker()), mapOf(makeBlocker(override)))).toBe(false)
+  })
+
+  it('is false when the reasons sets differ and true when they hold the same members', () => {
+    const a = mapOf(makeBlocker({ reasons: new Set(['fullscreen']) }))
+    expect(displayStateMapsEqual(a, mapOf(makeBlocker({ reasons: new Set(['user-rule']) })))).toBe(false)
+    expect(displayStateMapsEqual(a, mapOf(makeBlocker({ reasons: new Set(['fullscreen', 'user-rule']) })))).toBe(false)
+    expect(displayStateMapsEqual(a, mapOf(makeBlocker({ reasons: new Set(['fullscreen']) })))).toBe(true)
   })
 })

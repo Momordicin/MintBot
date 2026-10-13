@@ -1,8 +1,7 @@
-// services/core/session/queries.ts — SQLite 数据访问层：预设、会话、消息、向量与全文索引、实体、摘要、情绪状态的读写与检索
-// 用法：被 session/index.ts、state.ts、各 routes、context/buildContext.ts、memory/* 以同步函数直接调用，经 db/index.ts 的 better-sqlite3 连接；db/seed.ts 用 upsertPreset 写种子预设，core/index.ts 启动时按需 backfillMessageFts
-// 形状：表 Presets / Sessions / Messages / MessageEntities / Summaries / EmotionStates，虚表 message_embeddings（sqlite-vec）/ message_fts（FTS5）
-// 对应文件：services/core/db/index.ts（建表与连接）/ services/core/session/displayConfig.ts / services/core/memory/embedQueue.ts / services/core/memory/entityExtractor.ts / services/core/memory/forget.ts / services/core/memory/orchestrator.ts / services/core/memory/retrieval.ts / services/core/memory/summarizer.ts / services/core/context/buildContext.ts / services/core/session/queries.test.ts
-import { db } from '../db/index.js'
+// services/core/session/queries.ts — SQLite 数据访问层
+// 用法：session、routes、memory、context 各模块直接调用同步读写函数
+// 对应文件：services/core/db/index.ts / services/core/session/queries.test.ts
+import { db, checkpointTruncate } from '../db/index.js'
 import { DEFAULT_DISPLAY_CONFIG, parseDisplayConfig } from './displayConfig.js'
 import type { Message, Session, Preset, PresetSnapshot, MessageEntity, Summary, EmotionState, PresetDisplayConfig } from '../../../shared/types/index.js'
 
@@ -125,6 +124,18 @@ export function updatePresetModelConfig(
     .run(modelType, modelName, Date.now(), presetId)
 }
 
+export function getMostRecentOtherPresetId(excludePresetId: string): string | null {
+  const row = db.prepare(`
+    SELECT p.presetId AS presetId
+    FROM Presets p
+    LEFT JOIN (SELECT presetId, MAX(lastActiveAt) AS lastActiveAt FROM Sessions GROUP BY presetId) s ON s.presetId = p.presetId
+    WHERE p.presetId != ?
+    ORDER BY s.lastActiveAt IS NULL ASC, s.lastActiveAt DESC, p.createdAt DESC
+    LIMIT 1
+  `).get(excludePresetId) as { presetId: string } | undefined
+  return row?.presetId ?? null
+}
+
 export function getLatestSessionByPreset(presetId: string): Session | null {
   const row = db.prepare(`
     SELECT * FROM Sessions WHERE presetId = ? ORDER BY lastActiveAt DESC LIMIT 1
@@ -146,6 +157,10 @@ export function createSession(session: Session): void {
     presetSnapshot: JSON.stringify(session.presetSnapshot),
     title: session.title ?? null,
   })
+}
+
+export function sessionExists(sessionId: string): boolean {
+  return db.prepare(`SELECT 1 FROM Sessions WHERE sessionId = ?`).get(sessionId) !== undefined
 }
 
 export function touchSession(sessionId: string): void {
@@ -176,19 +191,30 @@ export function getMessagesPage(
   limit: number,
   beforeId?: number
 ): { messages: Message[]; hasMore: boolean } {
-  const rows = (beforeId !== undefined
+  const anchor = beforeId !== undefined
+    ? db.prepare(`SELECT createdAt FROM Messages WHERE id = ? AND sessionId = ?`).get(beforeId, sessionId) as { createdAt: number } | undefined
+    : undefined
+
+  const rows = (beforeId === undefined
     ? db.prepare(`
         SELECT * FROM Messages
-        WHERE sessionId = ? AND visibleToUser = 1 AND id < ?
-        ORDER BY id DESC
-        LIMIT ?
-      `).all(sessionId, beforeId, limit + 1)
-    : db.prepare(`
-        SELECT * FROM Messages
         WHERE sessionId = ? AND visibleToUser = 1
-        ORDER BY id DESC
+        ORDER BY createdAt DESC, id DESC
         LIMIT ?
       `).all(sessionId, limit + 1)
+    : anchor
+      ? db.prepare(`
+          SELECT * FROM Messages
+          WHERE sessionId = ? AND visibleToUser = 1 AND (createdAt < ? OR (createdAt = ? AND id < ?))
+          ORDER BY createdAt DESC, id DESC
+          LIMIT ?
+        `).all(sessionId, anchor.createdAt, anchor.createdAt, beforeId, limit + 1)
+      : db.prepare(`
+          SELECT * FROM Messages
+          WHERE sessionId = ? AND visibleToUser = 1 AND id < ?
+          ORDER BY createdAt DESC, id DESC
+          LIMIT ?
+        `).all(sessionId, beforeId, limit + 1)
   ) as any[]
 
   const hasMore = rows.length > limit
@@ -222,6 +248,22 @@ export function appendMessage(msg: Omit<Message, 'id'>): number {
   return result.lastInsertRowid as number
 }
 
+export function appendExchange(
+  sessionId: string,
+  userContent: string,
+  userCreatedAt: number,
+  assistantContent: string
+): number {
+  const base = { sessionId, embedded: false, summarized: false, visibleToUser: true, trigger: 'user' as const, triggerEventId: null }
+  const run = db.transaction(() => {
+    appendMessage({ ...base, role: 'user', content: userContent, createdAt: userCreatedAt })
+    const assistantId = appendMessage({ ...base, role: 'assistant', content: assistantContent, createdAt: Date.now() })
+    touchSession(sessionId)
+    return assistantId
+  })
+  return run()
+}
+
 function toVecBuffer(vector: number[]): Buffer {
   return Buffer.from(new Float32Array(vector).buffer)
 }
@@ -237,6 +279,17 @@ export function upsertMessageEmbedding(messageId: number, sessionId: string, emb
     INSERT OR REPLACE INTO message_embeddings (message_id, session_id, embedding)
     VALUES (@messageId, @sessionId, @embedding)
   `).run({ messageId: BigInt(messageId), sessionId, embedding: toVecBuffer(embedding) })
+}
+
+export function embedMessageIfExists(messageId: number, sessionId: string, content: string, embedding: number[]): boolean {
+  const run = db.transaction(() => {
+    if (db.prepare(`SELECT 1 FROM Messages WHERE id = ?`).get(messageId) === undefined) return false
+    upsertMessageEmbedding(messageId, sessionId, embedding)
+    indexMessageFts(messageId, sessionId, content)
+    markMessageEmbedded(messageId)
+    return true
+  })
+  return run()
 }
 
 export function searchSimilarMessages(embedding: number[], k: number, sessionId?: string): EmbeddingSearchResult[] {
@@ -539,8 +592,15 @@ export function getSummaries(sessionId: string): Summary[] {
 
 export function getMessageIdsInTimeRange(sessionId: string, fromTime: number, toTime: number): number[] {
   const rows = db.prepare(`
-    SELECT id FROM Messages WHERE sessionId = ? AND createdAt >= ? AND createdAt <= ? ORDER BY id ASC
-  `).all(sessionId, fromTime, toTime) as { id: number }[]
+    SELECT id FROM Messages
+    WHERE sessionId = @sessionId AND role = 'user' AND createdAt >= @fromTime AND createdAt <= @toTime
+    UNION
+    SELECT r.id FROM Messages q
+    JOIN Messages r ON r.id = (SELECT MIN(n.id) FROM Messages n WHERE n.sessionId = q.sessionId AND n.id > q.id)
+    WHERE q.sessionId = @sessionId AND q.role = 'user' AND q.createdAt >= @fromTime AND q.createdAt <= @toTime
+      AND r.role = 'assistant'
+    ORDER BY id ASC
+  `).all({ sessionId, fromTime, toTime }) as { id: number }[]
   return rows.map(row => row.id)
 }
 
@@ -592,7 +652,32 @@ export function forgetMessages(params: {
     return { deletedMessages, deletedEntities, deletedSummaries, deletedEmbeddings, deletedFts }
   })
 
-  return run()
+  const result = run()
+  checkpointTruncate('[Forget]')
+  return result
+}
+
+export function deletePresetWithData(presetId: string): void {
+  const run = db.transaction(() => {
+    const sessionIds = (db.prepare(`SELECT sessionId FROM Sessions WHERE presetId = ?`).all(presetId) as { sessionId: string }[])
+      .map(row => row.sessionId)
+    const deleteEmbedding = db.prepare(`DELETE FROM message_embeddings WHERE message_id = ?`)
+
+    for (const sessionId of sessionIds) {
+      const messageRows = db.prepare(`SELECT id FROM Messages WHERE sessionId = ?`).all(sessionId) as { id: number }[]
+      for (const row of messageRows) deleteEmbedding.run(BigInt(row.id))
+      db.prepare(`DELETE FROM message_fts WHERE session_id = ?`).run(sessionId)
+      db.prepare(`DELETE FROM MessageEntities WHERE sessionId = ?`).run(sessionId)
+      db.prepare(`DELETE FROM Summaries WHERE sessionId = ?`).run(sessionId)
+      db.prepare(`DELETE FROM EmotionStates WHERE sessionId = ?`).run(sessionId)
+      db.prepare(`DELETE FROM Messages WHERE sessionId = ?`).run(sessionId)
+      db.prepare(`DELETE FROM Sessions WHERE sessionId = ?`).run(sessionId)
+    }
+
+    db.prepare(`DELETE FROM Presets WHERE presetId = ?`).run(presetId)
+  })
+  run()
+  checkpointTruncate('[Presets]')
 }
 
 export function upsertEmotionState(sessionId: string, emotion: EmotionState): void {

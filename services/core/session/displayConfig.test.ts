@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { DEFAULT_DISPLAY_CONFIG, parseDisplayConfig, isValidTintStrength, clampTintStrength } from './displayConfig.js'
+import { DEFAULT_DISPLAY_CONFIG, parseDisplayConfig, isValidTintStrength, clampTintStrength, isValidPetScale } from './displayConfig.js'
 
 describe('parseDisplayConfig', () => {
   // 部分既有用例（chatBgRgb/chatBgOpacity 的类型错误分支）只 vi.spyOn 而不 restore，
@@ -40,6 +40,7 @@ describe('parseDisplayConfig', () => {
       accentRgb: [40, 50, 60],
       tintStrength: 0.5,
       currentPortrait: 'illustration',
+      petScale: { pixel: 1, illustration: 1 },
     })
     expect(warnSpy).not.toHaveBeenCalled()
     warnSpy.mockRestore()
@@ -106,6 +107,7 @@ describe('parseDisplayConfig', () => {
       accentRgb: DEFAULT_DISPLAY_CONFIG.accentRgb,
       tintStrength: DEFAULT_DISPLAY_CONFIG.tintStrength,
       currentPortrait: DEFAULT_DISPLAY_CONFIG.currentPortrait,
+      petScale: DEFAULT_DISPLAY_CONFIG.petScale,
     })
     expect(warnSpy).not.toHaveBeenCalled()
     warnSpy.mockRestore()
@@ -126,6 +128,43 @@ describe('parseDisplayConfig', () => {
     expect(parseDisplayConfig(raw).currentPortrait).toBe(DEFAULT_DISPLAY_CONFIG.currentPortrait)
     expect(warnSpy).toHaveBeenCalled()
     warnSpy.mockRestore()
+  })
+
+  it('petScale 缺失时取默认值 { pixel: 1, illustration: 1 } 且不告警；合法值原样使用', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const base = { chatBgRgb: [1, 2, 3], chatBgOpacity: 0.5 }
+    expect(DEFAULT_DISPLAY_CONFIG.petScale).toEqual({ pixel: 1, illustration: 1 })
+    expect(parseDisplayConfig(JSON.stringify(base)).petScale).toEqual({ pixel: 1, illustration: 1 })
+    expect(parseDisplayConfig(JSON.stringify({ ...base, petScale: { pixel: 0.5, illustration: 1.5 } })).petScale).toEqual({ pixel: 0.5, illustration: 1.5 })
+    expect(warnSpy).not.toHaveBeenCalled()
+    warnSpy.mockRestore()
+  })
+
+  it('petScale 只有某个 key 非法时仅该 key 回退默认值并告警，另一个 key 保留', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const base = { chatBgRgb: [1, 2, 3], chatBgOpacity: 0.5 }
+    expect(parseDisplayConfig(JSON.stringify({ ...base, petScale: { pixel: 2, illustration: 1.25 } })).petScale).toEqual({ pixel: 1, illustration: 1.25 })
+    expect(parseDisplayConfig(JSON.stringify({ ...base, petScale: { pixel: 0.75 } })).petScale).toEqual({ pixel: 0.75, illustration: 1 })
+    expect(parseDisplayConfig(JSON.stringify({ ...base, petScale: { pixel: '1', illustration: 0.5 } })).petScale).toEqual({ pixel: 1, illustration: 0.5 })
+    expect(warnSpy).toHaveBeenCalledTimes(3)
+    warnSpy.mockRestore()
+  })
+
+  it('petScale 不是对象时整体回退默认值并告警', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const base = { chatBgRgb: [1, 2, 3], chatBgOpacity: 0.5 }
+    expect(parseDisplayConfig(JSON.stringify({ ...base, petScale: 1.5 })).petScale).toEqual({ pixel: 1, illustration: 1 })
+    expect(parseDisplayConfig(JSON.stringify({ ...base, petScale: null })).petScale).toEqual({ pixel: 1, illustration: 1 })
+    expect(warnSpy).toHaveBeenCalledTimes(2)
+    warnSpy.mockRestore()
+  })
+
+  it('isValidPetScale 要求两个 key 都在档位内', () => {
+    expect(isValidPetScale({ pixel: 1, illustration: 1.25 })).toBe(true)
+    expect(isValidPetScale({ pixel: 1 })).toBe(false)
+    expect(isValidPetScale({ pixel: 1, illustration: 3 })).toBe(false)
+    expect(isValidPetScale('1')).toBe(false)
+    expect(isValidPetScale(null)).toBe(false)
   })
 
   it('accentRgb 缺失时回退到固定默认色 [0, 122, 255]，不 carry over（已解析的）chatBgRgb', () => {

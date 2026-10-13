@@ -6,13 +6,62 @@ import {
   pickFinestDisplay,
   computeSizeForDisplay,
   computeDefaultBoundsForDisplay,
-  computeAnchoredResizeBounds,
+  petWindowBounds,
+  petPreferredFromWindow,
   OVERLAY_DEFAULT_RIGHT_OFFSET_DIP,
   OVERLAY_DEFAULT_BOTTOM_OFFSET_DIP,
+  COLLAPSED_SIZE,
+  collapsedHandleBounds,
+  expandedBoundsFromHandle,
+  petHandleBounds,
+  parseWindowPositionsStore,
 } from './windowPositions'
 
+describe('parseWindowPositionsStore', () => {
+  const empty = { version: 2, chat: {}, overlay: {}, lastDisplayKey: { chat: null, overlay: null } }
+
+  it('returns an empty store for the old format without version', () => {
+    const legacy = {
+      chat: { '1': { x: 1, y: 2, width: 3, height: 4 } },
+      overlay: {},
+      lastDisplayId: { chat: 1, overlay: null },
+    }
+    expect(parseWindowPositionsStore(legacy)).toEqual(empty)
+  })
+
+  it('returns an empty store for a non-2 version, null and non-object input', () => {
+    expect(parseWindowPositionsStore({ ...empty, version: 3 })).toEqual(empty)
+    expect(parseWindowPositionsStore(null)).toEqual(empty)
+    expect(parseWindowPositionsStore('text')).toEqual(empty)
+  })
+
+  it('keeps a valid version 2 store unchanged', () => {
+    const store = {
+      version: 2,
+      chat: { 'DEVICE-A': { x: 10, y: 20, width: 290, height: 520 } },
+      overlay: { 'id:7': { x: 5, y: 6, width: 132, height: 132 } },
+      lastDisplayKey: { chat: 'DEVICE-A', overlay: 'id:7' },
+    }
+    expect(parseWindowPositionsStore(store)).toEqual(store)
+  })
+
+  it('treats corrupted fields as empty', () => {
+    const corrupted = {
+      version: 2,
+      chat: 'oops',
+      overlay: [1, 2],
+      lastDisplayKey: { chat: 5, overlay: 'id:7' },
+    }
+    expect(parseWindowPositionsStore(corrupted)).toEqual({
+      ...empty,
+      lastDisplayKey: { chat: null, overlay: 'id:7' },
+    })
+    expect(parseWindowPositionsStore({ version: 2, lastDisplayKey: null })).toEqual(empty)
+  })
+})
+
 // 只测新增的纯函数（显示器挑选 + bounds 夹紧）。getPreferredBounds/setPreferredBounds/
-// getPreferredDisplayId/commitUserChosenHomeDisplay 依赖 electron 的 app.getPath，需要真实
+// getEffectiveHomeDisplay/commitUserChosenHomeDisplay 依赖 electron 的 app.getPath 与 screen，需要真实
 // Electron 运行时才能验证磁盘读写，这里不测（见任务说明：需要真实 BrowserWindow/screen
 // 的部分不在这个测试文件覆盖范围内）。commitUserChosenHomeDisplay 的 import 边界守卫见
 // windowPositionsCommitGuard.test.ts
@@ -256,11 +305,13 @@ describe('computeDefaultBoundsForDisplay', () => {
   })
 })
 
-describe('computeAnchoredResizeBounds', () => {
+describe('petWindowBounds', () => {
   const workArea = { x: 0, y: 0, width: 1920, height: 1040 }
+  const px = { width: 132, height: 132 }
+  const illustration = { width: 300, height: 500 }
 
-  it('keeps the bottom edge and the horizontal center when growing', () => {
-    expect(computeAnchoredResizeBounds({ x: 1000, y: 800, width: 132, height: 132 }, { width: 300, height: 500 }, workArea)).toEqual({
+  it('at scale 1 keeps the bottom edge and the horizontal center when growing', () => {
+    expect(petWindowBounds({ x: 1000, y: 800, width: 132, height: 132 }, illustration, 1, workArea)).toEqual({
       x: 916,
       y: 432,
       width: 300,
@@ -268,8 +319,8 @@ describe('computeAnchoredResizeBounds', () => {
     })
   })
 
-  it('keeps the bottom edge and the horizontal center when shrinking', () => {
-    expect(computeAnchoredResizeBounds({ x: 900, y: 500, width: 300, height: 500 }, { width: 132, height: 132 }, workArea)).toEqual({
+  it('at scale 1 keeps the bottom edge and the horizontal center when shrinking', () => {
+    expect(petWindowBounds({ x: 900, y: 500, width: 300, height: 500 }, px, 1, workArea)).toEqual({
       x: 984,
       y: 868,
       width: 132,
@@ -277,19 +328,19 @@ describe('computeAnchoredResizeBounds', () => {
     })
   })
 
-  it('returns the same bounds when the size does not change', () => {
+  it('at scale 1 returns the same bounds when the size does not change', () => {
     const bounds = { x: 300, y: 400, width: 132, height: 132 }
-    expect(computeAnchoredResizeBounds(bounds, { width: 132, height: 132 }, workArea)).toEqual(bounds)
+    expect(petWindowBounds(bounds, px, 1, workArea)).toEqual(bounds)
   })
 
-  it('pulls the window back inside the work area when growing would overflow it', () => {
-    expect(computeAnchoredResizeBounds({ x: 1850, y: 900, width: 132, height: 132 }, { width: 300, height: 500 }, workArea)).toEqual({
+  it('at scale 1 pulls the window back inside the work area when growing would overflow it', () => {
+    expect(petWindowBounds({ x: 1850, y: 900, width: 132, height: 132 }, illustration, 1, workArea)).toEqual({
       x: 1620,
       y: 532,
       width: 300,
       height: 500,
     })
-    expect(computeAnchoredResizeBounds({ x: 10, y: 20, width: 132, height: 132 }, { width: 300, height: 500 }, { x: 0, y: 0, width: 1920, height: 1040 })).toEqual({
+    expect(petWindowBounds({ x: 10, y: 20, width: 132, height: 132 }, illustration, 1, workArea)).toEqual({
       x: 0,
       y: 0,
       width: 300,
@@ -298,7 +349,7 @@ describe('computeAnchoredResizeBounds', () => {
   })
 
   it('never exceeds the work area size', () => {
-    expect(computeAnchoredResizeBounds({ x: 0, y: 0, width: 132, height: 132 }, { width: 3000, height: 2000 }, workArea)).toEqual({
+    expect(petWindowBounds({ x: 0, y: 0, width: 132, height: 132 }, { width: 3000, height: 2000 }, 1, workArea)).toEqual({
       x: 0,
       y: 0,
       width: 1920,
@@ -306,34 +357,149 @@ describe('computeAnchoredResizeBounds', () => {
     })
   })
 
-  it('restores an edge-docked window at the new width: widening re-centers and stays inside the work area', () => {
+  it('at scale 1 restores an edge-docked window at the new width inside the work area', () => {
     const secondary = { x: 1920, y: 0, width: 1920, height: 1040 }
-    expect(computeAnchoredResizeBounds({ x: 3708, y: 900, width: 132, height: 132 }, { width: 300, height: 500 }, secondary)).toEqual({
+    expect(petWindowBounds({ x: 3708, y: 900, width: 132, height: 132 }, illustration, 1, secondary)).toEqual({
       x: 3540,
       y: 532,
       width: 300,
       height: 500,
     })
-    expect(computeAnchoredResizeBounds({ x: 1000, y: 900, width: 132, height: 132 }, { width: 300, height: 500 }, workArea)).toEqual({
-      x: 916,
-      y: 532,
-      width: 300,
-      height: 500,
-    })
-  })
-
-  it('restores an edge-docked window at the new width: narrowing re-centers and stays inside the work area', () => {
-    expect(computeAnchoredResizeBounds({ x: 1620, y: 532, width: 300, height: 500 }, { width: 132, height: 132 }, workArea)).toEqual({
+    expect(petWindowBounds({ x: 1620, y: 532, width: 300, height: 500 }, px, 1, workArea)).toEqual({
       x: 1704,
       y: 900,
       width: 132,
       height: 132,
     })
-    expect(computeAnchoredResizeBounds({ x: 0, y: 532, width: 300, height: 500 }, { width: 132, height: 132 }, workArea)).toEqual({
+    expect(petWindowBounds({ x: 0, y: 532, width: 300, height: 500 }, px, 1, workArea)).toEqual({
       x: 84,
       y: 900,
       width: 132,
       height: 132,
+    })
+  })
+
+  it('enlarges about the center of the bottom-anchored base rectangle at scale 1.5', () => {
+    expect(petWindowBounds({ x: 1000, y: 800, width: 132, height: 132 }, px, 1.5, workArea)).toEqual({
+      x: 967,
+      y: 767,
+      width: 198,
+      height: 198,
+    })
+    expect(petWindowBounds({ x: 1000, y: 700, width: 132, height: 132 }, illustration, 1.5, workArea)).toEqual({
+      x: 841,
+      y: 207,
+      width: 450,
+      height: 750,
+    })
+  })
+
+  it('shrinks about the center of the bottom-anchored base rectangle at scale 0.5', () => {
+    expect(petWindowBounds({ x: 1000, y: 800, width: 132, height: 132 }, px, 0.5, workArea)).toEqual({
+      x: 1033,
+      y: 833,
+      width: 66,
+      height: 66,
+    })
+  })
+
+  it('clamps the scaled window to the work area', () => {
+    expect(petWindowBounds({ x: 1850, y: 900, width: 132, height: 132 }, px, 1.5, workArea)).toEqual({
+      x: 1722,
+      y: 842,
+      width: 198,
+      height: 198,
+    })
+  })
+})
+
+describe('petPreferredFromWindow', () => {
+  const px = { width: 132, height: 132 }
+
+  it('is the identity at scale 1 when the window is the base size', () => {
+    const bounds = { x: 123, y: 456, width: 132, height: 132 }
+    expect(petPreferredFromWindow(bounds, px)).toEqual(bounds)
+  })
+
+  it('returns the base size centered on the window center, for a window larger than the base', () => {
+    expect(petPreferredFromWindow({ x: 967, y: 767, width: 198, height: 198 }, px)).toEqual({
+      x: 1000,
+      y: 800,
+      width: 132,
+      height: 132,
+    })
+  })
+
+  it('keeps the base size and the window center when the window was clamped smaller than base times scale', () => {
+    const clamped = { x: 1700, y: 40, width: 220, height: 400 }
+    const base = { width: 300, height: 500 }
+    const preferred = petPreferredFromWindow(clamped, base)
+
+    expect(preferred.width).toBe(300)
+    expect(preferred.height).toBe(500)
+    expect(preferred.x + preferred.width / 2).toBe(clamped.x + clamped.width / 2)
+    expect(preferred.y + preferred.height / 2).toBe(clamped.y + clamped.height / 2)
+  })
+
+  it('round-trips with petWindowBounds keeping the window center within 1 px at every scale option', () => {
+    const workArea = { x: 0, y: 0, width: 1920, height: 1040 }
+    const preferred = { x: 700, y: 400, width: 132, height: 132 }
+    for (const scale of [0.5, 0.75, 1, 1.25, 1.5]) {
+      const window = petWindowBounds(preferred, px, scale, workArea)
+      const back = petPreferredFromWindow(window, px)
+      const again = petWindowBounds(back, px, scale, workArea)
+      expect(back.width).toBe(px.width)
+      expect(back.height).toBe(px.height)
+      expect(Math.abs(again.x + again.width / 2 - (window.x + window.width / 2))).toBeLessThanOrEqual(1)
+      expect(Math.abs(again.y + again.height / 2 - (window.y + window.height / 2))).toBeLessThanOrEqual(1)
+    }
+  })
+})
+
+describe('collapsedHandleBounds', () => {
+  it('is a 24x24 square hugging the top-right corner where the drag handle sits', () => {
+    const handle = collapsedHandleBounds({ x: 1000, y: 500, width: 132, height: 132 })
+    expect(COLLAPSED_SIZE).toBe(24)
+    expect(handle).toEqual({ x: 1000 + 132 - 2 - 20 - 2, y: 500 + 2 - 2, width: 24, height: 24 })
+  })
+
+  it('depends only on the expanded top-right corner, not on the height', () => {
+    const tall = collapsedHandleBounds({ x: 10, y: 20, width: 300, height: 500 })
+    expect(tall).toEqual({ x: 10 + 300 - 24, y: 20, width: 24, height: 24 })
+  })
+})
+
+describe('expandedBoundsFromHandle', () => {
+  it('inverts collapsedHandleBounds for a known pet size', () => {
+    const expanded = { x: 321, y: 654, width: 300, height: 500 }
+    expect(expandedBoundsFromHandle(collapsedHandleBounds(expanded), expanded)).toEqual(expanded)
+  })
+})
+
+describe('petHandleBounds', () => {
+  const workArea = { x: 0, y: 0, width: 1920, height: 1080 }
+
+  it('keeps the handle position when it lies inside the work area', () => {
+    expect(petHandleBounds({ x: 1500, y: 600, width: 132, height: 132 }, workArea)).toEqual({
+      x: 1500 + 132 - 24, y: 600, width: 24, height: 24,
+    })
+  })
+
+  it('pulls the handle back in when the pet is docked past the right edge', () => {
+    expect(petHandleBounds({ x: 1880, y: 600, width: 132, height: 132 }, workArea)).toEqual({
+      x: 1920 - 24, y: 600, width: 24, height: 24,
+    })
+  })
+
+  it('pulls the handle back in when the pet is docked past the left edge', () => {
+    expect(petHandleBounds({ x: -200, y: 600, width: 132, height: 132 }, workArea)).toEqual({
+      x: 0, y: 600, width: 24, height: 24,
+    })
+  })
+
+  it('pulls the handle down when the pet overflows the top edge', () => {
+    expect(petHandleBounds({ x: 1500, y: -50, width: 132, height: 132 }, workArea)).toEqual({
+      x: 1500 + 132 - 24, y: 0, width: 24, height: 24,
     })
   })
 })

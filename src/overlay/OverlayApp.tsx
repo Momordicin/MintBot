@@ -1,11 +1,12 @@
 // src/overlay/OverlayApp.tsx — 桌宠悬浮窗：按情绪与无聊/睡眠状态显示角色立绘，播放转场序列，处理点击唤出聊天窗口、拖动手柄与贴边悬停展开
-// 用法：overlay/main.tsx 渲染 <OverlayApp />；GET /state、/characters/:id/manifest.json、/overlay/transition-chain，POST /internal/overlay-interaction，GET /events（emotion、preset-switched、preset-portrait-changed）；调用 electronAPI 的桌宠相关方法
-// 对应文件：src/overlay/portraitState.ts / src/overlay/transitionState.ts / src/overlay/edgeHoverState.ts / src/overlay/overlay.css / src/eventsWatchdog.ts / shared/portraitForm.ts / shared/transitionChain.ts / services/core/index.ts / services/core/routes/internal.ts / services/core/routes/transitionChain.ts / electron/main/index.ts（overlay:* IPC）
+// 用法：overlay/main.tsx 渲染 <OverlayApp />；GET /state、/characters/:id/manifest.json、/overlay/transition-chain，POST /internal/overlay-interaction，GET /events（emotion、preset-switched、preset-pet-display-changed），PATCH /presets/:id（右键菜单的缩放与形态动作）；调用 electronAPI 的桌宠相关方法
+// 对应文件：src/overlay/portraitState.ts / src/overlay/transitionState.ts / src/overlay/edgeHoverState.ts / src/overlay/petMenu.ts / src/overlay/overlay.css / src/eventsWatchdog.ts / shared/portraitForm.ts / shared/transitionChain.ts / services/core/index.ts / services/core/routes/internal.ts / services/core/routes/transitionChain.ts / electron/main/index.ts（overlay:* IPC）
 import React, { useEffect, useRef, useState } from 'react'
 import { createWatchdogEventSource } from '../eventsWatchdog.js'
 import type { AppState } from '../../shared/types/index.js'
 import type { TransitionChainStep } from '../../shared/transitionChain.js'
 import { resolveEffectiveForm } from '../../shared/portraitForm.js'
+import type { PetScale } from '../../shared/portraitForm.js'
 import './overlay.css'
 import {
   type OverlayManifest,
@@ -37,10 +38,15 @@ import {
   isDragHandleSuppressedByEdge,
 } from './edgeHoverState.js'
 
+import { buildMenuState, resolveMenuActionPatch } from './petMenu.js'
+import type { PetScalePair } from './petMenu.js'
+import type { OverlayMenuAction } from '../electron-api.js'
+
 import { CORE_URL, resolveAssetUrl } from '../coreUrl.js'
 
 const CLICK_DISPLACEMENT_THRESHOLD_PX = 5
 const TRANSITION_CHAIN_TIMEOUT_MS = 500
+const HANDLE_DRAG_THRESHOLD_PX = 4
 
 interface EmotionEventPayload {
   self?: { label: string; intensity: number } | null
@@ -54,15 +60,20 @@ interface DesktopPresencePayload {
   presence: PetPresence
   edgeSide: 'left' | 'right' | null
   handleSuppressed: boolean
+  collapsed: boolean
+  clickThrough: boolean
 }
 
 export function OverlayApp() {
   const [characterId, setCharacterId] = useState<string | null>(null)
   const [file, setFile] = useState<string | null>(null)
   const [isLocked, setIsLocked] = useState(false)
+  const [currentForm, setCurrentForm] = useState<PortraitFormName>('pixel')
   const [transitionStepKey, setTransitionStepKey] = useState('')
   const manifestRef = useRef<OverlayManifest | undefined>(undefined)
   const formRef = useRef<PortraitFormName>('pixel')
+  const presetIdRef = useRef<string | null>(null)
+  const petScaleRef = useRef<PetScalePair | null>(null)
   const sizedKeyRef = useRef<string | null>(null)
   const yRef = useRef<YState>(null)
   const xRef = useRef<string | undefined>(undefined)
@@ -84,8 +95,12 @@ export function OverlayApp() {
   const [isHandleVisible, setIsHandleVisible] = useState(false)
   const [isDragHandleSuppressed, setIsDragHandleSuppressed] = useState(false)
   const handleHideTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const pointerOverPetRef = useRef(false)
+  const handlePressRef = useRef<{ x: number; y: number; pointerId: number } | null>(null)
 
-  const presenceRef = useRef<DesktopPresencePayload>({ presence: 'AMBIENT', edgeSide: null, handleSuppressed: false })
+  const [collapsed, setCollapsed] = useState(false)
+  const [clickThrough, setClickThrough] = useState(false)
+  const presenceRef = useRef<DesktopPresencePayload>({ presence: 'AMBIENT', edgeSide: null, handleSuppressed: false, collapsed: false, clickThrough: false })
   const edgeHoverStateRef = useRef<EdgeHoverState>(INITIAL_EDGE_HOVER_STATE)
   const edgeHoverTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
@@ -147,20 +162,37 @@ export function OverlayApp() {
     setIsLocked(false)
   }
 
-  function sizeOverlayWindowOnce(id: string, form: PortraitFormName, manifest: OverlayManifest) {
-    const key = `${id}|${form}`
-    if (sizedKeyRef.current === key) return
-    const sizingFile = fallbackFirstFile(manifest.portraits?.[form])
-    if (sizingFile === null) return
-    sizedKeyRef.current = key
+  function applyCurrentDisplayFile() {
+    setFile(resolveOverlayDisplayFile(manifestRef.current, formRef.current, transitionFileRef.current, isDraggingRef.current, yRef.current, xRef.current))
+  }
 
+  function sizeOverlayWindowOnce(id: string, form: PortraitFormName, manifest: OverlayManifest, scale: PetScale, allowDeferSwap: boolean): boolean {
+    const key = `${id}|${form}|${scale}`
+    const previousKey = sizedKeyRef.current
+    if (previousKey === key) return false
+    const sizingFile = fallbackFirstFile(manifest.portraits?.[form])
+    if (sizingFile === null) return false
+    sizedKeyRef.current = key
+    const deferSwap = allowDeferSwap && !(previousKey !== null && previousKey.startsWith(`${id}|${form}|`))
+
+    const swapIfCurrent = () => {
+      if (deferSwap) applyCurrentDisplayFile()
+    }
     const probe = new Image()
     probe.onload = () => {
       if (sizedKeyRef.current !== key) return
-      if (probe.naturalWidth === 0 || probe.naturalHeight === 0) return
-      window.electronAPI.setOverlaySize(computeOverlaySize(form, probe.naturalWidth, probe.naturalHeight))
+      if (probe.naturalWidth !== 0 && probe.naturalHeight !== 0) {
+        const base = computeOverlaySize(form, probe.naturalWidth, probe.naturalHeight)
+        window.electronAPI.setOverlaySize({ baseWidth: base.width, baseHeight: base.height, scale })
+      }
+      swapIfCurrent()
+    }
+    probe.onerror = () => {
+      if (sizedKeyRef.current !== key) return
+      swapIfCurrent()
     }
     probe.src = resolveAssetUrl(id, sizingFile)
+    return deferSwap
   }
 
   function loadCharacterAndPortrait(calledByThresholdTimer: boolean) {
@@ -194,20 +226,24 @@ export function OverlayApp() {
             const form = resolveEffectiveForm(savedForm, manifest.portraits) ?? savedForm
             if (form !== formRef.current) {
               formRef.current = form
+              setCurrentForm(form)
               abortTransition()
             }
             manifestRef.current = manifest
-            sizeOverlayWindowOnce(id, form, manifest)
-            if (shouldPlayFallAsleep({
+            presetIdRef.current = state.presetSnapshot?.presetId ?? null
+            petScaleRef.current = state.presetSnapshot?.displayConfig?.petScale ?? null
+            const playFallAsleep = shouldPlayFallAsleep({
               calledByThresholdTimer,
               previousY,
               nextY: yRef.current,
               explicitSleep: state.explicitSleep,
-            })) {
+            })
+            const swapDeferred = sizeOverlayWindowOnce(id, form, manifest, petScaleRef.current?.[form] ?? 1, !playFallAsleep)
+            if (playFallAsleep) {
               startTransition('fall-asleep')
               return
             }
-            setFile(resolveOverlayDisplayFile(manifestRef.current, formRef.current, transitionFileRef.current, isDraggingRef.current, yRef.current, xRef.current))
+            if (!swapDeferred) applyCurrentDisplayFile()
           })
       })
       .catch(() => {
@@ -293,6 +329,7 @@ export function OverlayApp() {
   }
 
   function handlePortraitMouseEnter() {
+    pointerOverPetRef.current = true
     if (handleHideTimerRef.current !== undefined) {
       clearTimeout(handleHideTimerRef.current)
       handleHideTimerRef.current = undefined
@@ -302,8 +339,80 @@ export function OverlayApp() {
   }
 
   function handlePortraitMouseLeave() {
+    pointerOverPetRef.current = false
     scheduleHandleHide()
     handleEdgeHoverLeave()
+  }
+
+  function clearHandlePress(target: Element) {
+    const press = handlePressRef.current
+    handlePressRef.current = null
+    if (press && target.hasPointerCapture(press.pointerId)) {
+      target.releasePointerCapture(press.pointerId)
+    }
+  }
+
+  function handleDragHandlePointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) {
+      handlePressRef.current = null
+      return
+    }
+    if (transitionLockedRef.current || isDragHandleSuppressed) {
+      handlePressRef.current = null
+      return
+    }
+    event.preventDefault()
+    handlePressRef.current = { x: event.screenX, y: event.screenY, pointerId: event.pointerId }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  function handleDragHandlePointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    const press = handlePressRef.current
+    if (!press || press.pointerId !== event.pointerId) return
+    if ((event.buttons & 1) === 0) {
+      clearHandlePress(event.currentTarget)
+      return
+    }
+    if (Math.hypot(event.screenX - press.x, event.screenY - press.y) >= HANDLE_DRAG_THRESHOLD_PX) {
+      clearHandlePress(event.currentTarget)
+      if (transitionLockedRef.current || isDragHandleSuppressed) return
+      window.electronAPI.startOverlayDrag()
+    }
+  }
+
+  function handleDragHandlePointerEnd(event: React.PointerEvent<HTMLDivElement>) {
+    clearHandlePress(event.currentTarget)
+  }
+
+  function liveMenuInput() {
+    return { presetId: presetIdRef.current, form: formRef.current, manifest: manifestRef.current, petScale: petScaleRef.current }
+  }
+
+  function currentMenuState() {
+    return buildMenuState(liveMenuInput())
+  }
+
+  function handleContextMenu(event: React.MouseEvent) {
+    event.preventDefault()
+    window.electronAPI.openOverlayContextMenu(currentMenuState())
+  }
+
+  function handleMenuAction(action: OverlayMenuAction) {
+    const patch = resolveMenuActionPatch(action, liveMenuInput())
+    if (!patch) return
+    fetch(`${CORE_URL}/presets/${encodeURIComponent(patch.presetId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ displayConfig: patch.displayConfig }),
+    })
+      .then(async response => {
+        if (!response.ok) {
+          console.error('[PetMenu] Core rejected preset display config patch:', response.status, await response.text().catch(() => ''))
+        }
+      })
+      .catch(err => {
+        console.error('[PetMenu] Failed to patch preset display config:', err)
+      })
   }
 
   function handleMouseDown(event: React.MouseEvent) {
@@ -380,7 +489,7 @@ export function OverlayApp() {
 
   function handleDragEnd() {
     isDraggingRef.current = false
-    scheduleHandleHide()
+    if (!pointerOverPetRef.current) scheduleHandleHide()
     const capturedY = dragStartYRef.current
     dragStartYRef.current = null
 
@@ -417,6 +526,8 @@ export function OverlayApp() {
   useEffect(() => {
     function handleVisibilityChange() {
       if (document.visibilityState !== 'hidden') return
+      pointerOverPetRef.current = false
+      handlePressRef.current = null
       const wasDragging = isDraggingRef.current
       isDraggingRef.current = false
       dragStartYRef.current = null
@@ -443,8 +554,39 @@ export function OverlayApp() {
   }, [])
 
   useEffect(() => {
+    const unsubscribeRequested = window.electronAPI.onOverlayContextMenuRequested(() => {
+      window.electronAPI.openOverlayContextMenu(currentMenuState())
+    })
+    const unsubscribeAction = window.electronAPI.onOverlayMenuAction(handleMenuAction)
+    return () => {
+      unsubscribeRequested()
+      unsubscribeAction()
+    }
+  }, [])
+
+  useEffect(() => {
     function handleDesktopPresenceChanged(payload: DesktopPresencePayload) {
       presenceRef.current = payload
+      setCollapsed(payload.collapsed)
+      setClickThrough(payload.clickThrough)
+      if (payload.clickThrough) {
+        pointerOverPetRef.current = false
+        handlePressRef.current = null
+      }
+      if (payload.collapsed) {
+        if (edgeHoverTimerRef.current !== undefined) {
+          clearTimeout(edgeHoverTimerRef.current)
+          edgeHoverTimerRef.current = undefined
+        }
+        applyEdgeHoverState(resetEdgeHoverOnPresenceLeftEdge())
+        if (handleHideTimerRef.current !== undefined) {
+          clearTimeout(handleHideTimerRef.current)
+          handleHideTimerRef.current = undefined
+        }
+        setIsHandleVisible(false)
+        pointerOverPetRef.current = false
+        handlePressRef.current = null
+      }
       if (payload.presence !== 'EDGE') {
         if (edgeHoverTimerRef.current !== undefined) {
           clearTimeout(edgeHoverTimerRef.current)
@@ -508,7 +650,11 @@ export function OverlayApp() {
         handleHideTimerRef.current = undefined
       }
       setIsHandleVisible(false)
+      pointerOverPetRef.current = false
+      handlePressRef.current = null
       manifestRef.current = undefined
+      presetIdRef.current = null
+      petScaleRef.current = null
       sizedKeyRef.current = null
       characterIdRef.current = null
       yRef.current = null
@@ -523,7 +669,7 @@ export function OverlayApp() {
       listeners: {
         emotion: handleEmotionEvent,
         'preset-switched': handlePresetSwitchedEvent,
-        'preset-portrait-changed': () => loadCharacterAndPortrait(false),
+        'preset-pet-display-changed': () => loadCharacterAndPortrait(false),
       },
       onOpen: () => {
         loadCharacterAndPortrait(false)
@@ -538,12 +684,23 @@ export function OverlayApp() {
   const imgKey = transitionFileRef.current !== null ? `transition-${transitionStepKey}` : 'portrait'
   const src = file && characterId ? resolveAssetUrl(characterId, file) : null
 
+  if (collapsed) {
+    return (
+      <div className="overlay-root overlay-root--collapsed">
+        <div
+          className="overlay-drag-handle overlay-drag-handle--collapsed"
+          onContextMenu={handleContextMenu}
+        />
+      </div>
+    )
+  }
+
   return (
     <div className={`overlay-root${isLocked ? ' overlay-root--locked' : ''}`}>
       {src && (
         <img
           key={imgKey}
-          className="overlay-portrait"
+          className={`overlay-portrait${currentForm === 'pixel' ? ' overlay-portrait--pixel' : ''}`}
           src={src}
           alt=""
           onMouseDown={handleMouseDown}
@@ -551,17 +708,28 @@ export function OverlayApp() {
           onError={handleTransitionImageError}
           onMouseEnter={handlePortraitMouseEnter}
           onMouseLeave={handlePortraitMouseLeave}
+          onContextMenu={handleContextMenu}
         />
       )}
-      <div
-        className={`overlay-drag-handle${
-          isDragHandleSuppressed
-            ? ' overlay-drag-handle--edge-suppressed'
-            : isHandleVisible
-              ? ' overlay-drag-handle--visible'
-              : ''
-        }`}
-      />
+      {!clickThrough && (
+        <div
+          className={`overlay-drag-handle${
+            isDragHandleSuppressed
+              ? ' overlay-drag-handle--edge-suppressed'
+              : isHandleVisible
+                ? ' overlay-drag-handle--visible'
+                : ''
+          }`}
+          onMouseEnter={handlePortraitMouseEnter}
+          onMouseLeave={handlePortraitMouseLeave}
+          onPointerDown={handleDragHandlePointerDown}
+          onPointerMove={handleDragHandlePointerMove}
+          onPointerUp={handleDragHandlePointerEnd}
+          onPointerCancel={handleDragHandlePointerEnd}
+          onLostPointerCapture={handleDragHandlePointerEnd}
+          onContextMenu={handleContextMenu}
+        />
+      )}
     </div>
   )
 }

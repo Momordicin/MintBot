@@ -2,7 +2,7 @@
 // 用法：orchestrator.ts 的 runOrganizeModeTick 对每批待嵌入消息调 extractEntities(messages, { ner, model })（model 即 backgroundModelProvider 的 completeSync）；导出 VALID_TYPES 供 routes/memory.ts 校验实体类型
 // 形状：(Message[], { ner, model }) -> { inserted, closed }
 // 对应文件：services/core/memory/orchestrator.ts / services/core/routes/memory.ts / services/core/providers/NERProvider.ts / services/core/util/jsonSalvage.ts / services/core/session/queries.ts / services/core/memory/entityExtractor.test.ts
-import { insertEntity, getCurrentEntities, closeEntity } from '../session/queries.js'
+import { insertEntity, getCurrentEntities, closeEntity, getMessageCreatedAtByIds } from '../session/queries.js'
 import type { NERProvider } from '../providers/NERProvider.js'
 import type { Message, MessageEntity, BuiltContext, CompletionOptions } from '../../../shared/types/index.js'
 import { parseJsonSalvage } from '../util/jsonSalvage.js'
@@ -255,8 +255,11 @@ export async function extractEntities(
     console.error('[EntityExtractor] main-model layer failed, skipping:', err)
   }
 
+  const existingMessageIds = getMessageCreatedAtByIds(userMessages.map(m => m.id))
+
   let inserted = 0
   for (const cand of additiveCandidates) {
+    if (!existingMessageIds.has(cand.messageId)) continue
     if (insertIfNew(cand, currentBySession)) inserted++
   }
 
@@ -264,7 +267,7 @@ export async function extractEntities(
   let closed = 0
   for (const change of changes) {
     const msg = msgById.get(change.messageId)
-    if (!msg) continue
+    if (!msg || !existingMessageIds.has(msg.id)) continue
 
     const map = currentBySession.get(msg.sessionId) ?? new Map<string, number>()
     currentBySession.set(msg.sessionId, map)
