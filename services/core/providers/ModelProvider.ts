@@ -233,7 +233,10 @@ export class ModelProvider {
 
   private static ollamaRequestOverrides(options: CompletionOptions): OpenAICompatibleOverrides {
     return {
-      extraBody: options.jsonMode ? { response_format: { type: 'json_object' } } : undefined,
+      extraBody: {
+        reasoning_effort: 'none',
+        ...(options.jsonMode ? { response_format: { type: 'json_object' } } : {}),
+      },
     }
   }
 

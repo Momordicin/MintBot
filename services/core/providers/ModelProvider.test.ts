@@ -374,6 +374,21 @@ describe('provider 专属请求体覆盖（response_format / max_completion_toke
     expect(body.max_tokens).toBe(1000)
     expect(body.max_completion_tokens).toBeUndefined()
     expect(body.response_format).toEqual({ type: 'json_object' })
+    expect(body.reasoning_effort).toBe('none')
+  })
+
+  it('ollama 分支：未传 jsonMode 时仍带 reasoning_effort: none，不带 response_format', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(fakeStreamResponse())
+    vi.stubGlobal('fetch', fetchSpy)
+    const provider = createModelProvider({ type: 'ollama', ollamaModel: 'qwen3' })
+
+    for await (const _chunk of provider.complete(context)) {
+      // 只需要触发 fetch 调用
+    }
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
+    expect(body.reasoning_effort).toBe('none')
+    expect(body.response_format).toBeUndefined()
   })
 
   it('completeSync（非流式）路径同样生效：openai 用 max_completion_tokens，jsonMode 为 true 带 response_format', async () => {
