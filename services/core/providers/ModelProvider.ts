@@ -1,12 +1,14 @@
 // services/core/providers/ModelProvider.ts — 大语言模型调用封装：按配置类型（anthropic / openai / deepseek / ollama）发起流式 complete 或非流式 completeSync
 // 用法：routes/chat.ts 每次聊天用 createModelProviderForPreset(preset, 全局配置)（预设无模型覆盖则用全局配置）调 complete / completeSync；index.ts 与 routes/config.ts 用 createModelProvider 构建 fastify.modelProvider / backgroundModelProvider，后者的 completeSync 供 orchestrator 驱动 entityExtractor 与 summarizer
-// 形状：(BuiltContext, { maxTokens, signal, jsonMode }) -> AsyncIterable<string>（流式）| Promise<string>
 // 对应文件：services/core/routes/chat.ts / services/core/routes/config.ts / services/core/index.ts / services/core/memory/orchestrator.ts / shared/types/index.ts / services/core/providers/ModelProvider.test.ts
 import Anthropic from '@anthropic-ai/sdk'
+import OpenAI from 'openai'
+import type { ChatCompletionCreateParamsBase } from 'openai/resources/chat/completions'
 import type { ChatMessage, ModelConfig, CompletionOptions, BuiltContext, Preset } from '../../../shared/types/index.js'
 
+type DeepSeekExtras = { thinking: { type: 'disabled' } }
+
 interface OpenAICompatibleOverrides {
-  maxTokensParam?: 'max_tokens' | 'max_completion_tokens'
   extraBody?: Record<string, unknown>
 }
 
@@ -19,6 +21,90 @@ export class ModelProvider {
 
   private resolveMaxTokens(options: CompletionOptions): number {
     return options.maxTokens ?? this.config.maxTokens ?? 1000
+  }
+
+  private createAnthropicClient(): Anthropic {
+    const key = ModelProvider.requireApiKey(this.config.anthropicApiKey, 'Anthropic')
+    return new Anthropic({
+      apiKey: key,
+      authToken: null,
+      baseURL: 'https://api.anthropic.com',
+      logLevel: 'warn',
+      webhookKey: null,
+      maxRetries: 2,
+    })
+  }
+
+  private createOpenAIClient(kind: 'openai' | 'deepseek'): OpenAI {
+    const key = kind === 'openai'
+      ? ModelProvider.requireApiKey(this.config.openaiApiKey, 'OpenAI')
+      : ModelProvider.requireApiKey(this.config.deepseekApiKey, 'DeepSeek')
+    const baseURL = kind === 'openai'
+      ? (this.config.openaiBaseUrl || 'https://api.openai.com/v1')
+      : (this.config.deepseekBaseUrl || 'https://api.deepseek.com')
+    return new OpenAI({
+      apiKey: key,
+      adminAPIKey: null,
+      organization: null,
+      project: null,
+      baseURL,
+      webhookSecret: null,
+      logLevel: 'warn',
+      maxRetries: 2,
+    })
+  }
+
+  private buildOpenAIBody(
+    kind: 'openai' | 'deepseek',
+    messages: ChatMessage[],
+    options: CompletionOptions
+  ): ChatCompletionCreateParamsBase | (ChatCompletionCreateParamsBase & DeepSeekExtras) {
+    const mapped = messages.map(m => ({ role: m.role, content: m.content }))
+    const maxTokens = this.resolveMaxTokens(options)
+    const responseFormat = options.jsonMode ? { response_format: { type: 'json_object' as const } } : {}
+    if (kind === 'openai') {
+      return {
+        model: this.config.modelName ?? 'gpt-4o',
+        max_completion_tokens: maxTokens,
+        messages: mapped,
+        ...responseFormat,
+      }
+    }
+    return {
+      model: this.config.modelName ?? 'deepseek-v4-flash',
+      max_tokens: maxTokens,
+      messages: mapped,
+      thinking: { type: 'disabled' as const },
+    }
+  }
+
+  private async *streamOpenAI(
+    kind: 'openai' | 'deepseek',
+    messages: ChatMessage[],
+    options: CompletionOptions
+  ): AsyncIterable<string> {
+    const client = this.createOpenAIClient(kind)
+    const stream = await client.chat.completions.create(
+      { ...this.buildOpenAIBody(kind, messages, options), stream: true },
+      { signal: options.signal }
+    )
+    for await (const chunk of stream) {
+      const text = chunk.choices[0]?.delta?.content
+      if (text) yield text
+    }
+  }
+
+  private async createOpenAISync(
+    kind: 'openai' | 'deepseek',
+    messages: ChatMessage[],
+    options: CompletionOptions
+  ): Promise<string> {
+    const client = this.createOpenAIClient(kind)
+    const completion = await client.chat.completions.create(
+      { ...this.buildOpenAIBody(kind, messages, options), stream: false },
+      { signal: options.signal }
+    )
+    return completion.choices[0]?.message?.content ?? ''
   }
 
   async *complete(
@@ -74,9 +160,7 @@ export class ModelProvider {
     options: CompletionOptions,
     system?: string
   ): AsyncIterable<string> {
-    const client = new Anthropic({
-      apiKey: this.config.anthropicApiKey,
-    })
+    const client = this.createAnthropicClient()
 
     const chatMessages = messages.filter(m => m.role !== 'system')
 
@@ -107,9 +191,7 @@ export class ModelProvider {
     options: CompletionOptions,
     system?: string
   ): Promise<string> {
-    const client = new Anthropic({
-      apiKey: this.config.anthropicApiKey,
-    })
+    const client = this.createAnthropicClient()
 
     const chatMessages = messages.filter(m => m.role !== 'system')
 
@@ -135,28 +217,14 @@ export class ModelProvider {
     messages: ChatMessage[],
     options: CompletionOptions
   ): AsyncIterable<string> {
-    yield* ModelProvider.callOpenAICompatible(
-      this.config.openaiBaseUrl ?? 'https://api.openai.com/v1',
-      ModelProvider.requireApiKey(this.config.openaiApiKey, 'OpenAI'),
-      this.config.modelName ?? 'gpt-4o',
-      messages,
-      { ...options, maxTokens: this.resolveMaxTokens(options) },
-      ModelProvider.openAIRequestOverrides(options)
-    )
+    yield* this.streamOpenAI('openai', messages, options)
   }
 
   private async *completeDeepSeek(
     messages: ChatMessage[],
     options: CompletionOptions
   ): AsyncIterable<string> {
-    yield* ModelProvider.callOpenAICompatible(
-      this.config.deepseekBaseUrl ?? 'https://api.deepseek.com',
-      ModelProvider.requireApiKey(this.config.deepseekApiKey, 'DeepSeek'),
-      this.config.modelName ?? 'deepseek-v4-flash',
-      messages,
-      { ...options, maxTokens: this.resolveMaxTokens(options) },
-      ModelProvider.deepSeekRequestOverrides(options)
-    )
+    yield* this.streamOpenAI('deepseek', messages, options)
   }
 
   private async *completeOllama(
@@ -177,28 +245,14 @@ export class ModelProvider {
     messages: ChatMessage[],
     options: CompletionOptions
   ): Promise<string> {
-    return ModelProvider.callOpenAICompatibleSync(
-      this.config.openaiBaseUrl ?? 'https://api.openai.com/v1',
-      ModelProvider.requireApiKey(this.config.openaiApiKey, 'OpenAI'),
-      this.config.modelName ?? 'gpt-4o',
-      messages,
-      { ...options, maxTokens: this.resolveMaxTokens(options) },
-      ModelProvider.openAIRequestOverrides(options)
-    )
+    return this.createOpenAISync('openai', messages, options)
   }
 
   private async completeSyncDeepSeek(
     messages: ChatMessage[],
     options: CompletionOptions
   ): Promise<string> {
-    return ModelProvider.callOpenAICompatibleSync(
-      this.config.deepseekBaseUrl ?? 'https://api.deepseek.com',
-      ModelProvider.requireApiKey(this.config.deepseekApiKey, 'DeepSeek'),
-      this.config.modelName ?? 'deepseek-v4-flash',
-      messages,
-      { ...options, maxTokens: this.resolveMaxTokens(options) },
-      ModelProvider.deepSeekRequestOverrides(options)
-    )
+    return this.createOpenAISync('deepseek', messages, options)
   }
 
   private async completeSyncOllama(
@@ -213,22 +267,6 @@ export class ModelProvider {
       { ...options, maxTokens: this.resolveMaxTokens(options) },
       ModelProvider.ollamaRequestOverrides(options)
     )
-  }
-
-  private static openAIRequestOverrides(options: CompletionOptions): OpenAICompatibleOverrides {
-    return {
-      maxTokensParam: 'max_completion_tokens',
-      extraBody: options.jsonMode ? { response_format: { type: 'json_object' } } : undefined,
-    }
-  }
-
-  private static deepSeekRequestOverrides(options: CompletionOptions): OpenAICompatibleOverrides {
-    return {
-      extraBody: {
-        thinking: { type: 'disabled' },
-        ...(options.jsonMode ? { response_format: { type: 'json_object' } } : {}),
-      },
-    }
   }
 
   private static ollamaRequestOverrides(options: CompletionOptions): OpenAICompatibleOverrides {
@@ -280,7 +318,6 @@ export class ModelProvider {
     options: CompletionOptions,
     overrides: OpenAICompatibleOverrides = {}
   ): AsyncIterable<string> {
-    const maxTokensParam = overrides.maxTokensParam ?? 'max_tokens'
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -290,7 +327,7 @@ export class ModelProvider {
       body: JSON.stringify({
         ...overrides.extraBody,
         model,
-        [maxTokensParam]: options.maxTokens ?? 1000,
+        max_tokens: options.maxTokens ?? 1000,
         stream: true,
         messages: messages.map(m => ({
           role: m.role,
@@ -338,7 +375,6 @@ export class ModelProvider {
     options: CompletionOptions,
     overrides: OpenAICompatibleOverrides = {}
   ): Promise<string> {
-    const maxTokensParam = overrides.maxTokensParam ?? 'max_tokens'
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -348,7 +384,7 @@ export class ModelProvider {
       body: JSON.stringify({
         ...overrides.extraBody,
         model,
-        [maxTokensParam]: options.maxTokens ?? 1000,
+        max_tokens: options.maxTokens ?? 1000,
         stream: false,
         messages: messages.map(m => ({
           role: m.role,

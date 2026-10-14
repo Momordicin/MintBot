@@ -1,6 +1,5 @@
 // services/core/context/buildContext.ts — 为一次聊天请求组装发给模型的 BuiltContext：system（角色设定 + 情绪 + 已知实体 + 历史摘要 + 检索到的旧对话 + 词表/称呼/JSON 回复格式）与按条数、时间、字符预算裁剪的最近消息
 // 用法：routes/chat.ts 的 POST /chat 每次请求 await buildContext(message, { embedding, signal })；读取当前会话状态（requireCurrentState）与 session/queries.ts，检索走 memory/retrieval.ts，预算取自 getMemoryConfig()
-// 形状：(userInput, { embedding, signal? }) -> { system, messages }
 // 对应文件：services/core/routes/chat.ts / services/core/memory/retrieval.ts / services/core/session/index.ts / services/core/session/queries.ts / services/core/config/index.ts / services/core/context/buildContext.test.ts
 import type { BuiltContext, ChatMessage, MessageEntity } from '../../../shared/types/index.js'
 import { requireCurrentState, getHistory } from '../session/index.js'
@@ -113,7 +112,7 @@ export async function buildContext(
   system = `${system}\n\n${contractLines.join('\n')}`
 
   if (!/json/i.test(system)) {
-    throw new Error('[BuildContext] system prompt must contain the literal word "json" (required by OpenAI/DeepSeek json_object mode)')
+    throw new Error('[BuildContext] system prompt must contain the literal word "json" (required by OpenAI json_object mode)')
   }
 
   return { system, messages }

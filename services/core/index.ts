@@ -23,6 +23,7 @@ import { configRoutes } from './routes/config.js'
 import { windowBehaviorRoutes, broadcastWindowBehaviorSnapshot } from './routes/windowBehavior.js'
 import { transitionChainRoutes } from './routes/transitionChain.js'
 import { createModelProvider, ModelProvider } from './providers/ModelProvider.js'
+import { wipeCredentialEnv } from './providers/envCredentials.js'
 import { BGEProvider, getAiBaseUrl, type EmbeddingProvider } from './providers/EmbeddingProvider.js'
 import { Bert4NerProvider, type NERProvider } from './providers/NERProvider.js'
 import { startConfigWatcher, getModelProviderConfig, getBackgroundModelProviderConfig, getDefaultPresetId } from './config/index.js'
@@ -69,6 +70,8 @@ fastify.get('/state', async () => buildStatePayload())
 let organizeModeTask: ReturnType<typeof startOrganizeModeScheduler> | undefined
 
 async function start() {
+  wipeCredentialEnv()
+
   process.on('SIGINT', async () => {
     organizeModeTask?.stop()
     await stopOllamaIfManaged()
