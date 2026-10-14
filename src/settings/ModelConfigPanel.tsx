@@ -1,14 +1,15 @@
 // src/settings/ModelConfigPanel.tsx — 设置窗口的"模型配置"面板：API Key / Ollama 地址 / 对话模型 / 摘要模型
-// 用法：SettingsApp 里渲染 <ModelConfigPanel />（无 props）；GET/PATCH /config/model；GET /models?type=
-// 对应文件：src/settings/SettingsApp.tsx / services/core/routes/config.ts / services/core/routes/models.ts / shared/types/index.ts
+// 用法：SettingsApp 里渲染 <ModelConfigPanel />（无 props）；GET/PATCH /config/model
+// 对应文件：src/settings/SettingsApp.tsx / src/settings/ApiKeyField.tsx / src/settings/ModelNameField.tsx / services/core/routes/config.ts / shared/types/index.ts
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { ModelConfig } from '../../shared/types/index.js'
 import './settings.css'
 
 import { CORE_URL } from '../coreUrl.js'
+import { ApiKeyField, ENV_VAR, type KeyProvider } from './ApiKeyField.js'
+import { ModelNameField } from './ModelNameField.js'
 
 type ProviderType = 'anthropic' | 'openai' | 'ollama' | 'deepseek'
-type KeyProvider = 'anthropic' | 'openai' | 'deepseek'
 
 interface KeySummary {
   hasKey: boolean
@@ -68,12 +69,6 @@ const PROVIDER_LABEL: Record<ProviderType, string> = {
   openai: 'OpenAI',
   deepseek: 'DeepSeek',
   ollama: 'Ollama',
-}
-
-const ENV_VAR: Record<KeyProvider, string> = {
-  anthropic: 'ANTHROPIC_API_KEY',
-  openai: 'OPENAI_API_KEY',
-  deepseek: 'DEEPSEEK_API_KEY',
 }
 
 const BLANK_KEY_SUMMARY: KeySummary = { hasKey: false, last4: null, fromEnv: false, envDetected: false }
@@ -140,24 +135,6 @@ function buildGlobalPatch(form: FormState): Partial<ModelConfig> {
   return patch
 }
 
-function PencilIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M12 20h9" />
-      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z" />
-    </svg>
-  )
-}
-
-function CloseIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M18 6 6 18" />
-      <path d="m6 6 12 12" />
-    </svg>
-  )
-}
-
 interface KeyGroupProps {
   provider: KeyProvider
   summary: KeySummary
@@ -172,57 +149,20 @@ interface KeyGroupProps {
 }
 
 function KeyGroup({ provider, summary, keyInput, editing, fromEnv, onKeyInputChange, onEditingChange, onFromEnvChange, baseUrl, onBaseUrlChange }: KeyGroupProps) {
-  const envVar = ENV_VAR[provider]
-  const maskedValue = summary.hasKey ? `••••••••${summary.last4 ?? ''}` : '未填写'
   return (
     <div className="model-config-panel__group">
       <div className="model-config-panel__section-label">{PROVIDER_LABEL[provider]}</div>
-      <div className="model-config-panel__field">
-        <label>API Key</label>
-        <div className="model-config-panel__secret">
-          {fromEnv ? (
-            <input key="view" type="text" readOnly value={`使用环境变量 ${envVar}`} />
-          ) : editing ? (
-            <input
-              key="edit"
-              type="password"
-              autoFocus
-              autoComplete="new-password"
-              spellCheck={false}
-              value={keyInput}
-              placeholder="输入新的 API Key"
-              onChange={e => onKeyInputChange(e.target.value)}
-            />
-          ) : (
-            <input key="view" type="text" readOnly value={maskedValue} />
-          )}
-          {!fromEnv && (
-            <button
-              type="button"
-              className="model-config-panel__icon-btn"
-              aria-label={editing ? '取消编辑' : '编辑 API Key'}
-              onClick={() => {
-                onKeyInputChange('')
-                onEditingChange(!editing)
-              }}
-            >
-              {editing ? <CloseIcon /> : <PencilIcon />}
-            </button>
-          )}
-        </div>
-      </div>
-      <label className="model-config-panel__checkbox">
-        <input
-          type="checkbox"
-          checked={fromEnv}
-          disabled={!summary.envDetected && !fromEnv}
-          onChange={e => onFromEnvChange(e.target.checked)}
-        />
-        自动配置 API Key（使用环境变量 {envVar}）
-      </label>
-      {!summary.envDetected && (
-        <div className="model-config-panel__checkbox">未检测到环境变量 {envVar}；修改环境变量后需重启 MintBot</div>
-      )}
+      <ApiKeyField
+        summary={summary}
+        envDetected={summary.envDetected}
+        envVar={ENV_VAR[provider]}
+        fromEnv={fromEnv}
+        keyInput={keyInput}
+        editing={editing}
+        onKeyInputChange={onKeyInputChange}
+        onEditingChange={onEditingChange}
+        onFromEnvChange={onFromEnvChange}
+      />
       {onBaseUrlChange && (
         <div className="model-config-panel__field">
           <label>Base URL（可选）</label>
@@ -237,59 +177,14 @@ interface ModelSelectionFieldsProps {
   selection: ModelSelection
   providerOptions: ProviderType[]
   reloadKey: number
+  typedKeys: Record<KeyProvider, string>
+  fromEnvs: Record<KeyProvider, boolean>
   onChange: (next: ModelSelection) => void
 }
 
-function ModelSelectionFields({ selection, providerOptions, reloadKey, onChange }: ModelSelectionFieldsProps) {
-  const [options, setOptions] = useState<string[]>([])
-  const [isLoadingOptions, setIsLoadingOptions] = useState(true)
-  const [optionsError, setOptionsError] = useState<string | null>(null)
-  const controllerRef = useRef<AbortController | null>(null)
-
-  const loadOptions = useCallback((type: ProviderType) => {
-    controllerRef.current?.abort()
-    const controller = new AbortController()
-    controllerRef.current = controller
-    setOptions([])
-    setOptionsError(null)
-    setIsLoadingOptions(true)
-    fetch(`${CORE_URL}/models?type=${type}`, { signal: controller.signal })
-      .then(r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        return r.json()
-      })
-      .then((body: { models: string[]; error?: string }) => {
-        if (controller.signal.aborted) return
-        controllerRef.current = null
-        setOptions(body.models)
-        setOptionsError(body.error ?? null)
-        setIsLoadingOptions(false)
-      })
-      .catch(err => {
-        if (err instanceof DOMException && err.name === 'AbortError') return
-        controllerRef.current = null
-        setOptionsError('获取模型列表失败')
-        setIsLoadingOptions(false)
-      })
-  }, [])
-
-  useEffect(() => {
-    loadOptions(selection.type)
-    return () => {
-      controllerRef.current?.abort()
-      controllerRef.current = null
-    }
-  }, [selection.type, reloadKey, loadOptions])
-
+function ModelSelectionFields({ selection, providerOptions, reloadKey, typedKeys, fromEnvs, onChange }: ModelSelectionFieldsProps) {
   const current = selection.type === 'ollama' ? selection.ollamaModel : selection.modelName
-  const hasOptions = !isLoadingOptions && options.length > 0
-  const statusText = isLoadingOptions ? '加载中…' : (optionsError ?? '没有可用的模型')
-  const showStatusHint = !hasOptions && current !== ''
-  const choices = current !== '' && !options.includes(current) ? [current, ...options] : options
-
-  const retryLoad = () => {
-    if (!hasOptions && controllerRef.current === null) loadOptions(selection.type)
-  }
+  const typedKey = selection.type === 'ollama' ? '' : typedKeys[selection.type].trim()
 
   return (
     <>
@@ -304,31 +199,18 @@ function ModelSelectionFields({ selection, providerOptions, reloadKey, onChange 
           ))}
         </select>
       </div>
-      <div className="model-config-panel__field">
-        <label>模型名称</label>
-        <select
-          value={current}
-          onMouseDown={retryLoad}
-          onFocus={retryLoad}
-          onChange={e => onChange(
-            selection.type === 'ollama'
-              ? { ...selection, ollamaModel: e.target.value }
-              : { ...selection, modelName: e.target.value }
-          )}
-        >
-          {hasOptions ? (
-            <>
-              {current === '' && <option value="">请选择</option>}
-              {choices.map(name => (
-                <option key={name} value={name}>{name}</option>
-              ))}
-            </>
-          ) : (
-            <option value={current}>{current !== '' ? current : statusText}</option>
-          )}
-        </select>
-        {showStatusHint && <span className="model-config-panel__hint">{statusText}</span>}
-      </div>
+      <ModelNameField
+        type={selection.type}
+        current={current}
+        apiKey={typedKey}
+        fromEnv={selection.type === 'ollama' ? undefined : fromEnvs[selection.type]}
+        reloadKey={reloadKey}
+        onChange={name => onChange(
+          selection.type === 'ollama'
+            ? { ...selection, ollamaModel: name }
+            : { ...selection, modelName: name }
+        )}
+      />
     </>
   )
 }
@@ -502,6 +384,8 @@ export function ModelConfigPanel() {
           selection={form.chat}
           providerOptions={providerOptionsFor(form.chat.type)}
           reloadKey={modelsReloadKey}
+          typedKeys={form.keyInputs}
+          fromEnvs={form.fromEnv}
           onChange={chat => setForm(prev => ({ ...prev, chat }))}
         />
         <div className="model-config-panel__field">
@@ -533,6 +417,8 @@ export function ModelConfigPanel() {
             selection={form.summary}
             providerOptions={providerOptionsFor(form.summary.type)}
             reloadKey={modelsReloadKey}
+            typedKeys={form.keyInputs}
+            fromEnvs={form.fromEnv}
             onChange={summary => setForm(prev => ({ ...prev, summary }))}
           />
         )}

@@ -5,6 +5,23 @@ import { db, checkpointTruncate } from '../db/index.js'
 import { DEFAULT_DISPLAY_CONFIG, parseDisplayConfig } from './displayConfig.js'
 import type { Message, Session, Preset, PresetSnapshot, MessageEntity, Summary, EmotionState, PresetDisplayConfig } from '../../../shared/types/index.js'
 
+export type PresetKeyProvider = 'anthropic' | 'openai' | 'deepseek'
+
+export interface PresetProviderCredential {
+  apiKey?: string
+  fromEnv: boolean
+}
+
+export type PresetCredentials = Record<PresetKeyProvider, PresetProviderCredential>
+
+export interface PresetApiKeyUpdate {
+  provider: PresetKeyProvider
+  apiKey?: string
+  fromEnv?: boolean
+}
+
+const KEY_PROVIDER_LIST: readonly PresetKeyProvider[] = ['anthropic', 'openai', 'deepseek']
+
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every(item => typeof item === 'string')
 }
@@ -115,13 +132,63 @@ export function updatePresetAddressForms(presetId: string, addressForms: string[
     .run(JSON.stringify(addressForms), Date.now(), presetId)
 }
 
+export function getPresetApiKeys(presetId: string): PresetCredentials {
+  const credentials: PresetCredentials = {
+    anthropic: { fromEnv: false },
+    openai: { fromEnv: false },
+    deepseek: { fromEnv: false },
+  }
+  const rows = db.prepare(`SELECT provider, apiKey, fromEnv FROM PresetApiKeys WHERE presetId = ?`)
+    .all(presetId) as { provider: string; apiKey: string | null; fromEnv: number }[]
+  for (const row of rows) {
+    if (!KEY_PROVIDER_LIST.includes(row.provider as PresetKeyProvider)) continue
+    credentials[row.provider as PresetKeyProvider] = {
+      ...(row.apiKey ? { apiKey: row.apiKey } : {}),
+      fromEnv: row.fromEnv === 1,
+    }
+  }
+  return credentials
+}
+
+function writePresetApiKey(presetId: string, update: PresetApiKeyUpdate): void {
+  const existing = db.prepare(`SELECT apiKey, fromEnv FROM PresetApiKeys WHERE presetId = ? AND provider = ?`)
+    .get(presetId, update.provider) as { apiKey: string | null; fromEnv: number } | undefined
+  db.prepare(`
+    INSERT INTO PresetApiKeys (presetId, provider, apiKey, fromEnv)
+    VALUES (@presetId, @provider, @apiKey, @fromEnv)
+    ON CONFLICT(presetId, provider) DO UPDATE SET
+      apiKey = excluded.apiKey,
+      fromEnv = excluded.fromEnv
+  `).run({
+    presetId,
+    provider: update.provider,
+    apiKey: update.apiKey ?? existing?.apiKey ?? null,
+    fromEnv: (update.fromEnv ?? existing?.fromEnv === 1) ? 1 : 0,
+  })
+}
+
+export function upsertPresetApiKey(presetId: string, update: PresetApiKeyUpdate): void {
+  writePresetApiKey(presetId, update)
+  if (update.apiKey !== undefined) checkpointTruncate('[Presets]')
+}
+
 export function updatePresetModelConfig(
   presetId: string,
   modelType: 'anthropic' | 'openai' | 'ollama' | 'deepseek' | null,
-  modelName: string | null
+  modelName: string | null,
+  keyUpdate?: PresetApiKeyUpdate
 ): void {
-  db.prepare(`UPDATE Presets SET modelType = ?, modelName = ?, updatedAt = ? WHERE presetId = ?`)
-    .run(modelType, modelName, Date.now(), presetId)
+  db.transaction(() => {
+    db.prepare(`UPDATE Presets SET modelType = ?, modelName = ?, updatedAt = ? WHERE presetId = ?`)
+      .run(modelType, modelName, Date.now(), presetId)
+    if (keyUpdate) writePresetApiKey(presetId, keyUpdate)
+  })()
+  if (keyUpdate?.apiKey !== undefined) checkpointTruncate('[Presets]')
+}
+
+export function getPresetIdBySession(sessionId: string): string | null {
+  const row = db.prepare(`SELECT presetId FROM Sessions WHERE sessionId = ?`).get(sessionId) as { presetId: string } | undefined
+  return row?.presetId ?? null
 }
 
 export function getMostRecentOtherPresetId(excludePresetId: string): string | null {
@@ -674,6 +741,7 @@ export function deletePresetWithData(presetId: string): void {
       db.prepare(`DELETE FROM Sessions WHERE sessionId = ?`).run(sessionId)
     }
 
+    db.prepare(`DELETE FROM PresetApiKeys WHERE presetId = ?`).run(presetId)
     db.prepare(`DELETE FROM Presets WHERE presetId = ?`).run(presetId)
   })
   run()

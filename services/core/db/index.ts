@@ -194,6 +194,22 @@ function runMigrations(): { needsFtsBackfill: boolean } {
     console.log('[DB] Migration v11: enabled message_fts secure-delete, rewrote the database file to purge deleted content')
   }
 
+  if (current < 12) {
+    db.transaction(() => {
+      db.exec(`
+        CREATE TABLE PresetApiKeys (
+          presetId TEXT NOT NULL,
+          provider TEXT NOT NULL CHECK(provider IN ('anthropic', 'openai', 'deepseek')),
+          apiKey   TEXT,
+          fromEnv  INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (presetId, provider)
+        )
+      `)
+      db.pragma('user_version = 12')
+    })()
+    console.log('[DB] Migration v12: created PresetApiKeys table')
+  }
+
   return { needsFtsBackfill }
 }
 

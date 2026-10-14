@@ -1,10 +1,11 @@
-// src/settings/PersonaModelPanel.tsx — 设置窗口的"人设与模型"页：当前角色的人设提示词编辑、预设级模型覆盖
+// src/settings/PersonaModelPanel.tsx — 设置窗口的「人设与模型」页
 // 用法：SettingsApp 渲染 <PersonaModelPanel panel={useCharacterPanel 的返回值} />
-// 形状：props { panel: CharacterPanelModel }
-// 对应文件：src/settings/SettingsApp.tsx / src/settings/useCharacterPanel.ts
+// 对应文件：src/settings/SettingsApp.tsx / src/settings/useCharacterPanel.ts / src/settings/ApiKeyField.tsx / src/settings/ModelNameField.tsx
 import React from 'react'
 import type { ModelConfig } from '../../shared/types/index.js'
 import type { CharacterPanelModel } from './useCharacterPanel'
+import { ApiKeyField, ENV_VAR } from './ApiKeyField.js'
+import { ModelNameField } from './ModelNameField.js'
 
 interface PersonaModelPanelProps {
   panel: CharacterPanelModel
@@ -14,8 +15,10 @@ export function PersonaModelPanel({ panel }: PersonaModelPanelProps) {
   const {
     presetSnapshot, presets, personaError, systemPromptStep, systemPromptValue, setSystemPromptValue,
     systemPromptNotice, modelOverrideStep, useGlobalModel, setUseGlobalModel, overrideModelType,
-    setOverrideModelType, overrideModelName, setOverrideModelName, overrideModelNameOptions, isLoadingModelNames,
-    modelOverrideNotice, handleSystemPromptEditStart, handleSystemPromptEditCancel, handleSystemPromptSaveClick,
+    overrideModelName, setOverrideModelName, handleOverrideModelTypeChange, overrideKeyProvider, overrideKeySummary,
+    overrideEnvDetected, overrideFromEnv, overrideKeyInput, setOverrideKeyInput, overrideKeyEditing,
+    setOverrideKeyEditing, handleOverrideFromEnvChange, overrideKeysReady, modelKeysStatus, envStatus, retryModelKeys,
+    loadEnvDetected, modelOverrideNotice, handleSystemPromptEditStart, handleSystemPromptEditCancel, handleSystemPromptSaveClick,
     handleSystemPromptConfirmSaveCancel, handleSystemPromptConfirmSaveConfirm, handleSystemPromptConfirmApplyCancel,
     handleSystemPromptSend, handleModelOverrideEditStart, handleModelOverrideEditCancel,
     handleModelOverrideSaveClick, handleModelOverrideChooseApplyCancel, handleModelOverrideSend,
@@ -97,41 +100,61 @@ export function PersonaModelPanel({ panel }: PersonaModelPanelProps) {
                 使用全局默认模型
               </label>
               {!useGlobalModel && (
-                <div className="character-panel__row">
-                  <select
-                    value={overrideModelType}
-                    onChange={e => {
-                      setOverrideModelType(e.target.value as ModelConfig['type'])
-                      setOverrideModelName('')
-                    }}
-                  >
-                    <option value="anthropic">Anthropic</option>
-                    <option value="openai">OpenAI</option>
-                    <option value="deepseek">DeepSeek</option>
-                    <option value="ollama">Ollama</option>
-                  </select>
-                  <select
-                    value={overrideModelName}
-                    onChange={e => setOverrideModelName(e.target.value)}
-                    disabled={overrideModelNameOptions.length === 0}
-                  >
-                    {overrideModelNameOptions.length === 0 ? (
-                      <option value="" disabled>
-                        {isLoadingModelNames
-                          ? '模型列表加载中…'
-                          : overrideModelType === 'ollama' ? 'Ollama 未运行或无可用模型' : '模型列表为空'}
-                      </option>
-                    ) : (
-                      overrideModelNameOptions.map(name => (
-                        <option key={name} value={name}>{name}</option>
-                      ))
-                    )}
-                  </select>
-                </div>
+                <>
+                  <div className="model-config-panel__field">
+                    <label>类型</label>
+                    <select
+                      value={overrideModelType}
+                      onChange={e => handleOverrideModelTypeChange(e.target.value as ModelConfig['type'])}
+                    >
+                      <option value="anthropic">Anthropic</option>
+                      <option value="openai">OpenAI</option>
+                      <option value="deepseek">DeepSeek</option>
+                      <option value="ollama">Ollama</option>
+                    </select>
+                  </div>
+                  {overrideKeyProvider && (
+                    <div className="model-config-panel__group">
+                      <ApiKeyField
+                        summary={overrideKeySummary}
+                        envDetected={overrideEnvDetected}
+                        envVar={ENV_VAR[overrideKeyProvider]}
+                        fromEnv={overrideFromEnv}
+                        keyInput={overrideKeyInput}
+                        editing={overrideKeyEditing}
+                        onKeyInputChange={setOverrideKeyInput}
+                        onEditingChange={setOverrideKeyEditing}
+                        onFromEnvChange={handleOverrideFromEnvChange}
+                        keyStatus={modelKeysStatus}
+                        envStatus={envStatus}
+                      />
+                      {modelKeysStatus === 'error' && (
+                        <div className="character-panel__row">
+                          <span className="character-panel__error">读取 API Key 状态失败</span>
+                          <button className="rename-btn" onClick={retryModelKeys}>重试</button>
+                        </div>
+                      )}
+                      {envStatus === 'error' && (
+                        <div className="character-panel__row">
+                          <span className="character-panel__error">读取环境变量检测状态失败</span>
+                          <button className="rename-btn" onClick={loadEnvDetected}>重试</button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <ModelNameField
+                    type={overrideModelType}
+                    current={overrideModelName}
+                    apiKey={overrideKeyProvider ? overrideKeyInput.trim() : ''}
+                    presetId={presetSnapshot?.presetId}
+                    fromEnv={overrideKeyProvider !== null ? overrideFromEnv : undefined}
+                    onChange={setOverrideModelName}
+                  />
+                </>
               )}
               <div className="character-panel__row">
                 <button className="rename-btn" onClick={handleModelOverrideEditCancel}>取消</button>
-                <button className="rename-btn" onClick={handleModelOverrideSaveClick}>保存</button>
+                <button className="rename-btn" onClick={handleModelOverrideSaveClick} disabled={!overrideKeysReady}>保存</button>
               </div>
             </>
           )}

@@ -5,6 +5,7 @@ import path from 'path'
 import { initDb, db } from '../db/index.js'
 import {
   upsertPreset, getPresetById, updatePresetDisplayConfig, updatePresetSystemPrompt, updatePresetModelConfig, getEmotionState, upsertEmotionState,
+  getPresetApiKeys, upsertPresetApiKey,
   createSession, appendMessage, upsertMessageEmbedding, indexMessageFts, insertEntity, insertSummary,
 } from '../session/queries.js'
 import { DEFAULT_DISPLAY_CONFIG } from '../session/displayConfig.js'
@@ -12,6 +13,12 @@ import { loadSession, getCurrentState } from '../session/index.js'
 import { presetRoutes, WALLPAPER_DIR } from './presets.js'
 import { buildStatePayload } from '../state.js'
 import * as BroadcastModule from '../events/broadcast.js'
+import { isEnvCredentialDetected } from '../providers/envCredentials.js'
+
+vi.mock('../providers/envCredentials.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../providers/envCredentials.js')>()
+  return { ...actual, isEnvCredentialDetected: vi.fn(() => false) }
+})
 
 vi.mock('../events/broadcast.js', async importOriginal => {
   const actual = await importOriginal<typeof import('../events/broadcast.js')>()
@@ -905,7 +912,7 @@ describe('PATCH /presets/:presetId', () => {
     const response = await fastify.inject({
       method: 'PATCH',
       url: '/presets/p1',
-      payload: { modelType: 'openai', modelName: 'gpt-4o-mini' },
+      payload: { modelType: 'openai', modelName: 'gpt-4o-mini', apiKey: 'sk-role-openai' },
     })
 
     expect(response.statusCode).toBe(200)
@@ -920,7 +927,7 @@ describe('PATCH /presets/:presetId', () => {
     const response = await fastify.inject({
       method: 'PATCH',
       url: '/presets/p1',
-      payload: { modelType: 'deepseek', modelName: 'deepseek-v4-flash' },
+      payload: { modelType: 'deepseek', modelName: 'deepseek-v4-flash', apiKey: 'sk-role-deepseek' },
     })
 
     expect(response.statusCode).toBe(200)
@@ -951,7 +958,7 @@ describe('PATCH /presets/:presetId', () => {
     const response = await fastify.inject({
       method: 'PATCH',
       url: '/presets/p1',
-      payload: { modelType: 'openai', modelName: 'gpt-4o-mini', applyNow: true },
+      payload: { modelType: 'openai', modelName: 'gpt-4o-mini', apiKey: 'sk-role-openai', applyNow: true },
     })
 
     expect(response.statusCode).toBe(200)
@@ -1301,5 +1308,266 @@ describe('buildStatePayload — modelType/modelName 现查覆盖', () => {
     // 的 modelType 字段是 null 就跳过检测——ollamaReady 应为一个真正检测过的 boolean（false
     // 也算检测过，代表本机没有 Ollama 在跑），而不是代表"不适用"的 null
     expect(afterClear.ollamaReady).not.toBeNull()
+  })
+})
+
+describe('GET /presets/:presetId/model-keys', () => {
+  beforeEach(() => {
+    db.exec(`DELETE FROM PresetApiKeys`)
+  })
+
+  it('只返回 hasKey / last4 / fromEnv：长 key 取末 4 位，不足 8 位不给 last4，从不返回完整 key', async () => {
+    upsertPresetApiKey('p1', { provider: 'openai', apiKey: 'sk-openai-1234567890' })
+    upsertPresetApiKey('p1', { provider: 'deepseek', apiKey: 'short' })
+    upsertPresetApiKey('p1', { provider: 'anthropic', fromEnv: true })
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({ method: 'GET', url: '/presets/p1/model-keys' })
+
+    expect(response.statusCode).toBe(200)
+    expect(JSON.parse(response.payload)).toEqual({
+      anthropic: { hasKey: false, last4: null, fromEnv: true },
+      openai: { hasKey: true, last4: '7890', fromEnv: false },
+      deepseek: { hasKey: true, last4: null, fromEnv: false },
+    })
+    expect(response.payload).not.toContain('sk-openai-1234567890')
+    expect(response.payload).not.toContain('short')
+  })
+
+  it('没有任何 key 行时三家都是 hasKey=false', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({ method: 'GET', url: '/presets/p2/model-keys' })
+
+    expect(JSON.parse(response.payload)).toEqual({
+      anthropic: { hasKey: false, last4: null, fromEnv: false },
+      openai: { hasKey: false, last4: null, fromEnv: false },
+      deepseek: { hasKey: false, last4: null, fromEnv: false },
+    })
+  })
+
+  it('未知 preset 返回 404', async () => {
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({ method: 'GET', url: '/presets/missing/model-keys' })
+
+    expect(response.statusCode).toBe(404)
+  })
+})
+
+describe('PATCH /presets/:presetId — 角色 API Key', () => {
+  async function patch(payload: Record<string, unknown>, presetId = 'p1') {
+    const fastify = await buildTestApp()
+    return fastify.inject({ method: 'PATCH', url: `/presets/${presetId}`, payload })
+  }
+
+  beforeEach(() => {
+    db.exec(`DELETE FROM PresetApiKeys`)
+    vi.mocked(isEnvCredentialDetected).mockReset()
+    vi.mocked(isEnvCredentialDetected).mockReturnValue(false)
+  })
+
+  it('apiKey 随 modelType 保存：去掉首尾空白后写入该 provider 的行', async () => {
+    const response = await patch({ modelType: 'openai', modelName: 'gpt-4o-mini', apiKey: '  sk-role-key  ' })
+
+    expect(response.statusCode).toBe(200)
+    expect(getPresetById('p1')!.modelType).toBe('openai')
+    expect(getPresetApiKeys('p1').openai).toEqual({ apiKey: 'sk-role-key', fromEnv: false })
+    expect(getPresetApiKeys('p1').anthropic).toEqual({ fromEnv: false })
+  })
+
+  it('空串或全空白 apiKey 被忽略，已保存的 key 不变', async () => {
+    upsertPresetApiKey('p1', { provider: 'openai', apiKey: 'sk-saved-key' })
+
+    const empty = await patch({ modelType: 'openai', modelName: 'gpt-4o-mini', apiKey: '' })
+    const blank = await patch({ modelType: 'openai', modelName: 'gpt-4o', apiKey: '   ' })
+
+    expect(empty.statusCode).toBe(200)
+    expect(blank.statusCode).toBe(200)
+    expect(getPresetApiKeys('p1').openai).toEqual({ apiKey: 'sk-saved-key', fromEnv: false })
+  })
+
+  it('空 apiKey 且没有已保存的 key 时按未配置处理，返回 400', async () => {
+    const response = await patch({ modelType: 'openai', modelName: 'gpt-4o-mini', apiKey: '  ' })
+
+    expect(response.statusCode).toBe(400)
+    expect(JSON.parse(response.payload).error).toBe('API key 无效或未配置')
+  })
+
+  it('apiKeyFromEnv 由 false 变 true 且未检测到环境变量：400 且什么都不写', async () => {
+    const response = await patch({ name: '新名字', modelType: 'openai', modelName: 'gpt-4o-mini', apiKey: 'sk-role-key', apiKeyFromEnv: true })
+
+    expect(response.statusCode).toBe(400)
+    expect(JSON.parse(response.payload).error).toBe('未检测到环境变量 OPENAI_API_KEY')
+    expect(getPresetById('p1')!.name).toBe('角色一')
+    expect(getPresetById('p1')!.modelType).toBe('ollama')
+    expect(getPresetApiKeys('p1').openai).toEqual({ fromEnv: false })
+  })
+
+  it('apiKeyFromEnv 由 false 变 true 且检测到环境变量：写入 fromEnv，不需要保存的 key', async () => {
+    vi.mocked(isEnvCredentialDetected).mockReturnValue(true)
+
+    const response = await patch({ modelType: 'deepseek', modelName: 'deepseek-v4-flash', apiKeyFromEnv: true })
+
+    expect(response.statusCode).toBe(200)
+    expect(getPresetApiKeys('p1').deepseek).toEqual({ fromEnv: true })
+  })
+
+  it('已保存为 true 的 apiKeyFromEnv 再次提交不触发"未检测到环境变量"，环境可用时通过', async () => {
+    upsertPresetApiKey('p1', { provider: 'openai', fromEnv: true })
+    vi.mocked(isEnvCredentialDetected).mockReturnValue(true)
+
+    const response = await patch({ modelType: 'openai', modelName: 'gpt-4o-mini', apiKeyFromEnv: true })
+
+    expect(response.statusCode).toBe(200)
+    expect(getPresetApiKeys('p1').openai).toEqual({ fromEnv: true })
+  })
+
+  it('已保存为 true 的 apiKeyFromEnv 再次提交但环境变量已丢失：不报"未检测到环境变量"，按未配置 400', async () => {
+    upsertPresetApiKey('p1', { provider: 'openai', fromEnv: true })
+
+    const response = await patch({ modelType: 'openai', modelName: 'gpt-4o-mini', apiKeyFromEnv: true })
+
+    expect(response.statusCode).toBe(400)
+    expect(JSON.parse(response.payload).error).toBe('API key 无效或未配置')
+  })
+
+  it('key provider 未配置（无 key、未勾选环境变量）：400 且 name 等其它字段也不写', async () => {
+    const response = await patch({ name: '新名字', systemPrompt: '新人设', modelType: 'anthropic', modelName: 'claude-sonnet' })
+
+    expect(response.statusCode).toBe(400)
+    expect(JSON.parse(response.payload).error).toBe('API key 无效或未配置')
+    const preset = getPresetById('p1')!
+    expect(preset.name).toBe('角色一')
+    expect(preset.systemPrompt).toBe('你是角色一')
+    expect(preset.modelType).toBe('ollama')
+    expect(getPresetApiKeys('p1').anthropic).toEqual({ fromEnv: false })
+  })
+
+  it('勾选环境变量但环境不可用：400', async () => {
+    upsertPresetApiKey('p1', { provider: 'openai', apiKey: 'sk-saved-key', fromEnv: true })
+
+    const response = await patch({ modelType: 'openai', modelName: 'gpt-4o-mini' })
+
+    expect(response.statusCode).toBe(400)
+    expect(JSON.parse(response.payload).error).toBe('API key 无效或未配置')
+  })
+
+  it('取消勾选环境变量且已有保存的 key：通过，写入 fromEnv=false 并保留 key', async () => {
+    upsertPresetApiKey('p1', { provider: 'openai', apiKey: 'sk-saved-key', fromEnv: true })
+
+    const response = await patch({ modelType: 'openai', modelName: 'gpt-4o-mini', apiKeyFromEnv: false })
+
+    expect(response.statusCode).toBe(200)
+    expect(getPresetApiKeys('p1').openai).toEqual({ apiKey: 'sk-saved-key', fromEnv: false })
+  })
+
+  it('只带 apiKey（不带 modelType）时作用于已保存的 modelType', async () => {
+    updatePresetModelConfig('p1', 'openai', 'gpt-4o')
+
+    const response = await patch({ apiKey: 'sk-new-key' })
+
+    expect(response.statusCode).toBe(200)
+    expect(getPresetApiKeys('p1').openai).toEqual({ apiKey: 'sk-new-key', fromEnv: false })
+    expect(getPresetById('p1')!.modelName).toBe('gpt-4o')
+  })
+
+  it('只带 apiKey 且已保存的 modelType 是 ollama：400', async () => {
+    const response = await patch({ apiKey: 'sk-new-key' })
+
+    expect(response.statusCode).toBe(400)
+    expect(getPresetApiKeys('p1').openai).toEqual({ fromEnv: false })
+  })
+
+  it('apiKey / apiKeyFromEnv 与 modelType=ollama 或 null 同时出现：400，不写任何东西', async () => {
+    const withOllama = await patch({ modelType: 'ollama', modelName: 'llama3', apiKey: 'sk-x' })
+    const withNull = await patch({ modelType: null, modelName: null, apiKey: 'sk-x' })
+    const flagWithNull = await patch({ modelType: null, modelName: null, apiKeyFromEnv: true })
+
+    expect(withOllama.statusCode).toBe(400)
+    expect(withNull.statusCode).toBe(400)
+    expect(flagWithNull.statusCode).toBe(400)
+    expect(getPresetById('p1')!.modelName).toBe('qwen3')
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM PresetApiKeys`).get()).toEqual({ count: 0 })
+  })
+
+  it('modelType 设为 null（跟随全局）时不触碰已有的 key 行', async () => {
+    upsertPresetApiKey('p1', { provider: 'openai', apiKey: 'sk-saved-key', fromEnv: true })
+
+    const response = await patch({ modelType: null, modelName: null })
+
+    expect(response.statusCode).toBe(200)
+    expect(getPresetApiKeys('p1').openai).toEqual({ apiKey: 'sk-saved-key', fromEnv: true })
+  })
+
+  it('不含模型相关字段的 PATCH（name / systemPrompt / displayConfig）不校验 key，即使当前已是未配置 key 的 key provider', async () => {
+    updatePresetModelConfig('p1', 'anthropic', 'claude-sonnet')
+
+    const byName = await patch({ name: '改名' })
+    const byPrompt = await patch({ systemPrompt: '新人设' })
+    const byDisplay = await patch({ displayConfig: { chatBgOpacity: 0.5 } })
+
+    expect(byName.statusCode).toBe(200)
+    expect(byPrompt.statusCode).toBe(200)
+    expect(byDisplay.statusCode).toBe(200)
+    expect(getPresetById('p1')!.name).toBe('改名')
+  })
+
+  it('applyNow: true 时内存中的角色凭据立即刷新；缺省时不刷新', async () => {
+    loadSession('p1')
+    expect(getCurrentState()!.credentials.openai).toEqual({ fromEnv: false })
+
+    await patch({ modelType: 'openai', modelName: 'gpt-4o-mini', apiKey: 'sk-later' })
+    expect(getCurrentState()!.credentials.openai).toEqual({ fromEnv: false })
+    expect(getCurrentState()!.preset.modelType).toBe('ollama')
+
+    await patch({ modelType: 'openai', modelName: 'gpt-4o-mini', apiKey: 'sk-now', applyNow: true })
+    expect(getCurrentState()!.credentials.openai).toEqual({ apiKey: 'sk-now', fromEnv: false })
+    expect(getCurrentState()!.preset.modelType).toBe('openai')
+  })
+
+  it('响应、/state 载荷、GET /presets、广播与日志里都不出现 key', async () => {
+    const logSpies = [
+      vi.spyOn(console, 'log').mockImplementation(() => {}),
+      vi.spyOn(console, 'warn').mockImplementation(() => {}),
+      vi.spyOn(console, 'error').mockImplementation(() => {}),
+    ]
+    loadSession('p1')
+    const fastify = await buildTestApp()
+
+    const patched = await fastify.inject({
+      method: 'PATCH',
+      url: '/presets/p1',
+      payload: { modelType: 'openai', modelName: 'gpt-4o-mini', apiKey: 'sk-top-secret-value', applyNow: true },
+    })
+    const list = await fastify.inject({ method: 'GET', url: '/presets' })
+    const state = JSON.stringify(await buildStatePayload())
+
+    expect(patched.statusCode).toBe(200)
+    expect(patched.payload).not.toContain('sk-top-secret-value')
+    expect(list.payload).not.toContain('sk-top-secret-value')
+    expect(state).not.toContain('sk-top-secret-value')
+    expect(JSON.stringify(getPresetById('p1'))).not.toContain('sk-top-secret-value')
+    expect(JSON.stringify(getCurrentState()!.session.presetSnapshot)).not.toContain('sk-top-secret-value')
+    expect(JSON.stringify(vi.mocked(BroadcastModule.broadcastEvent).mock.calls)).not.toContain('sk-top-secret-value')
+    expect(JSON.stringify(logSpies.map(spy => spy.mock.calls))).not.toContain('sk-top-secret-value')
+  })
+
+  it('apiKey 不是字符串、apiKeyFromEnv 不是布尔时返回 400', async () => {
+    const badKey = await patch({ modelType: 'openai', modelName: 'gpt-4o', apiKey: 123 })
+    const badFlag = await patch({ modelType: 'openai', modelName: 'gpt-4o', apiKey: 'sk-x', apiKeyFromEnv: 'yes' })
+
+    expect(badKey.statusCode).toBe(400)
+    expect(badFlag.statusCode).toBe(400)
+  })
+
+  it('DELETE /presets/:presetId 同时删除该角色的 key 行', async () => {
+    upsertPresetApiKey('p2', { provider: 'openai', apiKey: 'sk-p2-key' })
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({ method: 'DELETE', url: '/presets/p2' })
+
+    expect(response.statusCode).toBe(200)
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM PresetApiKeys WHERE presetId = 'p2'`).get()).toEqual({ count: 0 })
   })
 })

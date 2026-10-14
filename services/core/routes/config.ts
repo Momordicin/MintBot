@@ -1,6 +1,6 @@
 // services/core/routes/config.ts — 模型配置的读取与修改路由
 // 用法：core/index.ts 注册 configRoutes；GET /config/model、PATCH /config/model
-// 对应文件：src/settings/ModelConfigPanel.tsx / services/core/config/index.ts / services/core/providers/envCredentials.ts / services/core/routes/config.test.ts
+// 对应文件：src/settings/ModelConfigPanel.tsx / services/core/config/index.ts / services/core/config/keySummary.ts / services/core/providers/envCredentials.ts / services/core/routes/config.test.ts
 import type { FastifyInstance } from 'fastify'
 import {
   getModelProviderConfig,
@@ -10,6 +10,7 @@ import {
   updateBackgroundModelProviderConfig,
   type BackgroundModelConfig,
 } from '../config/index.js'
+import { summarizeSavedKey } from '../config/keySummary.js'
 import { ConfigFileUnreadableError, CONFIG_FILE_UNREADABLE_MESSAGE } from '../config/configFileError.js'
 import { createModelProvider } from '../providers/ModelProvider.js'
 import { ENV_VAR_BY_PROVIDER, isEnvCredentialDetected, type KeyProvider } from '../providers/envCredentials.js'
@@ -20,7 +21,6 @@ const MIN_MAX_TOKENS = 1
 const MAX_MAX_TOKENS = 32000
 const KEY_PROVIDERS: readonly KeyProvider[] = ['anthropic', 'openai', 'deepseek']
 const API_KEY_INVALID_MESSAGE = 'API key 无效或未配置'
-const MIN_LAST4_KEY_LENGTH = 8
 
 const KEY_FIELD = {
   anthropic: { key: 'anthropicApiKey', fromEnv: 'anthropicApiKeyFromEnv' },
@@ -54,11 +54,8 @@ export interface BackgroundModelSummary {
 
 function summarizeKey(config: ModelConfig, provider: KeyProvider): KeySummary {
   const { key, fromEnv } = KEY_FIELD[provider]
-  const saved = config[key]
-  const hasKey = typeof saved === 'string' && saved.length > 0
   return {
-    hasKey,
-    last4: hasKey && saved.length >= MIN_LAST4_KEY_LENGTH ? saved.slice(-4) : null,
+    ...summarizeSavedKey(config[key]),
     fromEnv: config[fromEnv] === true,
     envDetected: isEnvCredentialDetected(provider),
   }

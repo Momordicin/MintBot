@@ -1,11 +1,12 @@
 // services/core/providers/ModelProvider.ts — 大语言模型调用封装：按配置类型（anthropic / openai / deepseek / ollama）发起流式 complete 或非流式 completeSync
-// 用法：routes/models.ts 调 createAnthropicClient / createOpenAIClient 构建 SDK 客户端；routes/chat.ts 每次聊天用 createModelProviderForPreset(preset, 全局配置)（预设无模型覆盖则用全局配置）调 complete / completeSync；index.ts 与 routes/config.ts 用 createModelProvider 构建 fastify.modelProvider / backgroundModelProvider，后者的 completeSync 供 orchestrator 驱动 entityExtractor 与 summarizer
-// 对应文件：services/core/routes/chat.ts / services/core/routes/config.ts / services/core/routes/models.ts / services/core/index.ts / services/core/memory/orchestrator.ts / shared/types/index.ts / services/core/providers/envCredentials.ts / services/core/providers/ModelProvider.test.ts
+// 用法：routes/models.ts 调 createAnthropicClient / createOpenAIClient 构建 SDK 客户端；routes/chat.ts 每次聊天与 memory/orchestrator.ts 的按角色后台整理用 createModelProviderForPreset(preset, 全局配置, 角色凭据)（预设无模型覆盖则用全局配置）调 complete / completeSync；index.ts 与 routes/config.ts 用 createModelProvider 构建 fastify.modelProvider / backgroundModelProvider，后者的 completeSync 供 orchestrator 驱动 entityExtractor 与 summarizer
+// 对应文件：services/core/routes/chat.ts / services/core/routes/config.ts / services/core/routes/models.ts / services/core/index.ts / services/core/memory/orchestrator.ts / shared/types/index.ts / services/core/providers/envCredentials.ts / services/core/session/queries.ts / services/core/providers/ModelProvider.test.ts
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
 import type { ChatCompletionCreateParamsBase } from 'openai/resources/chat/completions'
 import type { ChatMessage, ModelConfig, CompletionOptions, BuiltContext, Preset } from '../../../shared/types/index.js'
 import { getEnvCredential, type KeyProvider } from './envCredentials.js'
+import type { PresetCredentials } from '../session/queries.js'
 
 const STREAM_TIMEOUT_MS = 30000
 
@@ -435,7 +436,11 @@ export function createModelProvider(config: ModelConfig): ModelProvider {
   return new ModelProvider(config)
 }
 
-export function createModelProviderForPreset(preset: Preset, globalConfig: ModelConfig): ModelProvider {
+export function createModelProviderForPreset(
+  preset: Preset,
+  globalConfig: ModelConfig,
+  credentials: PresetCredentials
+): ModelProvider {
   if (preset.modelType === null || preset.modelName === null) {
     return createModelProvider(globalConfig)
   }
@@ -444,6 +449,10 @@ export function createModelProviderForPreset(preset: Preset, globalConfig: Model
     config.ollamaModel = preset.modelName
   } else {
     config.modelName = preset.modelName
+    const { key, fromEnv } = KEY_FIELD[preset.modelType]
+    const role = credentials[preset.modelType]
+    config[key] = role?.apiKey
+    config[fromEnv] = role?.fromEnv === true
   }
   return createModelProvider(config)
 }

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import type { Preset, ModelConfig, BuiltContext, CompletionOptions } from '../../../shared/types/index.js'
+import type { PresetCredentials } from '../session/queries.js'
 
 const { anthropicCtorMock, anthropicCreateMock, anthropicStreamMock, openaiCtorMock, openaiCreateMock } = vi.hoisted(() => ({
   anthropicCtorMock: vi.fn(),
@@ -42,6 +43,16 @@ function fakePreset(overrides: Partial<Preset> = {}): Preset {
     updatedAt: 0,
     ...overrides,
   }
+}
+
+const noCredentials: PresetCredentials = {
+  anthropic: { fromEnv: false },
+  openai: { fromEnv: false },
+  deepseek: { fromEnv: false },
+}
+
+function credentialsWith(overrides: Partial<PresetCredentials>): PresetCredentials {
+  return { ...noCredentials, ...overrides }
 }
 
 function fakeStreamResponse(): Response {
@@ -103,7 +114,7 @@ describe('createModelProviderForPreset', () => {
     const globalConfig: ModelConfig = { type: 'anthropic', modelName: 'should-not-be-used' }
     const preset = fakePreset({ modelType: 'ollama', modelName: 'llama3' })
 
-    const provider = createModelProviderForPreset(preset, globalConfig)
+    const provider = createModelProviderForPreset(preset, globalConfig, noCredentials)
     await drain(provider)
 
     expect(fetchSpy).toHaveBeenCalledTimes(1)
@@ -114,15 +125,15 @@ describe('createModelProviderForPreset', () => {
     expect(body.model).not.toBe('should-not-be-used')
   })
 
-  it('非 ollama 类型（openai）下 preset.modelName 写入 config.modelName，且沿用全局 key', async () => {
+  it('非 ollama 类型（openai）下 preset.modelName 写入 config.modelName，且使用角色 key 而不是全局 key', async () => {
     openaiCreateMock.mockResolvedValue(openaiStream('hi'))
 
     const globalConfig: ModelConfig = { type: 'ollama', ollamaModel: 'should-not-be-used', openaiApiKey: 'global-key' }
     const preset = fakePreset({ modelType: 'openai', modelName: 'gpt-4o-mini' })
 
-    await drain(createModelProviderForPreset(preset, globalConfig))
+    await drain(createModelProviderForPreset(preset, globalConfig, credentialsWith({ openai: { apiKey: 'role-key', fromEnv: false } })))
 
-    expect(openaiCtorMock.mock.calls[0][0].apiKey).toBe('global-key')
+    expect(openaiCtorMock.mock.calls[0][0].apiKey).toBe('role-key')
     expect(openaiCreateMock.mock.calls[0][0].model).toBe('gpt-4o-mini')
   })
 
@@ -132,7 +143,7 @@ describe('createModelProviderForPreset', () => {
     const globalConfig: ModelConfig = { type: 'openai', modelName: 'global-model', openaiApiKey: 'global-key' }
     const preset = fakePreset({ modelType: null, modelName: null })
 
-    await drain(createModelProviderForPreset(preset, globalConfig))
+    await drain(createModelProviderForPreset(preset, globalConfig, credentialsWith({ openai: { apiKey: 'role-key', fromEnv: false } })))
 
     expect(openaiCtorMock.mock.calls[0][0].apiKey).toBe('global-key')
     expect(openaiCreateMock.mock.calls[0][0].model).toBe('global-model')
@@ -150,10 +161,13 @@ describe('createModelProviderForPreset', () => {
     }
     const preset = fakePreset({ modelType: 'deepseek', modelName: 'deepseek-v4-pro' })
 
-    await drain(createModelProviderForPreset(preset, globalConfig))
+    await drain(createModelProviderForPreset(preset, globalConfig, credentialsWith({
+      openai: { apiKey: 'role-openai', fromEnv: false },
+      deepseek: { apiKey: 'role-deepseek', fromEnv: false },
+    })))
 
     const ctorArgs = openaiCtorMock.mock.calls[0][0]
-    expect(ctorArgs.apiKey).toBe('sk-deepseek')
+    expect(ctorArgs.apiKey).toBe('role-deepseek')
     expect(ctorArgs.baseURL).toBe('https://api.deepseek.com')
     expect(openaiCreateMock.mock.calls[0][0].model).toBe('deepseek-v4-pro')
   })
@@ -170,10 +184,13 @@ describe('createModelProviderForPreset', () => {
     }
     const preset = fakePreset({ modelType: 'openai', modelName: 'gpt-4o-mini' })
 
-    await drain(createModelProviderForPreset(preset, globalConfig))
+    await drain(createModelProviderForPreset(preset, globalConfig, credentialsWith({
+      openai: { apiKey: 'role-openai', fromEnv: false },
+      deepseek: { apiKey: 'role-deepseek', fromEnv: false },
+    })))
 
     const ctorArgs = openaiCtorMock.mock.calls[0][0]
-    expect(ctorArgs.apiKey).toBe('sk-openai')
+    expect(ctorArgs.apiKey).toBe('role-openai')
     expect(ctorArgs.baseURL).toBe('https://api.openai.com/v1')
     expect(openaiCreateMock.mock.calls[0][0].model).toBe('gpt-4o-mini')
   })
@@ -630,14 +647,58 @@ describe('缺失 API Key 时调用前失败', () => {
     expectNoSdkCall()
   })
 
-  it('preset 覆盖沿用全局 key：全局缺 key 时同样失败', async () => {
+  it('preset 覆盖且角色缺 key：即使全局有 key 也失败，不回落到全局 key', async () => {
     const provider = createModelProviderForPreset(
       fakePreset({ modelType: 'openai', modelName: 'gpt-4o-mini' }),
-      { type: 'ollama' }
+      { type: 'ollama', openaiApiKey: 'global-key', openaiApiKeyFromEnv: false },
+      noCredentials
     )
 
     await expect(provider.completeSync(context)).rejects.toThrow('[ModelProvider] OpenAI API key is not configured')
     expectNoSdkCall()
+  })
+
+  it('preset 覆盖且角色 FromEnv 关闭：全局 FromEnv 开启也不影响，使用角色自己的 key', async () => {
+    openaiCreateMock.mockResolvedValue(openaiCompletion('ok'))
+    const provider = createModelProviderForPreset(
+      fakePreset({ modelType: 'openai', modelName: 'gpt-4o-mini' }),
+      { type: 'ollama', openaiApiKey: 'global-key', openaiApiKeyFromEnv: true },
+      credentialsWith({ openai: { apiKey: 'role-key', fromEnv: false } })
+    )
+
+    await provider.completeSync(context)
+
+    expect(openaiCtorMock.mock.calls[0][0].apiKey).toBe('role-key')
+  })
+
+  it('preset 覆盖且角色 FromEnv 开启但环境缺失：抛环境变量不可用错误，不使用角色或全局已保存 key', async () => {
+    delete process.env.OPENAI_API_KEY
+    wipeCredentialEnv()
+    const provider = createModelProviderForPreset(
+      fakePreset({ modelType: 'openai', modelName: 'gpt-4o-mini' }),
+      { type: 'ollama', openaiApiKey: 'global-key' },
+      credentialsWith({ openai: { apiKey: 'role-key', fromEnv: true } })
+    )
+
+    await expect(provider.completeSync(context)).rejects.toThrow('[ModelProvider] OpenAI API key environment variable is not available')
+    expectNoSdkCall()
+  })
+
+  it('preset 覆盖且角色 FromEnv 开启且环境有 key：使用环境变量 key', async () => {
+    process.env.OPENAI_API_KEY = 'sk-from-env'
+    wipeCredentialEnv()
+    openaiCreateMock.mockResolvedValue(openaiCompletion('ok'))
+    const provider = createModelProviderForPreset(
+      fakePreset({ modelType: 'openai', modelName: 'gpt-4o-mini' }),
+      { type: 'ollama', openaiApiKey: 'global-key' },
+      credentialsWith({ openai: { fromEnv: true } })
+    )
+
+    await provider.completeSync(context)
+    delete process.env.OPENAI_API_KEY
+    wipeCredentialEnv()
+
+    expect(openaiCtorMock.mock.calls[0][0].apiKey).toBe('sk-from-env')
   })
 
   it('ollama 未配置任何凭据字段时仍正常发起请求（本地端点不认证）', async () => {

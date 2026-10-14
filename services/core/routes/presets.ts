@@ -1,14 +1,16 @@
 // services/core/routes/presets.ts — 预设（角色人设档案）的增删改、切换与壁纸上传路由
-// 用法：core/index.ts 里 fastify.register(presetRoutes)，并取其导出的 WALLPAPER_DIR 作 /wallpapers/ 静态目录；GET /presets、POST /presets、POST /switch-preset、POST /presets/:presetId/wallpaper、PATCH /presets/:presetId、DELETE /presets/:presetId；广播 preset-pet-display-changed
+// 用法：core/index.ts 里 fastify.register(presetRoutes)，并取其导出的 WALLPAPER_DIR 作 /wallpapers/ 静态目录；GET /presets、GET /presets/:presetId/model-keys、POST /presets、POST /switch-preset、POST /presets/:presetId/wallpaper、PATCH /presets/:presetId、DELETE /presets/:presetId；广播 preset-pet-display-changed
 // 形状：切换、壁纸、PATCH、DELETE 的响应为 buildStatePayload() 的状态载荷
-// 对应文件：src/settings/CharacterPanel.tsx（调用方）/ src/overlay/OverlayApp.tsx（消费 preset-pet-display-changed）/ services/core/session/queries.ts / services/core/session/index.ts / services/core/session/displayConfig.ts / services/core/state.ts / services/core/routes/presets.test.ts / services/core/routes/wallpaperGuard.test.ts
+// 对应文件：src/settings/CharacterPanel.tsx（调用方）/ src/overlay/OverlayApp.tsx（消费 preset-pet-display-changed）/ services/core/session/queries.ts / services/core/session/index.ts / services/core/session/displayConfig.ts / services/core/state.ts / services/core/providers/envCredentials.ts / services/core/config/keySummary.ts / services/core/routes/presets.test.ts / services/core/routes/wallpaperGuard.test.ts
 import type { FastifyInstance } from 'fastify'
 import path from 'path'
 import os from 'os'
 import fs from 'fs'
 import crypto from 'crypto'
 import * as dotenv from 'dotenv'
-import { getAllPresets, getPresetById, createPreset, updatePresetWallpaper, updatePresetName, updatePresetDisplayConfig, updatePresetSystemPrompt, updatePresetModelConfig, deletePresetWithData, getMostRecentOtherPresetId } from '../session/queries.js'
+import { getAllPresets, getPresetById, createPreset, updatePresetWallpaper, updatePresetName, updatePresetDisplayConfig, updatePresetSystemPrompt, updatePresetModelConfig, deletePresetWithData, getMostRecentOtherPresetId, getPresetApiKeys, upsertPresetApiKey, type PresetKeyProvider } from '../session/queries.js'
+import { ENV_VAR_BY_PROVIDER, isEnvCredentialDetected } from '../providers/envCredentials.js'
+import { summarizeSavedKey } from '../config/keySummary.js'
 import { switchPreset, refreshCurrentPresetIfActive, getCurrentState } from '../session/index.js'
 import { buildStatePayload } from '../state.js'
 import { broadcastEvent } from '../events/broadcast.js'
@@ -35,10 +37,35 @@ if (process.env.VITEST && !WALLPAPER_DIR.startsWith(os.tmpdir() + path.sep)) {
 
 const ALLOWED_WALLPAPER_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif'])
 const VALID_MODEL_TYPES: readonly string[] = ['anthropic', 'openai', 'ollama', 'deepseek']
+const API_KEY_INVALID_MESSAGE = 'API key 无效或未配置'
+
+function isKeyProvider(type: string | null): type is PresetKeyProvider {
+  return type === 'anthropic' || type === 'openai' || type === 'deepseek'
+}
 
 export async function presetRoutes(fastify: FastifyInstance) {
   fastify.get('/presets', async () => {
     return getAllPresets().map(p => ({ presetId: p.presetId, name: p.name }))
+  })
+
+  fastify.get<{
+    Params: { presetId: string }
+  }>('/presets/:presetId/model-keys', async (request, reply) => {
+    const { presetId } = request.params
+    if (!getPresetById(presetId)) {
+      return reply.status(404).send({ error: 'Preset not found' })
+    }
+
+    const credentials = getPresetApiKeys(presetId)
+    const summarize = (provider: PresetKeyProvider) => {
+      const { apiKey, fromEnv } = credentials[provider]
+      return { ...summarizeSavedKey(apiKey), fromEnv }
+    }
+    return {
+      anthropic: summarize('anthropic'),
+      openai: summarize('openai'),
+      deepseek: summarize('deepseek'),
+    }
   })
 
   fastify.post<{
@@ -182,6 +209,8 @@ export async function presetRoutes(fastify: FastifyInstance) {
       systemPrompt?: string
       modelType?: 'anthropic' | 'openai' | 'ollama' | 'deepseek' | null
       modelName?: string | null
+      apiKey?: string
+      apiKeyFromEnv?: boolean
       applyNow?: boolean
     }
   }>('/presets/:presetId', async (request, reply) => {
@@ -191,13 +220,22 @@ export async function presetRoutes(fastify: FastifyInstance) {
       return reply.status(404).send({ error: 'Preset not found' })
     }
 
-    const { name, displayConfig, systemPrompt, modelType, modelName, applyNow } = request.body
+    const { name, displayConfig, systemPrompt, modelType, modelName, apiKeyFromEnv, applyNow } = request.body
+    if (request.body.apiKey !== undefined && typeof request.body.apiKey !== 'string') {
+      return reply.status(400).send({ error: 'apiKey must be a string' })
+    }
+    if (apiKeyFromEnv !== undefined && typeof apiKeyFromEnv !== 'boolean') {
+      return reply.status(400).send({ error: 'apiKeyFromEnv must be a boolean' })
+    }
+    const apiKey = request.body.apiKey?.trim() || undefined
     if (
       name === undefined &&
       displayConfig === undefined &&
       systemPrompt === undefined &&
       modelType === undefined &&
-      modelName === undefined
+      modelName === undefined &&
+      apiKey === undefined &&
+      apiKeyFromEnv === undefined
     ) {
       return reply.status(400).send({ error: 'name, displayConfig, systemPrompt, modelType or modelName is required' })
     }
@@ -259,6 +297,30 @@ export async function presetRoutes(fastify: FastifyInstance) {
       }
     }
 
+    const resultingModelType = modelConfig !== undefined ? modelConfig.modelType : preset.modelType
+    const keyFieldsSent = apiKey !== undefined || apiKeyFromEnv !== undefined
+    let keyUpdate: { provider: PresetKeyProvider; apiKey?: string; fromEnv?: boolean } | undefined
+    if (keyFieldsSent && !isKeyProvider(resultingModelType)) {
+      return reply.status(400).send({ error: 'apiKey and apiKeyFromEnv only apply to anthropic, openai or deepseek' })
+    }
+    if (isKeyProvider(resultingModelType)) {
+      const saved = getPresetApiKeys(presetId)[resultingModelType]
+      if (apiKeyFromEnv === true && !saved.fromEnv && !isEnvCredentialDetected(resultingModelType)) {
+        return reply.status(400).send({ error: `未检测到环境变量 ${ENV_VAR_BY_PROVIDER[resultingModelType]}` })
+      }
+      if (modelConfig !== undefined || keyFieldsSent) {
+        const mergedFromEnv = apiKeyFromEnv ?? saved.fromEnv
+        const mergedApiKey = apiKey ?? saved.apiKey
+        const configured = mergedFromEnv ? isEnvCredentialDetected(resultingModelType) : !!mergedApiKey
+        if (!configured) {
+          return reply.status(400).send({ error: API_KEY_INVALID_MESSAGE })
+        }
+      }
+      if (keyFieldsSent) {
+        keyUpdate = { provider: resultingModelType, apiKey, fromEnv: apiKeyFromEnv }
+      }
+    }
+
     if (trimmedName !== undefined) {
       updatePresetName(presetId, trimmedName)
     }
@@ -291,7 +353,9 @@ export async function presetRoutes(fastify: FastifyInstance) {
     }
 
     if (modelConfig !== undefined) {
-      updatePresetModelConfig(presetId, modelConfig.modelType, modelConfig.modelName)
+      updatePresetModelConfig(presetId, modelConfig.modelType, modelConfig.modelName, keyUpdate)
+    } else if (keyUpdate !== undefined) {
+      upsertPresetApiKey(presetId, keyUpdate)
     }
 
     if (applyNow === true) {

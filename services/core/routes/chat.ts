@@ -129,7 +129,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
       try {
         const modelProviderConfig = getModelProviderConfig()
-        const modelProvider = createModelProviderForPreset(state.preset, modelProviderConfig)
+        const modelProvider = createModelProviderForPreset(state.preset, modelProviderConfig, state.credentials)
         const modelType = state.preset.modelType ?? modelProviderConfig.type
 
         let fullReply = ''

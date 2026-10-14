@@ -8,15 +8,18 @@ import { broadcastEvent } from '../events/broadcast.js'
 import { setDefaultPresetId } from '../config/index.js'
 import {
   getPresetById,
+  getPresetApiKeys,
   getAllPresets,
   getLatestSessionByPreset,
   createSession,
   getRecentMessages,
+  type PresetCredentials,
 } from './queries.js'
 
 interface SessionState {
   session: Session
   preset: Preset
+  credentials: PresetCredentials
   manifest: CharacterManifest | null
 }
 
@@ -55,7 +58,7 @@ export function loadSession(presetId: string): SessionState {
     console.log(`[Session] Resumed session ${session.sessionId} for preset ${presetId}`)
   }
 
-  current = { session, preset, manifest }
+  current = { session, preset, credentials: getPresetApiKeys(presetId), manifest }
   return current
 }
 
@@ -83,7 +86,7 @@ export function refreshCurrentPresetIfActive(presetId: string): void {
   if (current?.session.presetId !== presetId) return
   const preset = getPresetById(presetId)
   if (!preset) return
-  current = { ...current, preset }
+  current = { ...current, preset, credentials: getPresetApiKeys(presetId) }
 }
 
 export function getCurrentState(): SessionState | null {

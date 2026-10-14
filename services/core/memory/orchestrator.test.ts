@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { db, initDb } from '../db/index.js'
-import { appendMessage, getPendingEmbeddingCount, getCurrentEntities, getPendingSummaryCount } from '../session/queries.js'
+import {
+  appendMessage, getPendingEmbeddingCount, getCurrentEntities, getPendingSummaryCount,
+  upsertPreset, getPresetById, createSession, getLatestSessionByPreset, upsertPresetApiKey,
+} from '../session/queries.js'
 import { runOrganizeModeTick, isInDefaultOrganizeWindow } from './orchestrator.js'
 import { recordSystemEvent } from '../system/lockState.js'
 import { recordActivity } from '../providers/aiActivity.js'
@@ -22,18 +25,22 @@ vi.mock('../config/index.js', () => ({
   // summarizer.ts generateSummary 现在读这个函数取 maxTokens；本文件的用例不关心具体数值，
   // 未配置覆盖时回落到默认值 1000，与迁移前硬编码 1000 的行为一致
   getBackgroundModelProviderConfig: () => ({ type: 'ollama' }),
+  getModelProviderConfig: () => ({ type: 'ollama' }),
 }))
+
+const { createForPresetMock } = vi.hoisted(() => ({ createForPresetMock: vi.fn() }))
+vi.mock('../providers/ModelProvider.js', () => ({ createModelProviderForPreset: createForPresetMock }))
 
 // getCurrentState 用于当前激活角色的摘要插队检查——mock 成受控的 vi.fn()，每个用例自己
 // 设置返回值（默认 null，代表"无激活 session"，与真实模块在没有任何 session 被加载时的
 // 行为一致）。用 vi.hoisted 声明保证 vi.mock 的 factory（会被提升到文件顶部先执行）
 // 能引用到同一个函数实例
-const { getCurrentStateMock } = vi.hoisted(() => ({ getCurrentStateMock: vi.fn(() => null as { session: { sessionId: string } } | null) }))
+const { getCurrentStateMock } = vi.hoisted(() => ({ getCurrentStateMock: vi.fn(() => null as { session: { sessionId: string; presetId?: string }; preset?: any; credentials?: any } | null) }))
 vi.mock('../session/index.js', () => ({ getCurrentState: getCurrentStateMock }))
 
 initDb()
 beforeEach(() => {
-  db.exec(`DELETE FROM Messages; DELETE FROM message_embeddings; DELETE FROM message_fts; DELETE FROM MessageEntities; DELETE FROM Summaries;`)
+  db.exec(`DELETE FROM Messages; DELETE FROM message_embeddings; DELETE FROM message_fts; DELETE FROM MessageEntities; DELETE FROM Summaries; DELETE FROM Sessions; DELETE FROM Presets; DELETE FROM PresetApiKeys;`)
   // lockState 是模块级内存状态，跨测试用例复用同一模块实例，每个用例开始前重置为未锁屏，
   // 避免前一个用例里 recordSystemEvent('lock-screen', ...) 的状态泄漏到后续用例
   recordSystemEvent('unlock-screen')
@@ -553,5 +560,243 @@ describe('isInDefaultOrganizeWindow', () => {
 
   it('14:00:00 不属于窗口（日间）', () => {
     expect(isInDefaultOrganizeWindow(new Date(2024, 0, 1, 14, 0, 0).getTime())).toBe(false)
+  })
+})
+
+type RecordedCall = { label: string; prompt: string }
+
+function recordingModel(label: string, calls: RecordedCall[]): EntityModelProvider {
+  return {
+    async completeSync(context) {
+      calls.push({ label, prompt: context.messages.map(m => m.content).join('\n') })
+      return '{"techTerms":[],"changes":[]}'
+    },
+  }
+}
+
+function seedRole(presetId: string, model: { modelType: 'openai' | 'ollama' | 'deepseek'; modelName: string } | null, sessionId: string) {
+  upsertPreset({
+    presetId,
+    name: presetId,
+    characterId: 'char-001',
+    modelType: model?.modelType ?? null,
+    modelName: model?.modelName ?? null,
+    systemPrompt: 'sys',
+  })
+  const preset = getPresetById(presetId)!
+  createSession({
+    sessionId,
+    presetId,
+    presetSnapshot: {
+      presetId,
+      name: presetId,
+      characterId: 'char-001',
+      modelType: preset.modelType,
+      modelName: preset.modelName,
+      displayConfig: preset.displayConfig,
+      systemPrompt: 'sys',
+    },
+    createdAt: 1,
+    lastActiveAt: 1,
+  })
+  return preset
+}
+
+describe('runOrganizeModeTick — 按角色选择后台模型', () => {
+  let calls: RecordedCall[]
+
+  beforeEach(() => {
+    calls = []
+    createForPresetMock.mockReset()
+    createForPresetMock.mockImplementation((preset: { presetId: string }) => recordingModel(`role:${preset.presetId}`, calls))
+  })
+
+  it('实体抽取按角色分组：单独配置的角色用自己的模型与角色凭据，跟随全局的角色用全局后台模型', async () => {
+    seedRole('pA', { modelType: 'openai', modelName: 'gpt-4o' }, 'sA')
+    seedRole('pB', null, 'sB')
+    seedRole('pC', { modelType: 'ollama', modelName: 'qwen3' }, 'sC')
+    upsertPresetApiKey('pA', { provider: 'openai', apiKey: 'role-a-key' })
+    addMessageFor('sA', '我喜欢猫A', NOW_IN_WINDOW - 130 * MIN)
+    addMessageFor('sB', '我喜欢猫B', NOW_IN_WINDOW - 129 * MIN)
+    addMessageFor('sC', '我喜欢猫C', NOW_IN_WINDOW - 128 * MIN)
+
+    const result = await runOrganizeModeTick(
+      { embedding: fakeEmbedding(), ner: emptyNer(), model: recordingModel('global', calls) },
+      200,
+      () => NOW_IN_WINDOW
+    )
+
+    expect(result.totalProcessed).toBe(3)
+    expect(result.totalEntitiesInserted).toBe(3)
+    expect(calls).toHaveLength(3)
+    const byLabel = new Map(calls.map(call => [call.label, call.prompt]))
+    expect(byLabel.get('role:pA')).toContain('我喜欢猫A')
+    expect(byLabel.get('role:pA')).not.toContain('我喜欢猫B')
+    expect(byLabel.get('role:pC')).toContain('我喜欢猫C')
+    expect(byLabel.get('global')).toContain('我喜欢猫B')
+    expect(byLabel.get('global')).not.toContain('我喜欢猫A')
+    expect(byLabel.get('global')).not.toContain('我喜欢猫C')
+    expect(createForPresetMock).toHaveBeenCalledTimes(2)
+    const pACall = createForPresetMock.mock.calls.find(call => call[0].presetId === 'pA')!
+    expect(pACall[0].modelName).toBe('gpt-4o')
+    expect(pACall[2].openai).toEqual({ apiKey: 'role-a-key', fromEnv: false })
+    expect(getPendingEmbeddingCount()).toBe(0)
+  })
+
+  it('同一角色的多个 session 合并成一组，只构建一次该角色的模型', async () => {
+    seedRole('pA', { modelType: 'openai', modelName: 'gpt-4o' }, 'sA1')
+    createSession({ sessionId: 'sA2', presetId: 'pA', presetSnapshot: getLatestSessionByPreset('pA')!.presetSnapshot, createdAt: 2, lastActiveAt: 2 })
+    addMessageFor('sA1', '我喜欢猫1', NOW_IN_WINDOW - 130 * MIN)
+    addMessageFor('sA2', '我喜欢猫2', NOW_IN_WINDOW - 129 * MIN)
+
+    await runOrganizeModeTick(
+      { embedding: fakeEmbedding(), ner: emptyNer(), model: recordingModel('global', calls) },
+      200,
+      () => NOW_IN_WINDOW
+    )
+
+    expect(createForPresetMock).toHaveBeenCalledTimes(1)
+    expect(calls).toHaveLength(1)
+    expect(calls[0].prompt).toContain('我喜欢猫1')
+    expect(calls[0].prompt).toContain('我喜欢猫2')
+  })
+
+  it('当前激活角色使用内存里的 preset 与凭据，其它角色读数据库', async () => {
+    const pA = seedRole('pA', { modelType: 'openai', modelName: 'db-model' }, 'sA')
+    seedRole('pB', { modelType: 'deepseek', modelName: 'deepseek-db' }, 'sB')
+    upsertPresetApiKey('pA', { provider: 'openai', apiKey: 'db-key' })
+    upsertPresetApiKey('pB', { provider: 'deepseek', apiKey: 'db-key-b' })
+    getCurrentStateMock.mockReturnValue({
+      session: { sessionId: 'sA', presetId: 'pA' },
+      preset: { ...pA, modelName: 'memory-model' },
+      credentials: { anthropic: { fromEnv: false }, openai: { apiKey: 'memory-key', fromEnv: false }, deepseek: { fromEnv: false } },
+    })
+    addMessageFor('sA', '我喜欢猫A', NOW_IN_WINDOW - 130 * MIN)
+    addMessageFor('sB', '我喜欢猫B', NOW_IN_WINDOW - 129 * MIN)
+
+    await runOrganizeModeTick(
+      { embedding: fakeEmbedding(), ner: emptyNer(), model: recordingModel('global', calls) },
+      200,
+      () => NOW_IN_WINDOW
+    )
+
+    const pACall = createForPresetMock.mock.calls.find(call => call[0].presetId === 'pA')!
+    expect(pACall[0].modelName).toBe('memory-model')
+    expect(pACall[2].openai.apiKey).toBe('memory-key')
+    const pBCall = createForPresetMock.mock.calls.find(call => call[0].presetId === 'pB')!
+    expect(pBCall[0].modelName).toBe('deepseek-db')
+    expect(pBCall[2].deepseek.apiKey).toBe('db-key-b')
+  })
+
+  it('一个角色构建模型失败：该角色仍插入规则/NER 实体（只跳过模型层），不影响其它角色，整批嵌入照常', async () => {
+    seedRole('pA', { modelType: 'openai', modelName: 'gpt-4o' }, 'sA')
+    seedRole('pB', null, 'sB')
+    createForPresetMock.mockImplementation(() => {
+      throw new Error('bad role config')
+    })
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    addMessageFor('sA', '我喜欢猫A', NOW_IN_WINDOW - 130 * MIN)
+    addMessageFor('sB', '我喜欢猫B', NOW_IN_WINDOW - 129 * MIN)
+
+    const result = await runOrganizeModeTick(
+      { embedding: fakeEmbedding(), ner: emptyNer(), model: recordingModel('global', calls) },
+      200,
+      () => NOW_IN_WINDOW
+    )
+
+    expect(result.totalProcessed).toBe(2)
+    expect(result.totalEntitiesInserted).toBe(2)
+    expect(calls).toHaveLength(1)
+    expect(calls[0].label).toBe('global')
+    expect(calls[0].prompt).toContain('我喜欢猫B')
+    expect(calls[0].prompt).not.toContain('我喜欢猫A')
+    expect(getCurrentEntities('sA').map(e => e.value)).toEqual(['喜欢猫A'])
+    expect(getCurrentEntities('sB').map(e => e.value)).toEqual(['喜欢猫B'])
+    expect(errorSpy).toHaveBeenCalled()
+    expect(getPendingEmbeddingCount()).toBe(0)
+    errorSpy.mockRestore()
+  })
+
+  it('摘要按 session 所属角色选模型：单独配置的角色用自己的模型，跟随全局的用全局后台模型', async () => {
+    seedRole('pA', { modelType: 'openai', modelName: 'gpt-4o' }, 'sA')
+    seedRole('pB', null, 'sB')
+    upsertPresetApiKey('pA', { provider: 'openai', apiKey: 'role-a-key' })
+    for (let i = 0; i < 60; i++) {
+      addMessageFor('sA', `A消息${i}`, NOW_IN_WINDOW - 10 * MIN + i)
+      addMessageFor('sB', `B消息${i}`, NOW_IN_WINDOW - 10 * MIN + i)
+    }
+
+    const result = await runOrganizeModeTick(
+      { embedding: fakeEmbedding(), ner: emptyNer(), model: recordingModel('global', calls) },
+      200,
+      () => NOW_IN_WINDOW
+    )
+
+    expect(result.summariesGenerated).toBe(2)
+    const byLabel = new Map(calls.map(call => [call.label, call.prompt]))
+    expect(byLabel.get('role:pA')).toContain('A消息0')
+    expect(byLabel.get('role:pA')).not.toContain('B消息0')
+    expect(byLabel.get('global')).toContain('B消息0')
+    expect(byLabel.get('global')).not.toContain('A消息0')
+    expect(createForPresetMock.mock.calls[0][2].openai.apiKey).toBe('role-a-key')
+    expect(getPendingSummaryCount('sA')).toBe(0)
+    expect(getPendingSummaryCount('sB')).toBe(0)
+  })
+
+  it('一个 session 的摘要失败只记录日志，其它 session 的摘要照常生成', async () => {
+    seedRole('pA', { modelType: 'openai', modelName: 'gpt-4o' }, 'sA')
+    seedRole('pB', null, 'sB')
+    createForPresetMock.mockImplementation(() => ({
+      async completeSync() {
+        throw new Error('bad key')
+      },
+    }))
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    for (let i = 0; i < 60; i++) {
+      addMessageFor('sA', `A消息${i}`, NOW_IN_WINDOW - 10 * MIN + i)
+      addMessageFor('sB', `B消息${i}`, NOW_IN_WINDOW - 10 * MIN + i)
+    }
+
+    const result = await runOrganizeModeTick(
+      { embedding: fakeEmbedding(), ner: emptyNer(), model: recordingModel('global', calls) },
+      200,
+      () => NOW_IN_WINDOW
+    )
+
+    expect(result.summariesGenerated).toBe(1)
+    expect(getPendingSummaryCount('sA')).toBe(60)
+    expect(getPendingSummaryCount('sB')).toBe(0)
+    expect(errorSpy).toHaveBeenCalled()
+    errorSpy.mockRestore()
+  })
+
+  it('当前激活角色的插队摘要也用该角色自己的模型与内存凭据', async () => {
+    const pA = seedRole('pA', { modelType: 'openai', modelName: 'gpt-4o' }, 'sA')
+    getCurrentStateMock.mockReturnValue({
+      session: { sessionId: 'sA', presetId: 'pA' },
+      preset: pA,
+      credentials: { anthropic: { fromEnv: false }, openai: { apiKey: 'memory-key', fromEnv: false }, deepseek: { fromEnv: false } },
+    })
+    const oldestCreatedAt = NOW_IN_WINDOW - 130 * MIN
+    for (let i = 0; i < 60; i++) {
+      addMessageFor('sA', `A消息${i}`, oldestCreatedAt + i)
+    }
+    const latestCreatedAt = oldestCreatedAt + 59
+    let getNowCalls = 0
+    const getNow = () => {
+      getNowCalls++
+      return getNowCalls <= 5 ? NOW_IN_WINDOW : latestCreatedAt + 1 * MIN
+    }
+
+    const result = await runOrganizeModeTick(
+      { embedding: fakeEmbedding(), ner: emptyNer(), model: recordingModel('global', calls) },
+      200,
+      getNow
+    )
+
+    expect(result.summariesGenerated).toBe(1)
+    expect(calls.filter(call => call.label === 'global')).toHaveLength(0)
+    expect(calls.filter(call => call.label === 'role:pA').length).toBeGreaterThanOrEqual(2)
+    expect(createForPresetMock.mock.calls.every(call => call[2].openai.apiKey === 'memory-key')).toBe(true)
   })
 })

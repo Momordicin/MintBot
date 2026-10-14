@@ -1,15 +1,24 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { db, initDb, checkpointTruncate } from './index.js'
 
-// initDb() 已在 queries.test.ts 等文件里被调用过一次（同一进程内的 db 单例），这里只
-// 断言迁移链跑完之后的最终状态：user_version 到 11，Presets 表带 displayConfig/addressForms 列。
-// 不单独模拟从 v6 升到 v7/v8/v9/v10 的中间态——runMigrations() 里每一级迁移都是 SQL DDL 或数据库维护命令，
-// 真正需要验证的是"全新库从 0 跑到 11"与"列确实存在"，这与 v1/v5 等既有迁移目前
-// 在仓库里的验证深度一致（没有专门 mock user_version 起点的迁移测试先例）
 describe('DB 迁移 (runMigrations)', () => {
-  it('迁移链跑完后 user_version 为 11', () => {
+  it('迁移链跑完后 user_version 为 12', () => {
     initDb()
-    expect(db.pragma('user_version', { simple: true })).toBe(11)
+    expect(db.pragma('user_version', { simple: true })).toBe(12)
+  })
+
+  it('PresetApiKeys 表按 v12 定义存在（主键 presetId + provider，provider 受 CHECK 约束，fromEnv 默认 0）', () => {
+    initDb()
+    const columns = db.pragma('table_info(PresetApiKeys)') as { name: string; notnull: number; dflt_value: string | null; pk: number }[]
+    expect(columns.map(c => c.name)).toEqual(['presetId', 'provider', 'apiKey', 'fromEnv'])
+    expect(columns.filter(c => c.pk > 0).map(c => c.name)).toEqual(['presetId', 'provider'])
+    expect(columns.find(c => c.name === 'fromEnv')?.dflt_value).toBe('0')
+
+    db.exec(`DELETE FROM PresetApiKeys`)
+    db.prepare(`INSERT INTO PresetApiKeys (presetId, provider) VALUES ('p1', 'openai')`).run()
+    expect(db.prepare(`SELECT apiKey, fromEnv FROM PresetApiKeys WHERE presetId = 'p1'`).get()).toEqual({ apiKey: null, fromEnv: 0 })
+    expect(() => db.prepare(`INSERT INTO PresetApiKeys (presetId, provider) VALUES ('p1', 'ollama')`).run()).toThrow()
+    db.exec(`DELETE FROM PresetApiKeys`)
   })
 
   it('Presets 表带 displayConfig 列（migration v7）', () => {
