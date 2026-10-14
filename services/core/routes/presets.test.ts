@@ -238,6 +238,26 @@ describe('POST /switch-preset', () => {
     expect(response.statusCode).toBe(404)
   })
 
+  it('加载会话抛出非「角色不存在」错误时返回 500 而不是 404', async () => {
+    loadSession('p1')
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.mocked(createSession).mockImplementationOnce(() => {
+      throw new Error('db write failed')
+    })
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'POST',
+      url: '/switch-preset',
+      payload: { presetId: 'p2' },
+    })
+
+    expect(response.statusCode).toBe(500)
+    expect(getCurrentState()!.preset.presetId).toBe('p1')
+    expect(errorSpy).toHaveBeenCalledWith('[Presets] Switch preset failed:', expect.any(Error))
+    errorSpy.mockRestore()
+  })
+
   it('presetId 缺失/空时返回 400', async () => {
     const fastify = await buildTestApp()
 
@@ -1208,13 +1228,14 @@ describe('DELETE /presets/:presetId', () => {
     expect(JSON.parse(response.payload).presetSnapshot.presetId).toBe('p3')
   })
 
-  it('删除当前角色时切换到最近活跃角色失败：返回 404，不删除任何数据也不删壁纸', async () => {
+  it('删除当前角色时切换到最近活跃角色因非「角色不存在」错误失败：返回 500，不删除任何数据也不删壁纸', async () => {
     fs.mkdirSync(WALLPAPER_DIR, { recursive: true })
     writtenFiles.push('p1-wallpaper.png')
     fs.writeFileSync(path.join(WALLPAPER_DIR, 'p1-wallpaper.png'), Buffer.from([1]))
     const { session: p1Session } = loadSession('p1')
     seedSessionData(p1Session.sessionId)
     const p1Before = countRows(p1Session.sessionId)
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.mocked(createSession).mockImplementationOnce(() => {
       throw new Error('db write failed')
     })
@@ -1222,12 +1243,13 @@ describe('DELETE /presets/:presetId', () => {
 
     const response = await fastify.inject({ method: 'DELETE', url: '/presets/p1' })
 
-    expect(response.statusCode).toBe(404)
-    expect(JSON.parse(response.payload)).toEqual({ error: 'Preset not found' })
+    expect(response.statusCode).toBe(500)
     expect(getPresetById('p1')).not.toBeNull()
     expect(getPresetById('p2')).not.toBeNull()
     expect(countRows(p1Session.sessionId)).toEqual(p1Before)
     expect(fs.existsSync(path.join(WALLPAPER_DIR, 'p1-wallpaper.png'))).toBe(true)
+    expect(errorSpy).toHaveBeenCalledWith('[Presets] Switch before delete failed:', expect.any(Error))
+    errorSpy.mockRestore()
   })
 
   it('删除时移除该角色的壁纸文件，不动其他角色的壁纸', async () => {

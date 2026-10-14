@@ -11,7 +11,7 @@ import * as dotenv from 'dotenv'
 import { getAllPresets, getPresetById, createPreset, updatePresetWallpaper, updatePresetName, updatePresetDisplayConfig, updatePresetSystemPrompt, updatePresetModelConfig, deletePresetWithData, getMostRecentOtherPresetId, getPresetApiKeys, upsertPresetApiKey, type PresetKeyProvider } from '../session/queries.js'
 import { ENV_VAR_BY_PROVIDER, isEnvCredentialDetected } from '../providers/envCredentials.js'
 import { summarizeSavedKey } from '../config/keySummary.js'
-import { switchPreset, refreshCurrentPresetIfActive, getCurrentState } from '../session/index.js'
+import { switchPreset, refreshCurrentPresetIfActive, getCurrentState, PresetNotFoundError } from '../session/index.js'
 import { buildStatePayload } from '../state.js'
 import { broadcastEvent } from '../events/broadcast.js'
 import {
@@ -114,7 +114,11 @@ export async function presetRoutes(fastify: FastifyInstance) {
 
     try {
       switchPreset(presetId)
-    } catch {
+    } catch (err) {
+      if (!(err instanceof PresetNotFoundError)) {
+        console.error('[Presets] Switch preset failed:', err)
+        throw err
+      }
       return reply.status(404).send({ error: 'Preset not found' })
     }
 
@@ -135,7 +139,11 @@ export async function presetRoutes(fastify: FastifyInstance) {
     if (getCurrentState()?.session.presetId === presetId) {
       try {
         switchPreset(getMostRecentOtherPresetId(presetId)!)
-      } catch {
+      } catch (err) {
+        if (!(err instanceof PresetNotFoundError)) {
+          console.error('[Presets] Switch before delete failed:', err)
+          throw err
+        }
         return reply.status(404).send({ error: 'Preset not found' })
       }
     }

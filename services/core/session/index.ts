@@ -25,9 +25,11 @@ interface SessionState {
 
 let current: SessionState | null = null
 
+export class PresetNotFoundError extends Error {}
+
 export function loadSession(presetId: string): SessionState {
   const preset = getPresetById(presetId)
-  if (!preset) throw new Error(`[Session] Preset not found: ${presetId}`)
+  if (!preset) throw new PresetNotFoundError(`[Session] Preset not found: ${presetId}`)
 
   const manifest = loadCharacterManifest(preset.characterId)
 
