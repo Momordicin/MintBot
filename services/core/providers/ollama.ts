@@ -1,13 +1,15 @@
 // services/core/providers/ollama.ts — Ollama 本地模型服务的探测、模型列表查询，以及未运行时由 core 启动 `ollama serve`
-// 用法：index.ts 的 start() 在配置或任一预设使用 ollama 时调 ensureOllama(baseUrl)（等待至多 30 秒），SIGINT/SIGTERM 时调 stopOllamaIfManaged()（仅停止自己启动的进程）；routes/models.ts 调 listOllamaModels / getOllamaBaseUrl；state.ts 调 isOllamaRunning
+// 用法：index.ts 的 start() 调 shouldEnsureOllama / ensureOllama，SIGINT/SIGTERM 时调 stopOllamaIfManaged；routes/models.ts 调 ensureOllama / listOllamaModels / getOllamaBaseUrl；state.ts 调 isOllamaRunning
 // 对应文件：services/core/index.ts / services/core/routes/models.ts / services/core/state.ts / services/core/providers/ollama.test.ts
 import { spawn, ChildProcess } from 'child_process'
 
 let ollamaProcess: ChildProcess | null = null
 let ollamaManagedByUs = false
+let ollamaStartInFlight: Promise<boolean> | null = null
+let ollamaProcessFailure: Promise<void> = new Promise<void>(() => {})
 
 export function getOllamaBaseUrl(baseUrl?: string): string {
-  return baseUrl ?? 'http://localhost:11434'
+  return baseUrl || 'http://localhost:11434'
 }
 
 export async function isOllamaRunning(baseUrl: string): Promise<boolean> {
@@ -37,22 +39,54 @@ export async function listOllamaModels(baseUrl: string): Promise<string[]> {
   }
 }
 
-async function waitForOllama(baseUrl: string, timeoutMs = 30000): Promise<void> {
+async function waitForOllama(baseUrl: string, failure: Promise<void>, timeoutMs = 30000): Promise<void> {
+  let failed = false
+  void failure.then(() => {
+    failed = true
+  })
   const start = Date.now()
   while (Date.now() - start < timeoutMs) {
+    if (failed) throw new Error('[Ollama] Process failed or exited before Ollama became ready')
     if (await isOllamaRunning(baseUrl)) return
-    await new Promise(r => setTimeout(r, 1000))
+    if (failed) throw new Error('[Ollama] Process failed or exited before Ollama became ready')
+    await Promise.race([new Promise(r => setTimeout(r, 1000)), failure])
   }
   throw new Error('[Ollama] Timed out waiting for Ollama to start')
 }
 
-export async function ensureOllama(ollamaBaseUrl?: string): Promise<void> {
+export function shouldEnsureOllama(chatType: string, backgroundType: string, anyPresetUsesOllama: boolean): boolean {
+  return chatType === 'ollama' || backgroundType === 'ollama' || anyPresetUsesOllama
+}
+
+export function ensureOllama(ollamaBaseUrl?: string): Promise<boolean> {
+  if (!ollamaStartInFlight) {
+    ollamaStartInFlight = startOllamaIfNeeded(ollamaBaseUrl).finally(() => {
+      ollamaStartInFlight = null
+    })
+  }
+  return ollamaStartInFlight
+}
+
+async function startOllamaIfNeeded(ollamaBaseUrl?: string): Promise<boolean> {
   const baseUrl = getOllamaBaseUrl(ollamaBaseUrl)
+
+  if (ollamaManagedByUs && ollamaProcess && ollamaProcess.exitCode === null && ollamaProcess.signalCode === null) {
+    if (await isOllamaRunning(baseUrl)) return true
+    console.log('[Ollama] Managed process is not responding yet, waiting...')
+    try {
+      await waitForOllama(baseUrl, ollamaProcessFailure)
+      console.log('[Ollama] Started and ready ✓')
+      return true
+    } catch (err) {
+      console.error('[Ollama] Failed to start:', err)
+      return false
+    }
+  }
 
   if (await isOllamaRunning(baseUrl)) {
     console.log('[Ollama] Already running, not managed by MintBot')
     ollamaManagedByUs = false
-    return
+    return true
   }
 
   console.log('[Ollama] Not running, starting...')
@@ -63,19 +97,32 @@ export async function ensureOllama(ollamaBaseUrl?: string): Promise<void> {
     })
   } catch (err) {
     console.error('[Ollama] Failed to spawn:', err instanceof Error ? err.message : err)
-    return
+    return false
   }
 
-  ollamaProcess.on('error', (err) => {
-    console.error('[Ollama] Failed to start:', err.message)
+  const child = ollamaProcess
+  ollamaProcessFailure = new Promise<void>(resolve => {
+    child.on('error', (err) => {
+      console.error('[Ollama] Failed to start:', err.message)
+      if (ollamaProcess === child) {
+        ollamaProcess = null
+        ollamaManagedByUs = false
+      }
+      resolve()
+    })
+    child.on('exit', () => {
+      resolve()
+    })
   })
 
   ollamaManagedByUs = true
   try {
-    await waitForOllama(baseUrl)
+    await waitForOllama(baseUrl, ollamaProcessFailure)
     console.log('[Ollama] Started and ready ✓')
+    return true
   } catch (err) {
     console.error('[Ollama] Failed to start:', err)
+    return false
   }
 }
 

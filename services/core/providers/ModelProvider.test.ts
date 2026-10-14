@@ -1,19 +1,33 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import type { Preset, ModelConfig, BuiltContext } from '../../../shared/types/index.js'
+import type { Preset, ModelConfig, BuiltContext, CompletionOptions } from '../../../shared/types/index.js'
+import type { PresetCredentials } from '../session/queries.js'
 
-// completeSync 对 Anthropic 类型必须走 client.messages.create（非流式），而不是 messages.stream，
-// 用 vi.hoisted 声明 mock 函数，供 vi.mock 工厂（会被提升到 import 之前）闭包引用
-const { anthropicCreateMock, anthropicStreamMock } = vi.hoisted(() => ({
+const { anthropicCtorMock, anthropicCreateMock, anthropicStreamMock, openaiCtorMock, openaiCreateMock } = vi.hoisted(() => ({
+  anthropicCtorMock: vi.fn(),
   anthropicCreateMock: vi.fn(),
   anthropicStreamMock: vi.fn(),
+  openaiCtorMock: vi.fn(),
+  openaiCreateMock: vi.fn(),
 }))
 vi.mock('@anthropic-ai/sdk', () => ({
   default: class {
     messages = { create: anthropicCreateMock, stream: anthropicStreamMock }
+    constructor(options: unknown) {
+      anthropicCtorMock(options)
+    }
+  },
+}))
+vi.mock('openai', () => ({
+  default: class {
+    chat = { completions: { create: openaiCreateMock } }
+    constructor(options: unknown) {
+      openaiCtorMock(options)
+    }
   },
 }))
 
-const { createModelProviderForPreset, createModelProvider } = await import('./ModelProvider.js')
+const { createModelProviderForPreset, createSummaryModelProviderForPreset, createModelProvider, resolveApiKey } = await import('./ModelProvider.js')
+const { wipeCredentialEnv } = await import('./envCredentials.js')
 
 function fakePreset(overrides: Partial<Preset> = {}): Preset {
   return {
@@ -22,6 +36,8 @@ function fakePreset(overrides: Partial<Preset> = {}): Preset {
     characterId: 'c1',
     modelType: 'ollama',
     modelName: 'llama3',
+    summaryModelType: null,
+    summaryModelName: null,
     displayConfig: { chatBgRgb: [15, 15, 20], chatBgOpacity: 0.65, themeMode: 'auto', accentRgb: [15, 15, 20], tintStrength: 0, currentPortrait: 'pixel', petScale: { pixel: 1, illustration: 1 } },
     systemPrompt: 'sys',
     addressForms: [],
@@ -31,7 +47,16 @@ function fakePreset(overrides: Partial<Preset> = {}): Preset {
   }
 }
 
-// callOpenAICompatible 解析的 SSE 格式：一个 delta chunk + [DONE] 终止
+const noCredentials: PresetCredentials = {
+  anthropic: { fromEnv: false },
+  openai: { fromEnv: false },
+  deepseek: { fromEnv: false },
+}
+
+function credentialsWith(overrides: Partial<PresetCredentials>): PresetCredentials {
+  return { ...noCredentials, ...overrides }
+}
+
 function fakeStreamResponse(): Response {
   const body = 'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n'
   const stream = new ReadableStream({
@@ -45,16 +70,25 @@ function fakeStreamResponse(): Response {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  anthropicCtorMock.mockReset()
   anthropicCreateMock.mockReset()
   anthropicStreamMock.mockReset()
+  openaiCtorMock.mockReset()
+  openaiCreateMock.mockReset()
 })
 
-// completeSync 非流式响应格式：一次性 JSON，choices[0].message.content（不是流式的 delta.content）
+async function* openaiStream(...texts: string[]) {
+  for (const text of texts) yield { choices: [{ delta: { content: text } }] }
+}
+
+function openaiCompletion(content: string) {
+  return { choices: [{ message: { content } }] }
+}
+
 function fakeNonStreamResponse(content: string): Response {
   return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 })
 }
 
-// !response.ok 分支用的失败响应，body 按各测试用例自定（well-formed JSON / 非 JSON / 空 / 超长）
 function fakeErrorResponse(status: number, statusText: string, body: string): Response {
   return new Response(body, { status, statusText })
 }
@@ -62,13 +96,19 @@ function fakeErrorResponse(status: number, statusText: string, body: string): Re
 async function drain(provider: ReturnType<typeof createModelProviderForPreset>): Promise<void> {
   const context: BuiltContext = { system: '', messages: [{ role: 'user', content: 'hi' }] }
   for await (const _chunk of provider.complete(context)) {
-    // 只需要触发 fetch 调用，不关心返回内容
+  }
+}
+
+async function drainWith(
+  provider: ReturnType<typeof createModelProviderForPreset>,
+  context: BuiltContext,
+  options: CompletionOptions
+): Promise<void> {
+  for await (const _chunk of provider.complete(context, options)) {
   }
 }
 
 describe('createModelProviderForPreset', () => {
-  // 这是最容易踩的坑：completeAnthropic/completeOpenAI 读 config.modelName，
-  // 但 completeOllama 读的是另一个字段 config.ollamaModel，不看 config.modelName
   it('ollama 类型下 preset.modelName 写入 config.ollamaModel，而不是 config.modelName', async () => {
     const fetchSpy = vi.fn().mockResolvedValue(fakeStreamResponse())
     vi.stubGlobal('fetch', fetchSpy)
@@ -76,7 +116,7 @@ describe('createModelProviderForPreset', () => {
     const globalConfig: ModelConfig = { type: 'anthropic', modelName: 'should-not-be-used' }
     const preset = fakePreset({ modelType: 'ollama', modelName: 'llama3' })
 
-    const provider = createModelProviderForPreset(preset, globalConfig)
+    const provider = createModelProviderForPreset(preset, globalConfig, noCredentials)
     await drain(provider)
 
     expect(fetchSpy).toHaveBeenCalledTimes(1)
@@ -87,48 +127,32 @@ describe('createModelProviderForPreset', () => {
     expect(body.model).not.toBe('should-not-be-used')
   })
 
-  it('非 ollama 类型（openai）下 preset.modelName 写入 config.modelName', async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(fakeStreamResponse())
-    vi.stubGlobal('fetch', fetchSpy)
+  it('非 ollama 类型（openai）下 preset.modelName 写入 config.modelName，且使用角色 key 而不是全局 key', async () => {
+    openaiCreateMock.mockResolvedValue(openaiStream('hi'))
 
-    const globalConfig: ModelConfig = { type: 'ollama', ollamaModel: 'should-not-be-used', openaiApiKey: 'key' }
+    const globalConfig: ModelConfig = { type: 'ollama', ollamaModel: 'should-not-be-used', openaiApiKey: 'global-key' }
     const preset = fakePreset({ modelType: 'openai', modelName: 'gpt-4o-mini' })
 
-    const provider = createModelProviderForPreset(preset, globalConfig)
-    await drain(provider)
+    await drain(createModelProviderForPreset(preset, globalConfig, credentialsWith({ openai: { apiKey: 'role-key', fromEnv: false } })))
 
-    expect(fetchSpy).toHaveBeenCalledTimes(1)
-    const [, options] = fetchSpy.mock.calls[0]
-    const body = JSON.parse(options.body)
-    expect(body.model).toBe('gpt-4o-mini')
-    expect(body.model).not.toBe('should-not-be-used')
+    expect(openaiCtorMock.mock.calls[0][0].apiKey).toBe('role-key')
+    expect(openaiCreateMock.mock.calls[0][0].model).toBe('gpt-4o-mini')
   })
 
-  // preset.modelType/modelName 为 null 表示该 preset 未自定义对话模型，完全使用
-  // globalConfig（不做任何字段覆盖），验证不会被误当成 ollama 分支覆盖 ollamaModel
   it('preset.modelType/modelName 为 null 时，完全使用 globalConfig，不做任何覆盖', async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(fakeStreamResponse())
-    vi.stubGlobal('fetch', fetchSpy)
+    openaiCreateMock.mockResolvedValue(openaiStream('hi'))
 
     const globalConfig: ModelConfig = { type: 'openai', modelName: 'global-model', openaiApiKey: 'global-key' }
     const preset = fakePreset({ modelType: null, modelName: null })
 
-    const provider = createModelProviderForPreset(preset, globalConfig)
-    await drain(provider)
+    await drain(createModelProviderForPreset(preset, globalConfig, credentialsWith({ openai: { apiKey: 'role-key', fromEnv: false } })))
 
-    expect(fetchSpy).toHaveBeenCalledTimes(1)
-    const [, options] = fetchSpy.mock.calls[0]
-    expect(options.headers.Authorization).toBe('Bearer global-key')
-    const body = JSON.parse(options.body)
-    expect(body.model).toBe('global-model')
+    expect(openaiCtorMock.mock.calls[0][0].apiKey).toBe('global-key')
+    expect(openaiCreateMock.mock.calls[0][0].model).toBe('global-model')
   })
 
-  // openai/deepseek 各自拥有独立的凭据槽位（openaiApiKey/openaiBaseUrl 与
-  // deepseekApiKey/deepseekBaseUrl），二者可在同一份 globalConfig 中共存。
-  // preset 覆盖 modelType 时必须只取被覆盖类型对应的那组凭据，不能错拿另一组。
   it('globalConfig 同时持有 openai/deepseek 两组凭据时，preset 覆盖为 deepseek 只使用 deepseek 凭据', async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(fakeStreamResponse())
-    vi.stubGlobal('fetch', fetchSpy)
+    openaiCreateMock.mockResolvedValue(openaiStream('hi'))
 
     const globalConfig: ModelConfig = {
       type: 'openai',
@@ -139,20 +163,19 @@ describe('createModelProviderForPreset', () => {
     }
     const preset = fakePreset({ modelType: 'deepseek', modelName: 'deepseek-v4-pro' })
 
-    const provider = createModelProviderForPreset(preset, globalConfig)
-    await drain(provider)
+    await drain(createModelProviderForPreset(preset, globalConfig, credentialsWith({
+      openai: { apiKey: 'role-openai', fromEnv: false },
+      deepseek: { apiKey: 'role-deepseek', fromEnv: false },
+    })))
 
-    expect(fetchSpy).toHaveBeenCalledTimes(1)
-    const [url, options] = fetchSpy.mock.calls[0]
-    expect(url).toBe('https://api.deepseek.com/chat/completions')
-    expect(options.headers.Authorization).toBe('Bearer sk-deepseek')
-    const body = JSON.parse(options.body)
-    expect(body.model).toBe('deepseek-v4-pro')
+    const ctorArgs = openaiCtorMock.mock.calls[0][0]
+    expect(ctorArgs.apiKey).toBe('role-deepseek')
+    expect(ctorArgs.baseURL).toBe('https://api.deepseek.com')
+    expect(openaiCreateMock.mock.calls[0][0].model).toBe('deepseek-v4-pro')
   })
 
   it('globalConfig 同时持有 openai/deepseek 两组凭据时，preset 覆盖为 openai 只使用 openai 凭据', async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(fakeStreamResponse())
-    vi.stubGlobal('fetch', fetchSpy)
+    openaiCreateMock.mockResolvedValue(openaiStream('hi'))
 
     const globalConfig: ModelConfig = {
       type: 'deepseek',
@@ -163,15 +186,81 @@ describe('createModelProviderForPreset', () => {
     }
     const preset = fakePreset({ modelType: 'openai', modelName: 'gpt-4o-mini' })
 
-    const provider = createModelProviderForPreset(preset, globalConfig)
-    await drain(provider)
+    await drain(createModelProviderForPreset(preset, globalConfig, credentialsWith({
+      openai: { apiKey: 'role-openai', fromEnv: false },
+      deepseek: { apiKey: 'role-deepseek', fromEnv: false },
+    })))
 
-    expect(fetchSpy).toHaveBeenCalledTimes(1)
-    const [url, options] = fetchSpy.mock.calls[0]
-    expect(url).toBe('https://api.openai.com/v1/chat/completions')
-    expect(options.headers.Authorization).toBe('Bearer sk-openai')
-    const body = JSON.parse(options.body)
-    expect(body.model).toBe('gpt-4o-mini')
+    const ctorArgs = openaiCtorMock.mock.calls[0][0]
+    expect(ctorArgs.apiKey).toBe('role-openai')
+    expect(ctorArgs.baseURL).toBe('https://api.openai.com/v1')
+    expect(openaiCreateMock.mock.calls[0][0].model).toBe('gpt-4o-mini')
+  })
+})
+
+describe('SDK 构造参数', () => {
+  const context: BuiltContext = { system: '', messages: [{ role: 'user', content: 'hi' }] }
+
+  it('anthropic：全部参数显式传入', async () => {
+    anthropicCreateMock.mockResolvedValue({ content: [{ type: 'text', text: 'x' }] })
+    await createModelProvider({ type: 'anthropic', modelName: 'claude-3', anthropicApiKey: 'k-a' }).completeSync(context)
+
+    expect(anthropicCtorMock).toHaveBeenCalledTimes(1)
+    expect(anthropicCtorMock.mock.calls[0][0]).toEqual({
+      apiKey: 'k-a',
+      authToken: null,
+      baseURL: 'https://api.anthropic.com',
+      logLevel: 'warn',
+      webhookKey: null,
+      maxRetries: 2,
+    })
+  })
+
+  it('openai：全部参数显式传入，baseURL 用 openaiBaseUrl', async () => {
+    openaiCreateMock.mockResolvedValue(openaiCompletion('x'))
+    await createModelProvider({ type: 'openai', openaiApiKey: 'k-o', openaiBaseUrl: 'https://proxy.example/v1' }).completeSync(context)
+
+    expect(openaiCtorMock).toHaveBeenCalledTimes(1)
+    expect(openaiCtorMock.mock.calls[0][0]).toEqual({
+      apiKey: 'k-o',
+      adminAPIKey: null,
+      organization: null,
+      project: null,
+      baseURL: 'https://proxy.example/v1',
+      webhookSecret: null,
+      logLevel: 'warn',
+      maxRetries: 2,
+    })
+  })
+
+  it('openai：openaiBaseUrl 为空串时 baseURL 回落到官方地址', async () => {
+    openaiCreateMock.mockResolvedValue(openaiCompletion('x'))
+    await createModelProvider({ type: 'openai', openaiApiKey: 'k-o', openaiBaseUrl: '' }).completeSync(context)
+
+    expect(openaiCtorMock.mock.calls[0][0].baseURL).toBe('https://api.openai.com/v1')
+  })
+
+  it('deepseek：全部参数显式传入，baseURL 默认 https://api.deepseek.com', async () => {
+    openaiCreateMock.mockResolvedValue(openaiCompletion('x'))
+    await createModelProvider({ type: 'deepseek', deepseekApiKey: 'k-d' }).completeSync(context)
+
+    expect(openaiCtorMock.mock.calls[0][0]).toEqual({
+      apiKey: 'k-d',
+      adminAPIKey: null,
+      organization: null,
+      project: null,
+      baseURL: 'https://api.deepseek.com',
+      webhookSecret: null,
+      logLevel: 'warn',
+      maxRetries: 2,
+    })
+  })
+
+  it('deepseek：deepseekBaseUrl 覆盖默认地址', async () => {
+    openaiCreateMock.mockResolvedValue(openaiCompletion('x'))
+    await createModelProvider({ type: 'deepseek', deepseekApiKey: 'k-d', deepseekBaseUrl: 'https://ds.example' }).completeSync(context)
+
+    expect(openaiCtorMock.mock.calls[0][0].baseURL).toBe('https://ds.example')
   })
 })
 
@@ -200,25 +289,23 @@ describe('completeSync', () => {
     expect(params.model).toBe('claude-3')
     expect(params.max_tokens).toBe(500)
     expect(params.messages).toEqual([{ role: 'user', content: 'hi' }])
-    expect(requestOptions.signal).toBe(signal)
+    expect(requestOptions).toEqual({ signal })
   })
 
-  it('openai 类型下请求体 stream 为 false，解析一次性 JSON 的 choices[0].message.content', async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(fakeNonStreamResponse('openai reply'))
-    vi.stubGlobal('fetch', fetchSpy)
+  it('openai 类型下 stream 为 false，读取 choices[0].message.content，signal 作为请求选项传入', async () => {
+    openaiCreateMock.mockResolvedValue(openaiCompletion('openai reply'))
 
-    const config: ModelConfig = { type: 'openai', modelName: 'gpt-4o-mini', openaiApiKey: 'key' }
-    const provider = createModelProvider(config)
+    const provider = createModelProvider({ type: 'openai', modelName: 'gpt-4o-mini', openaiApiKey: 'key' })
     const signal = new AbortController().signal
 
     const result = await provider.completeSync(context, { signal })
 
     expect(result).toBe('openai reply')
-    expect(fetchSpy).toHaveBeenCalledTimes(1)
-    const [, options] = fetchSpy.mock.calls[0]
-    const body = JSON.parse(options.body)
+    expect(openaiCreateMock).toHaveBeenCalledTimes(1)
+    const [body, requestOptions] = openaiCreateMock.mock.calls[0]
     expect(body.stream).toBe(false)
-    expect(options.signal).toBe(signal)
+    expect(body.messages).toEqual([{ role: 'user', content: 'hi' }])
+    expect(requestOptions).toEqual({ signal })
   })
 
   it('ollama 类型下请求体 stream 为 false，解析一次性 JSON 的 choices[0].message.content', async () => {
@@ -238,129 +325,132 @@ describe('completeSync', () => {
     expect(body.stream).toBe(false)
   })
 
-  it('deepseek 类型下请求体 stream 为 false，打到 deepseekBaseUrl + /chat/completions，带 deepseekApiKey 的 Bearer 头', async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(fakeNonStreamResponse('deepseek reply'))
-    vi.stubGlobal('fetch', fetchSpy)
+  it('deepseek 类型下 stream 为 false，读取 choices[0].message.content', async () => {
+    openaiCreateMock.mockResolvedValue(openaiCompletion('deepseek reply'))
 
-    const config: ModelConfig = {
-      type: 'deepseek',
-      deepseekApiKey: 'sk-deepseek',
-      deepseekBaseUrl: 'https://api.deepseek.com',
-      modelName: 'deepseek-v4-pro',
-    }
-    const provider = createModelProvider(config)
+    const provider = createModelProvider({ type: 'deepseek', deepseekApiKey: 'sk-deepseek', modelName: 'deepseek-v4-pro' })
 
     const result = await provider.completeSync(context)
 
     expect(result).toBe('deepseek reply')
-    expect(fetchSpy).toHaveBeenCalledTimes(1)
-    const [url, options] = fetchSpy.mock.calls[0]
-    expect(url).toBe('https://api.deepseek.com/chat/completions')
-    expect(options.headers.Authorization).toBe('Bearer sk-deepseek')
-    const body = JSON.parse(options.body)
+    const [body] = openaiCreateMock.mock.calls[0]
     expect(body.model).toBe('deepseek-v4-pro')
     expect(body.stream).toBe(false)
   })
 })
 
-describe('deepseek 默认值', () => {
-  it('未配置 deepseekBaseUrl/modelName 时走默认值 https://api.deepseek.com + deepseek-v4-flash（流式）', async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(fakeStreamResponse())
-    vi.stubGlobal('fetch', fetchSpy)
+describe('流式', () => {
+  const context: BuiltContext = { system: 'sys', messages: [{ role: 'user', content: 'hi' }] }
 
-    const config: ModelConfig = { type: 'deepseek', deepseekApiKey: 'sk-deepseek' }
-    const provider = createModelProvider(config)
-    const context: BuiltContext = { system: '', messages: [{ role: 'user', content: 'hi' }] }
+  it('openai 流式：拼接 choices[0].delta.content，system 作为首条消息，signal 作为请求选项传入', async () => {
+    openaiCreateMock.mockResolvedValue(openaiStream('hel', 'lo'))
+    const provider = createModelProvider({ type: 'openai', openaiApiKey: 'key' })
+    const signal = new AbortController().signal
 
-    for await (const _chunk of provider.complete(context)) {
-      // 只需要触发 fetch 调用，不关心返回内容
-    }
+    let text = ''
+    for await (const chunk of provider.complete(context, { signal })) text += chunk
 
-    expect(fetchSpy).toHaveBeenCalledTimes(1)
-    const [url, options] = fetchSpy.mock.calls[0]
-    expect(url).toBe('https://api.deepseek.com/chat/completions')
-    const body = JSON.parse(options.body)
-    expect(body.model).toBe('deepseek-v4-flash')
+    expect(text).toBe('hello')
+    const [body, requestOptions] = openaiCreateMock.mock.calls[0]
+    expect(body.stream).toBe(true)
+    expect(body.messages).toEqual([{ role: 'system', content: 'sys' }, { role: 'user', content: 'hi' }])
+    expect(requestOptions).toEqual({ signal, timeout: 30000 })
+  })
+
+  it('deepseek 流式同样带 30 秒超时', async () => {
+    openaiCreateMock.mockResolvedValue(openaiStream('hi'))
+    const provider = createModelProvider({ type: 'deepseek', deepseekApiKey: 'key' })
+
+    for await (const chunk of provider.complete(context)) void chunk
+
+    expect(openaiCreateMock.mock.calls[0][1]).toEqual({ signal: undefined, timeout: 30000 })
+  })
+
+  it('anthropic 流式的 stream 调用带 30 秒超时，且不走 create', async () => {
+    anthropicStreamMock.mockResolvedValue((async function* () {
+      yield { type: 'content_block_delta', delta: { type: 'text_delta', text: 'hi' } }
+    })())
+    const provider = createModelProvider({ type: 'anthropic', modelName: 'claude-3', anthropicApiKey: 'key' })
+    const signal = new AbortController().signal
+
+    let text = ''
+    for await (const chunk of provider.complete(context, { signal })) text += chunk
+
+    expect(text).toBe('hi')
+    expect(anthropicCreateMock).not.toHaveBeenCalled()
+    expect(anthropicStreamMock.mock.calls[0][1]).toEqual({ signal, timeout: 30000 })
+  })
+
+  it('deepseek 流式：拼接 choices[0].delta.content', async () => {
+    openaiCreateMock.mockResolvedValue(openaiStream('a', 'b', 'c'))
+    const provider = createModelProvider({ type: 'deepseek', deepseekApiKey: 'sk-deepseek' })
+
+    let text = ''
+    for await (const chunk of provider.complete(context)) text += chunk
+
+    expect(text).toBe('abc')
+    expect(openaiCreateMock.mock.calls[0][0].stream).toBe(true)
   })
 })
 
-// provider-capability 落地：response_format: json_object（openai/deepseek/ollama，jsonMode 开关）、
-// OpenAI 专属 max_completion_tokens 参数名、DeepSeek 专属 thinking: disabled
-// anthropic 分支开发中
-describe('provider 专属请求体覆盖（response_format / max_completion_tokens / thinking）', () => {
-  const context: BuiltContext = { system: '', messages: [{ role: 'user', content: 'hi' }] }
+describe('默认模型名', () => {
+  it('deepseek 未配置 modelName 时使用 deepseek-v4-flash', async () => {
+    openaiCreateMock.mockResolvedValue(openaiStream('hi'))
+    await drain(createModelProvider({ type: 'deepseek', deepseekApiKey: 'sk-deepseek' }))
 
-  it('openai 分支：请求体用 max_completion_tokens，不再是 max_tokens（reasoning 系模型会拒绝后者）', async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(fakeStreamResponse())
-    vi.stubGlobal('fetch', fetchSpy)
-    const provider = createModelProvider({ type: 'openai', modelName: 'gpt-4o-mini', openaiApiKey: 'key' })
-
-    for await (const _chunk of provider.complete(context, { maxTokens: 500 })) {
-      // 只需要触发 fetch 调用
-    }
-
-    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
-    expect(body.max_completion_tokens).toBe(500)
-    expect(body.max_tokens).toBeUndefined()
+    expect(openaiCreateMock.mock.calls[0][0].model).toBe('deepseek-v4-flash')
   })
 
-  it('openai 分支：jsonMode 未传时请求体不带 response_format（避免误伤不支持 JSON 模式的旧模型/不需要 JSON 输出的调用）', async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(fakeStreamResponse())
-    vi.stubGlobal('fetch', fetchSpy)
-    const provider = createModelProvider({ type: 'openai', modelName: 'gpt-4o-mini', openaiApiKey: 'key' })
+  it('openai 未配置 modelName 时使用 gpt-4o', async () => {
+    openaiCreateMock.mockResolvedValue(openaiStream('hi'))
+    await drain(createModelProvider({ type: 'openai', openaiApiKey: 'key' }))
 
-    for await (const _chunk of provider.complete(context)) {
-      // 只需要触发 fetch 调用
-    }
+    expect(openaiCreateMock.mock.calls[0][0].model).toBe('gpt-4o')
+  })
+})
 
-    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
+describe('provider 专属请求体（response_format / max_completion_tokens / thinking）', () => {
+  const context: BuiltContext = { system: '', messages: [{ role: 'user', content: 'hi' }] }
+
+  it('openai：请求体用 max_completion_tokens，不带 max_tokens / thinking，jsonMode 未传时无 response_format', async () => {
+    openaiCreateMock.mockResolvedValue(openaiStream('hi'))
+    await drainWith(createModelProvider({ type: 'openai', modelName: 'gpt-4o-mini', openaiApiKey: 'key' }), context, { maxTokens: 500 })
+
+    const [body] = openaiCreateMock.mock.calls[0]
+    expect(body.max_completion_tokens).toBe(500)
+    expect(body.max_tokens).toBeUndefined()
+    expect(body.thinking).toBeUndefined()
     expect(body.response_format).toBeUndefined()
   })
 
-  it('openai 分支：jsonMode 为 true 时请求体带 response_format: json_object', async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(fakeStreamResponse())
-    vi.stubGlobal('fetch', fetchSpy)
-    const provider = createModelProvider({ type: 'openai', modelName: 'gpt-4o-mini', openaiApiKey: 'key' })
+  it('openai：jsonMode 为 true 时带 response_format: json_object', async () => {
+    openaiCreateMock.mockResolvedValue(openaiStream('hi'))
+    await drainWith(createModelProvider({ type: 'openai', modelName: 'gpt-4o-mini', openaiApiKey: 'key' }), context, { jsonMode: true })
 
-    for await (const _chunk of provider.complete(context, { jsonMode: true })) {
-      // 只需要触发 fetch 调用
-    }
-
-    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
-    expect(body.response_format).toEqual({ type: 'json_object' })
+    expect(openaiCreateMock.mock.calls[0][0].response_format).toEqual({ type: 'json_object' })
   })
 
-  it('deepseek 分支：请求体始终带 thinking: disabled（与 jsonMode 无关，V4 默认开启的推理必须显式关掉），max_tokens 参数名不变', async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(fakeStreamResponse())
-    vi.stubGlobal('fetch', fetchSpy)
-    const provider = createModelProvider({ type: 'deepseek', deepseekApiKey: 'sk-deepseek' })
+  it('deepseek：始终带 thinking: disabled，用 max_tokens，jsonMode 未传时无 response_format', async () => {
+    openaiCreateMock.mockResolvedValue(openaiStream('hi'))
+    await drainWith(createModelProvider({ type: 'deepseek', deepseekApiKey: 'sk-deepseek' }), context, {})
 
-    for await (const _chunk of provider.complete(context)) {
-      // 只需要触发 fetch 调用
-    }
-
-    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
+    const [body] = openaiCreateMock.mock.calls[0]
     expect(body.thinking).toEqual({ type: 'disabled' })
     expect(body.max_tokens).toBe(1000)
     expect(body.max_completion_tokens).toBeUndefined()
     expect(body.response_format).toBeUndefined()
   })
 
-  it('deepseek 分支：jsonMode 为 true 时额外带 response_format: json_object（thinking 仍然同时存在）', async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(fakeStreamResponse())
-    vi.stubGlobal('fetch', fetchSpy)
-    const provider = createModelProvider({ type: 'deepseek', deepseekApiKey: 'sk-deepseek' })
+  it('deepseek：jsonMode 为 true 时也不带 response_format，thinking 仍存在', async () => {
+    openaiCreateMock.mockResolvedValue(openaiStream('hi'))
+    await drainWith(createModelProvider({ type: 'deepseek', deepseekApiKey: 'sk-deepseek' }), context, { jsonMode: true })
 
-    for await (const _chunk of provider.complete(context, { jsonMode: true })) {
-      // 只需要触发 fetch 调用
-    }
-
-    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
+    const [body] = openaiCreateMock.mock.calls[0]
     expect(body.thinking).toEqual({ type: 'disabled' })
-    expect(body.response_format).toEqual({ type: 'json_object' })
+    expect(body.response_format).toBeUndefined()
   })
 
-  it('ollama 分支：不带 thinking（DeepSeek 专属），max_tokens 参数名不变（/v1 兼容层只认这个旧名字），jsonMode 为 true 时带 response_format', async () => {
+  it('ollama 分支：不带 thinking，max_tokens 参数名不变，jsonMode 为 true 时带 response_format', async () => {
     const fetchSpy = vi.fn().mockResolvedValue(fakeStreamResponse())
     vi.stubGlobal('fetch', fetchSpy)
     const provider = createModelProvider({ type: 'ollama', ollamaModel: 'qwen3' })
@@ -391,83 +481,65 @@ describe('provider 专属请求体覆盖（response_format / max_completion_toke
     expect(body.response_format).toBeUndefined()
   })
 
-  it('completeSync（非流式）路径同样生效：openai 用 max_completion_tokens，jsonMode 为 true 带 response_format', async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(fakeNonStreamResponse('reply'))
-    vi.stubGlobal('fetch', fetchSpy)
-    const provider = createModelProvider({ type: 'openai', modelName: 'o1', openaiApiKey: 'key' })
+  it('completeSync 路径同样生效：openai 用 max_completion_tokens 并带 response_format', async () => {
+    openaiCreateMock.mockResolvedValue(openaiCompletion('reply'))
+    await createModelProvider({ type: 'openai', modelName: 'o1', openaiApiKey: 'key' }).completeSync(context, { maxTokens: 200, jsonMode: true })
 
-    await provider.completeSync(context, { maxTokens: 200, jsonMode: true })
-
-    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
+    const [body] = openaiCreateMock.mock.calls[0]
     expect(body.max_completion_tokens).toBe(200)
     expect(body.max_tokens).toBeUndefined()
     expect(body.response_format).toEqual({ type: 'json_object' })
   })
 
-  it('completeSync（非流式）路径同样生效：deepseek 始终带 thinking: disabled', async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(fakeNonStreamResponse('reply'))
-    vi.stubGlobal('fetch', fetchSpy)
-    const provider = createModelProvider({ type: 'deepseek', deepseekApiKey: 'sk-deepseek' })
+  it('completeSync 路径同样生效：deepseek 始终带 thinking: disabled', async () => {
+    openaiCreateMock.mockResolvedValue(openaiCompletion('reply'))
+    await createModelProvider({ type: 'deepseek', deepseekApiKey: 'sk-deepseek' }).completeSync(context)
 
-    await provider.completeSync(context)
-
-    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
-    expect(body.thinking).toEqual({ type: 'disabled' })
+    expect(openaiCreateMock.mock.calls[0][0].thinking).toEqual({ type: 'disabled' })
   })
 })
 
-// resolveMaxTokens 三级 fallback（调用方显式传入 > provider 自身配置的 maxTokens > 1000）：
-// summarizer.ts / characterImport.ts / entityExtractor.ts 这三个整理模式调用方不再显式传
-// maxTokens，改为完全依赖这条 fallback 链——覆盖点从这三个模块的测试挪到这里
 describe('resolveMaxTokens 三级 fallback', () => {
   const context: BuiltContext = { system: '', messages: [{ role: 'user', content: 'hi' }] }
 
   it('调用方显式传入 maxTokens 时优先生效，即便 provider 自身配置了另一个值', async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(fakeNonStreamResponse('reply'))
-    vi.stubGlobal('fetch', fetchSpy)
+    openaiCreateMock.mockResolvedValue(openaiCompletion('reply'))
     const provider = createModelProvider({ type: 'openai', modelName: 'gpt-4o-mini', openaiApiKey: 'key', maxTokens: 2000 })
 
     await provider.completeSync(context, { maxTokens: 500 })
 
-    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
-    expect(body.max_completion_tokens).toBe(500)
+    expect(openaiCreateMock.mock.calls[0][0].max_completion_tokens).toBe(500)
   })
 
   it('调用方未传 maxTokens 时使用 provider 自身配置的 maxTokens', async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(fakeNonStreamResponse('reply'))
-    vi.stubGlobal('fetch', fetchSpy)
+    openaiCreateMock.mockResolvedValue(openaiCompletion('reply'))
     const provider = createModelProvider({ type: 'openai', modelName: 'gpt-4o-mini', openaiApiKey: 'key', maxTokens: 2000 })
 
     await provider.completeSync(context)
 
-    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
-    expect(body.max_completion_tokens).toBe(2000)
+    expect(openaiCreateMock.mock.calls[0][0].max_completion_tokens).toBe(2000)
   })
 
   it('调用方未传 maxTokens 且 provider 自身也未配置时，回落到默认值 1000', async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(fakeNonStreamResponse('reply'))
-    vi.stubGlobal('fetch', fetchSpy)
+    openaiCreateMock.mockResolvedValue(openaiCompletion('reply'))
     const provider = createModelProvider({ type: 'openai', modelName: 'gpt-4o-mini', openaiApiKey: 'key' })
 
     await provider.completeSync(context)
 
-    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
-    expect(body.max_completion_tokens).toBe(1000)
+    expect(openaiCreateMock.mock.calls[0][0].max_completion_tokens).toBe(1000)
   })
 })
 
-// 此前 !response.ok 分支只抛状态行，provider 真正返回的诊断信息被丢弃；这里覆盖 describeErrorResponse
-// 读取到的四种 body 形态，以及流式路径同样生效（不只是非流式路径）
 describe('失败响应体读取（describeErrorResponse）', () => {
   const context: BuiltContext = { system: '', messages: [{ role: 'user', content: 'hi' }] }
+  const ollamaConfig: ModelConfig = { type: 'ollama', ollamaModel: 'qwen3' }
 
   it('well-formed JSON error 对象：从 error.message 提取诊断信息，而不是只有状态行', async () => {
     const errorBody = JSON.stringify({
       error: { message: 'Invalid model ID: gpt-99', type: 'invalid_request_error', code: 'model_not_found' },
     })
-    const fetchSpy = vi.fn().mockResolvedValue(fakeErrorResponse(400, 'Bad Request', errorBody))
-    vi.stubGlobal('fetch', fetchSpy)
-    const provider = createModelProvider({ type: 'openai', modelName: 'gpt-99', openaiApiKey: 'key' })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fakeErrorResponse(400, 'Bad Request', errorBody)))
+    const provider = createModelProvider(ollamaConfig)
 
     await expect(provider.completeSync(context)).rejects.toThrow(
       'OpenAI API error: 400 Bad Request - Invalid model ID: gpt-99'
@@ -475,11 +547,10 @@ describe('失败响应体读取（describeErrorResponse）', () => {
   })
 
   it('非 JSON body：解析失败时原样展示原始文本，而不是丢弃', async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
       fakeErrorResponse(502, 'Bad Gateway', '<html><body>Bad Gateway</body></html>')
-    )
-    vi.stubGlobal('fetch', fetchSpy)
-    const provider = createModelProvider({ type: 'openai', modelName: 'gpt-4o-mini', openaiApiKey: 'key' })
+    ))
+    const provider = createModelProvider(ollamaConfig)
 
     await expect(provider.completeSync(context)).rejects.toThrow(
       'OpenAI API error: 502 Bad Gateway - <html><body>Bad Gateway</body></html>'
@@ -487,9 +558,8 @@ describe('失败响应体读取（describeErrorResponse）', () => {
   })
 
   it('空 body：退回状态行本身，不拼接多余的 " - "', async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(fakeErrorResponse(500, 'Internal Server Error', ''))
-    vi.stubGlobal('fetch', fetchSpy)
-    const provider = createModelProvider({ type: 'openai', modelName: 'gpt-4o-mini', openaiApiKey: 'key' })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fakeErrorResponse(500, 'Internal Server Error', '')))
+    const provider = createModelProvider(ollamaConfig)
 
     let caught: Error | undefined
     try {
@@ -502,11 +572,10 @@ describe('失败响应体读取（describeErrorResponse）', () => {
 
   it('超长 body：截断到 500 字符并加省略号，不把整段塞进异常信息', async () => {
     const longMessage = 'x'.repeat(2000)
-    const fetchSpy = vi.fn().mockResolvedValue(
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
       fakeErrorResponse(400, 'Bad Request', JSON.stringify({ error: { message: longMessage } }))
-    )
-    vi.stubGlobal('fetch', fetchSpy)
-    const provider = createModelProvider({ type: 'openai', modelName: 'gpt-4o-mini', openaiApiKey: 'key' })
+    ))
+    const provider = createModelProvider(ollamaConfig)
 
     let caught: Error | undefined
     try {
@@ -516,16 +585,15 @@ describe('失败响应体读取（describeErrorResponse）', () => {
     }
     expect(caught).toBeDefined()
     const detail = caught!.message.slice('OpenAI API error: 400 Bad Request - '.length)
-    expect(detail.length).toBe(501) // 500 字符 + 1 个省略号
+    expect(detail.length).toBe(501)
     expect(detail.endsWith('…')).toBe(true)
   })
 
   it('流式路径（complete）同样读取失败响应体，不只是非流式路径独有', async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
       fakeErrorResponse(429, 'Too Many Requests', JSON.stringify({ error: { message: 'Rate limit exceeded' } }))
-    )
-    vi.stubGlobal('fetch', fetchSpy)
-    const provider = createModelProvider({ type: 'openai', modelName: 'gpt-4o-mini', openaiApiKey: 'key' })
+    ))
+    const provider = createModelProvider(ollamaConfig)
 
     await expect(drain(provider)).rejects.toThrow(
       'OpenAI API error: 429 Too Many Requests - Rate limit exceeded'
@@ -533,35 +601,109 @@ describe('失败响应体读取（describeErrorResponse）', () => {
   })
 })
 
-// apiKey 兜底为字面量 'no-key' 会把"用户从未配置凭据"伪装成一次真实请求，最终从 provider 收到
-// 不知所云的 401；openai/deepseek 需要真实凭据，提前失败且不发起 fetch；ollama 本地端点不认证，
-// 不在此列，必须仍能正常请求
-describe('缺失 API Key 时提前失败', () => {
+describe('缺失 API Key 时调用前失败', () => {
   const context: BuiltContext = { system: '', messages: [{ role: 'user', content: 'hi' }] }
 
-  it('openai 未配置 openaiApiKey 时提前失败，不发起 fetch', async () => {
-    const fetchSpy = vi.fn()
-    vi.stubGlobal('fetch', fetchSpy)
+  function expectNoSdkCall(): void {
+    expect(anthropicCtorMock).not.toHaveBeenCalled()
+    expect(openaiCtorMock).not.toHaveBeenCalled()
+    expect(anthropicCreateMock).not.toHaveBeenCalled()
+    expect(anthropicStreamMock).not.toHaveBeenCalled()
+    expect(openaiCreateMock).not.toHaveBeenCalled()
+  }
+
+  it('构造 provider 时不检查 key（缺 key 也不抛）', () => {
+    expect(() => createModelProvider({ type: 'openai' })).not.toThrow()
+    expect(() => createModelProvider({ type: 'deepseek' })).not.toThrow()
+    expect(() => createModelProvider({ type: 'anthropic' })).not.toThrow()
+  })
+
+  it('openai 缺 key：completeSync 与 complete 都抛配置错误，SDK 构造函数未被调用', async () => {
     const provider = createModelProvider({ type: 'openai', modelName: 'gpt-4o-mini' })
 
-    await expect(provider.completeSync(context)).rejects.toThrow(
-      '[ModelProvider] OpenAI API key is not configured'
-    )
-    expect(fetchSpy).not.toHaveBeenCalled()
+    await expect(provider.completeSync(context)).rejects.toThrow('[ModelProvider] OpenAI API key is not configured')
+    await expect(drain(provider)).rejects.toThrow('[ModelProvider] OpenAI API key is not configured')
+    expectNoSdkCall()
   })
 
-  it('deepseek 未配置 deepseekApiKey 时提前失败，不发起 fetch', async () => {
-    const fetchSpy = vi.fn()
-    vi.stubGlobal('fetch', fetchSpy)
+  it('openai key 为空串同样视为缺失', async () => {
+    const provider = createModelProvider({ type: 'openai', openaiApiKey: '' })
+
+    await expect(provider.completeSync(context)).rejects.toThrow('[ModelProvider] OpenAI API key is not configured')
+    expectNoSdkCall()
+  })
+
+  it('deepseek 缺 key：completeSync 与 complete 都抛配置错误，SDK 构造函数未被调用', async () => {
     const provider = createModelProvider({ type: 'deepseek' })
 
-    await expect(provider.completeSync(context)).rejects.toThrow(
-      '[ModelProvider] DeepSeek API key is not configured'
-    )
-    expect(fetchSpy).not.toHaveBeenCalled()
+    await expect(provider.completeSync(context)).rejects.toThrow('[ModelProvider] DeepSeek API key is not configured')
+    await expect(drain(provider)).rejects.toThrow('[ModelProvider] DeepSeek API key is not configured')
+    expectNoSdkCall()
   })
 
-  it('ollama 未配置任何凭据字段时仍正常发起请求（本地端点不认证，不应被误判为缺失凭据）', async () => {
+  it('anthropic 缺 key：completeSync 与 complete 都抛配置错误，SDK 构造函数未被调用', async () => {
+    const provider = createModelProvider({ type: 'anthropic', modelName: 'claude-3' })
+
+    await expect(provider.completeSync(context)).rejects.toThrow('[ModelProvider] Anthropic API key is not configured')
+    await expect(drain(provider)).rejects.toThrow('[ModelProvider] Anthropic API key is not configured')
+    expectNoSdkCall()
+  })
+
+  it('preset 覆盖且角色缺 key：即使全局有 key 也失败，不回落到全局 key', async () => {
+    const provider = createModelProviderForPreset(
+      fakePreset({ modelType: 'openai', modelName: 'gpt-4o-mini' }),
+      { type: 'ollama', openaiApiKey: 'global-key', openaiApiKeyFromEnv: false },
+      noCredentials
+    )
+
+    await expect(provider.completeSync(context)).rejects.toThrow('[ModelProvider] OpenAI API key is not configured')
+    expectNoSdkCall()
+  })
+
+  it('preset 覆盖且角色 FromEnv 关闭：全局 FromEnv 开启也不影响，使用角色自己的 key', async () => {
+    openaiCreateMock.mockResolvedValue(openaiCompletion('ok'))
+    const provider = createModelProviderForPreset(
+      fakePreset({ modelType: 'openai', modelName: 'gpt-4o-mini' }),
+      { type: 'ollama', openaiApiKey: 'global-key', openaiApiKeyFromEnv: true },
+      credentialsWith({ openai: { apiKey: 'role-key', fromEnv: false } })
+    )
+
+    await provider.completeSync(context)
+
+    expect(openaiCtorMock.mock.calls[0][0].apiKey).toBe('role-key')
+  })
+
+  it('preset 覆盖且角色 FromEnv 开启但环境缺失：抛环境变量不可用错误，不使用角色或全局已保存 key', async () => {
+    delete process.env.OPENAI_API_KEY
+    wipeCredentialEnv()
+    const provider = createModelProviderForPreset(
+      fakePreset({ modelType: 'openai', modelName: 'gpt-4o-mini' }),
+      { type: 'ollama', openaiApiKey: 'global-key' },
+      credentialsWith({ openai: { apiKey: 'role-key', fromEnv: true } })
+    )
+
+    await expect(provider.completeSync(context)).rejects.toThrow('[ModelProvider] OpenAI API key environment variable is not available')
+    expectNoSdkCall()
+  })
+
+  it('preset 覆盖且角色 FromEnv 开启且环境有 key：使用环境变量 key', async () => {
+    process.env.OPENAI_API_KEY = 'sk-from-env'
+    wipeCredentialEnv()
+    openaiCreateMock.mockResolvedValue(openaiCompletion('ok'))
+    const provider = createModelProviderForPreset(
+      fakePreset({ modelType: 'openai', modelName: 'gpt-4o-mini' }),
+      { type: 'ollama', openaiApiKey: 'global-key' },
+      credentialsWith({ openai: { fromEnv: true } })
+    )
+
+    await provider.completeSync(context)
+    delete process.env.OPENAI_API_KEY
+    wipeCredentialEnv()
+
+    expect(openaiCtorMock.mock.calls[0][0].apiKey).toBe('sk-from-env')
+  })
+
+  it('ollama 未配置任何凭据字段时仍正常发起请求（本地端点不认证）', async () => {
     const fetchSpy = vi.fn().mockResolvedValue(fakeNonStreamResponse('ollama reply'))
     vi.stubGlobal('fetch', fetchSpy)
     const provider = createModelProvider({ type: 'ollama' })
@@ -570,5 +712,209 @@ describe('缺失 API Key 时提前失败', () => {
 
     expect(result).toBe('ollama reply')
     expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('resolveApiKey', () => {
+  it('FromEnv 开启且环境暂存值存在：返回暂存值，忽略已保存的 key', () => {
+    const config: ModelConfig = { type: 'openai', openaiApiKey: 'saved', openaiApiKeyFromEnv: true }
+
+    expect(resolveApiKey(config, 'openai', () => 'from-env')).toBe('from-env')
+  })
+
+  it('FromEnv 开启但暂存值为空：抛环境变量不可用错误，即使有已保存的 key', () => {
+    const config: ModelConfig = { type: 'deepseek', deepseekApiKey: 'saved', deepseekApiKeyFromEnv: true }
+
+    expect(() => resolveApiKey(config, 'deepseek', () => '')).toThrow('[ModelProvider] DeepSeek API key environment variable is not available')
+  })
+
+  it('FromEnv 关闭且有已保存的 key：返回已保存的 key，不读环境', () => {
+    const config: ModelConfig = { type: 'anthropic', anthropicApiKey: 'saved', anthropicApiKeyFromEnv: false }
+    const readEnvKey = vi.fn(() => 'from-env')
+
+    expect(resolveApiKey(config, 'anthropic', readEnvKey)).toBe('saved')
+    expect(readEnvKey).not.toHaveBeenCalled()
+  })
+
+  it('FromEnv 关闭且没有已保存的 key：抛未配置错误', () => {
+    expect(() => resolveApiKey({ type: 'anthropic' }, 'anthropic', () => 'from-env')).toThrow('[ModelProvider] Anthropic API key is not configured')
+    expect(() => resolveApiKey({ type: 'openai', openaiApiKey: '' }, 'openai', () => 'from-env')).toThrow('[ModelProvider] OpenAI API key is not configured')
+  })
+})
+
+describe('调用时按 FromEnv 标记解析 key', () => {
+  const context: BuiltContext = { system: '', messages: [{ role: 'user', content: 'hi' }] }
+  afterEach(() => {
+    delete process.env.OPENAI_API_KEY
+    delete process.env.ANTHROPIC_API_KEY
+    wipeCredentialEnv()
+  })
+
+  it('FromEnv 开启且环境里有 key：SDK 用暂存的 key 构造', async () => {
+    process.env.OPENAI_API_KEY = 'sk-from-env'
+    wipeCredentialEnv()
+    openaiCreateMock.mockResolvedValue({ choices: [{ message: { content: 'ok' } }] })
+
+    await createModelProvider({ type: 'openai', openaiApiKey: 'saved', openaiApiKeyFromEnv: true }).completeSync(context)
+
+    expect(openaiCtorMock.mock.calls[0][0].apiKey).toBe('sk-from-env')
+  })
+
+  it('FromEnv 开启但环境里没有 key：抛环境变量不可用错误，不构造 SDK 客户端也不发请求', async () => {
+    delete process.env.OPENAI_API_KEY
+    delete process.env.ANTHROPIC_API_KEY
+    wipeCredentialEnv()
+    const openaiProvider = createModelProvider({ type: 'openai', openaiApiKey: 'saved', openaiApiKeyFromEnv: true })
+    const anthropicProvider = createModelProvider({ type: 'anthropic', modelName: 'claude-3', anthropicApiKey: 'saved', anthropicApiKeyFromEnv: true })
+
+    await expect(openaiProvider.completeSync(context)).rejects.toThrow('[ModelProvider] OpenAI API key environment variable is not available')
+    await expect(drain(anthropicProvider)).rejects.toThrow('[ModelProvider] Anthropic API key environment variable is not available')
+
+    expect(openaiCtorMock).not.toHaveBeenCalled()
+    expect(anthropicCtorMock).not.toHaveBeenCalled()
+    expect(openaiCreateMock).not.toHaveBeenCalled()
+    expect(anthropicStreamMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('Ollama 空地址使用默认地址', () => {
+  const context: BuiltContext = { system: '', messages: [{ role: 'user', content: 'hi' }] }
+
+  it.each([
+    ['未设置', undefined],
+    ['空串', ''],
+  ])('ollamaBaseUrl %s：completeSync 与 complete 都请求默认地址', async (_label, ollamaBaseUrl) => {
+    const syncFetch = vi.fn().mockResolvedValue(fakeNonStreamResponse('ok'))
+    vi.stubGlobal('fetch', syncFetch)
+    const provider = createModelProvider({ type: 'ollama', ollamaModel: 'qwen3', ollamaBaseUrl })
+
+    await provider.completeSync(context)
+
+    expect(syncFetch.mock.calls[0][0]).toBe('http://localhost:11434/v1/chat/completions')
+
+    const streamFetch = vi.fn().mockResolvedValue(fakeStreamResponse())
+    vi.stubGlobal('fetch', streamFetch)
+    await drain(provider)
+
+    expect(streamFetch.mock.calls[0][0]).toBe('http://localhost:11434/v1/chat/completions')
+  })
+
+  it('ollamaBaseUrl 非空时使用配置的地址', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(fakeNonStreamResponse('ok'))
+    vi.stubGlobal('fetch', fetchSpy)
+
+    await createModelProvider({ type: 'ollama', ollamaModel: 'qwen3', ollamaBaseUrl: 'http://10.0.0.2:11434' }).completeSync(context)
+
+    expect(fetchSpy.mock.calls[0][0]).toBe('http://10.0.0.2:11434/v1/chat/completions')
+  })
+})
+
+describe('createSummaryModelProviderForPreset', () => {
+  const context: BuiltContext = { system: '', messages: [{ role: 'user', content: 'hi' }] }
+  const globalConfig: ModelConfig = {
+    type: 'ollama',
+    openaiApiKey: 'global-openai',
+    deepseekApiKey: 'global-deepseek',
+    ollamaBaseUrl: 'http://global-ollama:11434',
+  }
+
+  it('摘要模型为 null 时沿用角色的对话模型与对话 key，不读取摘要 key', async () => {
+    openaiCreateMock.mockResolvedValue(openaiCompletion('ok'))
+    const preset = fakePreset({ modelType: 'openai', modelName: 'gpt-4o', summaryModelType: null, summaryModelName: null })
+
+    await createSummaryModelProviderForPreset(
+      preset,
+      globalConfig,
+      credentialsWith({ openai: { apiKey: 'chat-key', fromEnv: false, summaryApiKey: 'summary-key', summaryFromEnv: false } })
+    ).completeSync(context)
+
+    expect(openaiCtorMock.mock.calls[0][0].apiKey).toBe('chat-key')
+    expect(openaiCreateMock.mock.calls[0][0].model).toBe('gpt-4o')
+  })
+
+  it('摘要模型已设置：使用摘要模型名与摘要 key，即使同一 provider 也不用对话 key', async () => {
+    openaiCreateMock.mockResolvedValue(openaiCompletion('ok'))
+    const preset = fakePreset({ modelType: 'openai', modelName: 'gpt-4o', summaryModelType: 'openai', summaryModelName: 'gpt-4o-mini' })
+
+    await createSummaryModelProviderForPreset(
+      preset,
+      globalConfig,
+      credentialsWith({ openai: { apiKey: 'chat-key', fromEnv: false, summaryApiKey: 'summary-key', summaryFromEnv: false } })
+    ).completeSync(context)
+
+    expect(openaiCtorMock.mock.calls[0][0].apiKey).toBe('summary-key')
+    expect(openaiCreateMock.mock.calls[0][0].model).toBe('gpt-4o-mini')
+  })
+
+  it('摘要 provider 与对话 provider 不同：只用摘要 provider 的摘要 key，不用全局 key', async () => {
+    openaiCreateMock.mockResolvedValue(openaiCompletion('ok'))
+    const preset = fakePreset({ modelType: 'openai', modelName: 'gpt-4o', summaryModelType: 'deepseek', summaryModelName: 'deepseek-v4-flash' })
+
+    await createSummaryModelProviderForPreset(
+      preset,
+      globalConfig,
+      credentialsWith({
+        openai: { apiKey: 'chat-key', fromEnv: false },
+        deepseek: { fromEnv: false, summaryApiKey: 'ds-summary-key', summaryFromEnv: false },
+      })
+    ).completeSync(context)
+
+    expect(openaiCtorMock.mock.calls[0][0].apiKey).toBe('ds-summary-key')
+    expect(openaiCreateMock.mock.calls[0][0].model).toBe('deepseek-v4-flash')
+  })
+
+  it('摘要 key 缺失时抛配置错误，不回落到对话 key 或全局 key', async () => {
+    const preset = fakePreset({ modelType: 'openai', modelName: 'gpt-4o', summaryModelType: 'openai', summaryModelName: 'gpt-4o-mini' })
+
+    await expect(createSummaryModelProviderForPreset(
+      preset,
+      globalConfig,
+      credentialsWith({ openai: { apiKey: 'chat-key', fromEnv: false } })
+    ).completeSync(context)).rejects.toThrow('[ModelProvider] OpenAI API key is not configured')
+    expect(openaiCtorMock).not.toHaveBeenCalled()
+  })
+
+  it('摘要 summaryFromEnv 开启时使用环境 key，环境缺失则抛错而不用对话 key', async () => {
+    process.env.OPENAI_API_KEY = 'sk-from-env'
+    wipeCredentialEnv()
+    openaiCreateMock.mockResolvedValue(openaiCompletion('ok'))
+    const preset = fakePreset({ modelType: 'openai', modelName: 'gpt-4o', summaryModelType: 'openai', summaryModelName: 'gpt-4o-mini' })
+    const credentials = credentialsWith({ openai: { apiKey: 'chat-key', fromEnv: false, summaryFromEnv: true } })
+
+    await createSummaryModelProviderForPreset(preset, globalConfig, credentials).completeSync(context)
+    expect(openaiCtorMock.mock.calls[0][0].apiKey).toBe('sk-from-env')
+
+    delete process.env.OPENAI_API_KEY
+    wipeCredentialEnv()
+    await expect(createSummaryModelProviderForPreset(preset, globalConfig, credentials).completeSync(context))
+      .rejects.toThrow('[ModelProvider] OpenAI API key environment variable is not available')
+  })
+
+  it('摘要模型为 ollama：摘要模型名写入 ollamaModel，使用全局 Ollama 地址，不需要 key', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(fakeNonStreamResponse('ollama reply'))
+    vi.stubGlobal('fetch', fetchSpy)
+    const preset = fakePreset({ modelType: 'openai', modelName: 'gpt-4o', summaryModelType: 'ollama', summaryModelName: 'qwen3-summary' })
+
+    const result = await createSummaryModelProviderForPreset(preset, globalConfig, noCredentials).completeSync(context)
+
+    expect(result).toBe('ollama reply')
+    const [url, options] = fetchSpy.mock.calls[0]
+    expect(url).toContain('http://global-ollama:11434')
+    expect(JSON.parse(options.body).model).toBe('qwen3-summary')
+  })
+
+  it('角色使用全局配置时忽略摘要字段，完全使用全局配置', async () => {
+    openaiCreateMock.mockResolvedValue(openaiCompletion('ok'))
+    const global: ModelConfig = { type: 'openai', modelName: 'global-model', openaiApiKey: 'global-key' }
+    const preset = fakePreset({ modelType: null, modelName: null, summaryModelType: 'deepseek', summaryModelName: 'deepseek-v4-flash' })
+
+    await createSummaryModelProviderForPreset(
+      preset,
+      global,
+      credentialsWith({ deepseek: { fromEnv: false, summaryApiKey: 'ds-summary-key', summaryFromEnv: false } })
+    ).completeSync(context)
+
+    expect(openaiCtorMock.mock.calls[0][0].apiKey).toBe('global-key')
+    expect(openaiCreateMock.mock.calls[0][0].model).toBe('global-model')
   })
 })

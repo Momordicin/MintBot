@@ -1,21 +1,92 @@
-// src/settings/PersonaModelPanel.tsx — 设置窗口的"人设与模型"页：当前角色的人设提示词编辑、预设级模型覆盖
+// src/settings/PersonaModelPanel.tsx — 设置窗口的「人设与模型」页
 // 用法：SettingsApp 渲染 <PersonaModelPanel panel={useCharacterPanel 的返回值} />
-// 形状：props { panel: CharacterPanelModel }
-// 对应文件：src/settings/SettingsApp.tsx / src/settings/useCharacterPanel.ts
+// 对应文件：src/settings/SettingsApp.tsx / src/settings/useCharacterPanel.ts / src/settings/ApiKeyField.tsx / src/settings/ModelNameField.tsx
 import React from 'react'
 import type { ModelConfig } from '../../shared/types/index.js'
 import type { CharacterPanelModel } from './useCharacterPanel'
+import { ApiKeyField, ENV_VAR, type ApiKeyLoadStatus, type ApiKeySummary, type KeyProvider } from './ApiKeyField.js'
+import { ModelNameField } from './ModelNameField.js'
 
 interface PersonaModelPanelProps {
   panel: CharacterPanelModel
+}
+
+interface ModelRowProps {
+  label: string
+  type: ModelConfig['type']
+  modelName: string
+  presetId?: string
+  purpose?: 'summary'
+  keyProvider: KeyProvider | null
+  keySummary: ApiKeySummary
+  envDetected: boolean
+  fromEnv: boolean
+  keyInput: string
+  keyEditing: boolean
+  keyStatus: ApiKeyLoadStatus
+  envStatus: ApiKeyLoadStatus
+  onTypeChange: (type: ModelConfig['type']) => void
+  onModelNameChange: (name: string) => void
+  onKeyInputChange: (value: string) => void
+  onKeyEditingChange: (editing: boolean) => void
+  onFromEnvChange: (checked: boolean) => void
+}
+
+function ModelRow({
+  label, type, modelName, presetId, purpose, keyProvider, keySummary, envDetected, fromEnv, keyInput, keyEditing,
+  keyStatus, envStatus, onTypeChange, onModelNameChange, onKeyInputChange, onKeyEditingChange, onFromEnvChange,
+}: ModelRowProps) {
+  return (
+    <div className="model-config-panel__row">
+      <span className="model-config-panel__row-label">{label}</span>
+      <div className="model-config-panel__field model-config-panel__field--compact model-config-panel__field--provider">
+        <select value={type} onChange={e => onTypeChange(e.target.value as ModelConfig['type'])}>
+          <option value="anthropic">Anthropic</option>
+          <option value="openai">OpenAI</option>
+          <option value="deepseek">DeepSeek</option>
+          <option value="ollama">Ollama</option>
+        </select>
+      </div>
+      <ModelNameField
+        compact
+        type={type}
+        current={modelName}
+        apiKey={keyProvider ? keyInput.trim() : ''}
+        presetId={presetId}
+        purpose={purpose}
+        fromEnv={keyProvider !== null ? fromEnv : undefined}
+        onChange={onModelNameChange}
+      />
+      {keyProvider && (
+        <ApiKeyField
+          compact
+          summary={keySummary}
+          envDetected={envDetected}
+          envVar={ENV_VAR[keyProvider]}
+          fromEnv={fromEnv}
+          keyInput={keyInput}
+          editing={keyEditing}
+          onKeyInputChange={onKeyInputChange}
+          onEditingChange={onKeyEditingChange}
+          onFromEnvChange={onFromEnvChange}
+          keyStatus={keyStatus}
+          envStatus={envStatus}
+        />
+      )}
+    </div>
+  )
 }
 
 export function PersonaModelPanel({ panel }: PersonaModelPanelProps) {
   const {
     presetSnapshot, presets, personaError, systemPromptStep, systemPromptValue, setSystemPromptValue,
     systemPromptNotice, modelOverrideStep, useGlobalModel, setUseGlobalModel, overrideModelType,
-    setOverrideModelType, overrideModelName, setOverrideModelName, overrideModelNameOptions, isLoadingModelNames,
-    modelOverrideNotice, handleSystemPromptEditStart, handleSystemPromptEditCancel, handleSystemPromptSaveClick,
+    overrideModelName, setOverrideModelName, handleOverrideModelTypeChange, overrideKeyProvider, overrideKeySummary,
+    overrideEnvDetected, overrideFromEnv, overrideKeyInput, setOverrideKeyInput, overrideKeyEditing,
+    setOverrideKeyEditing, handleOverrideFromEnvChange, overrideKeysReady, modelKeysStatus, envStatus, retryModelKeys,
+    loadEnvDetected, summarySameAsChat, setSummarySameAsChat, summaryModelType, summaryModelName, setSummaryModelName,
+    handleSummaryModelTypeChange, summaryKeyProvider, summaryKeySummary, summaryEnvDetected, summaryFromEnv,
+    summaryKeyInput, setSummaryKeyInput, summaryKeyEditing, setSummaryKeyEditing, handleSummaryFromEnvChange, modelOverrideNotice, handleSystemPromptEditStart, handleSystemPromptEditCancel, handleSystemPromptSaveClick,
     handleSystemPromptConfirmSaveCancel, handleSystemPromptConfirmSaveConfirm, handleSystemPromptConfirmApplyCancel,
     handleSystemPromptSend, handleModelOverrideEditStart, handleModelOverrideEditCancel,
     handleModelOverrideSaveClick, handleModelOverrideChooseApplyCancel, handleModelOverrideSend,
@@ -97,41 +168,73 @@ export function PersonaModelPanel({ panel }: PersonaModelPanelProps) {
                 使用全局默认模型
               </label>
               {!useGlobalModel && (
-                <div className="character-panel__row">
-                  <select
-                    value={overrideModelType}
-                    onChange={e => {
-                      setOverrideModelType(e.target.value as ModelConfig['type'])
-                      setOverrideModelName('')
-                    }}
-                  >
-                    <option value="anthropic">Anthropic</option>
-                    <option value="openai">OpenAI</option>
-                    <option value="deepseek">DeepSeek</option>
-                    <option value="ollama">Ollama</option>
-                  </select>
-                  <select
-                    value={overrideModelName}
-                    onChange={e => setOverrideModelName(e.target.value)}
-                    disabled={overrideModelNameOptions.length === 0}
-                  >
-                    {overrideModelNameOptions.length === 0 ? (
-                      <option value="" disabled>
-                        {isLoadingModelNames
-                          ? '模型列表加载中…'
-                          : overrideModelType === 'ollama' ? 'Ollama 未运行或无可用模型' : '模型列表为空'}
-                      </option>
-                    ) : (
-                      overrideModelNameOptions.map(name => (
-                        <option key={name} value={name}>{name}</option>
-                      ))
-                    )}
-                  </select>
-                </div>
+                <>
+                  <ModelRow
+                    label="对话模型"
+                    type={overrideModelType}
+                    modelName={overrideModelName}
+                    presetId={presetSnapshot?.presetId}
+                    keyProvider={overrideKeyProvider}
+                    keySummary={overrideKeySummary}
+                    envDetected={overrideEnvDetected}
+                    fromEnv={overrideFromEnv}
+                    keyInput={overrideKeyInput}
+                    keyEditing={overrideKeyEditing}
+                    keyStatus={modelKeysStatus}
+                    envStatus={envStatus}
+                    onTypeChange={handleOverrideModelTypeChange}
+                    onModelNameChange={setOverrideModelName}
+                    onKeyInputChange={setOverrideKeyInput}
+                    onKeyEditingChange={setOverrideKeyEditing}
+                    onFromEnvChange={handleOverrideFromEnvChange}
+                  />
+                  <label className="character-panel__model-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={summarySameAsChat}
+                      onChange={e => setSummarySameAsChat(e.target.checked)}
+                    />
+                    摘要使用与对话模型相同
+                  </label>
+                  {!summarySameAsChat && (
+                    <ModelRow
+                      label="摘要模型"
+                      type={summaryModelType}
+                      modelName={summaryModelName}
+                      presetId={presetSnapshot?.presetId}
+                      purpose="summary"
+                      keyProvider={summaryKeyProvider}
+                      keySummary={summaryKeySummary}
+                      envDetected={summaryEnvDetected}
+                      fromEnv={summaryFromEnv}
+                      keyInput={summaryKeyInput}
+                      keyEditing={summaryKeyEditing}
+                      keyStatus={modelKeysStatus}
+                      envStatus={envStatus}
+                      onTypeChange={handleSummaryModelTypeChange}
+                      onModelNameChange={setSummaryModelName}
+                      onKeyInputChange={setSummaryKeyInput}
+                      onKeyEditingChange={setSummaryKeyEditing}
+                      onFromEnvChange={handleSummaryFromEnvChange}
+                    />
+                  )}
+                  {(overrideKeyProvider || summaryKeyProvider) && modelKeysStatus === 'error' && (
+                    <div className="character-panel__row">
+                      <span className="character-panel__error">读取 API Key 状态失败</span>
+                      <button className="rename-btn" onClick={retryModelKeys}>重试</button>
+                    </div>
+                  )}
+                  {(overrideKeyProvider || summaryKeyProvider) && envStatus === 'error' && (
+                    <div className="character-panel__row">
+                      <span className="character-panel__error">读取环境变量检测状态失败</span>
+                      <button className="rename-btn" onClick={loadEnvDetected}>重试</button>
+                    </div>
+                  )}
+                </>
               )}
               <div className="character-panel__row">
                 <button className="rename-btn" onClick={handleModelOverrideEditCancel}>取消</button>
-                <button className="rename-btn" onClick={handleModelOverrideSaveClick}>保存</button>
+                <button className="rename-btn" onClick={handleModelOverrideSaveClick} disabled={!overrideKeysReady}>保存</button>
               </div>
             </>
           )}

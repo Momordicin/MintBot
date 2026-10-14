@@ -1,199 +1,216 @@
-// src/settings/ModelConfigPanel.tsx — 设置窗口的"模型配置"面板：对话模型与摘要模型（可选"与对话模型相同"）的类型、API Key、模型名、Base URL、max_tokens
+// src/settings/ModelConfigPanel.tsx — 设置窗口的"模型配置"面板：API Key / Ollama 地址 / 对话模型 / 摘要模型
 // 用法：SettingsApp 里渲染 <ModelConfigPanel />（无 props）；GET/PATCH /config/model
-// 形状：PATCH body { modelProvider: Partial<ModelConfig>, backgroundModelProvider: Partial<ModelConfig> | null }
-// 对应文件：src/settings/SettingsApp.tsx / services/core/routes/config.ts / shared/types/index.ts
+// 对应文件：src/settings/SettingsApp.tsx / src/settings/ApiKeyField.tsx / src/settings/ModelNameField.tsx / services/core/routes/config.ts / shared/types/index.ts
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { ModelConfig } from '../../shared/types/index.js'
 import './settings.css'
 
 import { CORE_URL } from '../coreUrl.js'
+import { ApiKeyField, ENV_VAR, type KeyProvider } from './ApiKeyField.js'
+import { ModelNameField } from './ModelNameField.js'
+
+type ProviderType = 'anthropic' | 'openai' | 'ollama' | 'deepseek'
+
+interface KeySummary {
+  hasKey: boolean
+  last4: string | null
+  fromEnv: boolean
+  envDetected: boolean
+}
 
 interface ModelConfigSummary {
-  type: 'anthropic' | 'openai' | 'ollama' | 'deepseek'
-  hasAnthropicApiKey: boolean
-  hasOpenaiApiKey: boolean
-  hasDeepseekApiKey: boolean
+  type: ProviderType
+  modelName?: string
+  ollamaModel?: string
+  ollamaBaseUrl?: string
   openaiBaseUrl?: string
   deepseekBaseUrl?: string
-  ollamaBaseUrl?: string
-  ollamaModel?: string
-  modelName?: string
   maxTokens?: number
+  keys: Record<KeyProvider, KeySummary>
+}
+
+interface BackgroundSummary {
+  type: ProviderType
+  modelName?: string
+  ollamaModel?: string
+}
+
+interface ConfigModelResponse {
+  modelProvider: ModelConfigSummary | null
+  backgroundModelProvider: BackgroundSummary | null
+}
+
+interface ModelSelection {
+  type: ProviderType
+  modelName: string
+  ollamaModel: string
+}
+
+interface FormState {
+  keyInputs: Record<KeyProvider, string>
+  keyEditing: Record<KeyProvider, boolean>
+  fromEnv: Record<KeyProvider, boolean>
+  openaiBaseUrl: string
+  deepseekBaseUrl: string
+  ollamaBaseUrl: string
+  maxTokens: string
+  chat: ModelSelection
+  sameAsChat: boolean
+  summary: ModelSelection
 }
 
 const MIN_MAX_TOKENS = 1
 const MAX_MAX_TOKENS = 32000
 
-interface ConfigModelResponse {
-  modelProvider: ModelConfigSummary | null
-  backgroundModelProvider: ModelConfigSummary | null
+const KEY_PROVIDERS: readonly KeyProvider[] = ['anthropic', 'openai', 'deepseek']
+
+const PROVIDER_LABEL: Record<ProviderType, string> = {
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  deepseek: 'DeepSeek',
+  ollama: 'Ollama',
 }
 
-interface ModelFormState {
-  type: 'anthropic' | 'openai' | 'ollama' | 'deepseek'
-  apiKey: string
-  modelName: string
-  openaiBaseUrl: string
-  deepseekBaseUrl: string
-  ollamaBaseUrl: string
-  ollamaModel: string
-  maxTokens: string   
+const BLANK_KEY_SUMMARY: KeySummary = { hasKey: false, last4: null, fromEnv: false, envDetected: false }
+
+const BLANK_KEYS: Record<KeyProvider, KeySummary> = {
+  anthropic: BLANK_KEY_SUMMARY,
+  openai: BLANK_KEY_SUMMARY,
+  deepseek: BLANK_KEY_SUMMARY,
 }
 
-const BLANK_FORM: ModelFormState = {
-  type: 'anthropic',
-  apiKey: '',
-  modelName: '',
-  openaiBaseUrl: '',
-  deepseekBaseUrl: '',
-  ollamaBaseUrl: '',
-  ollamaModel: '',
-  maxTokens: '',
-}
-
-function summaryToFormState(summary: ModelConfigSummary | null): ModelFormState {
-  if (!summary) return BLANK_FORM
+function toSelection(source: { type: ProviderType; modelName?: string; ollamaModel?: string } | null, fallbackType: ProviderType): ModelSelection {
   return {
-    type: summary.type,
-    apiKey: '',
-    modelName: summary.modelName ?? '',
-    openaiBaseUrl: summary.openaiBaseUrl ?? '',
-    deepseekBaseUrl: summary.deepseekBaseUrl ?? '',
-    ollamaBaseUrl: summary.ollamaBaseUrl ?? '',
-    ollamaModel: summary.ollamaModel ?? '',
-    maxTokens: summary.maxTokens !== undefined ? String(summary.maxTokens) : '',
+    type: source?.type ?? fallbackType,
+    modelName: source?.modelName ?? '',
+    ollamaModel: source?.ollamaModel ?? '',
   }
 }
 
-function buildPartialConfig(form: ModelFormState): Partial<ModelConfig> {
-  const partial: Partial<ModelConfig> = { type: form.type }
-  const trimmedApiKey = form.apiKey.trim()
-  if (form.type === 'anthropic') {
-    partial.modelName = form.modelName.trim()
-    if (trimmedApiKey) partial.anthropicApiKey = trimmedApiKey
-  } else if (form.type === 'openai') {
-    partial.modelName = form.modelName.trim()
-    partial.openaiBaseUrl = form.openaiBaseUrl.trim()
-    if (trimmedApiKey) partial.openaiApiKey = trimmedApiKey
-  } else if (form.type === 'deepseek') {
-    partial.modelName = form.modelName.trim()
-    partial.deepseekBaseUrl = form.deepseekBaseUrl.trim()
-    if (trimmedApiKey) partial.deepseekApiKey = trimmedApiKey
-  } else {
-    partial.ollamaBaseUrl = form.ollamaBaseUrl.trim()
-    partial.ollamaModel = form.ollamaModel.trim()
+function toFormState(data: ConfigModelResponse): FormState {
+  const chat = data.modelProvider
+  const keys = chat?.keys ?? BLANK_KEYS
+  return {
+    keyInputs: { anthropic: '', openai: '', deepseek: '' },
+    keyEditing: { anthropic: false, openai: false, deepseek: false },
+    fromEnv: { anthropic: keys.anthropic.fromEnv, openai: keys.openai.fromEnv, deepseek: keys.deepseek.fromEnv },
+    openaiBaseUrl: chat?.openaiBaseUrl ?? '',
+    deepseekBaseUrl: chat?.deepseekBaseUrl ?? '',
+    ollamaBaseUrl: chat?.ollamaBaseUrl ?? '',
+    maxTokens: chat?.maxTokens !== undefined ? String(chat.maxTokens) : '',
+    chat: toSelection(chat, 'anthropic'),
+    sameAsChat: data.backgroundModelProvider === null,
+    summary: toSelection(data.backgroundModelProvider, chat?.type ?? 'anthropic'),
   }
+}
+
+function buildSelectionPatch(selection: ModelSelection): Partial<ModelConfig> {
+  return selection.type === 'ollama'
+    ? { type: 'ollama', ollamaModel: selection.ollamaModel.trim() }
+    : { type: selection.type, modelName: selection.modelName.trim() }
+}
+
+function buildGlobalPatch(form: FormState): Partial<ModelConfig> {
+  const patch: Partial<ModelConfig> = {
+    ...buildSelectionPatch(form.chat),
+    anthropicApiKeyFromEnv: form.fromEnv.anthropic,
+    openaiApiKeyFromEnv: form.fromEnv.openai,
+    deepseekApiKeyFromEnv: form.fromEnv.deepseek,
+    openaiBaseUrl: form.openaiBaseUrl.trim(),
+    deepseekBaseUrl: form.deepseekBaseUrl.trim(),
+    ollamaBaseUrl: form.ollamaBaseUrl.trim(),
+  }
+  const anthropicKey = form.keyInputs.anthropic.trim()
+  const openaiKey = form.keyInputs.openai.trim()
+  const deepseekKey = form.keyInputs.deepseek.trim()
+  if (anthropicKey) patch.anthropicApiKey = anthropicKey
+  if (openaiKey) patch.openaiApiKey = openaiKey
+  if (deepseekKey) patch.deepseekApiKey = deepseekKey
 
   const trimmedMaxTokens = form.maxTokens.trim()
   if (trimmedMaxTokens) {
     const parsedMaxTokens = Number(trimmedMaxTokens)
-    if (Number.isInteger(parsedMaxTokens)) partial.maxTokens = parsedMaxTokens
+    if (Number.isInteger(parsedMaxTokens)) patch.maxTokens = parsedMaxTokens
   }
-  return partial
+  return patch
 }
 
-interface ModelFormFieldsProps {
-  form: ModelFormState
-  onChange: (next: ModelFormState) => void
-  summary: ModelConfigSummary | null
+interface KeyGroupProps {
+  provider: KeyProvider
+  summary: KeySummary
+  keyInput: string
+  editing: boolean
+  fromEnv: boolean
+  onKeyInputChange: (value: string) => void
+  onEditingChange: (editing: boolean) => void
+  onFromEnvChange: (checked: boolean) => void
+  baseUrl?: string
+  onBaseUrlChange?: (value: string) => void
 }
 
-function ModelFormFields({ form, onChange, summary }: ModelFormFieldsProps) {
-  const hasKey = form.type === 'anthropic'
-    ? summary?.hasAnthropicApiKey ?? false
-    : form.type === 'openai'
-      ? summary?.hasOpenaiApiKey ?? false
-      : form.type === 'deepseek'
-        ? summary?.hasDeepseekApiKey ?? false
-        : false
+function KeyGroup({ provider, summary, keyInput, editing, fromEnv, onKeyInputChange, onEditingChange, onFromEnvChange, baseUrl, onBaseUrlChange }: KeyGroupProps) {
+  return (
+    <div className="model-config-panel__group">
+      <div className="model-config-panel__section-label">{PROVIDER_LABEL[provider]}</div>
+      <ApiKeyField
+        summary={summary}
+        envDetected={summary.envDetected}
+        envVar={ENV_VAR[provider]}
+        fromEnv={fromEnv}
+        keyInput={keyInput}
+        editing={editing}
+        onKeyInputChange={onKeyInputChange}
+        onEditingChange={onEditingChange}
+        onFromEnvChange={onFromEnvChange}
+      />
+      {onBaseUrlChange && (
+        <div className="model-config-panel__field">
+          <label>Base URL（可选）</label>
+          <input value={baseUrl ?? ''} onChange={e => onBaseUrlChange(e.target.value)} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+interface ModelSelectionFieldsProps {
+  selection: ModelSelection
+  providerOptions: ProviderType[]
+  reloadKey: number
+  typedKeys: Record<KeyProvider, string>
+  fromEnvs: Record<KeyProvider, boolean>
+  onChange: (next: ModelSelection) => void
+}
+
+function ModelSelectionFields({ selection, providerOptions, reloadKey, typedKeys, fromEnvs, onChange }: ModelSelectionFieldsProps) {
+  const current = selection.type === 'ollama' ? selection.ollamaModel : selection.modelName
+  const typedKey = selection.type === 'ollama' ? '' : typedKeys[selection.type].trim()
 
   return (
     <>
       <div className="model-config-panel__field">
         <label>类型</label>
         <select
-          value={form.type}
-          onChange={e => onChange({
-            ...form,
-            type: e.target.value as ModelFormState['type'],
-            apiKey: '',
-            modelName: '',
-          })}
+          value={selection.type}
+          onChange={e => onChange({ ...selection, type: e.target.value as ProviderType, modelName: '' })}
         >
-          <option value="anthropic">Anthropic</option>
-          <option value="openai">OpenAI</option>
-          <option value="deepseek">DeepSeek</option>
-          <option value="ollama">Ollama</option>
+          {providerOptions.map(option => (
+            <option key={option} value={option}>{PROVIDER_LABEL[option]}</option>
+          ))}
         </select>
       </div>
-      <div className="model-config-panel__field">
-        <label>最大回复 token 数（max_tokens）</label>
-        <input
-          type="number"
-          min={MIN_MAX_TOKENS}
-          max={MAX_MAX_TOKENS}
-          step={1}
-          placeholder="默认 1000"
-          value={form.maxTokens}
-          onChange={e => onChange({ ...form, maxTokens: e.target.value })}
-        />
-      </div>
-      {(form.type === 'anthropic' || form.type === 'openai' || form.type === 'deepseek') && (
-        <>
-          <div className="model-config-panel__field">
-            <label>API Key</label>
-            <input
-              type="password"
-              value={form.apiKey}
-              placeholder={hasKey ? '已设置（如需更换请输入新值）' : '未设置'}
-              onChange={e => onChange({ ...form, apiKey: e.target.value })}
-            />
-          </div>
-          <div className="model-config-panel__field">
-            <label>模型名称</label>
-            <input
-              value={form.modelName}
-              onChange={e => onChange({ ...form, modelName: e.target.value })}
-            />
-          </div>
-        </>
-      )}
-      {form.type === 'openai' && (
-        <div className="model-config-panel__field">
-          <label>Base URL（可选）</label>
-          <input
-            value={form.openaiBaseUrl}
-            onChange={e => onChange({ ...form, openaiBaseUrl: e.target.value })}
-          />
-        </div>
-      )}
-      {form.type === 'deepseek' && (
-        <div className="model-config-panel__field">
-          <label>Base URL（可选）</label>
-          <input
-            value={form.deepseekBaseUrl}
-            onChange={e => onChange({ ...form, deepseekBaseUrl: e.target.value })}
-          />
-        </div>
-      )}
-      {form.type === 'ollama' && (
-        <>
-          <div className="model-config-panel__field">
-            <label>Ollama Base URL</label>
-            <input
-              value={form.ollamaBaseUrl}
-              onChange={e => onChange({ ...form, ollamaBaseUrl: e.target.value })}
-            />
-          </div>
-          <div className="model-config-panel__field">
-            <label>Ollama 模型</label>
-            <input
-              value={form.ollamaModel}
-              onChange={e => onChange({ ...form, ollamaModel: e.target.value })}
-            />
-          </div>
-        </>
-      )}
+      <ModelNameField
+        type={selection.type}
+        current={current}
+        apiKey={typedKey}
+        fromEnv={selection.type === 'ollama' ? undefined : fromEnvs[selection.type]}
+        reloadKey={reloadKey}
+        onChange={name => onChange(
+          selection.type === 'ollama'
+            ? { ...selection, ollamaModel: name }
+            : { ...selection, modelName: name }
+        )}
+      />
     </>
   )
 }
@@ -201,14 +218,12 @@ function ModelFormFields({ form, onChange, summary }: ModelFormFieldsProps) {
 export function ModelConfigPanel() {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [chatSummary, setChatSummary] = useState<ModelConfigSummary | null>(null)
-  const [backgroundSummary, setBackgroundSummary] = useState<ModelConfigSummary | null>(null)
-  const [chatForm, setChatForm] = useState<ModelFormState>(BLANK_FORM)
-  const [sameAsChatModel, setSameAsChatModel] = useState(true)
-  const [summaryForm, setSummaryForm] = useState<ModelFormState>(BLANK_FORM)
+  const [keys, setKeys] = useState<Record<KeyProvider, KeySummary>>(BLANK_KEYS)
+  const [form, setForm] = useState<FormState>(() => toFormState({ modelProvider: null, backgroundModelProvider: null }))
   const [isSaving, setIsSaving] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [saveNotice, setSaveNotice] = useState<string | null>(null)
+  const [modelsReloadKey, setModelsReloadKey] = useState(0)
   const patchControllerRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
@@ -218,22 +233,24 @@ export function ModelConfigPanel() {
   }, [])
 
   useEffect(() => {
-    fetch(`${CORE_URL}/config/model`)
+    const controller = new AbortController()
+    fetch(`${CORE_URL}/config/model`, { signal: controller.signal })
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         return r.json()
       })
       .then((data: ConfigModelResponse) => {
-        setChatSummary(data.modelProvider)
-        setBackgroundSummary(data.backgroundModelProvider)
-        setChatForm(summaryToFormState(data.modelProvider))
-        setSameAsChatModel(data.backgroundModelProvider === null)
-        setSummaryForm(summaryToFormState(data.backgroundModelProvider))
+        setKeys(data.modelProvider?.keys ?? BLANK_KEYS)
+        setForm(toFormState(data))
       })
-      .catch(() => {
+      .catch(err => {
+        if (err instanceof DOMException && err.name === 'AbortError') return
         setLoadError('加载模型配置失败，请稍后重试')
       })
-      .finally(() => setLoading(false))
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false)
+      })
+    return () => controller.abort()
   }, [])
 
   const handleSave = useCallback(async () => {
@@ -245,8 +262,8 @@ export function ModelConfigPanel() {
     setSaveNotice(null)
 
     const body: { modelProvider: Partial<ModelConfig>; backgroundModelProvider: Partial<ModelConfig> | null } = {
-      modelProvider: buildPartialConfig(chatForm),
-      backgroundModelProvider: sameAsChatModel ? null : buildPartialConfig(summaryForm),
+      modelProvider: buildGlobalPatch(form),
+      backgroundModelProvider: form.sameAsChat ? null : buildSelectionPatch(form.summary),
     }
 
     try {
@@ -265,11 +282,9 @@ export function ModelConfigPanel() {
       const data: ConfigModelResponse = await response.json()
       if (controller.signal.aborted) return
 
-      setChatSummary(data.modelProvider)
-      setBackgroundSummary(data.backgroundModelProvider)
-      setChatForm(summaryToFormState(data.modelProvider))
-      setSameAsChatModel(data.backgroundModelProvider === null)
-      setSummaryForm(summaryToFormState(data.backgroundModelProvider))
+      setKeys(data.modelProvider?.keys ?? BLANK_KEYS)
+      setForm(toFormState(data))
+      setModelsReloadKey(prev => prev + 1)
       setSaveNotice('已保存')
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
@@ -277,7 +292,7 @@ export function ModelConfigPanel() {
     } finally {
       setIsSaving(false)
     }
-  }, [chatForm, summaryForm, sameAsChatModel])
+  }, [form])
 
   if (loading) {
     return <div className="memory-loading">加载中…</div>
@@ -287,11 +302,104 @@ export function ModelConfigPanel() {
     return <div className="character-panel__error">{loadError}</div>
   }
 
+  const isConfigured = (provider: KeyProvider): boolean =>
+    form.fromEnv[provider]
+      ? keys[provider].envDetected
+      : keys[provider].hasKey || form.keyInputs[provider].trim() !== ''
+
+  const providerOptionsFor = (current: ProviderType): ProviderType[] => {
+    const options: ProviderType[] = [...KEY_PROVIDERS.filter(isConfigured), 'ollama']
+    return options.includes(current) ? options : [current, ...options]
+  }
+
+  const setKeyInput = (provider: KeyProvider, value: string) =>
+    setForm(prev => ({ ...prev, keyInputs: { ...prev.keyInputs, [provider]: value } }))
+
+  const setKeyEditing = (provider: KeyProvider, editing: boolean) =>
+    setForm(prev => ({ ...prev, keyEditing: { ...prev.keyEditing, [provider]: editing } }))
+
+  const setFromEnv = (provider: KeyProvider, checked: boolean) =>
+    setForm(prev => ({
+      ...prev,
+      fromEnv: { ...prev.fromEnv, [provider]: checked },
+      keyInputs: checked ? { ...prev.keyInputs, [provider]: '' } : prev.keyInputs,
+      keyEditing: checked ? { ...prev.keyEditing, [provider]: false } : prev.keyEditing,
+    }))
+
   return (
-    <div className="model-config-panel">
+    <fieldset className="model-config-panel" disabled={isSaving}>
+      {isSaving && <div className="model-config-panel__saving"><div className="model-config-panel__saving-label">保存中…</div></div>}
+      <div className="model-config-panel__section">
+        <div className="model-config-panel__section-label">API Key</div>
+        <KeyGroup
+          provider="anthropic"
+          summary={keys.anthropic}
+          keyInput={form.keyInputs.anthropic}
+          editing={form.keyEditing.anthropic}
+          fromEnv={form.fromEnv.anthropic}
+          onKeyInputChange={value => setKeyInput('anthropic', value)}
+          onEditingChange={editing => setKeyEditing('anthropic', editing)}
+          onFromEnvChange={checked => setFromEnv('anthropic', checked)}
+        />
+        <KeyGroup
+          provider="openai"
+          summary={keys.openai}
+          keyInput={form.keyInputs.openai}
+          editing={form.keyEditing.openai}
+          fromEnv={form.fromEnv.openai}
+          onKeyInputChange={value => setKeyInput('openai', value)}
+          onEditingChange={editing => setKeyEditing('openai', editing)}
+          onFromEnvChange={checked => setFromEnv('openai', checked)}
+          baseUrl={form.openaiBaseUrl}
+          onBaseUrlChange={value => setForm(prev => ({ ...prev, openaiBaseUrl: value }))}
+        />
+        <KeyGroup
+          provider="deepseek"
+          summary={keys.deepseek}
+          keyInput={form.keyInputs.deepseek}
+          editing={form.keyEditing.deepseek}
+          fromEnv={form.fromEnv.deepseek}
+          onKeyInputChange={value => setKeyInput('deepseek', value)}
+          onEditingChange={editing => setKeyEditing('deepseek', editing)}
+          onFromEnvChange={checked => setFromEnv('deepseek', checked)}
+          baseUrl={form.deepseekBaseUrl}
+          onBaseUrlChange={value => setForm(prev => ({ ...prev, deepseekBaseUrl: value }))}
+        />
+      </div>
+
+      <div className="model-config-panel__section">
+        <div className="model-config-panel__section-label">Ollama</div>
+        <div className="model-config-panel__field">
+          <label>Ollama Base URL</label>
+          <input
+            value={form.ollamaBaseUrl}
+            onChange={e => setForm(prev => ({ ...prev, ollamaBaseUrl: e.target.value }))}
+          />
+        </div>
+      </div>
+
       <div className="model-config-panel__section">
         <div className="model-config-panel__section-label">对话模型</div>
-        <ModelFormFields form={chatForm} onChange={setChatForm} summary={chatSummary} />
+        <ModelSelectionFields
+          selection={form.chat}
+          providerOptions={providerOptionsFor(form.chat.type)}
+          reloadKey={modelsReloadKey}
+          typedKeys={form.keyInputs}
+          fromEnvs={form.fromEnv}
+          onChange={chat => setForm(prev => ({ ...prev, chat }))}
+        />
+        <div className="model-config-panel__field model-config-panel__field--short">
+          <label>最大回复 token 数（max_tokens）</label>
+          <input
+            type="number"
+            min={MIN_MAX_TOKENS}
+            max={MAX_MAX_TOKENS}
+            step={1}
+            placeholder="默认 1000"
+            value={form.maxTokens}
+            onChange={e => setForm(prev => ({ ...prev, maxTokens: e.target.value }))}
+          />
+        </div>
       </div>
 
       <div className="model-config-panel__section">
@@ -299,13 +407,20 @@ export function ModelConfigPanel() {
         <label className="model-config-panel__checkbox">
           <input
             type="checkbox"
-            checked={sameAsChatModel}
-            onChange={e => setSameAsChatModel(e.target.checked)}
+            checked={form.sameAsChat}
+            onChange={e => setForm(prev => ({ ...prev, sameAsChat: e.target.checked }))}
           />
           使用与对话模型相同
         </label>
-        {!sameAsChatModel && (
-          <ModelFormFields form={summaryForm} onChange={setSummaryForm} summary={backgroundSummary} />
+        {!form.sameAsChat && (
+          <ModelSelectionFields
+            selection={form.summary}
+            providerOptions={providerOptionsFor(form.summary.type)}
+            reloadKey={modelsReloadKey}
+            typedKeys={form.keyInputs}
+            fromEnvs={form.fromEnv}
+            onChange={summary => setForm(prev => ({ ...prev, summary }))}
+          />
         )}
       </div>
 
@@ -315,6 +430,6 @@ export function ModelConfigPanel() {
 
       {errorMessage && <div className="character-panel__error">{errorMessage}</div>}
       {saveNotice && <div className="character-panel__notice">{saveNotice}</div>}
-    </div>
+    </fieldset>
   )
 }

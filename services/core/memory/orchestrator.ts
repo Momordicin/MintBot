@@ -1,7 +1,7 @@
 // services/core/memory/orchestrator.ts — "整理模式"后台调度：在无活跃对话的整理时段抽取实体并嵌入积压消息；无活跃对话且 shouldTriggerSummary 通过时生成摘要；AI 空闲后卸载 embedding/NER 模型；另提供嵌入队列状态
 // 用法：index.ts 的 start() 调 startOrganizeModeScheduler(fastify)（node-cron，用 fastify 上的 embedding/NER/backgroundModel provider，关闭时 stop()）；runOrganizeModeTick 为单次执行；routes/memory.ts（GET /embedding-queue-status）与 state.ts（GET /state）调 computeEmbeddingQueueStatus
 // 形状：runOrganizeModeTick -> OrganizeModeTickResult；computeEmbeddingQueueStatus -> EmbeddingQueueStatus；startOrganizeModeScheduler -> ScheduledTask
-// 对应文件：services/core/memory/embedQueue.ts / services/core/memory/entityExtractor.ts / services/core/memory/summarizer.ts / services/core/providers/aiActivity.ts / services/core/system/lockState.ts / services/core/routes/memory.ts / services/core/state.ts / services/core/memory/orchestrator.test.ts
+// 对应文件：services/core/memory/embedQueue.ts / services/core/memory/entityExtractor.ts / services/core/memory/summarizer.ts / services/core/providers/aiActivity.ts / services/core/providers/ModelProvider.ts / services/core/system/lockState.ts / services/core/routes/memory.ts / services/core/state.ts / services/core/memory/orchestrator.test.ts
 import { schedule, type ScheduledTask } from 'node-cron'
 import type { FastifyInstance } from 'fastify'
 import { extractEntities, type EntityModelProvider } from './entityExtractor.js'
@@ -17,14 +17,18 @@ import {
   getPendingEmbeddingCountForSession,
   getOldestPendingEmbeddingTimeForSession,
   getPendingEmbeddingCountBefore,
+  getPresetById,
+  getPresetApiKeys,
+  getPresetIdBySession,
 } from '../session/queries.js'
 import { getLockScreenMinutes } from '../system/lockState.js'
 import { getCurrentState } from '../session/index.js'
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
 import type { NERProvider } from '../providers/NERProvider.js'
+import { createSummaryModelProviderForPreset } from '../providers/ModelProvider.js'
 import { getLastActivityAt } from '../providers/aiActivity.js'
-import type { EmbeddingQueueStatus } from '../../../shared/types/index.js'
-import { getMemoryConfig } from '../config/index.js'
+import type { EmbeddingQueueStatus, Message } from '../../../shared/types/index.js'
+import { getMemoryConfig, getModelProviderConfig } from '../config/index.js'
 
 const ACTIVE_CONVERSATION_WINDOW_MS = 5 * 60 * 1000
 const IDLE_UNLOAD_THRESHOLD_MS = 20 * 60 * 1000
@@ -81,6 +85,31 @@ function shouldTriggerOrganizeMode(now: number): boolean {
   return pendingConditionMet && !status.activeConversation && isInDefaultOrganizeWindow(now)
 }
 
+function resolveModelForPreset(presetId: string | null, globalModel: EntityModelProvider): EntityModelProvider {
+  if (presetId === null) return globalModel
+  const active = getCurrentState()
+  const isActive = active?.session.presetId === presetId
+  const preset = isActive ? active.preset : getPresetById(presetId)
+  if (!preset || preset.modelType === null || preset.modelName === null) return globalModel
+  const credentials = isActive ? active.credentials : getPresetApiKeys(presetId)
+  return createSummaryModelProviderForPreset(preset, getModelProviderConfig(), credentials)
+}
+
+function groupByPreset(messages: Message[]): Map<string | null, Message[]> {
+  const presetBySession = new Map<string, string | null>()
+  const groups = new Map<string | null, Message[]>()
+  for (const message of messages) {
+    if (!presetBySession.has(message.sessionId)) {
+      presetBySession.set(message.sessionId, getPresetIdBySession(message.sessionId))
+    }
+    const presetId = presetBySession.get(message.sessionId) ?? null
+    const group = groups.get(presetId)
+    if (group) group.push(message)
+    else groups.set(presetId, [message])
+  }
+  return groups
+}
+
 export interface OrganizeModeTickResult {
   triggered: boolean
   batches: number
@@ -105,7 +134,24 @@ export async function runOrganizeModeTick(
     const batch = getPendingEmbeddingMessages(batchSize)
     if (batch.length === 0) break
 
-    const { inserted, closed } = await extractEntities(batch, { ner: deps.ner, model: deps.model })
+    let inserted = 0
+    let closed = 0
+    for (const [presetId, messages] of groupByPreset(batch)) {
+      let model: EntityModelProvider
+      try {
+        model = resolveModelForPreset(presetId, deps.model)
+      } catch (err) {
+        console.error(`[OrganizeMode] model unavailable for preset ${presetId ?? '(unknown)'}, entity model layer skipped:`, err)
+        model = { completeSync: () => Promise.reject(err) }
+      }
+      try {
+        const result = await extractEntities(messages, { ner: deps.ner, model })
+        inserted += result.inserted
+        closed += result.closed
+      } catch (err) {
+        console.error(`[OrganizeMode] entity extraction failed for preset ${presetId ?? '(unknown)'}:`, err)
+      }
+    }
     const { processed } = await processEmbedQueue(deps.embedding, batchSize, batch)
 
     batches++
@@ -122,8 +168,13 @@ export async function runOrganizeModeTick(
         isLowActivityWindow: isInDefaultOrganizeWindow(getNow()),
       })
       if (shouldSummarizeActive) {
-        const result = await generateSummary(activeSessionId, { model: deps.model })
-        if (result !== null) summariesGenerated++
+        try {
+          const model = resolveModelForPreset(getPresetIdBySession(activeSessionId), deps.model)
+          const result = await generateSummary(activeSessionId, { model })
+          if (result !== null) summariesGenerated++
+        } catch (err) {
+          console.error(`[OrganizeMode] summary failed for session ${activeSessionId}:`, err)
+        }
       }
     }
 
@@ -132,17 +183,23 @@ export async function runOrganizeModeTick(
 
   if (!computeActiveConversation(getNow())) {
     for (const sessionId of getSessionsWithPendingSummaries()) {
-      while (!computeActiveConversation(getNow())) {
-        const shouldSummarize = shouldTriggerSummary({
-          messageCountSinceLastSummary: getPendingSummaryCount(sessionId),
-          lockScreenMinutes: getLockScreenMinutes(getNow()),
-          isLowActivityWindow: isInDefaultOrganizeWindow(getNow()),
-        })
-        if (!shouldSummarize) break
+      try {
+        let model: EntityModelProvider | undefined
+        while (!computeActiveConversation(getNow())) {
+          const shouldSummarize = shouldTriggerSummary({
+            messageCountSinceLastSummary: getPendingSummaryCount(sessionId),
+            lockScreenMinutes: getLockScreenMinutes(getNow()),
+            isLowActivityWindow: isInDefaultOrganizeWindow(getNow()),
+          })
+          if (!shouldSummarize) break
 
-        const result = await generateSummary(sessionId, { model: deps.model })
-        if (result === null) break
-        summariesGenerated++
+          model ??= resolveModelForPreset(getPresetIdBySession(sessionId), deps.model)
+          const result = await generateSummary(sessionId, { model })
+          if (result === null) break
+          summariesGenerated++
+        }
+      } catch (err) {
+        console.error(`[OrganizeMode] summary failed for session ${sessionId}:`, err)
       }
     }
   }

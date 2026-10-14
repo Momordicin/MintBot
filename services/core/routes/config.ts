@@ -1,6 +1,6 @@
 // services/core/routes/config.ts — 模型配置的读取与修改路由
 // 用法：core/index.ts 注册 configRoutes；GET /config/model、PATCH /config/model
-// 对应文件：src/settings/ModelConfigPanel.tsx / services/core/config/index.ts / services/core/routes/config.test.ts
+// 对应文件：src/settings/ModelConfigPanel.tsx / services/core/config/index.ts / services/core/config/keySummary.ts / services/core/providers/envCredentials.ts / services/core/routes/config.test.ts
 import type { FastifyInstance } from 'fastify'
 import {
   getModelProviderConfig,
@@ -8,42 +8,122 @@ import {
   getRawBackgroundModelProviderConfig,
   updateModelProviderConfig,
   updateBackgroundModelProviderConfig,
+  type BackgroundModelConfig,
 } from '../config/index.js'
+import { summarizeSavedKey } from '../config/keySummary.js'
 import { ConfigFileUnreadableError, CONFIG_FILE_UNREADABLE_MESSAGE } from '../config/configFileError.js'
 import { createModelProvider } from '../providers/ModelProvider.js'
+import { ENV_VAR_BY_PROVIDER, isEnvCredentialDetected, type KeyProvider } from '../providers/envCredentials.js'
 import type { ModelConfig } from '../../../shared/types/index.js'
 
 const VALID_MODEL_TYPES: readonly string[] = ['anthropic', 'openai', 'ollama', 'deepseek']
 const MIN_MAX_TOKENS = 1
 const MAX_MAX_TOKENS = 32000
+const KEY_PROVIDERS: readonly KeyProvider[] = ['anthropic', 'openai', 'deepseek']
+const API_KEY_INVALID_MESSAGE = 'API key 无效或未配置'
+
+const KEY_FIELD = {
+  anthropic: { key: 'anthropicApiKey', fromEnv: 'anthropicApiKeyFromEnv' },
+  openai: { key: 'openaiApiKey', fromEnv: 'openaiApiKeyFromEnv' },
+  deepseek: { key: 'deepseekApiKey', fromEnv: 'deepseekApiKeyFromEnv' },
+} as const
+
+interface KeySummary {
+  hasKey: boolean
+  last4: string | null
+  fromEnv: boolean
+  envDetected: boolean
+}
 
 export interface ModelConfigSummary {
   type: 'anthropic' | 'openai' | 'ollama' | 'deepseek'
-  hasAnthropicApiKey: boolean
-  hasOpenaiApiKey: boolean
-  hasDeepseekApiKey: boolean
+  modelName?: string
+  ollamaModel?: string
+  ollamaBaseUrl?: string
   openaiBaseUrl?: string
   deepseekBaseUrl?: string
-  ollamaBaseUrl?: string
-  ollamaModel?: string
-  modelName?: string
   maxTokens?: number
+  keys: Record<KeyProvider, KeySummary>
+}
+
+export interface BackgroundModelSummary {
+  type: 'anthropic' | 'openai' | 'ollama' | 'deepseek'
+  modelName?: string
+  ollamaModel?: string
+}
+
+function summarizeKey(config: ModelConfig, provider: KeyProvider): KeySummary {
+  const { key, fromEnv } = KEY_FIELD[provider]
+  return {
+    ...summarizeSavedKey(config[key]),
+    fromEnv: config[fromEnv] === true,
+    envDetected: isEnvCredentialDetected(provider),
+  }
 }
 
 function toSummary(config: ModelConfig): ModelConfigSummary {
-  const { anthropicApiKey, openaiApiKey, deepseekApiKey, ...rest } = config
   return {
-    ...rest,
-    hasAnthropicApiKey: typeof anthropicApiKey === 'string' && anthropicApiKey.length > 0,
-    hasOpenaiApiKey: typeof openaiApiKey === 'string' && openaiApiKey.length > 0,
-    hasDeepseekApiKey: typeof deepseekApiKey === 'string' && deepseekApiKey.length > 0,
+    type: config.type,
+    modelName: config.modelName,
+    ollamaModel: config.ollamaModel,
+    ollamaBaseUrl: config.ollamaBaseUrl,
+    openaiBaseUrl: config.openaiBaseUrl,
+    deepseekBaseUrl: config.deepseekBaseUrl,
+    maxTokens: config.maxTokens,
+    keys: {
+      anthropic: summarizeKey(config, 'anthropic'),
+      openai: summarizeKey(config, 'openai'),
+      deepseek: summarizeKey(config, 'deepseek'),
+    },
   }
 }
 
-function validateModelConfigPartial(partial: Partial<ModelConfig>, current: Partial<ModelConfig>): string | null {
-  if (partial.type !== undefined && !VALID_MODEL_TYPES.includes(partial.type)) {
+function toBackgroundSummary(config: BackgroundModelConfig): BackgroundModelSummary {
+  return { type: config.type, modelName: config.modelName, ollamaModel: config.ollamaModel }
+}
+
+function isProviderConfigured(global: Partial<ModelConfig>, provider: KeyProvider): boolean {
+  const { key, fromEnv } = KEY_FIELD[provider]
+  if (global[fromEnv] === true) return isEnvCredentialDetected(provider)
+  const saved = global[key]
+  return typeof saved === 'string' && saved.length > 0
+}
+
+function validateProviderSelection(selected: Partial<ModelConfig>, global: Partial<ModelConfig>): string | null {
+  const trimmedModelName = selected.modelName?.trim()
+  if (selected.type === 'ollama') {
+    if (!selected.ollamaModel) return 'ollamaModel is required when type is ollama'
+    return null
+  }
+  if (selected.type === 'anthropic' || selected.type === 'openai' || selected.type === 'deepseek') {
+    if (!isProviderConfigured(global, selected.type)) return API_KEY_INVALID_MESSAGE
+    if (!trimmedModelName) return `modelName is required when type is ${selected.type}`
+    return null
+  }
+  return 'type is required'
+}
+
+function dropEmptyKeys(partial: Partial<ModelConfig> | undefined): Partial<ModelConfig> | undefined {
+  if (!partial || typeof partial !== 'object') return partial
+  const cleaned = { ...partial }
+  for (const provider of KEY_PROVIDERS) {
+    const field = KEY_FIELD[provider].key
+    const value = cleaned[field]
+    if (typeof value === 'string' && value.trim() === '') delete cleaned[field]
+  }
+  return cleaned
+}
+
+function validateType(type: string | undefined): string | null {
+  if (type !== undefined && !VALID_MODEL_TYPES.includes(type)) {
     return 'type must be one of anthropic, openai, ollama, deepseek'
   }
+  return null
+}
+
+function validateGlobalPartial(partial: Partial<ModelConfig>, current: Partial<ModelConfig>): string | null {
+  const typeError = validateType(partial.type)
+  if (typeError) return typeError
 
   if (partial.maxTokens !== undefined) {
     if (!Number.isInteger(partial.maxTokens) || partial.maxTokens < MIN_MAX_TOKENS || partial.maxTokens > MAX_MAX_TOKENS) {
@@ -51,23 +131,33 @@ function validateModelConfigPartial(partial: Partial<ModelConfig>, current: Part
     }
   }
 
-  const merged = { ...current, ...partial }
-  const trimmedModelName = merged.modelName?.trim()
-  if (merged.type === 'anthropic') {
-    if (!merged.anthropicApiKey) return 'anthropicApiKey is required when type is anthropic'
-    if (!trimmedModelName) return 'modelName is required when type is anthropic'
-  } else if (merged.type === 'openai') {
-    if (!merged.openaiApiKey) return 'openaiApiKey is required when type is openai'
-    if (!trimmedModelName) return 'modelName is required when type is openai'
-  } else if (merged.type === 'deepseek') {
-    if (!merged.deepseekApiKey) return 'deepseekApiKey is required when type is deepseek'
-    if (!trimmedModelName) return 'modelName is required when type is deepseek'
-  } else if (merged.type === 'ollama') {
-    if (!merged.ollamaModel) return 'ollamaModel is required when type is ollama'
-  } else {
-    return 'type is required'
+  for (const provider of KEY_PROVIDERS) {
+    const flag = KEY_FIELD[provider].fromEnv
+    if (partial[flag] === true && current[flag] !== true && !isEnvCredentialDetected(provider)) {
+      return `未检测到环境变量 ${ENV_VAR_BY_PROVIDER[provider]}`
+    }
   }
-  return null
+
+  const merged = { ...current, ...partial }
+  return validateProviderSelection(merged, merged)
+}
+
+function validateBackgroundPartial(
+  partial: Partial<ModelConfig>,
+  current: Partial<ModelConfig>,
+  mergedGlobal: Partial<ModelConfig>
+): string | null {
+  const typeError = validateType(partial.type)
+  if (typeError) return typeError
+  return validateProviderSelection({ ...current, ...partial }, mergedGlobal)
+}
+
+function pickBackgroundPartial(partial: Partial<ModelConfig>): Partial<ModelConfig> {
+  const picked: Partial<ModelConfig> = {}
+  if (partial.type !== undefined) picked.type = partial.type
+  if (partial.modelName !== undefined) picked.modelName = partial.modelName
+  if (partial.ollamaModel !== undefined) picked.ollamaModel = partial.ollamaModel
+  return picked
 }
 
 export async function configRoutes(fastify: FastifyInstance) {
@@ -83,7 +173,7 @@ export async function configRoutes(fastify: FastifyInstance) {
 
     return {
       modelProvider,
-      backgroundModelProvider: rawBackground ? toSummary(rawBackground) : null,
+      backgroundModelProvider: rawBackground ? toBackgroundSummary(rawBackground) : null,
     }
   })
 
@@ -93,30 +183,34 @@ export async function configRoutes(fastify: FastifyInstance) {
       backgroundModelProvider?: Partial<ModelConfig> | null
     }
   }>('/config/model', async (request, reply) => {
-    const { modelProvider, backgroundModelProvider } = request.body
+    const { backgroundModelProvider } = request.body
+    const modelProvider = dropEmptyKeys(request.body.modelProvider)
+
+    let currentModelProvider: Partial<ModelConfig> = {}
+    try {
+      currentModelProvider = getModelProviderConfig()
+    } catch {
+    }
+    const mergedGlobal = { ...currentModelProvider, ...modelProvider }
 
     if (modelProvider !== undefined) {
-      let currentModelProvider: Partial<ModelConfig> = {}
-      try {
-        currentModelProvider = getModelProviderConfig()
-      } catch {
-      }
-      const error = validateModelConfigPartial(modelProvider, currentModelProvider)
+      const error = validateGlobalPartial(modelProvider, currentModelProvider)
       if (error) {
         return reply.status(400).send({ error })
       }
     }
 
-    if (backgroundModelProvider !== undefined && backgroundModelProvider !== null) {
+    const backgroundPartial = backgroundModelProvider ? pickBackgroundPartial(backgroundModelProvider) : null
+    if (backgroundPartial) {
       const currentBackground = getRawBackgroundModelProviderConfig() ?? {}
-      const error = validateModelConfigPartial(backgroundModelProvider, currentBackground)
+      const error = validateBackgroundPartial(backgroundPartial, currentBackground, mergedGlobal)
       if (error) {
         return reply.status(400).send({ error })
       }
     }
 
     let modelProviderResult: ModelConfig | null
-    let backgroundResult: ModelConfig | null
+    let backgroundResult: BackgroundModelConfig | null
     try {
       modelProviderResult = modelProvider !== undefined
         ? updateModelProviderConfig(modelProvider)
@@ -129,7 +223,7 @@ export async function configRoutes(fastify: FastifyInstance) {
           })()
 
       backgroundResult = backgroundModelProvider !== undefined
-        ? updateBackgroundModelProviderConfig(backgroundModelProvider)
+        ? updateBackgroundModelProviderConfig(backgroundPartial)
         : getRawBackgroundModelProviderConfig()
     } catch (err) {
       if (!(err instanceof ConfigFileUnreadableError)) throw err
@@ -147,7 +241,7 @@ export async function configRoutes(fastify: FastifyInstance) {
 
     return {
       modelProvider: modelProviderResult ? toSummary(modelProviderResult) : null,
-      backgroundModelProvider: backgroundResult ? toSummary(backgroundResult) : null,
+      backgroundModelProvider: backgroundResult ? toBackgroundSummary(backgroundResult) : null,
     }
   })
 }

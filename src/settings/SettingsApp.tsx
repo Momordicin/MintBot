@@ -27,7 +27,7 @@ const PRIMARY_NAV: { page: Page; label: string }[] = [
 ]
 
 const SECONDARY_NAV: { page: Page; label: string }[] = [
-  { page: 'modelService', label: '模型服务' },
+  { page: 'modelService', label: '全局模型服务' },
   { page: 'window', label: '窗口行为' },
 ]
 

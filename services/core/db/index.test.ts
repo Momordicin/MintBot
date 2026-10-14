@@ -1,15 +1,24 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { db, initDb, checkpointTruncate } from './index.js'
 
-// initDb() 已在 queries.test.ts 等文件里被调用过一次（同一进程内的 db 单例），这里只
-// 断言迁移链跑完之后的最终状态：user_version 到 11，Presets 表带 displayConfig/addressForms 列。
-// 不单独模拟从 v6 升到 v7/v8/v9/v10 的中间态——runMigrations() 里每一级迁移都是 SQL DDL 或数据库维护命令，
-// 真正需要验证的是"全新库从 0 跑到 11"与"列确实存在"，这与 v1/v5 等既有迁移目前
-// 在仓库里的验证深度一致（没有专门 mock user_version 起点的迁移测试先例）
 describe('DB 迁移 (runMigrations)', () => {
-  it('迁移链跑完后 user_version 为 11', () => {
+  it('迁移链跑完后 user_version 为 13', () => {
     initDb()
-    expect(db.pragma('user_version', { simple: true })).toBe(11)
+    expect(db.pragma('user_version', { simple: true })).toBe(13)
+  })
+
+  it('PresetApiKeys 表按 v12/v13 定义存在（主键 presetId + provider，provider 受 CHECK 约束，fromEnv 默认 0）', () => {
+    initDb()
+    const columns = db.pragma('table_info(PresetApiKeys)') as { name: string; notnull: number; dflt_value: string | null; pk: number }[]
+    expect(columns.map(c => c.name)).toEqual(['presetId', 'provider', 'apiKey', 'fromEnv', 'summaryApiKey', 'summaryFromEnv'])
+    expect(columns.filter(c => c.pk > 0).map(c => c.name)).toEqual(['presetId', 'provider'])
+    expect(columns.find(c => c.name === 'fromEnv')?.dflt_value).toBe('0')
+
+    db.exec(`DELETE FROM PresetApiKeys`)
+    db.prepare(`INSERT INTO PresetApiKeys (presetId, provider) VALUES ('p1', 'openai')`).run()
+    expect(db.prepare(`SELECT apiKey, fromEnv FROM PresetApiKeys WHERE presetId = 'p1'`).get()).toEqual({ apiKey: null, fromEnv: 0 })
+    expect(() => db.prepare(`INSERT INTO PresetApiKeys (presetId, provider) VALUES ('p1', 'ollama')`).run()).toThrow()
+    db.exec(`DELETE FROM PresetApiKeys`)
   })
 
   it('Presets 表带 displayConfig 列（migration v7）', () => {
@@ -198,5 +207,64 @@ describe('DB 迁移 v10 (Presets.modelType 支持 deepseek)', () => {
     expect(row.wallpaperPath).toBe('p2-bg.jpg')
     expect(JSON.parse(row.displayConfig)).toEqual({ chatBgRgb: [1, 2, 3], chatBgOpacity: 0.5 })
     expect(JSON.parse(row.addressForms)).toEqual(['小明'])
+  })
+})
+
+describe('DB 迁移 v13 (角色摘要模型列)', () => {
+  beforeEach(() => {
+    initDb()
+    db.exec(`DELETE FROM Presets; DELETE FROM PresetApiKeys`)
+  })
+
+  it('新库的 Presets 与 PresetApiKeys 带摘要列，summaryFromEnv 默认 0，摘要模型列默认 NULL', () => {
+    const presetColumns = (db.pragma('table_info(Presets)') as { name: string }[]).map(c => c.name)
+    const keyColumns = db.pragma('table_info(PresetApiKeys)') as { name: string; notnull: number; dflt_value: string | null }[]
+    expect(presetColumns).toEqual(expect.arrayContaining(['summaryModelType', 'summaryModelName']))
+    expect(keyColumns.map(c => c.name)).toEqual(expect.arrayContaining(['summaryApiKey', 'summaryFromEnv']))
+    expect(keyColumns.find(c => c.name === 'summaryFromEnv')?.dflt_value).toBe('0')
+    expect(keyColumns.find(c => c.name === 'summaryFromEnv')?.notnull).toBe(1)
+
+    db.prepare(`INSERT INTO Presets (presetId, name, characterId, modelType, modelName, systemPrompt, createdAt, updatedAt) VALUES ('p1', 'n', 'c', NULL, NULL, 's', 0, 0)`).run()
+    db.prepare(`INSERT INTO PresetApiKeys (presetId, provider) VALUES ('p1', 'openai')`).run()
+    expect(db.prepare(`SELECT summaryModelType, summaryModelName FROM Presets WHERE presetId = 'p1'`).get()).toEqual({ summaryModelType: null, summaryModelName: null })
+    expect(db.prepare(`SELECT summaryApiKey, summaryFromEnv FROM PresetApiKeys WHERE presetId = 'p1'`).get()).toEqual({ summaryApiKey: null, summaryFromEnv: 0 })
+  })
+
+  it('summaryModelType 只接受 anthropic / openai / ollama / deepseek 或 NULL', () => {
+    const insert = db.prepare(`INSERT INTO Presets (presetId, name, characterId, summaryModelType, systemPrompt, createdAt, updatedAt) VALUES (?, 'n', 'c', ?, 's', 0, 0)`)
+
+    for (const type of ['anthropic', 'openai', 'ollama', 'deepseek', null]) {
+      expect(() => insert.run(`ok-${type}`, type)).not.toThrow()
+    }
+    expect(() => insert.run('bad', 'bogus')).toThrow()
+  })
+})
+
+describe('DB 迁移 v13 从 v12 升级', () => {
+  it('v12 库升级后保留既有 Presets 与 PresetApiKeys 数据，新增列取默认值，user_version 为 13', () => {
+    initDb()
+    db.exec(`DELETE FROM Presets; DELETE FROM PresetApiKeys`)
+    db.prepare(`INSERT INTO Presets (presetId, name, characterId, modelType, modelName, systemPrompt, createdAt, updatedAt) VALUES ('p1', '角色一', 'char-001', 'openai', 'gpt-4o', '你是角色一', 1, 2)`).run()
+    db.prepare(`INSERT INTO PresetApiKeys (presetId, provider, apiKey, fromEnv) VALUES ('p1', 'openai', 'sk-old', 1)`).run()
+    db.exec(`
+      ALTER TABLE PresetApiKeys DROP COLUMN summaryApiKey;
+      ALTER TABLE PresetApiKeys DROP COLUMN summaryFromEnv;
+      ALTER TABLE Presets DROP COLUMN summaryModelType;
+      ALTER TABLE Presets DROP COLUMN summaryModelName;
+    `)
+    db.pragma('user_version = 12')
+    expect((db.pragma('table_info(Presets)') as { name: string }[]).map(c => c.name)).not.toContain('summaryModelType')
+
+    initDb()
+
+    expect(db.pragma('user_version', { simple: true })).toBe(13)
+    expect(db.prepare(`SELECT * FROM Presets WHERE presetId = 'p1'`).get()).toMatchObject({
+      modelType: 'openai', modelName: 'gpt-4o', createdAt: 1, updatedAt: 2, summaryModelType: null, summaryModelName: null,
+    })
+    expect(db.prepare(`SELECT * FROM PresetApiKeys WHERE presetId = 'p1'`).get()).toEqual({
+      presetId: 'p1', provider: 'openai', apiKey: 'sk-old', fromEnv: 1, summaryApiKey: null, summaryFromEnv: 0,
+    })
+    expect(() => db.prepare(`UPDATE Presets SET summaryModelType = 'bogus'`).run()).toThrow()
+    db.exec(`DELETE FROM Presets; DELETE FROM PresetApiKeys`)
   })
 })

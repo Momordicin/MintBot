@@ -688,9 +688,14 @@
 /* ─── 模型配置面板（全局对话模型 + 摘要模型） ──────────────── */
 
 .model-config-panel {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 16px;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
 }
 
 .model-config-panel__section {
@@ -700,6 +705,12 @@
   border: 1px solid var(--input-border);
   border-radius: 6px;
   padding: 10px 12px;
+}
+
+.model-config-panel__group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .model-config-panel__section-label {
@@ -725,15 +736,106 @@
 }
 
 .model-config-panel__field label {
-  min-width: 90px;
+  flex: 0 0 190px;
 }
 
 .model-config-panel__field input,
 .model-config-panel__field select {
   flex: 1;
+  min-width: 0;
   border-radius: 6px;
   padding: 4px 8px;
   font-size: 12px;
+}
+
+.model-config-panel__field--short input {
+  flex: 0 1 33%;
+}
+
+.model-config-panel__error-mark {
+  flex: none;
+  color: var(--error);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: help;
+}
+
+.model-config-panel__row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.model-config-panel__row-label {
+  flex: 0 0 52px;
+  font-size: 12px;
+  color: var(--label2);
+}
+
+.model-config-panel__field--compact {
+  flex: 1 1 110px;
+  min-width: 0;
+}
+
+.model-config-panel__field--provider {
+  flex: 0 0 96px;
+}
+
+.model-config-panel__checkbox--compact {
+  flex: none;
+  white-space: nowrap;
+}
+
+.model-config-panel__saving {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+  color: #fff;
+  font-size: 13px;
+  cursor: progress;
+}
+
+.model-config-panel__saving-label {
+  position: sticky;
+  top: 16px;
+  margin-top: 16px;
+}
+
+.model-config-panel__hint {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.model-config-panel__secret {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+
+.model-config-panel__secret input {
+  padding-right: 28px;
+}
+
+.model-config-panel__icon-btn {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
 }
 
 /* 本面板不嵌套在 .character-panel 下，.rename-btn 本身的颜色角色/状态由上面的控件表面

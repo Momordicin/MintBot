@@ -256,7 +256,7 @@ describe('config/index — getBackgroundModelProviderConfig', () => {
   it('配置了 backgroundModelProvider 时返回它自己', async () => {
     readFileSyncMock.mockReturnValue(JSON.stringify({
       modelProvider: { type: 'ollama', ollamaBaseUrl: 'http://localhost:11434' },
-      backgroundModelProvider: { type: 'anthropic', anthropicApiKey: 'sk-bg', modelName: 'claude-strong' },
+      backgroundModelProvider: { type: 'anthropic', modelName: 'claude-strong' },
     }))
     const { startConfigWatcher, getBackgroundModelProviderConfig } = await import('./index.js')
 
@@ -264,7 +264,7 @@ describe('config/index — getBackgroundModelProviderConfig', () => {
 
     expect(getBackgroundModelProviderConfig()).toEqual({
       type: 'anthropic',
-      anthropicApiKey: 'sk-bg',
+      ollamaBaseUrl: 'http://localhost:11434',
       modelName: 'claude-strong',
     })
   })
@@ -310,7 +310,7 @@ describe('config/index — getBackgroundModelProviderConfig', () => {
   it('热更新场景：先配置了 backgroundModelProvider，后续 config.json 里删掉该字段，重新加载后正确回退到主模型配置，不保留旧实例的值', async () => {
     readFileSyncMock.mockReturnValue(JSON.stringify({
       modelProvider: { type: 'ollama', ollamaBaseUrl: 'http://localhost:11434' },
-      backgroundModelProvider: { type: 'anthropic', anthropicApiKey: 'sk-bg', modelName: 'claude-strong' },
+      backgroundModelProvider: { type: 'anthropic', modelName: 'claude-strong' },
     }))
     const onMock = vi.fn()
     watchMock.mockReturnValue({ on: onMock })
@@ -318,7 +318,7 @@ describe('config/index — getBackgroundModelProviderConfig', () => {
     const { startConfigWatcher, getBackgroundModelProviderConfig, getModelProviderConfig } = await import('./index.js')
 
     startConfigWatcher()
-    expect(getBackgroundModelProviderConfig()).toEqual({ type: 'anthropic', anthropicApiKey: 'sk-bg', modelName: 'claude-strong' })
+    expect(getBackgroundModelProviderConfig()).toEqual({ type: 'anthropic', ollamaBaseUrl: 'http://localhost:11434', modelName: 'claude-strong' })
 
     const changeCallback = onMock.mock.calls.find(call => call[0] === 'change')?.[1]
     readFileSyncMock.mockReturnValue(JSON.stringify({
@@ -378,7 +378,7 @@ describe('config/index — updateBackgroundModelProviderConfig', () => {
   it('传 null 时，写出的 JSON 里 backgroundModelProvider 这个 key 被整个删掉（而非写入 JSON null）', async () => {
     readFileSyncMock.mockReturnValue(JSON.stringify({
       modelProvider: { type: 'ollama', ollamaBaseUrl: 'http://localhost:11434' },
-      backgroundModelProvider: { type: 'anthropic', anthropicApiKey: 'sk-bg', modelName: 'claude-strong' },
+      backgroundModelProvider: { type: 'anthropic', modelName: 'claude-strong' },
     }))
     const { updateBackgroundModelProviderConfig } = await import('./index.js')
 
@@ -395,14 +395,14 @@ describe('config/index — updateBackgroundModelProviderConfig', () => {
   it('传 null 并重新加载（模拟 chokidar 写入后触发的 reload）后，getBackgroundModelProviderConfig 真正 fallback 到 modelProvider，而不是保留旧覆盖', async () => {
     readFileSyncMock.mockReturnValue(JSON.stringify({
       modelProvider: { type: 'ollama', ollamaBaseUrl: 'http://localhost:11434' },
-      backgroundModelProvider: { type: 'anthropic', anthropicApiKey: 'sk-bg', modelName: 'claude-strong' },
+      backgroundModelProvider: { type: 'anthropic', modelName: 'claude-strong' },
     }))
     const onMock = vi.fn()
     watchMock.mockReturnValue({ on: onMock })
     const { startConfigWatcher, updateBackgroundModelProviderConfig, getBackgroundModelProviderConfig, getModelProviderConfig } = await import('./index.js')
 
     startConfigWatcher()
-    expect(getBackgroundModelProviderConfig()).toEqual({ type: 'anthropic', anthropicApiKey: 'sk-bg', modelName: 'claude-strong' })
+    expect(getBackgroundModelProviderConfig()).toEqual({ type: 'anthropic', ollamaBaseUrl: 'http://localhost:11434', modelName: 'claude-strong' })
 
     updateBackgroundModelProviderConfig(null)
     const [, written] = writeFileSyncMock.mock.calls[0]
@@ -418,19 +418,19 @@ describe('config/index — updateBackgroundModelProviderConfig', () => {
   it('传非 null partial 时合并磁盘上已存的 backgroundModelProvider，不 clobber 未提及字段', async () => {
     readFileSyncMock.mockReturnValue(JSON.stringify({
       modelProvider: { type: 'ollama', ollamaBaseUrl: 'http://localhost:11434' },
-      backgroundModelProvider: { type: 'anthropic', anthropicApiKey: 'sk-bg', modelName: 'claude-strong' },
+      backgroundModelProvider: { type: 'anthropic', modelName: 'claude-strong' },
     }))
     const { updateBackgroundModelProviderConfig } = await import('./index.js')
 
     const result = updateBackgroundModelProviderConfig({ modelName: 'claude-stronger' })
 
-    expect(result).toEqual({ type: 'anthropic', anthropicApiKey: 'sk-bg', modelName: 'claude-stronger' })
+    expect(result).toEqual({ type: 'anthropic', modelName: 'claude-stronger' })
   })
 
   it('传 null 清除覆盖后，getBackgroundModelProviderConfig 立即 fallback 到 modelProvider，不依赖 chokidar 的异步 reload', async () => {
     readFileSyncMock.mockReturnValue(JSON.stringify({
       modelProvider: { type: 'ollama', ollamaBaseUrl: 'http://localhost:11434' },
-      backgroundModelProvider: { type: 'anthropic', anthropicApiKey: 'sk-bg', modelName: 'claude-strong' },
+      backgroundModelProvider: { type: 'anthropic', modelName: 'claude-strong' },
     }))
     const onMock = vi.fn()
     watchMock.mockReturnValue({ on: onMock })
@@ -444,6 +444,102 @@ describe('config/index — updateBackgroundModelProviderConfig', () => {
     // 故意不触发 chokidar 的 'change' 回调——清除覆盖必须立即生效，不能有滞后窗口
     expect(getRawBackgroundModelProviderConfig()).toBeNull()
     expect(getBackgroundModelProviderConfig()).toEqual(getModelProviderConfig())
+  })
+})
+
+describe('config/index — 后台模型配置的组成与裁剪', () => {
+  const globalSection = {
+    type: 'anthropic',
+    anthropicApiKey: 'sk-global-a',
+    anthropicApiKeyFromEnv: false,
+    openaiApiKey: 'sk-global-o',
+    openaiApiKeyFromEnv: true,
+    openaiBaseUrl: 'https://proxy.example/v1',
+    deepseekBaseUrl: 'https://ds.example',
+    ollamaBaseUrl: 'http://localhost:11434',
+    modelName: 'chat-model',
+    ollamaModel: 'chat-ollama',
+    maxTokens: 2000,
+  }
+
+  it('后台配置由全局段的 key、FromEnv 标记、Base URL、maxTokens 与后台段的 type/modelName 组成，全局 modelName 与 ollamaModel 不泄漏', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      modelProvider: globalSection,
+      backgroundModelProvider: { type: 'openai', modelName: 'bg-model' },
+    }))
+    const { startConfigWatcher, getBackgroundModelProviderConfig } = await import('./index.js')
+
+    startConfigWatcher()
+    const background = getBackgroundModelProviderConfig()
+
+    expect(background).toMatchObject({
+      type: 'openai',
+      modelName: 'bg-model',
+      anthropicApiKey: 'sk-global-a',
+      anthropicApiKeyFromEnv: false,
+      openaiApiKey: 'sk-global-o',
+      openaiApiKeyFromEnv: true,
+      openaiBaseUrl: 'https://proxy.example/v1',
+      deepseekBaseUrl: 'https://ds.example',
+      ollamaBaseUrl: 'http://localhost:11434',
+      maxTokens: 2000,
+    })
+    expect(background.ollamaModel).toBeUndefined()
+  })
+
+  it('后台段只有 ollamaModel 时 modelName 不取全局值', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      modelProvider: globalSection,
+      backgroundModelProvider: { type: 'ollama', ollamaModel: 'bg-ollama' },
+    }))
+    const { startConfigWatcher, getBackgroundModelProviderConfig } = await import('./index.js')
+
+    startConfigWatcher()
+    const background = getBackgroundModelProviderConfig()
+
+    expect(background.type).toBe('ollama')
+    expect(background.ollamaModel).toBe('bg-ollama')
+    expect(background.modelName).toBeUndefined()
+  })
+
+  it('加载时后台段只保留 type、modelName、ollamaModel', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      modelProvider: globalSection,
+      backgroundModelProvider: {
+        type: 'openai',
+        modelName: 'bg-model',
+        ollamaModel: 'bg-ollama',
+        openaiApiKey: 'sk-stale',
+        openaiApiKeyFromEnv: true,
+        openaiBaseUrl: 'https://stale.example',
+        maxTokens: 5,
+      },
+    }))
+    const { startConfigWatcher, getRawBackgroundModelProviderConfig, getBackgroundModelProviderConfig } = await import('./index.js')
+
+    startConfigWatcher()
+
+    expect(getRawBackgroundModelProviderConfig()).toEqual({ type: 'openai', modelName: 'bg-model', ollamaModel: 'bg-ollama' })
+    expect(getBackgroundModelProviderConfig()).toMatchObject({ openaiApiKey: 'sk-global-o', openaiBaseUrl: 'https://proxy.example/v1', maxTokens: 2000 })
+  })
+
+  it('写回时合并结果与写入的后台段只保留 type、modelName、ollamaModel，磁盘上的旧字段被清除', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      modelProvider: globalSection,
+      backgroundModelProvider: { type: 'openai', modelName: 'bg-model', openaiApiKey: 'sk-stale', maxTokens: 5 },
+    }))
+    const { updateBackgroundModelProviderConfig, getRawBackgroundModelProviderConfig } = await import('./index.js')
+
+    const result = updateBackgroundModelProviderConfig({
+      modelName: 'bg-model-2',
+      anthropicApiKey: 'sk-new',
+      maxTokens: 9,
+    } as never)
+
+    expect(result).toEqual({ type: 'openai', modelName: 'bg-model-2' })
+    const [, written] = writeFileSyncMock.mock.calls[0]
+    expect(JSON.parse(written as string).backgroundModelProvider).toEqual({ type: 'openai', modelName: 'bg-model-2' })
+    expect(getRawBackgroundModelProviderConfig()).toEqual({ type: 'openai', modelName: 'bg-model-2' })
   })
 })
 

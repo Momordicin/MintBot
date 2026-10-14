@@ -5,6 +5,34 @@ import { db, checkpointTruncate } from '../db/index.js'
 import { DEFAULT_DISPLAY_CONFIG, parseDisplayConfig } from './displayConfig.js'
 import type { Message, Session, Preset, PresetSnapshot, MessageEntity, Summary, EmotionState, PresetDisplayConfig } from '../../../shared/types/index.js'
 
+export type PresetKeyProvider = 'anthropic' | 'openai' | 'deepseek'
+
+export interface PresetProviderCredential {
+  apiKey?: string
+  fromEnv: boolean
+  summaryApiKey?: string
+  summaryFromEnv?: boolean
+}
+
+export type PresetCredentials = Record<PresetKeyProvider, PresetProviderCredential>
+
+export interface PresetApiKeyUpdate {
+  provider: PresetKeyProvider
+  apiKey?: string
+  fromEnv?: boolean
+  summaryApiKey?: string
+  summaryFromEnv?: boolean
+}
+
+export type PresetModelType = 'anthropic' | 'openai' | 'ollama' | 'deepseek'
+
+export interface PresetSummaryUpdate {
+  model?: { modelType: PresetModelType | null; modelName: string | null }
+  keyUpdate?: PresetApiKeyUpdate
+}
+
+const KEY_PROVIDER_LIST: readonly PresetKeyProvider[] = ['anthropic', 'openai', 'deepseek']
+
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every(item => typeof item === 'string')
 }
@@ -48,7 +76,7 @@ export function getAllPresets(): Preset[] {
   }))
 }
 
-export function upsertPreset(preset: Omit<Preset, 'createdAt' | 'updatedAt' | 'displayConfig' | 'addressForms'> & { displayConfig?: PresetDisplayConfig; addressForms?: string[] }): void {
+export function upsertPreset(preset: Omit<Preset, 'createdAt' | 'updatedAt' | 'displayConfig' | 'addressForms' | 'summaryModelType' | 'summaryModelName'> & { displayConfig?: PresetDisplayConfig; addressForms?: string[] }): void {
   const now = Date.now()
   db.prepare(`
     INSERT INTO Presets (presetId, name, characterId, modelType, modelName, wallpaperPath, displayConfig, systemPrompt, addressForms, createdAt, updatedAt)
@@ -74,7 +102,7 @@ export function upsertPreset(preset: Omit<Preset, 'createdAt' | 'updatedAt' | 'd
   })
 }
 
-export function createPreset(preset: Omit<Preset, 'createdAt' | 'updatedAt'>): void {
+export function createPreset(preset: Omit<Preset, 'createdAt' | 'updatedAt' | 'summaryModelType' | 'summaryModelName'>): void {
   const now = Date.now()
   db.prepare(`
     INSERT INTO Presets (presetId, name, characterId, modelType, modelName, wallpaperPath, displayConfig, systemPrompt, addressForms, createdAt, updatedAt)
@@ -115,13 +143,79 @@ export function updatePresetAddressForms(presetId: string, addressForms: string[
     .run(JSON.stringify(addressForms), Date.now(), presetId)
 }
 
+export function getPresetApiKeys(presetId: string): PresetCredentials {
+  const credentials: PresetCredentials = {
+    anthropic: { fromEnv: false, summaryFromEnv: false },
+    openai: { fromEnv: false, summaryFromEnv: false },
+    deepseek: { fromEnv: false, summaryFromEnv: false },
+  }
+  const rows = db.prepare(`SELECT provider, apiKey, fromEnv, summaryApiKey, summaryFromEnv FROM PresetApiKeys WHERE presetId = ?`)
+    .all(presetId) as { provider: string; apiKey: string | null; fromEnv: number; summaryApiKey: string | null; summaryFromEnv: number }[]
+  for (const row of rows) {
+    if (!KEY_PROVIDER_LIST.includes(row.provider as PresetKeyProvider)) continue
+    credentials[row.provider as PresetKeyProvider] = {
+      ...(row.apiKey ? { apiKey: row.apiKey } : {}),
+      fromEnv: row.fromEnv === 1,
+      ...(row.summaryApiKey ? { summaryApiKey: row.summaryApiKey } : {}),
+      summaryFromEnv: row.summaryFromEnv === 1,
+    }
+  }
+  return credentials
+}
+
+function writePresetApiKey(presetId: string, update: PresetApiKeyUpdate): void {
+  const existing = db.prepare(`SELECT apiKey, fromEnv, summaryApiKey, summaryFromEnv FROM PresetApiKeys WHERE presetId = ? AND provider = ?`)
+    .get(presetId, update.provider) as { apiKey: string | null; fromEnv: number; summaryApiKey: string | null; summaryFromEnv: number } | undefined
+  db.prepare(`
+    INSERT INTO PresetApiKeys (presetId, provider, apiKey, fromEnv, summaryApiKey, summaryFromEnv)
+    VALUES (@presetId, @provider, @apiKey, @fromEnv, @summaryApiKey, @summaryFromEnv)
+    ON CONFLICT(presetId, provider) DO UPDATE SET
+      apiKey = excluded.apiKey,
+      fromEnv = excluded.fromEnv,
+      summaryApiKey = excluded.summaryApiKey,
+      summaryFromEnv = excluded.summaryFromEnv
+  `).run({
+    presetId,
+    provider: update.provider,
+    apiKey: update.apiKey ?? existing?.apiKey ?? null,
+    fromEnv: (update.fromEnv ?? existing?.fromEnv === 1) ? 1 : 0,
+    summaryApiKey: update.summaryApiKey ?? existing?.summaryApiKey ?? null,
+    summaryFromEnv: (update.summaryFromEnv ?? existing?.summaryFromEnv === 1) ? 1 : 0,
+  })
+}
+
+function writesSecret(update: PresetApiKeyUpdate | undefined): boolean {
+  return update?.apiKey !== undefined || update?.summaryApiKey !== undefined
+}
+
+export function upsertPresetApiKey(presetId: string, update: PresetApiKeyUpdate): void {
+  writePresetApiKey(presetId, update)
+  if (writesSecret(update)) checkpointTruncate('[Presets]')
+}
+
 export function updatePresetModelConfig(
   presetId: string,
-  modelType: 'anthropic' | 'openai' | 'ollama' | 'deepseek' | null,
-  modelName: string | null
+  modelType: PresetModelType | null,
+  modelName: string | null,
+  keyUpdate?: PresetApiKeyUpdate,
+  summary?: PresetSummaryUpdate
 ): void {
-  db.prepare(`UPDATE Presets SET modelType = ?, modelName = ?, updatedAt = ? WHERE presetId = ?`)
-    .run(modelType, modelName, Date.now(), presetId)
+  db.transaction(() => {
+    db.prepare(`UPDATE Presets SET modelType = ?, modelName = ?, updatedAt = ? WHERE presetId = ?`)
+      .run(modelType, modelName, Date.now(), presetId)
+    if (summary?.model) {
+      db.prepare(`UPDATE Presets SET summaryModelType = ?, summaryModelName = ? WHERE presetId = ?`)
+        .run(summary.model.modelType, summary.model.modelName, presetId)
+    }
+    if (keyUpdate) writePresetApiKey(presetId, keyUpdate)
+    if (summary?.keyUpdate) writePresetApiKey(presetId, summary.keyUpdate)
+  })()
+  if (writesSecret(keyUpdate) || writesSecret(summary?.keyUpdate)) checkpointTruncate('[Presets]')
+}
+
+export function getPresetIdBySession(sessionId: string): string | null {
+  const row = db.prepare(`SELECT presetId FROM Sessions WHERE sessionId = ?`).get(sessionId) as { presetId: string } | undefined
+  return row?.presetId ?? null
 }
 
 export function getMostRecentOtherPresetId(excludePresetId: string): string | null {
@@ -674,6 +768,7 @@ export function deletePresetWithData(presetId: string): void {
       db.prepare(`DELETE FROM Sessions WHERE sessionId = ?`).run(sessionId)
     }
 
+    db.prepare(`DELETE FROM PresetApiKeys WHERE presetId = ?`).run(presetId)
     db.prepare(`DELETE FROM Presets WHERE presetId = ?`).run(presetId)
   })
   run()

@@ -194,6 +194,35 @@ function runMigrations(): { needsFtsBackfill: boolean } {
     console.log('[DB] Migration v11: enabled message_fts secure-delete, rewrote the database file to purge deleted content')
   }
 
+  if (current < 12) {
+    db.transaction(() => {
+      db.exec(`
+        CREATE TABLE PresetApiKeys (
+          presetId TEXT NOT NULL,
+          provider TEXT NOT NULL CHECK(provider IN ('anthropic', 'openai', 'deepseek')),
+          apiKey   TEXT,
+          fromEnv  INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (presetId, provider)
+        )
+      `)
+      db.pragma('user_version = 12')
+    })()
+    console.log('[DB] Migration v12: created PresetApiKeys table')
+  }
+
+  if (current < 13) {
+    db.transaction(() => {
+      db.exec(`
+        ALTER TABLE PresetApiKeys ADD COLUMN summaryApiKey TEXT;
+        ALTER TABLE PresetApiKeys ADD COLUMN summaryFromEnv INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE Presets ADD COLUMN summaryModelType TEXT CHECK(summaryModelType IS NULL OR summaryModelType IN ('anthropic', 'openai', 'ollama', 'deepseek'));
+        ALTER TABLE Presets ADD COLUMN summaryModelName TEXT;
+      `)
+      db.pragma('user_version = 13')
+    })()
+    console.log('[DB] Migration v13: added role summary model columns to Presets and PresetApiKeys')
+  }
+
   return { needsFtsBackfill }
 }
 

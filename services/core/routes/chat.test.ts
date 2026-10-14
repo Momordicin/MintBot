@@ -5,7 +5,7 @@ import type { FastifyReply } from 'fastify'
 import { initDb, db } from '../db/index.js'
 import { upsertPreset, getEmotionState } from '../session/queries.js'
 import * as queries from '../session/queries.js'
-import { loadSession, getHistory } from '../session/index.js'
+import { loadSession, getHistory, getCurrentState } from '../session/index.js'
 import { getLastAttentionAt, isExplicitSleep, markExplicitSleep, recordAttention } from '../session/attention.js'
 import { chatRoutes } from './chat.js'
 import * as ModelProviderModule from '../providers/ModelProvider.js'
@@ -15,6 +15,20 @@ import * as ConfigModule from '../config/index.js'
 import type { ModelProvider } from '../providers/ModelProvider.js'
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
 import { RENDERER_ORIGINS } from '../config/ports.js'
+
+const { openaiCtorMock, openaiCreateMock } = vi.hoisted(() => ({
+  openaiCtorMock: vi.fn(),
+  openaiCreateMock: vi.fn(),
+}))
+
+vi.mock('openai', () => ({
+  default: class {
+    chat = { completions: { create: openaiCreateMock } }
+    constructor(options: unknown) {
+      openaiCtorMock(options)
+    }
+  },
+}))
 
 // emotion 双发（TDD §3.3）：私有流照常发送，broadcastEvent 只是额外调用，本文件不关心
 // broadcast.ts 自己的注册表/写入机制（那是 broadcast.test.ts 的职责），这里只验证 chat.ts
@@ -626,6 +640,19 @@ describe('POST /chat', () => {
     expect(db.prepare('SELECT COUNT(*) as count FROM Messages WHERE sessionId = ?').get(session.sessionId)).toEqual({ count: 0 })
   })
 
+  it('环境变量中的 API Key 不可用：聊天窗口收到 API key 无效或未配置，日志不带用户消息，不入库', async () => {
+    const { session } = loadSession('p1')
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fastify = await buildThrowingApp(new Error('[ModelProvider] OpenAI API key environment variable is not available'))
+
+    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '用户消息-内容-环境' } })
+
+    expect(errorSpy).toHaveBeenCalled()
+    expect(loggedText(errorSpy)).not.toContain('用户消息-内容-环境')
+    expect(parseSSE(response.payload).find(e => e.event === 'system')?.data).toMatchObject({ payload: { message: 'API key 无效或未配置' }, sessionId: session.sessionId })
+    expect(db.prepare('SELECT COUNT(*) as count FROM Messages WHERE sessionId = ?').get(session.sessionId)).toEqual({ count: 0 })
+  })
+
   it('createModelProviderForPreset 构造时抛配置错误：走同一条失败路径（SSE system error、不入库、日志不带用户消息）', async () => {
     const { session } = loadSession('p1')
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -700,7 +727,7 @@ describe('POST /chat', () => {
 
     await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
 
-    expect(createSpy).toHaveBeenCalledWith(preset, { type: 'ollama', ollamaModel: 'qwen3' })
+    expect(createSpy).toHaveBeenCalledWith(preset, { type: 'ollama', ollamaModel: 'qwen3' }, getCurrentState()!.credentials)
   })
 
   it('客户端提前断开（reply.raw 触发 close）：signal 被传给 provider，断开后不再写入/结束响应', async () => {
@@ -1362,5 +1389,86 @@ describe('POST /chat — 表情包挑选（emote 字段，TDD §3.9「表情包�
     } finally {
       randomSpy.mockRestore()
     }
+  })
+})
+
+describe('POST /chat — 角色单独配置的 API Key', () => {
+  const globalConfig = { type: 'ollama' as const, ollamaModel: 'qwen3', openaiApiKey: 'global-key', openaiApiKeyFromEnv: false }
+
+  async function chatOnce() {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fastify = Fastify()
+    fastify.decorate('streamingEnabled', false)
+    fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
+    await fastify.register(chatRoutes)
+    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+    return { events: parseSSE(response.payload), errorSpy }
+  }
+
+  beforeEach(() => {
+    db.exec(`DELETE FROM PresetApiKeys`)
+    openaiCtorMock.mockReset()
+    openaiCreateMock.mockReset()
+    openaiCreateMock.mockResolvedValue({ choices: [{ message: { content: JSON.stringify({ reply: '嗯嗯' }) } }] })
+  })
+
+  it('角色单独配置 openai：使用该角色保存的 key，不使用全局 key', async () => {
+    queries.updatePresetModelConfig('p1', 'openai', 'gpt-4o-mini', { provider: 'openai', apiKey: 'role-key' })
+    loadSession('p1')
+    vi.mocked(ConfigModule.getModelProviderConfig).mockReturnValueOnce(globalConfig)
+
+    const { events } = await chatOnce()
+
+    expect(events.find(e => e.event === 'message_done')?.data.text).toBe('嗯嗯')
+    expect(openaiCtorMock).toHaveBeenCalledTimes(1)
+    expect(openaiCtorMock.mock.calls[0][0].apiKey).toBe('role-key')
+    expect(openaiCreateMock.mock.calls[0][0].model).toBe('gpt-4o-mini')
+  })
+
+  it('角色单独配置但没有 key：不回落到全局 key，不发请求，提示 Model call failed', async () => {
+    queries.updatePresetModelConfig('p1', 'openai', 'gpt-4o-mini')
+    loadSession('p1')
+    vi.mocked(ConfigModule.getModelProviderConfig).mockReturnValueOnce(globalConfig)
+
+    const { events, errorSpy } = await chatOnce()
+
+    expect(events.find(e => e.event === 'system')?.data.payload.message).toBe('Model call failed')
+    expect(openaiCtorMock).not.toHaveBeenCalled()
+    expect(openaiCreateMock).not.toHaveBeenCalled()
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain('global-key')
+  })
+
+  it('角色勾选环境变量但环境里没有：不发请求，提示 API key 无效或未配置，不回落到已保存或全局 key', async () => {
+    queries.updatePresetModelConfig('p1', 'openai', 'gpt-4o-mini', { provider: 'openai', apiKey: 'role-key', fromEnv: true })
+    loadSession('p1')
+    vi.mocked(ConfigModule.getModelProviderConfig).mockReturnValueOnce(globalConfig)
+
+    const { events } = await chatOnce()
+
+    expect(events.find(e => e.event === 'system')?.data.payload.message).toBe('API key 无效或未配置')
+    expect(openaiCtorMock).not.toHaveBeenCalled()
+    expect(openaiCreateMock).not.toHaveBeenCalled()
+  })
+
+  it('使用全局配置的角色：仍使用全局 key，不受角色 key 行影响', async () => {
+    queries.updatePresetModelConfig('p1', null, null)
+    queries.upsertPresetApiKey('p1', { provider: 'openai', apiKey: 'role-key' })
+    loadSession('p1')
+    vi.mocked(ConfigModule.getModelProviderConfig).mockReturnValueOnce({ ...globalConfig, type: 'openai', modelName: 'gpt-4o' })
+
+    await chatOnce()
+
+    expect(openaiCtorMock.mock.calls[0][0].apiKey).toBe('global-key')
+  })
+
+  it('聊天用的是会话内存里的凭据：数据库里的 key 变了但未刷新时仍用旧 key', async () => {
+    queries.updatePresetModelConfig('p1', 'openai', 'gpt-4o-mini', { provider: 'openai', apiKey: 'role-key' })
+    loadSession('p1')
+    queries.upsertPresetApiKey('p1', { provider: 'openai', apiKey: 'role-key-new' })
+    vi.mocked(ConfigModule.getModelProviderConfig).mockReturnValueOnce(globalConfig)
+
+    await chatOnce()
+
+    expect(openaiCtorMock.mock.calls[0][0].apiKey).toBe('role-key')
   })
 })

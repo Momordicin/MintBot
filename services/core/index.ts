@@ -23,10 +23,11 @@ import { configRoutes } from './routes/config.js'
 import { windowBehaviorRoutes, broadcastWindowBehaviorSnapshot } from './routes/windowBehavior.js'
 import { transitionChainRoutes } from './routes/transitionChain.js'
 import { createModelProvider, ModelProvider } from './providers/ModelProvider.js'
+import { wipeCredentialEnv } from './providers/envCredentials.js'
 import { BGEProvider, getAiBaseUrl, type EmbeddingProvider } from './providers/EmbeddingProvider.js'
 import { Bert4NerProvider, type NERProvider } from './providers/NERProvider.js'
 import { startConfigWatcher, getModelProviderConfig, getBackgroundModelProviderConfig, getDefaultPresetId } from './config/index.js'
-import { ensureOllama, stopOllamaIfManaged } from './providers/ollama.js'
+import { ensureOllama, shouldEnsureOllama, stopOllamaIfManaged } from './providers/ollama.js'
 import { ensureAiService, stopAiServiceIfManaged } from './providers/aiService.js'
 import { startOrganizeModeScheduler } from './memory/orchestrator.js'
 import { buildStatePayload } from './state.js'
@@ -69,6 +70,8 @@ fastify.get('/state', async () => buildStatePayload())
 let organizeModeTask: ReturnType<typeof startOrganizeModeScheduler> | undefined
 
 async function start() {
+  wipeCredentialEnv()
+
   process.on('SIGINT', async () => {
     organizeModeTask?.stop()
     await stopOllamaIfManaged()
@@ -111,9 +114,9 @@ async function start() {
 
   organizeModeTask = startOrganizeModeScheduler(fastify)
 
-  const anyPresetUsesOllama = getAllPresets().some(p => p.modelType === 'ollama')
+  const anyPresetUsesOllama = getAllPresets().some(p => p.modelType === 'ollama' || (p.modelType !== null && p.summaryModelType === 'ollama'))
   const modelConfig = getModelProviderConfig()
-  if (modelConfig.type === 'ollama' || anyPresetUsesOllama) {
+  if (shouldEnsureOllama(modelConfig.type, getBackgroundModelProviderConfig().type, anyPresetUsesOllama)) {
     await ensureOllama(modelConfig.ollamaBaseUrl)
   }
 

@@ -24,6 +24,8 @@ export async function buildStatePayload() {
       systemPrompt: preset?.systemPrompt ?? frozenSnapshot.systemPrompt,
       modelType: preset ? preset.modelType : frozenSnapshot.modelType,
       modelName: preset ? preset.modelName : frozenSnapshot.modelName,
+      summaryModelType: preset ? preset.summaryModelType : (frozenSnapshot.summaryModelType ?? null),
+      summaryModelName: preset ? preset.summaryModelName : (frozenSnapshot.summaryModelName ?? null),
     }
   }
 
