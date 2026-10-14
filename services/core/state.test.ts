@@ -13,14 +13,14 @@ vi.mock('./config/index.js', () => ({
 
 initDb()
 
-// buildStatePayload 本身依赖较多状态（session/preset/emotion 等），这里只关心 embeddingReady
-// 这一个字段是否正确复用 isEmbeddingReady（与 GET /embedding-ready 共用同一逻辑，见 EmbeddingProvider.ts）
-describe('buildStatePayload — embeddingReady', () => {
+// buildStatePayload 本身依赖较多状态（session/preset/emotion 等），这里只关心 aiAvailable
+// 这一个字段是否正确复用 isAiServiceAvailable（与 GET /ai-available 共用同一逻辑，见 EmbeddingProvider.ts）
+describe('buildStatePayload — aiAvailable', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  it('AI 服务健康检查返回 embedding_loaded=true 时，embeddingReady 为 true', async () => {
+  it('AI 服务健康检查身份匹配且 embedding_loaded=true 时，aiAvailable 为 true', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ status: 'ok', service: 'mintbot-ai', embedding_loaded: true, ner_loaded: false }),
@@ -28,10 +28,10 @@ describe('buildStatePayload — embeddingReady', () => {
 
     const payload = await buildStatePayload()
 
-    expect(payload.embeddingReady).toBe(true)
+    expect(payload.aiAvailable).toBe(true)
   })
 
-  it('AI 服务健康检查返回 embedding_loaded=false 时，embeddingReady 为 false', async () => {
+  it('AI 服务健康检查身份匹配但 embedding_loaded=false 时，aiAvailable 仍为 true', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ status: 'ok', service: 'mintbot-ai', embedding_loaded: false, ner_loaded: false }),
@@ -39,15 +39,15 @@ describe('buildStatePayload — embeddingReady', () => {
 
     const payload = await buildStatePayload()
 
-    expect(payload.embeddingReady).toBe(false)
+    expect(payload.aiAvailable).toBe(true)
   })
 
-  it('AI 服务不可达时，embeddingReady 为 false，不向上抛出', async () => {
+  it('AI 服务不可达时，aiAvailable 为 false，不向上抛出', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')))
 
     const payload = await buildStatePayload()
 
-    expect(payload.embeddingReady).toBe(false)
+    expect(payload.aiAvailable).toBe(false)
   })
 })
 

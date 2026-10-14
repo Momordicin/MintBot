@@ -1,5 +1,5 @@
 // src/chat/ChatWindow.tsx — 聊天窗口主界面：加载当前预设与历史消息，发送消息并读取回复，按预设显示配置应用壁纸、头像与主题色
-// 用法：App 渲染 <ChatWindow />；GET /state、/embedding-ready、/messages、/characters/:id/manifest.json，POST /chat（读 SSE：message_done / system），GET /events（preset-switched）；调用 electronAPI.setTitlebarOverlay
+// 用法：App 渲染 <ChatWindow />；GET /state、/ai-available、/messages、/characters/:id/manifest.json，POST /chat（读 SSE：message_done / system），GET /events（preset-switched）；调用 electronAPI.setTitlebarOverlay
 // 对应文件：src/App.tsx / src/chat/MessageList.tsx / src/chat/InputBar.tsx / src/chat/TitleBar.tsx / src/chat/MessageBubble.tsx / src/chat/sse.ts / src/chat/theme.ts / src/eventsWatchdog.ts / services/core/index.ts / services/core/routes/chat.ts / services/core/routes/messages.ts / services/core/routes/status.ts / services/core/routes/events.ts / electron/main/index.ts（titlebar:set-overlay）
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { MessageList } from './MessageList'
@@ -18,6 +18,9 @@ import { CORE_URL, resolveAssetUrl } from '../coreUrl.js'
 const DEFAULT_WALLPAPER_URL = `${CORE_URL}/wallpapers/bg.jpg`
 const INITIAL_HISTORY_LIMIT = 3
 const LOAD_MORE_HISTORY_LIMIT = 20
+const AVATAR_DIM_AFTER_MS = 20 * 60 * 1000
+
+type AvatarDimMode = 'none' | 'startup' | 'switch'
 
 let localMessageSeq = 0
 function nextLocalMessageId(): string {
@@ -47,11 +50,11 @@ function wallpaperUrlFor(snapshot: PresetSnapshot | null): string {
     : DEFAULT_WALLPAPER_URL
 }
 
-function fetchEmbeddingReady(): Promise<boolean | undefined> {
-  return fetch(`${CORE_URL}/embedding-ready`)
+function fetchAiAvailable(): Promise<boolean> {
+  return fetch(`${CORE_URL}/ai-available`)
     .then(r => r.json())
-    .then((data: { embeddingReady: boolean }) => data.embeddingReady)
-    .catch(() => undefined)
+    .then((data: { aiAvailable: boolean }) => data.aiAvailable)
+    .catch(() => false)
 }
 
 interface AvatarUrls {
@@ -80,7 +83,7 @@ export function ChatWindow() {
   const [isReplying, setIsReplying] = useState(false)
   const [appState, setAppState] = useState<AppState | null>(null)
   const prefersDark = usePrefersDark()
-  const [embeddingReady, setEmbeddingReady] = useState<boolean>(false)
+  const [avatarDimmed, setAvatarDimmed] = useState<boolean>(true)
   const [wallpaperUrl, setWallpaperUrl] = useState<string | null>(null)
   const [avatarUrl, setAvatarUrl] = useState<string | undefined>(undefined)
   const [userAvatarUrl, setUserAvatarUrl] = useState<string | undefined>(undefined)
@@ -91,11 +94,14 @@ export function ChatWindow() {
   const activeControllersRef = useRef<Set<AbortController>>(new Set())
   const sessionSyncControllerRef = useRef<AbortController | null>(null)
   const appStateRef = useRef<AppState | null>(null)
-  const hasCompletedInitialWarmupRef = useRef(false)
+  const avatarDimTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const startupHandledRef = useRef(false)
 
   useEffect(() => {
     appStateRef.current = appState
   }, [appState])
+
+  useEffect(() => clearAvatarDimTimer, [])
 
   useEffect(() => {
     if (hasFetched.current) return
@@ -104,12 +110,13 @@ export function ChatWindow() {
     fetch(`${CORE_URL}/state`)
       .then(r => r.json())
       .then((state: AppState) => {
-        if (sessionSyncControllerRef.current) return
+        if (startupHandledRef.current) return
+        startupHandledRef.current = true
         const controller = new AbortController()
         sessionSyncControllerRef.current = controller
 
         setAppState(state)
-        setEmbeddingReady(state.embeddingReady)
+        appStateRef.current = state
         setWallpaperUrl(wallpaperUrlFor(state.presetSnapshot))
         if (state.presetSnapshot?.characterId) {
           fetchAvatarUrls(state.presetSnapshot.characterId, controller.signal).then(urls => {
@@ -118,30 +125,12 @@ export function ChatWindow() {
             setUserAvatarUrl(urls.userAvatarUrl)
           })
         }
-        if (state.sessionId) {
-          loadInitialMessages(state.sessionId, controller.signal)
-        }
+        beginSession(state, true, controller.signal)
       })
       .catch(() => {
         addSystemMessage('无法连接核心服务，请确认服务已启动', true)
       })
   }, [])
-
-  useEffect(() => {
-    if (embeddingReady) {
-      hasCompletedInitialWarmupRef.current = true
-      return
-    }
-    if (hasCompletedInitialWarmupRef.current) return
-
-    const interval = setInterval(() => {
-      fetchEmbeddingReady().then(ready => {
-        if (ready !== undefined) setEmbeddingReady(ready)
-      })
-    }, 3000)
-
-    return () => clearInterval(interval)
-  }, [embeddingReady])
 
   useEffect(() => {
     const syncSessionOnFocus = async () => {
@@ -152,7 +141,11 @@ export function ChatWindow() {
         setAppState(state)
         setWallpaperUrl(wallpaperUrlFor(state.presetSnapshot))
 
-        if (state.sessionId === appStateRef.current?.sessionId) return
+        const isStartup = !startupHandledRef.current
+        if (!isStartup && state.sessionId === appStateRef.current?.sessionId) return
+        startupHandledRef.current = true
+        appStateRef.current = state
+        if (!isStartup) clearAvatarDimTimer()
 
         activeControllersRef.current.forEach(controller => controller.abort())
         activeControllersRef.current.clear()
@@ -167,9 +160,7 @@ export function ChatWindow() {
         setHasMoreHistory(false)
         oldestMessageIdRef.current = null
         isLoadingMoreRef.current = false
-        if (state.sessionId) {
-          loadInitialMessages(state.sessionId, controller.signal)
-        }
+        beginSession(state, isStartup, controller.signal)
 
         const nextUrls: AvatarUrls = state.presetSnapshot?.characterId
           ? await fetchAvatarUrls(state.presetSnapshot.characterId, controller.signal)
@@ -182,9 +173,6 @@ export function ChatWindow() {
     }
 
     const handler = () => {
-      fetchEmbeddingReady().then(ready => {
-        if (ready !== undefined) setEmbeddingReady(ready)
-      })
       syncSessionOnFocus()
     }
     window.addEventListener('focus', handler)
@@ -233,7 +221,70 @@ export function ChatWindow() {
     root.style.colorScheme = resolvedMode === 'day' ? 'light' : 'dark'
   }, [theme, chatBgOpacity, resolvedMode])
 
-  async function loadInitialMessages(sessionId: string, signal: AbortSignal) {
+  function clearAvatarDimTimer() {
+    if (avatarDimTimerRef.current !== null) {
+      clearTimeout(avatarDimTimerRef.current)
+      avatarDimTimerRef.current = null
+    }
+  }
+
+  function armAvatarDimTimer(delayMs: number) {
+    clearAvatarDimTimer()
+    avatarDimTimerRef.current = setTimeout(() => {
+      avatarDimTimerRef.current = null
+      setAvatarDimmed(true)
+    }, delayMs)
+  }
+
+  function syncAvatarDim(lastChatMessageAt: number) {
+    const remainingMs = AVATAR_DIM_AFTER_MS - (Date.now() - lastChatMessageAt)
+    if (remainingMs <= 0) {
+      clearAvatarDimTimer()
+      setAvatarDimmed(true)
+      return
+    }
+    setAvatarDimmed(false)
+    armAvatarDimTimer(remainingMs)
+  }
+
+  function applyNoHistoryAvatarDim(mode: AvatarDimMode, signal: AbortSignal) {
+    if (mode === 'none' || signal.aborted) return
+    if (mode === 'startup') {
+      setAvatarDimmed(false)
+      armAvatarDimTimer(AVATAR_DIM_AFTER_MS)
+      return
+    }
+    fetchAiAvailable().then(available => {
+      if (signal.aborted) return
+      if (available) {
+        setAvatarDimmed(false)
+        armAvatarDimTimer(AVATAR_DIM_AFTER_MS)
+      } else {
+        clearAvatarDimTimer()
+        setAvatarDimmed(true)
+      }
+    })
+  }
+
+  function beginSession(state: AppState, isStartup: boolean, signal: AbortSignal) {
+    let mode: AvatarDimMode = 'switch'
+    if (isStartup) {
+      if (state.aiAvailable) {
+        mode = 'startup'
+      } else {
+        mode = 'none'
+        clearAvatarDimTimer()
+        setAvatarDimmed(true)
+      }
+    }
+    if (state.sessionId) {
+      loadInitialMessages(state.sessionId, signal, mode)
+    } else {
+      applyNoHistoryAvatarDim(mode, signal)
+    }
+  }
+
+  async function loadInitialMessages(sessionId: string, signal: AbortSignal, mode: AvatarDimMode) {
     try {
       const response = await fetch(
         `${CORE_URL}/messages?sessionId=${encodeURIComponent(sessionId)}&limit=${INITIAL_HISTORY_LIMIT}`,
@@ -248,9 +299,18 @@ export function ChatWindow() {
       setHasMoreHistory(page.hasMore)
       oldestMessageIdRef.current = page.messages[0]?.id ?? null
       setInitialLoadSignal(n => n + 1)
+      if (mode !== 'none') {
+        const lastChatMessage = page.messages.filter(m => m.role !== 'system').pop()
+        if (lastChatMessage) {
+          syncAvatarDim(lastChatMessage.createdAt)
+        } else {
+          applyNoHistoryAvatarDim(mode, signal)
+        }
+      }
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
       addSystemMessage('加载历史消息失败', true)
+      applyNoHistoryAvatarDim(mode, signal)
     }
   }
 
@@ -296,12 +356,6 @@ export function ChatWindow() {
   }
 
   const sendMessage = useCallback(async (text: string) => {
-    if (activeControllersRef.current.size === 0) {
-      fetchEmbeddingReady().then(ready => {
-        if (ready !== undefined) setEmbeddingReady(ready)
-      })
-    }
-
     setMessages(prev => [...prev, {
       id: nextLocalMessageId(),
       role: 'user' as const,
@@ -337,6 +391,16 @@ export function ChatWindow() {
             content: replyText,
             createdAt: Date.now(),
           }])
+          fetchAiAvailable().then(available => {
+            if (replySessionId !== appStateRef.current?.sessionId) return
+            if (available) {
+              setAvatarDimmed(false)
+              armAvatarDimTimer(AVATAR_DIM_AFTER_MS)
+            } else {
+              clearAvatarDimTimer()
+              setAvatarDimmed(true)
+            }
+          })
         }
 
         if (event === 'system') {
@@ -360,7 +424,7 @@ export function ChatWindow() {
 
   return (
     <div
-      className={`chat-window${embeddingReady ? '' : ' chat-window--embedding-not-ready'}`}
+      className={`chat-window${avatarDimmed ? ' chat-window--avatar-dimmed' : ''}`}
       style={wallpaperUrl ? { backgroundImage: `url(${wallpaperUrl})` } : undefined}
     >
       <TitleBar avatarUrl={avatarUrl} displayName={displayName} />

@@ -133,9 +133,9 @@
   color: var(--titlebar-text);
 }
 
-/* ─── Embedding 未就绪：头像置灰 ───────────────────────── */
+/* ─── AI 服务不可用或久未对话：头像置灰 ───────────────────────── */
 
-.chat-window--embedding-not-ready .msg-row--bot .msg-avatar img {
+.chat-window--avatar-dimmed .msg-row--bot .msg-avatar img {
   filter: grayscale(100%);
 }
 
