@@ -1,5 +1,5 @@
 // services/core/providers/ollama.ts — Ollama 本地模型服务的探测、模型列表查询，以及未运行时由 core 启动 `ollama serve`
-// 用法：index.ts 的 start() 在配置或任一预设使用 ollama 时调 ensureOllama(baseUrl)（等待至多 30 秒），SIGINT/SIGTERM 时调 stopOllamaIfManaged()（仅停止自己启动的进程）；routes/models.ts 调 listOllamaModels / getOllamaBaseUrl；state.ts 调 isOllamaRunning
+// 用法：index.ts 的 start() 用 shouldEnsureOllama 判断对话模型、后台模型或任一预设是否使用 ollama，是则调 ensureOllama(baseUrl)（等待至多 30 秒），SIGINT/SIGTERM 时调 stopOllamaIfManaged()（仅停止自己启动的进程）；routes/models.ts 调 listOllamaModels / getOllamaBaseUrl；state.ts 调 isOllamaRunning
 // 对应文件：services/core/index.ts / services/core/routes/models.ts / services/core/state.ts / services/core/providers/ollama.test.ts
 import { spawn, ChildProcess } from 'child_process'
 
@@ -7,7 +7,7 @@ let ollamaProcess: ChildProcess | null = null
 let ollamaManagedByUs = false
 
 export function getOllamaBaseUrl(baseUrl?: string): string {
-  return baseUrl ?? 'http://localhost:11434'
+  return baseUrl || 'http://localhost:11434'
 }
 
 export async function isOllamaRunning(baseUrl: string): Promise<boolean> {
@@ -44,6 +44,10 @@ async function waitForOllama(baseUrl: string, timeoutMs = 30000): Promise<void> 
     await new Promise(r => setTimeout(r, 1000))
   }
   throw new Error('[Ollama] Timed out waiting for Ollama to start')
+}
+
+export function shouldEnsureOllama(chatType: string, backgroundType: string, anyPresetUsesOllama: boolean): boolean {
+  return chatType === 'ollama' || backgroundType === 'ollama' || anyPresetUsesOllama
 }
 
 export async function ensureOllama(ollamaBaseUrl?: string): Promise<void> {

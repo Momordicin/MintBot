@@ -691,6 +691,10 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
 }
 
 .model-config-panel__section {
@@ -700,6 +704,12 @@
   border: 1px solid var(--input-border);
   border-radius: 6px;
   padding: 10px 12px;
+}
+
+.model-config-panel__group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .model-config-panel__section-label {

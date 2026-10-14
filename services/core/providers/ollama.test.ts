@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { listOllamaModels } from './ollama.js'
+import { listOllamaModels, shouldEnsureOllama, getOllamaBaseUrl } from './ollama.js'
 
 // listOllamaModels 是 GET /models（CharacterPanel.tsx §2 模型名下拉框）的数据源，
 // 与 isOllamaRunning 同款降级风格测试：只验证成功解析 + 各类失败都降级为空数组，不抛错
@@ -55,5 +55,31 @@ describe('listOllamaModels', () => {
     const result = await listOllamaModels('http://localhost:11434')
 
     expect(result).toEqual(['qwen3'])
+  })
+})
+
+describe('shouldEnsureOllama', () => {
+  it.each([
+    ['ollama', 'anthropic', false, true],
+    ['anthropic', 'ollama', false, true],
+    ['anthropic', 'openai', true, true],
+    ['ollama', 'ollama', false, true],
+    ['anthropic', 'openai', false, false],
+    ['deepseek', 'anthropic', false, false],
+  ])('对话 %s / 后台 %s / 预设使用 ollama=%s 时返回 %s', (chatType, backgroundType, anyPreset, expected) => {
+    expect(shouldEnsureOllama(chatType, backgroundType, anyPreset)).toBe(expected)
+  })
+})
+
+describe('getOllamaBaseUrl', () => {
+  it.each([
+    [undefined],
+    [''],
+  ])('地址为 %j 时使用默认地址', baseUrl => {
+    expect(getOllamaBaseUrl(baseUrl)).toBe('http://localhost:11434')
+  })
+
+  it('地址非空时原样使用', () => {
+    expect(getOllamaBaseUrl('http://192.168.1.5:11434')).toBe('http://192.168.1.5:11434')
   })
 })

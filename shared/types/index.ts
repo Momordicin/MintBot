@@ -7,9 +7,12 @@ import type { PetScale } from '../portraitForm.js'
 export interface ModelConfig {
   type: 'anthropic' | 'openai' | 'ollama' | 'deepseek'
   anthropicApiKey?: string
+  anthropicApiKeyFromEnv?: boolean
   openaiApiKey?: string
+  openaiApiKeyFromEnv?: boolean
   openaiBaseUrl?: string
   deepseekApiKey?: string
+  deepseekApiKeyFromEnv?: boolean
   deepseekBaseUrl?: string
   ollamaBaseUrl?: string
   ollamaModel?: string

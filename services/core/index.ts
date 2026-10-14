@@ -27,7 +27,7 @@ import { wipeCredentialEnv } from './providers/envCredentials.js'
 import { BGEProvider, getAiBaseUrl, type EmbeddingProvider } from './providers/EmbeddingProvider.js'
 import { Bert4NerProvider, type NERProvider } from './providers/NERProvider.js'
 import { startConfigWatcher, getModelProviderConfig, getBackgroundModelProviderConfig, getDefaultPresetId } from './config/index.js'
-import { ensureOllama, stopOllamaIfManaged } from './providers/ollama.js'
+import { ensureOllama, shouldEnsureOllama, stopOllamaIfManaged } from './providers/ollama.js'
 import { ensureAiService, stopAiServiceIfManaged } from './providers/aiService.js'
 import { startOrganizeModeScheduler } from './memory/orchestrator.js'
 import { buildStatePayload } from './state.js'
@@ -116,7 +116,7 @@ async function start() {
 
   const anyPresetUsesOllama = getAllPresets().some(p => p.modelType === 'ollama')
   const modelConfig = getModelProviderConfig()
-  if (modelConfig.type === 'ollama' || anyPresetUsesOllama) {
+  if (shouldEnsureOllama(modelConfig.type, getBackgroundModelProviderConfig().type, anyPresetUsesOllama)) {
     await ensureOllama(modelConfig.ollamaBaseUrl)
   }
 

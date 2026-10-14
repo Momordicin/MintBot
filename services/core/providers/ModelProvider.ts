@@ -1,12 +1,39 @@
 // services/core/providers/ModelProvider.ts — 大语言模型调用封装：按配置类型（anthropic / openai / deepseek / ollama）发起流式 complete 或非流式 completeSync
 // 用法：routes/chat.ts 每次聊天用 createModelProviderForPreset(preset, 全局配置)（预设无模型覆盖则用全局配置）调 complete / completeSync；index.ts 与 routes/config.ts 用 createModelProvider 构建 fastify.modelProvider / backgroundModelProvider，后者的 completeSync 供 orchestrator 驱动 entityExtractor 与 summarizer
-// 对应文件：services/core/routes/chat.ts / services/core/routes/config.ts / services/core/index.ts / services/core/memory/orchestrator.ts / shared/types/index.ts / services/core/providers/ModelProvider.test.ts
+// 对应文件：services/core/routes/chat.ts / services/core/routes/config.ts / services/core/index.ts / services/core/memory/orchestrator.ts / shared/types/index.ts / services/core/providers/envCredentials.ts / services/core/providers/ModelProvider.test.ts
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
 import type { ChatCompletionCreateParamsBase } from 'openai/resources/chat/completions'
 import type { ChatMessage, ModelConfig, CompletionOptions, BuiltContext, Preset } from '../../../shared/types/index.js'
+import { getEnvCredential, type KeyProvider } from './envCredentials.js'
 
 type DeepSeekExtras = { thinking: { type: 'disabled' } }
+
+const KEY_FIELD: Record<KeyProvider, { key: 'anthropicApiKey' | 'openaiApiKey' | 'deepseekApiKey'; fromEnv: 'anthropicApiKeyFromEnv' | 'openaiApiKeyFromEnv' | 'deepseekApiKeyFromEnv'; label: string }> = {
+  anthropic: { key: 'anthropicApiKey', fromEnv: 'anthropicApiKeyFromEnv', label: 'Anthropic' },
+  openai: { key: 'openaiApiKey', fromEnv: 'openaiApiKeyFromEnv', label: 'OpenAI' },
+  deepseek: { key: 'deepseekApiKey', fromEnv: 'deepseekApiKeyFromEnv', label: 'DeepSeek' },
+}
+
+export function resolveApiKey(
+  config: ModelConfig,
+  provider: KeyProvider,
+  readEnvKey: (provider: KeyProvider) => string = getEnvCredential
+): string {
+  const { key, fromEnv, label } = KEY_FIELD[provider]
+  if (config[fromEnv] === true) {
+    const envKey = readEnvKey(provider)
+    if (!envKey) {
+      throw new Error(`[ModelProvider] ${label} API key environment variable is not available`)
+    }
+    return envKey
+  }
+  const saved = config[key]
+  if (!saved) {
+    throw new Error(`[ModelProvider] ${label} API key is not configured`)
+  }
+  return saved
+}
 
 interface OpenAICompatibleOverrides {
   extraBody?: Record<string, unknown>
@@ -24,7 +51,7 @@ export class ModelProvider {
   }
 
   private createAnthropicClient(): Anthropic {
-    const key = ModelProvider.requireApiKey(this.config.anthropicApiKey, 'Anthropic')
+    const key = resolveApiKey(this.config, 'anthropic')
     return new Anthropic({
       apiKey: key,
       authToken: null,
@@ -37,8 +64,8 @@ export class ModelProvider {
 
   private createOpenAIClient(kind: 'openai' | 'deepseek'): OpenAI {
     const key = kind === 'openai'
-      ? ModelProvider.requireApiKey(this.config.openaiApiKey, 'OpenAI')
-      : ModelProvider.requireApiKey(this.config.deepseekApiKey, 'DeepSeek')
+      ? resolveApiKey(this.config, 'openai')
+      : resolveApiKey(this.config, 'deepseek')
     const baseURL = kind === 'openai'
       ? (this.config.openaiBaseUrl || 'https://api.openai.com/v1')
       : (this.config.deepseekBaseUrl || 'https://api.deepseek.com')
@@ -232,7 +259,7 @@ export class ModelProvider {
     options: CompletionOptions
   ): AsyncIterable<string> {
     yield* ModelProvider.callOpenAICompatible(
-      (this.config.ollamaBaseUrl ?? 'http://localhost:11434') + '/v1',
+      (this.config.ollamaBaseUrl || 'http://localhost:11434') + '/v1',
       'ollama',
       this.config.ollamaModel ?? 'qwen3',
       messages,
@@ -260,7 +287,7 @@ export class ModelProvider {
     options: CompletionOptions
   ): Promise<string> {
     return ModelProvider.callOpenAICompatibleSync(
-      (this.config.ollamaBaseUrl ?? 'http://localhost:11434') + '/v1',
+      (this.config.ollamaBaseUrl || 'http://localhost:11434') + '/v1',
       'ollama',
       this.config.ollamaModel ?? 'qwen3',
       messages,
@@ -276,13 +303,6 @@ export class ModelProvider {
         ...(options.jsonMode ? { response_format: { type: 'json_object' } } : {}),
       },
     }
-  }
-
-  private static requireApiKey(apiKey: string | undefined, providerLabel: string): string {
-    if (!apiKey) {
-      throw new Error(`[ModelProvider] ${providerLabel} API key is not configured`)
-    }
-    return apiKey
   }
 
   private static async describeErrorResponse(response: Response): Promise<string> {

@@ -35,6 +35,8 @@ export interface MemoryConfig {
   contextBudget: ContextBudgetConfig
 }
 
+export type BackgroundModelConfig = Pick<ModelConfig, 'type' | 'modelName' | 'ollamaModel'>
+
 export const CONFIG_PATH = path.resolve(process.cwd(), 'config.json')
 
 const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
@@ -72,13 +74,22 @@ export const VALID_APP_RULE_EFFECTS: readonly AppRuleEffect[] = ['allow', 'soft'
 
 let currentMemoryConfig: MemoryConfig = DEFAULT_MEMORY_CONFIG
 let currentModelProviderConfig: ModelConfig | undefined
-let currentBackgroundModelProviderConfig: ModelConfig | undefined
+let currentBackgroundModelProviderConfig: BackgroundModelConfig | undefined
 let currentWindowBehaviorConfig: WindowBehaviorConfig = DEFAULT_WINDOW_BEHAVIOR_CONFIG
 let windowBehaviorRevision = 1
 let windowBehaviorSignature = serializeWindowBehaviorConfig(DEFAULT_WINDOW_BEHAVIOR_CONFIG)
 let windowBehaviorSeeded = false
 let currentDefaultPresetId: string | undefined
 let loaded = false
+
+function pickBackgroundFields(source: unknown): BackgroundModelConfig {
+  const record = (source ?? {}) as Record<string, unknown>
+  const picked: Record<string, unknown> = {}
+  for (const field of ['type', 'modelName', 'ollamaModel']) {
+    if (record[field] !== undefined) picked[field] = record[field]
+  }
+  return picked as BackgroundModelConfig
+}
 
 function mergeNumberField(source: unknown, field: string, fallback: number, label: string): number {
   const value = (source as Record<string, unknown> | undefined)?.[field]
@@ -252,7 +263,7 @@ function load(): LoadResult {
   const backgroundModelProviderRaw = (raw as Record<string, unknown>)?.backgroundModelProvider
   currentBackgroundModelProviderConfig =
     backgroundModelProviderRaw && typeof backgroundModelProviderRaw === 'object'
-      ? (backgroundModelProviderRaw as ModelConfig)
+      ? pickBackgroundFields(backgroundModelProviderRaw)
       : undefined
 
   const windowBehaviorChanged = applyWindowBehaviorConfig(mergeWindowBehaviorConfig(raw))
@@ -305,12 +316,20 @@ export function getModelProviderConfig(): ModelConfig {
 
 export function getBackgroundModelProviderConfig(): ModelConfig {
   ensureLoaded()
-  return currentBackgroundModelProviderConfig ?? getModelProviderConfig()
+  const global = getModelProviderConfig()
+  const background = currentBackgroundModelProviderConfig
+  if (!background) return global
+  return {
+    ...global,
+    type: background.type,
+    modelName: background.modelName,
+    ollamaModel: background.ollamaModel,
+  }
 }
 
-export function getRawBackgroundModelProviderConfig(): ModelConfig | null {
+export function getRawBackgroundModelProviderConfig(): BackgroundModelConfig | null {
   ensureLoaded()
-  return currentBackgroundModelProviderConfig ?? null
+  return currentBackgroundModelProviderConfig ? pickBackgroundFields(currentBackgroundModelProviderConfig) : null
 }
 
 function describeReadError(err: unknown): string {
@@ -342,7 +361,7 @@ function readRawSection(section: 'modelProvider' | 'backgroundModelProvider' | '
 
 type ConfigSectionValue = {
   modelProvider: ModelConfig
-  backgroundModelProvider: ModelConfig
+  backgroundModelProvider: BackgroundModelConfig
   windowBehavior: WindowBehaviorConfig
   defaultPresetId: string
 }
@@ -379,8 +398,8 @@ export function updateModelProviderConfig(partial: Partial<ModelConfig>): ModelC
   return merged
 }
 
-export function updateBackgroundModelProviderConfig(partial: Partial<ModelConfig> | null): ModelConfig | null {
-  const merged = partial === null ? null : ({ ...readRawSection('backgroundModelProvider'), ...partial } as ModelConfig)
+export function updateBackgroundModelProviderConfig(partial: Partial<ModelConfig> | null): BackgroundModelConfig | null {
+  const merged = partial === null ? null : pickBackgroundFields({ ...readRawSection('backgroundModelProvider'), ...partial })
   writeConfigSection('backgroundModelProvider', merged)
   currentBackgroundModelProviderConfig = merged ?? undefined
   loaded = true

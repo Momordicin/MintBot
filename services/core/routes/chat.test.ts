@@ -626,6 +626,19 @@ describe('POST /chat', () => {
     expect(db.prepare('SELECT COUNT(*) as count FROM Messages WHERE sessionId = ?').get(session.sessionId)).toEqual({ count: 0 })
   })
 
+  it('环境变量中的 API Key 不可用：聊天窗口收到 API key 无效或未配置，日志不带用户消息，不入库', async () => {
+    const { session } = loadSession('p1')
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fastify = await buildThrowingApp(new Error('[ModelProvider] OpenAI API key environment variable is not available'))
+
+    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '用户消息-内容-环境' } })
+
+    expect(errorSpy).toHaveBeenCalled()
+    expect(loggedText(errorSpy)).not.toContain('用户消息-内容-环境')
+    expect(parseSSE(response.payload).find(e => e.event === 'system')?.data).toMatchObject({ payload: { message: 'API key 无效或未配置' }, sessionId: session.sessionId })
+    expect(db.prepare('SELECT COUNT(*) as count FROM Messages WHERE sessionId = ?').get(session.sessionId)).toEqual({ count: 0 })
+  })
+
   it('createModelProviderForPreset 构造时抛配置错误：走同一条失败路径（SSE system error、不入库、日志不带用户消息）', async () => {
     const { session } = loadSession('p1')
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})

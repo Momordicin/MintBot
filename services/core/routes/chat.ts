@@ -25,7 +25,9 @@ function enqueue<T>(task: () => Promise<T>): Promise<T> {
 }
 
 const CONNECTION_ERROR_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'UND_ERR_CONNECT_TIMEOUT'])
-const CONFIG_ERROR_PATTERN = /^Unknown model provider type:|^\[ModelProvider\] .*(modelName is required|API key is not configured)|^Could not resolve authentication method|^\[Config\] modelProvider is not configured/
+const CONFIG_ERROR_PATTERN = /^Unknown model provider type:|^\[ModelProvider\] .*(modelName is required|API key is not configured|API key environment variable is not available)|^Could not resolve authentication method|^\[Config\] modelProvider is not configured/
+
+const ENV_KEY_UNAVAILABLE_PATTERN = /^\[ModelProvider\] .*API key environment variable is not available/
 
 function isModelStartupFailure(err: unknown): boolean {
   if (err instanceof Error && CONFIG_ERROR_PATTERN.test(err.message)) return true
@@ -205,7 +207,10 @@ export async function chatRoutes(fastify: FastifyInstance) {
         if (!abortController.signal.aborted) {
           logChatError('[Chat] Error:', err, message)
         }
-        send('system', { type: 'error', payload: { message: 'Model call failed' }, sessionId })
+        const errorMessage = err instanceof Error && ENV_KEY_UNAVAILABLE_PATTERN.test(err.message)
+          ? 'API key 无效或未配置'
+          : 'Model call failed'
+        send('system', { type: 'error', payload: { message: errorMessage }, sessionId })
       } finally {
         if (!reply.raw.writableEnded && !reply.raw.destroyed) {
           reply.raw.end()

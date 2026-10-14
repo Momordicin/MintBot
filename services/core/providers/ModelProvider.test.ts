@@ -25,7 +25,8 @@ vi.mock('openai', () => ({
   },
 }))
 
-const { createModelProviderForPreset, createModelProvider } = await import('./ModelProvider.js')
+const { createModelProviderForPreset, createModelProvider, resolveApiKey } = await import('./ModelProvider.js')
+const { wipeCredentialEnv } = await import('./envCredentials.js')
 
 function fakePreset(overrides: Partial<Preset> = {}): Preset {
   return {
@@ -624,5 +625,99 @@ describe('缺失 API Key 时调用前失败', () => {
 
     expect(result).toBe('ollama reply')
     expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('resolveApiKey', () => {
+  it('FromEnv 开启且环境暂存值存在：返回暂存值，忽略已保存的 key', () => {
+    const config: ModelConfig = { type: 'openai', openaiApiKey: 'saved', openaiApiKeyFromEnv: true }
+
+    expect(resolveApiKey(config, 'openai', () => 'from-env')).toBe('from-env')
+  })
+
+  it('FromEnv 开启但暂存值为空：抛环境变量不可用错误，即使有已保存的 key', () => {
+    const config: ModelConfig = { type: 'deepseek', deepseekApiKey: 'saved', deepseekApiKeyFromEnv: true }
+
+    expect(() => resolveApiKey(config, 'deepseek', () => '')).toThrow('[ModelProvider] DeepSeek API key environment variable is not available')
+  })
+
+  it('FromEnv 关闭且有已保存的 key：返回已保存的 key，不读环境', () => {
+    const config: ModelConfig = { type: 'anthropic', anthropicApiKey: 'saved', anthropicApiKeyFromEnv: false }
+    const readEnvKey = vi.fn(() => 'from-env')
+
+    expect(resolveApiKey(config, 'anthropic', readEnvKey)).toBe('saved')
+    expect(readEnvKey).not.toHaveBeenCalled()
+  })
+
+  it('FromEnv 关闭且没有已保存的 key：抛未配置错误', () => {
+    expect(() => resolveApiKey({ type: 'anthropic' }, 'anthropic', () => 'from-env')).toThrow('[ModelProvider] Anthropic API key is not configured')
+    expect(() => resolveApiKey({ type: 'openai', openaiApiKey: '' }, 'openai', () => 'from-env')).toThrow('[ModelProvider] OpenAI API key is not configured')
+  })
+})
+
+describe('调用时按 FromEnv 标记解析 key', () => {
+  const context: BuiltContext = { system: '', messages: [{ role: 'user', content: 'hi' }] }
+  afterEach(() => {
+    delete process.env.OPENAI_API_KEY
+    delete process.env.ANTHROPIC_API_KEY
+    wipeCredentialEnv()
+  })
+
+  it('FromEnv 开启且环境里有 key：SDK 用暂存的 key 构造', async () => {
+    process.env.OPENAI_API_KEY = 'sk-from-env'
+    wipeCredentialEnv()
+    openaiCreateMock.mockResolvedValue({ choices: [{ message: { content: 'ok' } }] })
+
+    await createModelProvider({ type: 'openai', openaiApiKey: 'saved', openaiApiKeyFromEnv: true }).completeSync(context)
+
+    expect(openaiCtorMock.mock.calls[0][0].apiKey).toBe('sk-from-env')
+  })
+
+  it('FromEnv 开启但环境里没有 key：抛环境变量不可用错误，不构造 SDK 客户端也不发请求', async () => {
+    delete process.env.OPENAI_API_KEY
+    delete process.env.ANTHROPIC_API_KEY
+    wipeCredentialEnv()
+    const openaiProvider = createModelProvider({ type: 'openai', openaiApiKey: 'saved', openaiApiKeyFromEnv: true })
+    const anthropicProvider = createModelProvider({ type: 'anthropic', modelName: 'claude-3', anthropicApiKey: 'saved', anthropicApiKeyFromEnv: true })
+
+    await expect(openaiProvider.completeSync(context)).rejects.toThrow('[ModelProvider] OpenAI API key environment variable is not available')
+    await expect(drain(anthropicProvider)).rejects.toThrow('[ModelProvider] Anthropic API key environment variable is not available')
+
+    expect(openaiCtorMock).not.toHaveBeenCalled()
+    expect(anthropicCtorMock).not.toHaveBeenCalled()
+    expect(openaiCreateMock).not.toHaveBeenCalled()
+    expect(anthropicStreamMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('Ollama 空地址使用默认地址', () => {
+  const context: BuiltContext = { system: '', messages: [{ role: 'user', content: 'hi' }] }
+
+  it.each([
+    ['未设置', undefined],
+    ['空串', ''],
+  ])('ollamaBaseUrl %s：completeSync 与 complete 都请求默认地址', async (_label, ollamaBaseUrl) => {
+    const syncFetch = vi.fn().mockResolvedValue(fakeNonStreamResponse('ok'))
+    vi.stubGlobal('fetch', syncFetch)
+    const provider = createModelProvider({ type: 'ollama', ollamaModel: 'qwen3', ollamaBaseUrl })
+
+    await provider.completeSync(context)
+
+    expect(syncFetch.mock.calls[0][0]).toBe('http://localhost:11434/v1/chat/completions')
+
+    const streamFetch = vi.fn().mockResolvedValue(fakeStreamResponse())
+    vi.stubGlobal('fetch', streamFetch)
+    await drain(provider)
+
+    expect(streamFetch.mock.calls[0][0]).toBe('http://localhost:11434/v1/chat/completions')
+  })
+
+  it('ollamaBaseUrl 非空时使用配置的地址', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(fakeNonStreamResponse('ok'))
+    vi.stubGlobal('fetch', fetchSpy)
+
+    await createModelProvider({ type: 'ollama', ollamaModel: 'qwen3', ollamaBaseUrl: 'http://10.0.0.2:11434' }).completeSync(context)
+
+    expect(fetchSpy.mock.calls[0][0]).toBe('http://10.0.0.2:11434/v1/chat/completions')
   })
 })
