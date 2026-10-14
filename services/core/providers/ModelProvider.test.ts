@@ -26,7 +26,7 @@ vi.mock('openai', () => ({
   },
 }))
 
-const { createModelProviderForPreset, createModelProvider, resolveApiKey } = await import('./ModelProvider.js')
+const { createModelProviderForPreset, createSummaryModelProviderForPreset, createModelProvider, resolveApiKey } = await import('./ModelProvider.js')
 const { wipeCredentialEnv } = await import('./envCredentials.js')
 
 function fakePreset(overrides: Partial<Preset> = {}): Preset {
@@ -36,6 +36,8 @@ function fakePreset(overrides: Partial<Preset> = {}): Preset {
     characterId: 'c1',
     modelType: 'ollama',
     modelName: 'llama3',
+    summaryModelType: null,
+    summaryModelName: null,
     displayConfig: { chatBgRgb: [15, 15, 20], chatBgOpacity: 0.65, themeMode: 'auto', accentRgb: [15, 15, 20], tintStrength: 0, currentPortrait: 'pixel', petScale: { pixel: 1, illustration: 1 } },
     systemPrompt: 'sys',
     addressForms: [],
@@ -804,5 +806,115 @@ describe('Ollama 空地址使用默认地址', () => {
     await createModelProvider({ type: 'ollama', ollamaModel: 'qwen3', ollamaBaseUrl: 'http://10.0.0.2:11434' }).completeSync(context)
 
     expect(fetchSpy.mock.calls[0][0]).toBe('http://10.0.0.2:11434/v1/chat/completions')
+  })
+})
+
+describe('createSummaryModelProviderForPreset', () => {
+  const context: BuiltContext = { system: '', messages: [{ role: 'user', content: 'hi' }] }
+  const globalConfig: ModelConfig = {
+    type: 'ollama',
+    openaiApiKey: 'global-openai',
+    deepseekApiKey: 'global-deepseek',
+    ollamaBaseUrl: 'http://global-ollama:11434',
+  }
+
+  it('摘要模型为 null 时沿用角色的对话模型与对话 key，不读取摘要 key', async () => {
+    openaiCreateMock.mockResolvedValue(openaiCompletion('ok'))
+    const preset = fakePreset({ modelType: 'openai', modelName: 'gpt-4o', summaryModelType: null, summaryModelName: null })
+
+    await createSummaryModelProviderForPreset(
+      preset,
+      globalConfig,
+      credentialsWith({ openai: { apiKey: 'chat-key', fromEnv: false, summaryApiKey: 'summary-key', summaryFromEnv: false } })
+    ).completeSync(context)
+
+    expect(openaiCtorMock.mock.calls[0][0].apiKey).toBe('chat-key')
+    expect(openaiCreateMock.mock.calls[0][0].model).toBe('gpt-4o')
+  })
+
+  it('摘要模型已设置：使用摘要模型名与摘要 key，即使同一 provider 也不用对话 key', async () => {
+    openaiCreateMock.mockResolvedValue(openaiCompletion('ok'))
+    const preset = fakePreset({ modelType: 'openai', modelName: 'gpt-4o', summaryModelType: 'openai', summaryModelName: 'gpt-4o-mini' })
+
+    await createSummaryModelProviderForPreset(
+      preset,
+      globalConfig,
+      credentialsWith({ openai: { apiKey: 'chat-key', fromEnv: false, summaryApiKey: 'summary-key', summaryFromEnv: false } })
+    ).completeSync(context)
+
+    expect(openaiCtorMock.mock.calls[0][0].apiKey).toBe('summary-key')
+    expect(openaiCreateMock.mock.calls[0][0].model).toBe('gpt-4o-mini')
+  })
+
+  it('摘要 provider 与对话 provider 不同：只用摘要 provider 的摘要 key，不用全局 key', async () => {
+    openaiCreateMock.mockResolvedValue(openaiCompletion('ok'))
+    const preset = fakePreset({ modelType: 'openai', modelName: 'gpt-4o', summaryModelType: 'deepseek', summaryModelName: 'deepseek-v4-flash' })
+
+    await createSummaryModelProviderForPreset(
+      preset,
+      globalConfig,
+      credentialsWith({
+        openai: { apiKey: 'chat-key', fromEnv: false },
+        deepseek: { fromEnv: false, summaryApiKey: 'ds-summary-key', summaryFromEnv: false },
+      })
+    ).completeSync(context)
+
+    expect(openaiCtorMock.mock.calls[0][0].apiKey).toBe('ds-summary-key')
+    expect(openaiCreateMock.mock.calls[0][0].model).toBe('deepseek-v4-flash')
+  })
+
+  it('摘要 key 缺失时抛配置错误，不回落到对话 key 或全局 key', async () => {
+    const preset = fakePreset({ modelType: 'openai', modelName: 'gpt-4o', summaryModelType: 'openai', summaryModelName: 'gpt-4o-mini' })
+
+    await expect(createSummaryModelProviderForPreset(
+      preset,
+      globalConfig,
+      credentialsWith({ openai: { apiKey: 'chat-key', fromEnv: false } })
+    ).completeSync(context)).rejects.toThrow('[ModelProvider] OpenAI API key is not configured')
+    expect(openaiCtorMock).not.toHaveBeenCalled()
+  })
+
+  it('摘要 summaryFromEnv 开启时使用环境 key，环境缺失则抛错而不用对话 key', async () => {
+    process.env.OPENAI_API_KEY = 'sk-from-env'
+    wipeCredentialEnv()
+    openaiCreateMock.mockResolvedValue(openaiCompletion('ok'))
+    const preset = fakePreset({ modelType: 'openai', modelName: 'gpt-4o', summaryModelType: 'openai', summaryModelName: 'gpt-4o-mini' })
+    const credentials = credentialsWith({ openai: { apiKey: 'chat-key', fromEnv: false, summaryFromEnv: true } })
+
+    await createSummaryModelProviderForPreset(preset, globalConfig, credentials).completeSync(context)
+    expect(openaiCtorMock.mock.calls[0][0].apiKey).toBe('sk-from-env')
+
+    delete process.env.OPENAI_API_KEY
+    wipeCredentialEnv()
+    await expect(createSummaryModelProviderForPreset(preset, globalConfig, credentials).completeSync(context))
+      .rejects.toThrow('[ModelProvider] OpenAI API key environment variable is not available')
+  })
+
+  it('摘要模型为 ollama：摘要模型名写入 ollamaModel，使用全局 Ollama 地址，不需要 key', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(fakeNonStreamResponse('ollama reply'))
+    vi.stubGlobal('fetch', fetchSpy)
+    const preset = fakePreset({ modelType: 'openai', modelName: 'gpt-4o', summaryModelType: 'ollama', summaryModelName: 'qwen3-summary' })
+
+    const result = await createSummaryModelProviderForPreset(preset, globalConfig, noCredentials).completeSync(context)
+
+    expect(result).toBe('ollama reply')
+    const [url, options] = fetchSpy.mock.calls[0]
+    expect(url).toContain('http://global-ollama:11434')
+    expect(JSON.parse(options.body).model).toBe('qwen3-summary')
+  })
+
+  it('角色使用全局配置时忽略摘要字段，完全使用全局配置', async () => {
+    openaiCreateMock.mockResolvedValue(openaiCompletion('ok'))
+    const global: ModelConfig = { type: 'openai', modelName: 'global-model', openaiApiKey: 'global-key' }
+    const preset = fakePreset({ modelType: null, modelName: null, summaryModelType: 'deepseek', summaryModelName: 'deepseek-v4-flash' })
+
+    await createSummaryModelProviderForPreset(
+      preset,
+      global,
+      credentialsWith({ deepseek: { fromEnv: false, summaryApiKey: 'ds-summary-key', summaryFromEnv: false } })
+    ).completeSync(context)
+
+    expect(openaiCtorMock.mock.calls[0][0].apiKey).toBe('global-key')
+    expect(openaiCreateMock.mock.calls[0][0].model).toBe('global-model')
   })
 })

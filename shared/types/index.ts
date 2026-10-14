@@ -100,6 +100,8 @@ export interface Preset {
   characterId: string
   modelType: 'anthropic' | 'openai' | 'ollama' | 'deepseek' | null   // null = 未自定义，跟随全局 modelProvider 配置
   modelName: string | null
+  summaryModelType: 'anthropic' | 'openai' | 'ollama' | 'deepseek' | null   // null = 后台整理沿用该角色的对话配置
+  summaryModelName: string | null
   wallpaperPath?: string
   displayConfig: PresetDisplayConfig  // 读时永远补齐默认值，下游无需处理 null（见 session/displayConfig.ts）
   systemPrompt: string
@@ -120,6 +122,8 @@ export interface PresetSnapshot {
   characterId: string
   modelType: 'anthropic' | 'openai' | 'ollama' | 'deepseek' | null   // null = 未自定义，跟随全局 modelProvider 配置
   modelName: string | null
+  summaryModelType?: 'anthropic' | 'openai' | 'ollama' | 'deepseek' | null
+  summaryModelName?: string | null
   wallpaperPath?: string
   displayConfig?: PresetDisplayConfig  // 可选：已存在的冻结快照 blob 确实没有这个字段（v7 之前创建的 session）
   systemPrompt: string

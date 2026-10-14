@@ -1,5 +1,5 @@
 // services/core/routes/models.ts — 按提供商类型返回可选模型名列表
-// 用法：core/index.ts 里 fastify.register(modelsRoutes)；GET /models?type=ollama|anthropic|openai|deepseek[&presetId=...]、POST /models
+// 用法：core/index.ts 里 fastify.register(modelsRoutes)；GET /models?type=ollama|anthropic|openai|deepseek[&presetId=...][&fromEnv=1|0][&purpose=summary]、POST /models
 // 对应文件：src/settings/ModelConfigPanel.tsx / src/settings/useCharacterPanel.ts / services/core/providers/ModelProvider.ts / services/core/providers/ollama.ts / services/core/config/index.ts / services/core/session/queries.ts / services/core/routes/models.test.ts
 import type { FastifyInstance } from 'fastify'
 import { ensureOllama, listOllamaModels, getOllamaBaseUrl } from '../providers/ollama.js'
@@ -76,8 +76,8 @@ async function listProviderModels(type: KeyType, config: ModelConfig) {
 }
 
 export async function modelsRoutes(fastify: FastifyInstance) {
-  fastify.get<{ Querystring: { type?: string; presetId?: string; fromEnv?: string } }>('/models', async (request, reply) => {
-    const { type, presetId, fromEnv: fromEnvFlag } = request.query
+  fastify.get<{ Querystring: { type?: string; presetId?: string; fromEnv?: string; purpose?: string } }>('/models', async (request, reply) => {
+    const { type, presetId, fromEnv: fromEnvFlag, purpose } = request.query
 
     if (type === 'ollama') {
       return listOllama()
@@ -98,7 +98,10 @@ export async function modelsRoutes(fastify: FastifyInstance) {
         return listProviderModels(type, getModelProviderConfig())
       }
       const row = getPresetApiKeys(presetId)[type]
-      return listProviderModels(type, { ...getBaseConfig(type), [key]: row.apiKey, [fromEnv]: fromEnvFlag === '0' ? false : row.fromEnv })
+      const useSummary = purpose === 'summary'
+      const savedKey = useSummary ? row.summaryApiKey : row.apiKey
+      const savedFromEnv = useSummary ? row.summaryFromEnv : row.fromEnv
+      return listProviderModels(type, { ...getBaseConfig(type), [key]: savedKey, [fromEnv]: fromEnvFlag === '0' ? false : savedFromEnv })
     }
 
     return reply.status(400).send({ error: 'type must be one of ollama|anthropic|openai|deepseek' })

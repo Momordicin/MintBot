@@ -388,7 +388,7 @@ export function ModelConfigPanel() {
           fromEnvs={form.fromEnv}
           onChange={chat => setForm(prev => ({ ...prev, chat }))}
         />
-        <div className="model-config-panel__field">
+        <div className="model-config-panel__field model-config-panel__field--short">
           <label>最大回复 token 数（max_tokens）</label>
           <input
             type="number"

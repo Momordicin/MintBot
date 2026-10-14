@@ -25,7 +25,7 @@ import { getLockScreenMinutes } from '../system/lockState.js'
 import { getCurrentState } from '../session/index.js'
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
 import type { NERProvider } from '../providers/NERProvider.js'
-import { createModelProviderForPreset } from '../providers/ModelProvider.js'
+import { createSummaryModelProviderForPreset } from '../providers/ModelProvider.js'
 import { getLastActivityAt } from '../providers/aiActivity.js'
 import type { EmbeddingQueueStatus, Message } from '../../../shared/types/index.js'
 import { getMemoryConfig, getModelProviderConfig } from '../config/index.js'
@@ -92,7 +92,7 @@ function resolveModelForPreset(presetId: string | null, globalModel: EntityModel
   const preset = isActive ? active.preset : getPresetById(presetId)
   if (!preset || preset.modelType === null || preset.modelName === null) return globalModel
   const credentials = isActive ? active.credentials : getPresetApiKeys(presetId)
-  return createModelProviderForPreset(preset, getModelProviderConfig(), credentials)
+  return createSummaryModelProviderForPreset(preset, getModelProviderConfig(), credentials)
 }
 
 function groupByPreset(messages: Message[]): Map<string | null, Message[]> {

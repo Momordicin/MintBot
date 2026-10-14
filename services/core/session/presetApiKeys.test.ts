@@ -41,33 +41,33 @@ afterEach(() => {
 describe('getPresetApiKeys / upsertPresetApiKey', () => {
   it('没有任何行时三家都返回无 key、fromEnv 为 false', () => {
     expect(getPresetApiKeys('p1')).toEqual({
-      anthropic: { fromEnv: false },
-      openai: { fromEnv: false },
-      deepseek: { fromEnv: false },
+      anthropic: { fromEnv: false, summaryFromEnv: false },
+      openai: { fromEnv: false, summaryFromEnv: false },
+      deepseek: { fromEnv: false, summaryFromEnv: false },
     })
   })
 
   it('写入 apiKey 后读回，只影响该 provider 与该角色', () => {
     upsertPresetApiKey('p1', { provider: 'openai', apiKey: 'sk-openai-1' })
 
-    expect(getPresetApiKeys('p1').openai).toEqual({ apiKey: 'sk-openai-1', fromEnv: false })
-    expect(getPresetApiKeys('p1').anthropic).toEqual({ fromEnv: false })
-    expect(getPresetApiKeys('p2').openai).toEqual({ fromEnv: false })
+    expect(getPresetApiKeys('p1').openai).toEqual({ apiKey: 'sk-openai-1', fromEnv: false, summaryFromEnv: false })
+    expect(getPresetApiKeys('p1').anthropic).toEqual({ fromEnv: false, summaryFromEnv: false })
+    expect(getPresetApiKeys('p2').openai).toEqual({ fromEnv: false, summaryFromEnv: false })
   })
 
   it('只改 fromEnv 时保留已保存的 apiKey，只改 apiKey 时保留 fromEnv', () => {
     upsertPresetApiKey('p1', { provider: 'deepseek', apiKey: 'sk-deepseek-1' })
     upsertPresetApiKey('p1', { provider: 'deepseek', fromEnv: true })
-    expect(getPresetApiKeys('p1').deepseek).toEqual({ apiKey: 'sk-deepseek-1', fromEnv: true })
+    expect(getPresetApiKeys('p1').deepseek).toEqual({ apiKey: 'sk-deepseek-1', fromEnv: true, summaryFromEnv: false })
 
     upsertPresetApiKey('p1', { provider: 'deepseek', apiKey: 'sk-deepseek-2' })
-    expect(getPresetApiKeys('p1').deepseek).toEqual({ apiKey: 'sk-deepseek-2', fromEnv: true })
+    expect(getPresetApiKeys('p1').deepseek).toEqual({ apiKey: 'sk-deepseek-2', fromEnv: true, summaryFromEnv: false })
   })
 
   it('没有 apiKey 只有 fromEnv 的行读回时不带 apiKey 字段', () => {
     upsertPresetApiKey('p1', { provider: 'anthropic', fromEnv: true })
 
-    expect(getPresetApiKeys('p1').anthropic).toEqual({ fromEnv: true })
+    expect(getPresetApiKeys('p1').anthropic).toEqual({ fromEnv: true, summaryFromEnv: false })
   })
 
   it('写入 apiKey 后执行 WAL checkpoint(TRUNCATE)，只改 fromEnv 时不执行', () => {
@@ -88,7 +88,7 @@ describe('getPresetApiKeys / upsertPresetApiKey', () => {
     const preset = getPresetById('p1')!
     expect(preset.modelType).toBe('deepseek')
     expect(preset.modelName).toBe('deepseek-v4-flash')
-    expect(getPresetApiKeys('p1').deepseek).toEqual({ apiKey: 'sk-ds', fromEnv: false })
+    expect(getPresetApiKeys('p1').deepseek).toEqual({ apiKey: 'sk-ds', fromEnv: false, summaryFromEnv: false })
     expect(pragma).toHaveBeenCalledWith('wal_checkpoint(TRUNCATE)')
   })
 
@@ -105,7 +105,7 @@ describe('getPresetApiKeys / upsertPresetApiKey', () => {
 
     updatePresetModelConfig('p1', null, null)
 
-    expect(getPresetApiKeys('p1').openai).toEqual({ apiKey: 'sk-openai-1', fromEnv: false })
+    expect(getPresetApiKeys('p1').openai).toEqual({ apiKey: 'sk-openai-1', fromEnv: false, summaryFromEnv: false })
   })
 })
 
@@ -127,7 +127,7 @@ describe('deletePresetWithData', () => {
     deletePresetWithData('p1')
 
     expect(db.prepare(`SELECT COUNT(*) AS count FROM PresetApiKeys WHERE presetId = 'p1'`).get()).toEqual({ count: 0 })
-    expect(getPresetApiKeys('p2').openai).toEqual({ apiKey: 'sk-openai-2', fromEnv: false })
+    expect(getPresetApiKeys('p2').openai).toEqual({ apiKey: 'sk-openai-2', fromEnv: false, summaryFromEnv: false })
   })
 })
 
@@ -150,7 +150,7 @@ describe('session 状态里的角色凭据', () => {
 
     const state = loadSession('p1')
 
-    expect(state.credentials.openai).toEqual({ apiKey: 'sk-openai-1', fromEnv: false })
+    expect(state.credentials.openai).toEqual({ apiKey: 'sk-openai-1', fromEnv: false, summaryFromEnv: false })
   })
 
   it('switchPreset 换成新角色的凭据', () => {
@@ -174,5 +174,105 @@ describe('session 状态里的角色凭据', () => {
 
     refreshCurrentPresetIfActive('p1')
     expect(getCurrentState()!.credentials.openai.apiKey).toBe('sk-openai-new')
+  })
+})
+
+describe('角色摘要模型与摘要 key', () => {
+  it('新角色的摘要模型列为 null，摘要 key 默认无 key、summaryFromEnv 为 false', () => {
+    const preset = getPresetById('p1')!
+
+    expect(preset.summaryModelType).toBeNull()
+    expect(preset.summaryModelName).toBeNull()
+    expect(getPresetApiKeys('p1').openai.summaryApiKey).toBeUndefined()
+    expect(getPresetApiKeys('p1').openai.summaryFromEnv).toBe(false)
+  })
+
+  it('upsertPresetApiKey 写入 summaryApiKey 与 summaryFromEnv，与对话 key 互不覆盖', () => {
+    upsertPresetApiKey('p1', { provider: 'openai', apiKey: 'sk-chat' })
+    upsertPresetApiKey('p1', { provider: 'openai', summaryApiKey: 'sk-summary', summaryFromEnv: true })
+
+    expect(getPresetApiKeys('p1').openai).toEqual({
+      apiKey: 'sk-chat',
+      fromEnv: false,
+      summaryApiKey: 'sk-summary',
+      summaryFromEnv: true,
+    })
+
+    upsertPresetApiKey('p1', { provider: 'openai', fromEnv: true })
+    expect(getPresetApiKeys('p1').openai.summaryApiKey).toBe('sk-summary')
+    expect(getPresetApiKeys('p1').openai.summaryFromEnv).toBe(true)
+  })
+
+  it('写入 summaryApiKey 后执行 WAL checkpoint(TRUNCATE)，只改 summaryFromEnv 时不执行', () => {
+    const pragma = vi.spyOn(db, 'pragma')
+
+    upsertPresetApiKey('p1', { provider: 'openai', summaryFromEnv: true })
+    expect(pragma).not.toHaveBeenCalledWith('wal_checkpoint(TRUNCATE)')
+
+    upsertPresetApiKey('p1', { provider: 'openai', summaryApiKey: 'sk-summary' })
+    expect(pragma).toHaveBeenCalledWith('wal_checkpoint(TRUNCATE)')
+  })
+
+  it('updatePresetModelConfig 在同一事务里写入摘要模型列与摘要 key 并 checkpoint', () => {
+    const pragma = vi.spyOn(db, 'pragma')
+
+    updatePresetModelConfig('p1', 'openai', 'gpt-4o', undefined, {
+      model: { modelType: 'deepseek', modelName: 'deepseek-v4-flash' },
+      keyUpdate: { provider: 'deepseek', summaryApiKey: 'sk-ds-summary' },
+    })
+
+    const preset = getPresetById('p1')!
+    expect(preset.summaryModelType).toBe('deepseek')
+    expect(preset.summaryModelName).toBe('deepseek-v4-flash')
+    expect(getPresetApiKeys('p1').deepseek.summaryApiKey).toBe('sk-ds-summary')
+    expect(pragma).toHaveBeenCalledWith('wal_checkpoint(TRUNCATE)')
+  })
+
+  it('updatePresetModelConfig 的摘要 key 写入失败时模型列与摘要模型列一并回滚', () => {
+    expect(() => updatePresetModelConfig('p1', 'deepseek', 'deepseek-v4-flash', undefined, {
+      model: { modelType: 'ollama', modelName: 'qwen3' },
+      keyUpdate: { provider: 'ollama' as never, summaryApiKey: 'x' },
+    })).toThrow()
+
+    const preset = getPresetById('p1')!
+    expect(preset.modelType).toBe('openai')
+    expect(preset.summaryModelType).toBeNull()
+  })
+
+  it('updatePresetModelConfig 不带摘要参数时不改摘要模型列，传 null 模型时清空', () => {
+    updatePresetModelConfig('p1', 'openai', 'gpt-4o', undefined, { model: { modelType: 'ollama', modelName: 'qwen3' } })
+    updatePresetModelConfig('p1', 'openai', 'gpt-4o-mini')
+    expect(getPresetById('p1')!.summaryModelType).toBe('ollama')
+
+    updatePresetModelConfig('p1', 'openai', 'gpt-4o-mini', undefined, { model: { modelType: null, modelName: null } })
+    expect(getPresetById('p1')!.summaryModelType).toBeNull()
+    expect(getPresetById('p1')!.summaryModelName).toBeNull()
+  })
+
+  it('摘要模型列受 CHECK 约束，只接受 anthropic / openai / ollama / deepseek 或 null', () => {
+    expect(() => db.prepare(`UPDATE Presets SET summaryModelType = 'bogus' WHERE presetId = 'p1'`).run()).toThrow()
+  })
+
+  it('session 凭据携带摘要 key，refreshCurrentPresetIfActive 刷新摘要 key 与摘要模型', () => {
+    loadSession('p1')
+    updatePresetModelConfig('p1', 'openai', 'gpt-4o', undefined, {
+      model: { modelType: 'deepseek', modelName: 'deepseek-v4-flash' },
+      keyUpdate: { provider: 'deepseek', summaryApiKey: 'sk-ds-summary' },
+    })
+    expect(getCurrentState()!.credentials.deepseek.summaryApiKey).toBeUndefined()
+    expect(getCurrentState()!.preset.summaryModelType).toBeNull()
+
+    refreshCurrentPresetIfActive('p1')
+
+    expect(getCurrentState()!.credentials.deepseek.summaryApiKey).toBe('sk-ds-summary')
+    expect(getCurrentState()!.preset.summaryModelType).toBe('deepseek')
+  })
+
+  it('deletePresetWithData 一并删除摘要 key', () => {
+    upsertPresetApiKey('p1', { provider: 'openai', summaryApiKey: 'sk-summary' })
+
+    deletePresetWithData('p1')
+
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM PresetApiKeys WHERE presetId = 'p1'`).get()).toEqual({ count: 0 })
   })
 })

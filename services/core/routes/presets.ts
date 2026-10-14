@@ -8,7 +8,7 @@ import os from 'os'
 import fs from 'fs'
 import crypto from 'crypto'
 import * as dotenv from 'dotenv'
-import { getAllPresets, getPresetById, createPreset, updatePresetWallpaper, updatePresetName, updatePresetDisplayConfig, updatePresetSystemPrompt, updatePresetModelConfig, deletePresetWithData, getMostRecentOtherPresetId, getPresetApiKeys, upsertPresetApiKey, type PresetKeyProvider } from '../session/queries.js'
+import { getAllPresets, getPresetById, createPreset, updatePresetWallpaper, updatePresetName, updatePresetDisplayConfig, updatePresetSystemPrompt, updatePresetModelConfig, deletePresetWithData, getMostRecentOtherPresetId, getPresetApiKeys, upsertPresetApiKey, type PresetKeyProvider, type PresetApiKeyUpdate, type PresetModelType } from '../session/queries.js'
 import { ENV_VAR_BY_PROVIDER, isEnvCredentialDetected } from '../providers/envCredentials.js'
 import { summarizeSavedKey } from '../config/keySummary.js'
 import { switchPreset, refreshCurrentPresetIfActive, getCurrentState, PresetNotFoundError } from '../session/index.js'
@@ -38,6 +38,7 @@ if (process.env.VITEST && !WALLPAPER_DIR.startsWith(os.tmpdir() + path.sep)) {
 const ALLOWED_WALLPAPER_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif'])
 const VALID_MODEL_TYPES: readonly string[] = ['anthropic', 'openai', 'ollama', 'deepseek']
 const API_KEY_INVALID_MESSAGE = 'API key 无效或未配置'
+const SUMMARY_API_KEY_INVALID_MESSAGE = '摘要模型的 API key 无效或未配置'
 
 function isKeyProvider(type: string | null): type is PresetKeyProvider {
   return type === 'anthropic' || type === 'openai' || type === 'deepseek'
@@ -58,8 +59,12 @@ export async function presetRoutes(fastify: FastifyInstance) {
 
     const credentials = getPresetApiKeys(presetId)
     const summarize = (provider: PresetKeyProvider) => {
-      const { apiKey, fromEnv } = credentials[provider]
-      return { ...summarizeSavedKey(apiKey), fromEnv }
+      const { apiKey, fromEnv, summaryApiKey, summaryFromEnv } = credentials[provider]
+      return {
+        ...summarizeSavedKey(apiKey),
+        fromEnv,
+        summary: { ...summarizeSavedKey(summaryApiKey), fromEnv: summaryFromEnv },
+      }
     }
     return {
       anthropic: summarize('anthropic'),
@@ -219,6 +224,10 @@ export async function presetRoutes(fastify: FastifyInstance) {
       modelName?: string | null
       apiKey?: string
       apiKeyFromEnv?: boolean
+      summaryModelType?: PresetModelType | null
+      summaryModelName?: string | null
+      summaryApiKey?: string
+      summaryApiKeyFromEnv?: boolean
       applyNow?: boolean
     }
   }>('/presets/:presetId', async (request, reply) => {
@@ -228,14 +237,21 @@ export async function presetRoutes(fastify: FastifyInstance) {
       return reply.status(404).send({ error: 'Preset not found' })
     }
 
-    const { name, displayConfig, systemPrompt, modelType, modelName, apiKeyFromEnv, applyNow } = request.body
+    const { name, displayConfig, systemPrompt, modelType, modelName, apiKeyFromEnv, summaryModelType, summaryModelName, summaryApiKeyFromEnv, applyNow } = request.body
     if (request.body.apiKey !== undefined && typeof request.body.apiKey !== 'string') {
       return reply.status(400).send({ error: 'apiKey must be a string' })
     }
     if (apiKeyFromEnv !== undefined && typeof apiKeyFromEnv !== 'boolean') {
       return reply.status(400).send({ error: 'apiKeyFromEnv must be a boolean' })
     }
+    if (request.body.summaryApiKey !== undefined && typeof request.body.summaryApiKey !== 'string') {
+      return reply.status(400).send({ error: 'summaryApiKey must be a string' })
+    }
+    if (summaryApiKeyFromEnv !== undefined && typeof summaryApiKeyFromEnv !== 'boolean') {
+      return reply.status(400).send({ error: 'summaryApiKeyFromEnv must be a boolean' })
+    }
     const apiKey = request.body.apiKey?.trim() || undefined
+    const summaryApiKey = request.body.summaryApiKey?.trim() || undefined
     if (
       name === undefined &&
       displayConfig === undefined &&
@@ -243,9 +259,13 @@ export async function presetRoutes(fastify: FastifyInstance) {
       modelType === undefined &&
       modelName === undefined &&
       apiKey === undefined &&
-      apiKeyFromEnv === undefined
+      apiKeyFromEnv === undefined &&
+      summaryModelType === undefined &&
+      summaryModelName === undefined &&
+      summaryApiKey === undefined &&
+      summaryApiKeyFromEnv === undefined
     ) {
-      return reply.status(400).send({ error: 'name, displayConfig, systemPrompt, modelType or modelName is required' })
+      return reply.status(400).send({ error: 'name, displayConfig, systemPrompt, modelType, modelName, apiKey, apiKeyFromEnv, summaryModelType, summaryModelName, summaryApiKey or summaryApiKeyFromEnv is required' })
     }
 
     const trimmedName = name?.trim()
@@ -305,6 +325,29 @@ export async function presetRoutes(fastify: FastifyInstance) {
       }
     }
 
+    if ((summaryModelType !== undefined) !== (summaryModelName !== undefined)) {
+      return reply.status(400).send({ error: 'summaryModelType and summaryModelName must be provided together' })
+    }
+
+    let summaryConfig: { modelType: PresetModelType | null; modelName: string | null } | undefined
+    if (summaryModelType !== undefined) {
+      if (summaryModelType === null) {
+        if (summaryModelName !== null) {
+          return reply.status(400).send({ error: 'summaryModelName must be null when summaryModelType is null' })
+        }
+        summaryConfig = { modelType: null, modelName: null }
+      } else {
+        if (!VALID_MODEL_TYPES.includes(summaryModelType)) {
+          return reply.status(400).send({ error: 'summaryModelType must be one of anthropic, openai, ollama, deepseek, or null' })
+        }
+        const trimmedSummaryModelName = (summaryModelName ?? '').trim()
+        if (!trimmedSummaryModelName) {
+          return reply.status(400).send({ error: 'summaryModelName is required when summaryModelType is set' })
+        }
+        summaryConfig = { modelType: summaryModelType, modelName: trimmedSummaryModelName }
+      }
+    }
+
     const resultingModelType = modelConfig !== undefined ? modelConfig.modelType : preset.modelType
     const keyFieldsSent = apiKey !== undefined || apiKeyFromEnv !== undefined
     let keyUpdate: { provider: PresetKeyProvider; apiKey?: string; fromEnv?: boolean } | undefined
@@ -326,6 +369,33 @@ export async function presetRoutes(fastify: FastifyInstance) {
       }
       if (keyFieldsSent) {
         keyUpdate = { provider: resultingModelType, apiKey, fromEnv: apiKeyFromEnv }
+      }
+    }
+
+    const summaryKeyFieldsSent = summaryApiKey !== undefined || summaryApiKeyFromEnv !== undefined
+    let summaryKeyUpdate: PresetApiKeyUpdate | undefined
+    if ((summaryConfig !== undefined || summaryKeyFieldsSent) && resultingModelType === null) {
+      return reply.status(400).send({ error: 'summary settings require a role-specific model config' })
+    }
+    const resultingSummaryType = summaryConfig !== undefined ? summaryConfig.modelType : preset.summaryModelType
+    if (summaryKeyFieldsSent && !isKeyProvider(resultingSummaryType)) {
+      return reply.status(400).send({ error: 'summaryApiKey and summaryApiKeyFromEnv only apply to anthropic, openai or deepseek' })
+    }
+    if (resultingModelType !== null && isKeyProvider(resultingSummaryType)) {
+      const saved = getPresetApiKeys(presetId)[resultingSummaryType]
+      if (summaryApiKeyFromEnv === true && !saved.summaryFromEnv && !isEnvCredentialDetected(resultingSummaryType)) {
+        return reply.status(400).send({ error: `未检测到环境变量 ${ENV_VAR_BY_PROVIDER[resultingSummaryType]}` })
+      }
+      if (modelConfig !== undefined || summaryConfig !== undefined || summaryKeyFieldsSent) {
+        const mergedFromEnv = summaryApiKeyFromEnv ?? saved.summaryFromEnv
+        const mergedApiKey = summaryApiKey ?? saved.summaryApiKey
+        const configured = mergedFromEnv ? isEnvCredentialDetected(resultingSummaryType) : !!mergedApiKey
+        if (!configured) {
+          return reply.status(400).send({ error: SUMMARY_API_KEY_INVALID_MESSAGE })
+        }
+      }
+      if (summaryKeyFieldsSent) {
+        summaryKeyUpdate = { provider: resultingSummaryType, summaryApiKey, summaryFromEnv: summaryApiKeyFromEnv }
       }
     }
 
@@ -360,8 +430,17 @@ export async function presetRoutes(fastify: FastifyInstance) {
       updatePresetSystemPrompt(presetId, trimmedSystemPrompt)
     }
 
-    if (modelConfig !== undefined) {
-      updatePresetModelConfig(presetId, modelConfig.modelType, modelConfig.modelName, keyUpdate)
+    const summaryUpdate = summaryConfig !== undefined || summaryKeyUpdate !== undefined
+      ? { model: summaryConfig, keyUpdate: summaryKeyUpdate }
+      : undefined
+    if (modelConfig !== undefined || summaryUpdate !== undefined) {
+      updatePresetModelConfig(
+        presetId,
+        modelConfig !== undefined ? modelConfig.modelType : preset.modelType,
+        modelConfig !== undefined ? modelConfig.modelName : preset.modelName,
+        keyUpdate,
+        summaryUpdate
+      )
     } else if (keyUpdate !== undefined) {
       upsertPresetApiKey(presetId, keyUpdate)
     }

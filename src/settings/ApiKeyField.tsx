@@ -1,5 +1,5 @@
 // src/settings/ApiKeyField.tsx — 设置窗口共用的 API Key 字段
-// 用法：ModelConfigPanel 的三个 Key 分组与 PersonaModelPanel 的角色模型覆盖区渲染 <ApiKeyField />；导出 KeyProvider / ENV_VAR
+// 用法：ModelConfigPanel 的三个 Key 分组渲染 <ApiKeyField />，PersonaModelPanel 的模型行渲染 <ApiKeyField compact />；导出 KeyProvider / ENV_VAR
 // 对应文件：src/settings/ModelConfigPanel.tsx / src/settings/PersonaModelPanel.tsx / src/settings/settings.css
 import React from 'react'
 
@@ -48,21 +48,24 @@ interface ApiKeyFieldProps {
   onFromEnvChange: (checked: boolean) => void
   keyStatus?: ApiKeyLoadStatus
   envStatus?: ApiKeyLoadStatus
+  compact?: boolean
 }
 
-export function ApiKeyField({ summary, envDetected, envVar, fromEnv, keyInput, editing, onKeyInputChange, onEditingChange, onFromEnvChange, keyStatus = 'ready', envStatus = 'ready' }: ApiKeyFieldProps) {
+export function ApiKeyField({ summary, envDetected, envVar, fromEnv, keyInput, editing, onKeyInputChange, onEditingChange, onFromEnvChange, keyStatus = 'ready', envStatus = 'ready', compact = false }: ApiKeyFieldProps) {
   const maskedValue = summary.hasKey ? `••••••••${summary.last4 ?? ''}` : '未填写'
   const keyReady = keyStatus === 'ready'
   const pending = !keyReady || envStatus !== 'ready'
+  const envLabel = `自动配置 API Key（使用环境变量 ${envVar}）`
+  const envHint = envStatus === 'ready' && !envDetected ? `${envLabel}。未检测到环境变量 ${envVar}；修改环境变量后需重启 MintBot` : envLabel
   return (
     <>
-      <div className="model-config-panel__field">
-        <label>API Key</label>
+      <div className={compact ? 'model-config-panel__field model-config-panel__field--compact' : 'model-config-panel__field'}>
+        {!compact && <label>API Key</label>}
         <div className="model-config-panel__secret">
           {!keyReady ? (
             <input key="view" type="text" readOnly value={keyStatus === 'loading' ? '加载中…' : '读取失败'} />
           ) : fromEnv ? (
-            <input key="view" type="text" readOnly value={`使用环境变量 ${envVar}`} />
+            <input key="view" type="text" readOnly value={compact ? '环境变量' : `使用环境变量 ${envVar}`} title={compact ? `使用环境变量 ${envVar}` : undefined} />
           ) : editing ? (
             <input
               key="edit"
@@ -92,19 +95,22 @@ export function ApiKeyField({ summary, envDetected, envVar, fromEnv, keyInput, e
           )}
         </div>
       </div>
-      <label className="model-config-panel__checkbox">
+      <label
+        className={compact ? 'model-config-panel__checkbox model-config-panel__checkbox--compact' : 'model-config-panel__checkbox'}
+        title={compact ? envHint : undefined}
+      >
         <input
           type="checkbox"
           checked={fromEnv}
           disabled={pending || (!envDetected && !fromEnv)}
           onChange={e => onFromEnvChange(e.target.checked)}
         />
-        自动配置 API Key（使用环境变量 {envVar}）
+        {compact ? '环境变量' : <>自动配置 API Key（使用环境变量 {envVar}）</>}
       </label>
-      {envStatus === 'loading' && (
+      {!compact && envStatus === 'loading' && (
         <div className="model-config-panel__checkbox">正在检测环境变量 {envVar}…</div>
       )}
-      {envStatus === 'ready' && !envDetected && (
+      {!compact && envStatus === 'ready' && !envDetected && (
         <div className="model-config-panel__checkbox">未检测到环境变量 {envVar}；修改环境变量后需重启 MintBot</div>
       )}
     </>

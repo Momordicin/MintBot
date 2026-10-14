@@ -1,5 +1,5 @@
 // src/settings/ModelNameField.tsx — 设置窗口共用的「模型名称」下拉框
-// 用法：ModelConfigPanel 的对话 / 摘要模型选择与 PersonaModelPanel 的角色模型覆盖区渲染 <ModelNameField />；GET /models?type=[&presetId=]、POST /models
+// 用法：ModelConfigPanel 的对话 / 摘要模型选择渲染 <ModelNameField />，PersonaModelPanel 的模型行渲染 <ModelNameField compact />；GET /models?type=[&presetId=][&purpose=]、POST /models
 // 对应文件：src/settings/ModelConfigPanel.tsx / src/settings/PersonaModelPanel.tsx / services/core/routes/models.ts / src/settings/settings.css
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { ModelConfig } from '../../shared/types/index.js'
@@ -14,10 +14,12 @@ interface ModelNameFieldProps {
   presetId?: string
   fromEnv?: boolean
   reloadKey?: number
+  purpose?: 'summary'
+  compact?: boolean
   onChange: (name: string) => void
 }
 
-export function ModelNameField({ type, current, apiKey, presetId, fromEnv, reloadKey = 0, onChange }: ModelNameFieldProps) {
+export function ModelNameField({ type, current, apiKey, presetId, fromEnv, reloadKey = 0, purpose, compact = false, onChange }: ModelNameFieldProps) {
   const [options, setOptions] = useState<string[]>([])
   const [isLoadingOptions, setIsLoadingOptions] = useState(true)
   const [optionsError, setOptionsError] = useState<string | null>(null)
@@ -38,7 +40,7 @@ export function ModelNameField({ type, current, apiKey, presetId, fromEnv, reloa
           signal: controller.signal,
         })
       : fetch(
-          `${CORE_URL}/models?type=${type}${presetId ? `&presetId=${encodeURIComponent(presetId)}` : ''}${fromEnv === undefined ? '' : `&fromEnv=${fromEnv ? 1 : 0}`}`,
+          `${CORE_URL}/models?type=${type}${presetId ? `&presetId=${encodeURIComponent(presetId)}` : ''}${purpose ? `&purpose=${purpose}` : ''}${fromEnv === undefined ? '' : `&fromEnv=${fromEnv ? 1 : 0}`}`,
           { signal: controller.signal }
         )
     request
@@ -59,7 +61,7 @@ export function ModelNameField({ type, current, apiKey, presetId, fromEnv, reloa
         setOptionsError('获取模型列表失败')
         setIsLoadingOptions(false)
       })
-  }, [type, apiKey, presetId, fromEnv])
+  }, [type, apiKey, presetId, purpose, fromEnv])
 
   useEffect(() => {
     const timer = apiKey !== '' ? setTimeout(loadOptions, TYPED_KEY_DEBOUNCE_MS) : null
@@ -81,10 +83,11 @@ export function ModelNameField({ type, current, apiKey, presetId, fromEnv, reloa
   }
 
   return (
-    <div className="model-config-panel__field">
-      <label>模型名称</label>
+    <div className={compact ? 'model-config-panel__field model-config-panel__field--compact' : 'model-config-panel__field'}>
+      {!compact && <label>模型名称</label>}
       <select
         value={current}
+        title={compact && showStatusHint ? statusText : undefined}
         onMouseDown={retryLoad}
         onFocus={retryLoad}
         onChange={e => onChange(e.target.value)}
@@ -100,7 +103,10 @@ export function ModelNameField({ type, current, apiKey, presetId, fromEnv, reloa
           <option value={current}>{current !== '' ? current : statusText}</option>
         )}
       </select>
-      {showStatusHint && <span className="model-config-panel__hint">{statusText}</span>}
+      {compact && !isLoadingOptions && optionsError !== null && (
+        <span className="model-config-panel__error-mark" title={optionsError}>!</span>
+      )}
+      {!compact && showStatusHint && <span className="model-config-panel__hint">{statusText}</span>}
     </div>
   )
 }

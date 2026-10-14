@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { db, initDb } from '../db/index.js'
 import {
   appendMessage, getPendingEmbeddingCount, getCurrentEntities, getPendingSummaryCount,
-  upsertPreset, getPresetById, createSession, getLatestSessionByPreset, upsertPresetApiKey,
+  upsertPreset, getPresetById, createSession, getLatestSessionByPreset, upsertPresetApiKey, updatePresetModelConfig,
 } from '../session/queries.js'
 import { runOrganizeModeTick, isInDefaultOrganizeWindow } from './orchestrator.js'
 import { recordSystemEvent } from '../system/lockState.js'
@@ -29,7 +29,7 @@ vi.mock('../config/index.js', () => ({
 }))
 
 const { createForPresetMock } = vi.hoisted(() => ({ createForPresetMock: vi.fn() }))
-vi.mock('../providers/ModelProvider.js', () => ({ createModelProviderForPreset: createForPresetMock }))
+vi.mock('../providers/ModelProvider.js', () => ({ createSummaryModelProviderForPreset: createForPresetMock }))
 
 // getCurrentState 用于当前激活角色的摘要插队检查——mock 成受控的 vi.fn()，每个用例自己
 // 设置返回值（默认 null，代表"无激活 session"，与真实模块在没有任何 session 被加载时的
@@ -639,7 +639,7 @@ describe('runOrganizeModeTick — 按角色选择后台模型', () => {
     expect(createForPresetMock).toHaveBeenCalledTimes(2)
     const pACall = createForPresetMock.mock.calls.find(call => call[0].presetId === 'pA')!
     expect(pACall[0].modelName).toBe('gpt-4o')
-    expect(pACall[2].openai).toEqual({ apiKey: 'role-a-key', fromEnv: false })
+    expect(pACall[2].openai).toEqual({ apiKey: 'role-a-key', fromEnv: false, summaryFromEnv: false })
     expect(getPendingEmbeddingCount()).toBe(0)
   })
 
@@ -798,5 +798,140 @@ describe('runOrganizeModeTick — 按角色选择后台模型', () => {
     expect(calls.filter(call => call.label === 'global')).toHaveLength(0)
     expect(calls.filter(call => call.label === 'role:pA').length).toBeGreaterThanOrEqual(2)
     expect(createForPresetMock.mock.calls.every(call => call[2].openai.apiKey === 'memory-key')).toBe(true)
+  })
+})
+
+describe('runOrganizeModeTick — 角色摘要模型', () => {
+  let calls: RecordedCall[]
+
+  beforeEach(() => {
+    calls = []
+    createForPresetMock.mockReset()
+    createForPresetMock.mockImplementation((preset: { presetId: string }) => recordingModel(`role:${preset.presetId}`, calls))
+  })
+
+  it('实体抽取的模型层交给摘要模型工厂：传入带摘要模型列的 preset 与带摘要 key 的凭据', async () => {
+    seedRole('pA', { modelType: 'openai', modelName: 'gpt-4o' }, 'sA')
+    upsertPresetApiKey('pA', { provider: 'openai', apiKey: 'chat-key' })
+    updatePresetModelConfig('pA', 'openai', 'gpt-4o', undefined, {
+      model: { modelType: 'deepseek', modelName: 'deepseek-v4-flash' },
+      keyUpdate: { provider: 'deepseek', summaryApiKey: 'ds-summary-key' },
+    })
+    addMessageFor('sA', '我喜欢猫A', NOW_IN_WINDOW - 130 * MIN)
+
+    await runOrganizeModeTick(
+      { embedding: fakeEmbedding(), ner: emptyNer(), model: recordingModel('global', calls) },
+      200,
+      () => NOW_IN_WINDOW
+    )
+
+    expect(createForPresetMock).toHaveBeenCalledTimes(1)
+    const [preset, , credentials] = createForPresetMock.mock.calls[0]
+    expect(preset.modelType).toBe('openai')
+    expect(preset.summaryModelType).toBe('deepseek')
+    expect(preset.summaryModelName).toBe('deepseek-v4-flash')
+    expect(credentials.deepseek.summaryApiKey).toBe('ds-summary-key')
+    expect(credentials.openai.apiKey).toBe('chat-key')
+    expect(calls.map(call => call.label)).toEqual(['role:pA'])
+  })
+
+  it('当前激活角色使用内存里的摘要模型与摘要凭据，其它角色读数据库', async () => {
+    const pA = seedRole('pA', { modelType: 'openai', modelName: 'gpt-4o' }, 'sA')
+    seedRole('pB', { modelType: 'openai', modelName: 'gpt-4o' }, 'sB')
+    updatePresetModelConfig('pA', 'openai', 'gpt-4o', undefined, {
+      model: { modelType: 'deepseek', modelName: 'db-summary-model' },
+      keyUpdate: { provider: 'deepseek', summaryApiKey: 'db-summary-key' },
+    })
+    updatePresetModelConfig('pB', 'openai', 'gpt-4o', undefined, {
+      model: { modelType: 'anthropic', modelName: 'claude-b' },
+      keyUpdate: { provider: 'anthropic', summaryApiKey: 'db-summary-key-b' },
+    })
+    getCurrentStateMock.mockReturnValue({
+      session: { sessionId: 'sA', presetId: 'pA' },
+      preset: { ...pA, summaryModelType: 'deepseek', summaryModelName: 'memory-summary-model' },
+      credentials: {
+        anthropic: { fromEnv: false, summaryFromEnv: false },
+        openai: { fromEnv: false, summaryFromEnv: false },
+        deepseek: { fromEnv: false, summaryApiKey: 'memory-summary-key', summaryFromEnv: false },
+      },
+    })
+    addMessageFor('sA', '我喜欢猫A', NOW_IN_WINDOW - 130 * MIN)
+    addMessageFor('sB', '我喜欢猫B', NOW_IN_WINDOW - 129 * MIN)
+
+    await runOrganizeModeTick(
+      { embedding: fakeEmbedding(), ner: emptyNer(), model: recordingModel('global', calls) },
+      200,
+      () => NOW_IN_WINDOW
+    )
+
+    const pACall = createForPresetMock.mock.calls.find(call => call[0].presetId === 'pA')!
+    expect(pACall[0].summaryModelName).toBe('memory-summary-model')
+    expect(pACall[2].deepseek.summaryApiKey).toBe('memory-summary-key')
+    const pBCall = createForPresetMock.mock.calls.find(call => call[0].presetId === 'pB')!
+    expect(pBCall[0].summaryModelName).toBe('claude-b')
+    expect(pBCall[2].anthropic.summaryApiKey).toBe('db-summary-key-b')
+  })
+
+  it('摘要生成同样使用摘要模型工厂：传入的 preset 带摘要模型，摘要请求由其返回的模型发出', async () => {
+    seedRole('pA', { modelType: 'openai', modelName: 'gpt-4o' }, 'sA')
+    updatePresetModelConfig('pA', 'openai', 'gpt-4o', undefined, {
+      model: { modelType: 'ollama', modelName: 'qwen3-summary' },
+    })
+    for (let i = 0; i < 60; i++) {
+      addMessageFor('sA', `A消息${i}`, NOW_IN_WINDOW - 10 * MIN + i)
+    }
+
+    const result = await runOrganizeModeTick(
+      { embedding: fakeEmbedding(), ner: emptyNer(), model: recordingModel('global', calls) },
+      200,
+      () => NOW_IN_WINDOW
+    )
+
+    expect(result.summariesGenerated).toBe(1)
+    expect(createForPresetMock.mock.calls.every(call => call[0].summaryModelType === 'ollama' && call[0].summaryModelName === 'qwen3-summary')).toBe(true)
+    expect(calls.filter(call => call.label === 'role:pA').length).toBeGreaterThanOrEqual(1)
+    expect(calls.filter(call => call.label === 'global')).toHaveLength(0)
+  })
+
+  it('摘要模型构建失败：该角色仍插入规则实体，其它角色的摘要模型不受影响', async () => {
+    seedRole('pA', { modelType: 'openai', modelName: 'gpt-4o' }, 'sA')
+    seedRole('pB', { modelType: 'openai', modelName: 'gpt-4o' }, 'sB')
+    updatePresetModelConfig('pA', 'openai', 'gpt-4o', undefined, { model: { modelType: 'ollama', modelName: 'bad' } })
+    updatePresetModelConfig('pB', 'openai', 'gpt-4o', undefined, { model: { modelType: 'ollama', modelName: 'good' } })
+    createForPresetMock.mockImplementation((preset: { presetId: string }) => {
+      if (preset.presetId === 'pA') throw new Error('bad summary model')
+      return recordingModel('role:pB', calls)
+    })
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    addMessageFor('sA', '我喜欢猫A', NOW_IN_WINDOW - 130 * MIN)
+    addMessageFor('sB', '我喜欢猫B', NOW_IN_WINDOW - 129 * MIN)
+
+    const result = await runOrganizeModeTick(
+      { embedding: fakeEmbedding(), ner: emptyNer(), model: recordingModel('global', calls) },
+      200,
+      () => NOW_IN_WINDOW
+    )
+
+    expect(result.totalProcessed).toBe(2)
+    expect(getCurrentEntities('sA').map(e => e.value)).toEqual(['喜欢猫A'])
+    expect(getCurrentEntities('sB').map(e => e.value)).toEqual(['喜欢猫B'])
+    expect(calls.map(call => call.label)).toEqual(['role:pB'])
+    expect(errorSpy).toHaveBeenCalled()
+    errorSpy.mockRestore()
+  })
+
+  it('角色使用全局配置时不读取摘要字段，仍用全局后台模型', async () => {
+    seedRole('pA', null, 'sA')
+    db.prepare(`UPDATE Presets SET summaryModelType = 'ollama', summaryModelName = 'qwen3-summary' WHERE presetId = 'pA'`).run()
+    addMessageFor('sA', '我喜欢猫A', NOW_IN_WINDOW - 130 * MIN)
+
+    await runOrganizeModeTick(
+      { embedding: fakeEmbedding(), ner: emptyNer(), model: recordingModel('global', calls) },
+      200,
+      () => NOW_IN_WINDOW
+    )
+
+    expect(createForPresetMock).not.toHaveBeenCalled()
+    expect(calls.map(call => call.label)).toEqual(['global'])
   })
 })

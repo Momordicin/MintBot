@@ -730,3 +730,111 @@ describe('GET /models?fromEnv=0', () => {
     expect(ollama.body).toEqual({ models: ['qwen3'] })
   })
 })
+
+async function getSummaryModels(type: string, query = '', presetId: string | null = 'p1') {
+  const fastify = await buildTestApp()
+  const presetPart = presetId === null ? '' : `&presetId=${presetId}`
+  const response = await fastify.inject({ method: 'GET', url: `/models?type=${type}&purpose=summary${presetPart}${query}` })
+  return { status: response.statusCode, body: JSON.parse(response.payload) }
+}
+
+describe('GET /models?purpose=summary', () => {
+  beforeEach(() => {
+    getPresetByIdMock.mockReset()
+    getPresetByIdMock.mockReturnValue({ presetId: 'p1' })
+    getPresetApiKeysMock.mockReset()
+    getPresetApiKeysMock.mockReturnValue(noKeys)
+  })
+
+  it('带 presetId 时使用该角色的摘要 key，不使用对话 key 与全局 key', async () => {
+    getModelProviderConfigMock.mockReturnValue({ type: 'openai', openaiApiKey: 'sk-global', openaiBaseUrl: 'http://proxy.local/v1' })
+    getPresetApiKeysMock.mockReturnValue({ ...noKeys, openai: { apiKey: 'sk-chat', fromEnv: false, summaryApiKey: 'sk-summary', summaryFromEnv: false } })
+    openaiListMock.mockReturnValue(pages('gpt-4o-mini'))
+
+    const { body } = await getSummaryModels('openai')
+
+    expect(body).toEqual({ models: ['gpt-4o-mini'] })
+    expect(openaiCtorMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: 'sk-summary', baseURL: 'http://proxy.local/v1' }))
+    expect(getPresetApiKeysMock).toHaveBeenCalledWith('p1')
+  })
+
+  it('摘要 key 缺失时不借用对话 key：不发请求并返回错误提示', async () => {
+    getPresetApiKeysMock.mockReturnValue({ ...noKeys, openai: { apiKey: 'sk-chat', fromEnv: false, summaryFromEnv: false } })
+
+    const { body } = await getSummaryModels('openai')
+
+    expect(body).toEqual({ models: [], error: 'API key 无效或未配置' })
+    expect(openaiCtorMock).not.toHaveBeenCalled()
+    expect(openaiListMock).not.toHaveBeenCalled()
+  })
+
+  it('摘要 summaryFromEnv 已保存为开启时使用环境暂存的 key，不用对话 key', async () => {
+    getPresetApiKeysMock.mockReturnValue({ ...noKeys, anthropic: { apiKey: 'sk-chat', fromEnv: false, summaryApiKey: 'sk-summary', summaryFromEnv: true } })
+    getEnvCredentialMock.mockReturnValue('sk-ant-env')
+    anthropicListMock.mockReturnValue(pages('claude-a'))
+
+    const { body } = await getSummaryModels('anthropic')
+
+    expect(body).toEqual({ models: ['claude-a'] })
+    expect(anthropicCtorMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: 'sk-ant-env' }))
+  })
+
+  it('fromEnv=1 对摘要 key 生效：使用环境 key，不读取角色 key 行', async () => {
+    getPresetApiKeysMock.mockReturnValue({ ...noKeys, deepseek: { fromEnv: false, summaryApiKey: 'sk-summary', summaryFromEnv: false } })
+    getEnvCredentialMock.mockReturnValue('sk-ds-env')
+    openaiListMock.mockReturnValue(pages('deepseek-v4-flash'))
+
+    const { body } = await getSummaryModels('deepseek', '&fromEnv=1')
+
+    expect(body).toEqual({ models: ['deepseek-v4-flash'] })
+    expect(openaiCtorMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: 'sk-ds-env' }))
+    expect(getPresetApiKeysMock).not.toHaveBeenCalled()
+  })
+
+  it('fromEnv=0 对摘要 key 生效：摘要 summaryFromEnv 开启时仍用已保存的摘要 key，不读环境变量', async () => {
+    getPresetApiKeysMock.mockReturnValue({ ...noKeys, anthropic: { fromEnv: false, summaryApiKey: 'sk-summary', summaryFromEnv: true } })
+    getEnvCredentialMock.mockReturnValue('sk-ant-env')
+    anthropicListMock.mockReturnValue(pages('claude-a'))
+
+    const { body } = await getSummaryModels('anthropic', '&fromEnv=0')
+
+    expect(body).toEqual({ models: ['claude-a'] })
+    expect(anthropicCtorMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: 'sk-summary' }))
+    expect(getEnvCredentialMock).not.toHaveBeenCalled()
+  })
+
+  it('fromEnv=0 且没有已保存的摘要 key：不发请求并返回错误提示，即使对话 key 存在', async () => {
+    getPresetApiKeysMock.mockReturnValue({ ...noKeys, openai: { apiKey: 'sk-chat', fromEnv: false, summaryFromEnv: true } })
+    getEnvCredentialMock.mockReturnValue('sk-env')
+
+    const { body } = await getSummaryModels('openai', '&fromEnv=0')
+
+    expect(body).toEqual({ models: [], error: 'API key 无效或未配置' })
+    expect(openaiListMock).not.toHaveBeenCalled()
+  })
+
+  it('不带 presetId 时 purpose 被忽略，仍使用全局 key', async () => {
+    getModelProviderConfigMock.mockReturnValue({ type: 'openai', openaiApiKey: 'sk-global' })
+    openaiListMock.mockReturnValue(pages('gpt-4o'))
+
+    const { body } = await getSummaryModels('openai', '', null)
+
+    expect(body).toEqual({ models: ['gpt-4o'] })
+    expect(openaiCtorMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: 'sk-global' }))
+    expect(getPresetApiKeysMock).not.toHaveBeenCalled()
+  })
+
+  it('未知 preset 返回 404，purpose 缺省时仍使用对话 key', async () => {
+    getPresetByIdMock.mockReturnValue(null)
+    const unknown = await getSummaryModels('openai')
+    expect(unknown.status).toBe(404)
+
+    getPresetByIdMock.mockReturnValue({ presetId: 'p1' })
+    getPresetApiKeysMock.mockReturnValue({ ...noKeys, openai: { apiKey: 'sk-chat', fromEnv: false, summaryApiKey: 'sk-summary', summaryFromEnv: false } })
+    openaiListMock.mockReturnValue(pages('gpt-4o'))
+    const chat = await getPresetModels('openai', 'p1')
+
+    expect(chat.body).toEqual({ models: ['gpt-4o'] })
+    expect(openaiCtorMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: 'sk-chat' }))
+  })
+})

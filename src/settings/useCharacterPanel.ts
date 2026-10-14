@@ -32,9 +32,11 @@ type SystemPromptStep = 'idle' | 'editing' | 'confirmingSave' | 'confirmingApply
 
 type ModelOverrideStep = 'idle' | 'editing' | 'chooseApply' | 'saving'
 
-type ModelKeySummaries = Record<KeyProvider, ApiKeySummary & { fromEnv: boolean }>
+type ModelKeyState = ApiKeySummary & { fromEnv: boolean }
 
-const BLANK_MODEL_KEY: ApiKeySummary & { fromEnv: boolean } = { hasKey: false, last4: null, fromEnv: false }
+type ModelKeySummaries = Record<KeyProvider, ModelKeyState & { summary: ModelKeyState }>
+
+const BLANK_MODEL_KEY: ModelKeyState = { hasKey: false, last4: null, fromEnv: false }
 type KeyLoadStatus = 'loading' | 'ready' | 'error'
 
 const NO_ENV_DETECTED: Record<KeyProvider, boolean> = { anthropic: false, openai: false, deepseek: false }
@@ -104,6 +106,12 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
   const [overrideKeyInput, setOverrideKeyInput] = useState('')
   const [overrideKeyEditing, setOverrideKeyEditing] = useState(false)
   const [overrideFromEnvChoice, setOverrideFromEnvChoice] = useState<boolean | null>(null)
+  const [summarySameAsChat, setSummarySameAsChat] = useState(true)
+  const [summaryModelType, setSummaryModelType] = useState<ModelConfig['type']>('anthropic')
+  const [summaryModelName, setSummaryModelName] = useState('')
+  const [summaryKeyInput, setSummaryKeyInput] = useState('')
+  const [summaryKeyEditing, setSummaryKeyEditing] = useState(false)
+  const [summaryFromEnvChoice, setSummaryFromEnvChoice] = useState<boolean | null>(null)
   const [modelKeys, setModelKeys] = useState<ModelKeySummaries | null>(null)
   const [envDetected, setEnvDetected] = useState<Record<KeyProvider, boolean>>(NO_ENV_DETECTED)
   const [modelKeysStatus, setModelKeysStatus] = useState<KeyLoadStatus>('loading')
@@ -196,6 +204,12 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
     setOverrideKeyInput('')
     setOverrideKeyEditing(false)
     setOverrideFromEnvChoice(null)
+    setSummarySameAsChat((presetSnapshot?.summaryModelType ?? null) === null)
+    setSummaryModelType(presetSnapshot?.summaryModelType ?? 'anthropic')
+    setSummaryModelName(presetSnapshot?.summaryModelName ?? '')
+    setSummaryKeyInput('')
+    setSummaryKeyEditing(false)
+    setSummaryFromEnvChoice(null)
     modelKeysControllerRef.current?.abort()
     setModelKeys(null)
     setModelKeysStatus('loading')
@@ -792,7 +806,10 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
     }
   }, [systemPromptValue, onSwitched])
 
-  const overrideKeysReady = useGlobalModel || overrideModelType === 'ollama' || modelKeysStatus === 'ready'
+  const overrideKeyProvider: KeyProvider | null = overrideModelType === 'ollama' ? null : overrideModelType
+  const summaryKeyProvider: KeyProvider | null = summarySameAsChat || summaryModelType === 'ollama' ? null : summaryModelType
+  const needsModelKeys = !useGlobalModel && (overrideKeyProvider !== null || summaryKeyProvider !== null)
+  const overrideKeysReady = !needsModelKeys || modelKeysStatus === 'ready'
 
   const resetOverrideKeyState = useCallback(() => {
     setOverrideKeyInput('')
@@ -800,24 +817,35 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
     setOverrideFromEnvChoice(null)
   }, [])
 
+  const resetSummaryKeyState = useCallback(() => {
+    setSummaryKeyInput('')
+    setSummaryKeyEditing(false)
+    setSummaryFromEnvChoice(null)
+  }, [])
+
   const handleModelOverrideEditStart = useCallback(() => {
     setUseGlobalModel(presetSnapshotRef.current?.modelType === null)
     setOverrideModelType(presetSnapshotRef.current?.modelType ?? 'anthropic')
     setOverrideModelName(presetSnapshotRef.current?.modelName ?? '')
     resetOverrideKeyState()
+    setSummarySameAsChat((presetSnapshotRef.current?.summaryModelType ?? null) === null)
+    setSummaryModelType(presetSnapshotRef.current?.summaryModelType ?? 'anthropic')
+    setSummaryModelName(presetSnapshotRef.current?.summaryModelName ?? '')
+    resetSummaryKeyState()
     const presetId = presetSnapshotRef.current?.presetId
     if (presetId) loadModelKeys(presetId)
     loadEnvDetected()
     setPersonaError(null)
     setModelOverrideNotice(null)
     setModelOverrideStep('editing')
-  }, [resetOverrideKeyState, loadModelKeys, loadEnvDetected])
+  }, [resetOverrideKeyState, resetSummaryKeyState, loadModelKeys, loadEnvDetected])
 
   const handleModelOverrideEditCancel = useCallback(() => {
     resetOverrideKeyState()
+    resetSummaryKeyState()
     setModelOverrideStep('idle')
     setPersonaError(null)
-  }, [resetOverrideKeyState])
+  }, [resetOverrideKeyState, resetSummaryKeyState])
 
   const handleOverrideModelTypeChange = useCallback((type: ModelConfig['type']) => {
     setOverrideModelType(type)
@@ -833,15 +861,33 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
     }
   }, [])
 
+  const handleSummaryModelTypeChange = useCallback((type: ModelConfig['type']) => {
+    setSummaryModelType(type)
+    setSummaryModelName('')
+    resetSummaryKeyState()
+  }, [resetSummaryKeyState])
+
+  const handleSummaryFromEnvChange = useCallback((checked: boolean) => {
+    setSummaryFromEnvChoice(checked)
+    if (checked) {
+      setSummaryKeyInput('')
+      setSummaryKeyEditing(false)
+    }
+  }, [])
+
   const handleModelOverrideSaveClick = useCallback(() => {
     if (!useGlobalModel && !overrideModelName.trim()) {
       setPersonaError('模型名称不能为空')
       return
     }
+    if (!useGlobalModel && !summarySameAsChat && !summaryModelName.trim()) {
+      setPersonaError('摘要模型名称不能为空')
+      return
+    }
     if (!overrideKeysReady) return
     setPersonaError(null)
     setModelOverrideStep('chooseApply')
-  }, [useGlobalModel, overrideModelName, overrideKeysReady])
+  }, [useGlobalModel, overrideModelName, summarySameAsChat, summaryModelName, overrideKeysReady])
 
   const handleModelOverrideChooseApplyCancel = useCallback(() => {
     setModelOverrideStep('editing')
@@ -862,6 +908,29 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
       if (overrideFromEnvChoice !== null) keyFields.apiKeyFromEnv = overrideFromEnvChoice
       else if (modelKeys) keyFields.apiKeyFromEnv = modelKeys[overrideModelType].fromEnv
     }
+    const summaryFields: {
+      summaryModelType?: ModelConfig['type'] | null
+      summaryModelName?: string | null
+      summaryApiKey?: string
+      summaryApiKeyFromEnv?: boolean
+    } = {}
+    if (!useGlobalModel) {
+      if (summarySameAsChat) {
+        summaryFields.summaryModelType = null
+        summaryFields.summaryModelName = null
+      } else {
+        const trimmedSummaryName = summaryModelName.trim()
+        if (!trimmedSummaryName) return
+        summaryFields.summaryModelType = summaryModelType
+        summaryFields.summaryModelName = trimmedSummaryName
+        if (summaryModelType !== 'ollama') {
+          const typedSummaryKey = summaryKeyInput.trim()
+          if (typedSummaryKey) summaryFields.summaryApiKey = typedSummaryKey
+          if (summaryFromEnvChoice !== null) summaryFields.summaryApiKeyFromEnv = summaryFromEnvChoice
+          else if (modelKeys) summaryFields.summaryApiKeyFromEnv = modelKeys[summaryModelType].summary.fromEnv
+        }
+      }
+    }
     let serverError: string | null = null
 
     modelOverrideControllerRef.current?.abort()
@@ -874,7 +943,7 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
       const response = await fetch(`${CORE_URL}/presets/${encodeURIComponent(presetId)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ modelType, modelName: trimmedModelName, applyNow, ...keyFields }),
+        body: JSON.stringify({ modelType, modelName: trimmedModelName, applyNow, ...keyFields, ...summaryFields }),
         signal: controller.signal,
       })
 
@@ -890,7 +959,8 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
       if (state.presetSnapshot?.presetId === presetSnapshotRef.current?.presetId) {
         onSwitched(state)
         resetOverrideKeyState()
-        if (!useGlobalModel && overrideModelType !== 'ollama') loadModelKeys(presetId)
+        resetSummaryKeyState()
+        if (needsModelKeys) loadModelKeys(presetId)
         if (!applyNow) {
           setModelOverrideNotice(`此次修改将在下次重新启用『${presetSnapshotRef.current?.name ?? ''}』时生效。`)
         }
@@ -902,7 +972,7 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
       setPersonaError(serverError ?? '保存模型设置失败，请稍后重试')
       setModelOverrideStep('editing')
     }
-  }, [useGlobalModel, overrideModelType, overrideModelName, overrideKeyInput, overrideFromEnvChoice, modelKeys, onSwitched, resetOverrideKeyState, loadModelKeys])
+  }, [useGlobalModel, overrideModelType, overrideModelName, overrideKeyInput, overrideFromEnvChoice, summarySameAsChat, summaryModelType, summaryModelName, summaryKeyInput, summaryFromEnvChoice, needsModelKeys, modelKeys, onSwitched, resetOverrideKeyState, resetSummaryKeyState, loadModelKeys])
 
   const sendDisplayConfigPatch = useCallback((presetId: string, partial: Partial<PresetDisplayConfig>) => {
     displayConfigControllerRef.current?.abort()
@@ -1025,10 +1095,12 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
     ? [{ value: createCharacterId, label: `（新导入）${createCharacterId}` }, ...characterIds.map(id => ({ value: id, label: id }))]
     : characterIds.map(id => ({ value: id, label: id }))
 
-  const overrideKeyProvider: KeyProvider | null = overrideModelType === 'ollama' ? null : overrideModelType
   const overrideKeySummary = (overrideKeyProvider && modelKeys?.[overrideKeyProvider]) || BLANK_MODEL_KEY
   const overrideEnvDetected = overrideKeyProvider ? envDetected[overrideKeyProvider] : false
   const overrideFromEnv = overrideFromEnvChoice ?? overrideKeySummary.fromEnv
+  const summaryKeySummary = (summaryKeyProvider && modelKeys?.[summaryKeyProvider]?.summary) || BLANK_MODEL_KEY
+  const summaryEnvDetected = summaryKeyProvider ? envDetected[summaryKeyProvider] : false
+  const summaryFromEnv = summaryFromEnvChoice ?? summaryKeySummary.fromEnv
 
   return {
     presetSnapshot,
@@ -1087,6 +1159,21 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
     overrideKeyEditing,
     setOverrideKeyEditing,
     handleOverrideFromEnvChange,
+    summarySameAsChat,
+    setSummarySameAsChat,
+    summaryModelType,
+    summaryModelName,
+    setSummaryModelName,
+    handleSummaryModelTypeChange,
+    summaryKeyProvider,
+    summaryKeySummary,
+    summaryEnvDetected,
+    summaryFromEnv,
+    summaryKeyInput,
+    setSummaryKeyInput,
+    summaryKeyEditing,
+    setSummaryKeyEditing,
+    handleSummaryFromEnvChange,
     modelOverrideNotice,
     chatBgOpacity,
     themeMode,

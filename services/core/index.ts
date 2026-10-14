@@ -114,7 +114,7 @@ async function start() {
 
   organizeModeTask = startOrganizeModeScheduler(fastify)
 
-  const anyPresetUsesOllama = getAllPresets().some(p => p.modelType === 'ollama')
+  const anyPresetUsesOllama = getAllPresets().some(p => p.modelType === 'ollama' || (p.modelType !== null && p.summaryModelType === 'ollama'))
   const modelConfig = getModelProviderConfig()
   if (shouldEnsureOllama(modelConfig.type, getBackgroundModelProviderConfig().type, anyPresetUsesOllama)) {
     await ensureOllama(modelConfig.ollamaBaseUrl)
