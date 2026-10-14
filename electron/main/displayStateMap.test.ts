@@ -185,7 +185,7 @@ describe('shell UI exclusion', () => {
   const shellInfo = (overrides: Partial<ExternalWindowInfo>) =>
     makeInfo({ isFullscreen: true, exeName: 'explorer.exe', ...overrides })
 
-  it.each(['XamlExplorerHostIslandWindow', 'MultitaskingViewFrame', 'ForegroundStaging', 'TaskSwitcherWnd'])(
+  it.each(['XamlExplorerHostIslandWindow', 'MultitaskingViewFrame', 'ForegroundStaging', 'TaskSwitcherWnd', 'Progman', 'WorkerW'])(
     'explorer.exe with class %s creates no blocker',
     className => {
       const map = applyExternalObservation(new Map(), shellInfo({ className }), NO_RULES)

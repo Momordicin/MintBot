@@ -40,6 +40,8 @@ const SHELL_UI_CLASSES = new Set([
   'MultitaskingViewFrame',
   'ForegroundStaging',
   'TaskSwitcherWnd',
+  'Progman',
+  'WorkerW',
 ])
 
 export function isShellUiWindow(info: Pick<ExternalWindowInfo, 'exeName' | 'className'>): boolean {
