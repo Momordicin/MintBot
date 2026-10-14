@@ -688,6 +688,7 @@
 /* ─── 模型配置面板（全局对话模型 + 摘要模型） ──────────────── */
 
 .model-config-panel {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -744,6 +745,55 @@
   border-radius: 6px;
   padding: 4px 8px;
   font-size: 12px;
+}
+
+.model-config-panel__saving {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+  color: #fff;
+  font-size: 13px;
+  cursor: progress;
+}
+
+.model-config-panel__saving-label {
+  position: sticky;
+  top: 16px;
+  margin-top: 16px;
+}
+
+.model-config-panel__hint {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.model-config-panel__secret {
+  position: relative;
+  flex: 1;
+  display: flex;
+}
+
+.model-config-panel__secret input {
+  padding-right: 28px;
+}
+
+.model-config-panel__icon-btn {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
 }
 
 /* 本面板不嵌套在 .character-panel 下，.rename-btn 本身的颜色角色/状态由上面的控件表面

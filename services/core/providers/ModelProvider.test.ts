@@ -270,7 +270,7 @@ describe('completeSync', () => {
     expect(params.model).toBe('claude-3')
     expect(params.max_tokens).toBe(500)
     expect(params.messages).toEqual([{ role: 'user', content: 'hi' }])
-    expect(requestOptions.signal).toBe(signal)
+    expect(requestOptions).toEqual({ signal })
   })
 
   it('openai 类型下 stream 为 false，读取 choices[0].message.content，signal 作为请求选项传入', async () => {
@@ -335,7 +335,31 @@ describe('流式', () => {
     const [body, requestOptions] = openaiCreateMock.mock.calls[0]
     expect(body.stream).toBe(true)
     expect(body.messages).toEqual([{ role: 'system', content: 'sys' }, { role: 'user', content: 'hi' }])
-    expect(requestOptions).toEqual({ signal })
+    expect(requestOptions).toEqual({ signal, timeout: 30000 })
+  })
+
+  it('deepseek 流式同样带 30 秒超时', async () => {
+    openaiCreateMock.mockResolvedValue(openaiStream('hi'))
+    const provider = createModelProvider({ type: 'deepseek', deepseekApiKey: 'key' })
+
+    for await (const chunk of provider.complete(context)) void chunk
+
+    expect(openaiCreateMock.mock.calls[0][1]).toEqual({ signal: undefined, timeout: 30000 })
+  })
+
+  it('anthropic 流式的 stream 调用带 30 秒超时，且不走 create', async () => {
+    anthropicStreamMock.mockResolvedValue((async function* () {
+      yield { type: 'content_block_delta', delta: { type: 'text_delta', text: 'hi' } }
+    })())
+    const provider = createModelProvider({ type: 'anthropic', modelName: 'claude-3', anthropicApiKey: 'key' })
+    const signal = new AbortController().signal
+
+    let text = ''
+    for await (const chunk of provider.complete(context, { signal })) text += chunk
+
+    expect(text).toBe('hi')
+    expect(anthropicCreateMock).not.toHaveBeenCalled()
+    expect(anthropicStreamMock.mock.calls[0][1]).toEqual({ signal, timeout: 30000 })
   })
 
   it('deepseek 流式：拼接 choices[0].delta.content', async () => {

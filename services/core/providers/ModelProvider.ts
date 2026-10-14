@@ -1,11 +1,13 @@
 // services/core/providers/ModelProvider.ts — 大语言模型调用封装：按配置类型（anthropic / openai / deepseek / ollama）发起流式 complete 或非流式 completeSync
-// 用法：routes/chat.ts 每次聊天用 createModelProviderForPreset(preset, 全局配置)（预设无模型覆盖则用全局配置）调 complete / completeSync；index.ts 与 routes/config.ts 用 createModelProvider 构建 fastify.modelProvider / backgroundModelProvider，后者的 completeSync 供 orchestrator 驱动 entityExtractor 与 summarizer
-// 对应文件：services/core/routes/chat.ts / services/core/routes/config.ts / services/core/index.ts / services/core/memory/orchestrator.ts / shared/types/index.ts / services/core/providers/envCredentials.ts / services/core/providers/ModelProvider.test.ts
+// 用法：routes/models.ts 调 createAnthropicClient / createOpenAIClient 构建 SDK 客户端；routes/chat.ts 每次聊天用 createModelProviderForPreset(preset, 全局配置)（预设无模型覆盖则用全局配置）调 complete / completeSync；index.ts 与 routes/config.ts 用 createModelProvider 构建 fastify.modelProvider / backgroundModelProvider，后者的 completeSync 供 orchestrator 驱动 entityExtractor 与 summarizer
+// 对应文件：services/core/routes/chat.ts / services/core/routes/config.ts / services/core/routes/models.ts / services/core/index.ts / services/core/memory/orchestrator.ts / shared/types/index.ts / services/core/providers/envCredentials.ts / services/core/providers/ModelProvider.test.ts
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
 import type { ChatCompletionCreateParamsBase } from 'openai/resources/chat/completions'
 import type { ChatMessage, ModelConfig, CompletionOptions, BuiltContext, Preset } from '../../../shared/types/index.js'
 import { getEnvCredential, type KeyProvider } from './envCredentials.js'
+
+const STREAM_TIMEOUT_MS = 30000
 
 type DeepSeekExtras = { thinking: { type: 'disabled' } }
 
@@ -35,6 +37,37 @@ export function resolveApiKey(
   return saved
 }
 
+export function createAnthropicClient(config: ModelConfig): Anthropic {
+  const key = resolveApiKey(config, 'anthropic')
+  return new Anthropic({
+    apiKey: key,
+    authToken: null,
+    baseURL: 'https://api.anthropic.com',
+    logLevel: 'warn',
+    webhookKey: null,
+    maxRetries: 2,
+  })
+}
+
+export function createOpenAIClient(config: ModelConfig, kind: 'openai' | 'deepseek'): OpenAI {
+  const key = kind === 'openai'
+    ? resolveApiKey(config, 'openai')
+    : resolveApiKey(config, 'deepseek')
+  const baseURL = kind === 'openai'
+    ? (config.openaiBaseUrl || 'https://api.openai.com/v1')
+    : (config.deepseekBaseUrl || 'https://api.deepseek.com')
+  return new OpenAI({
+    apiKey: key,
+    adminAPIKey: null,
+    organization: null,
+    project: null,
+    baseURL,
+    webhookSecret: null,
+    logLevel: 'warn',
+    maxRetries: 2,
+  })
+}
+
 interface OpenAICompatibleOverrides {
   extraBody?: Record<string, unknown>
 }
@@ -51,34 +84,11 @@ export class ModelProvider {
   }
 
   private createAnthropicClient(): Anthropic {
-    const key = resolveApiKey(this.config, 'anthropic')
-    return new Anthropic({
-      apiKey: key,
-      authToken: null,
-      baseURL: 'https://api.anthropic.com',
-      logLevel: 'warn',
-      webhookKey: null,
-      maxRetries: 2,
-    })
+    return createAnthropicClient(this.config)
   }
 
   private createOpenAIClient(kind: 'openai' | 'deepseek'): OpenAI {
-    const key = kind === 'openai'
-      ? resolveApiKey(this.config, 'openai')
-      : resolveApiKey(this.config, 'deepseek')
-    const baseURL = kind === 'openai'
-      ? (this.config.openaiBaseUrl || 'https://api.openai.com/v1')
-      : (this.config.deepseekBaseUrl || 'https://api.deepseek.com')
-    return new OpenAI({
-      apiKey: key,
-      adminAPIKey: null,
-      organization: null,
-      project: null,
-      baseURL,
-      webhookSecret: null,
-      logLevel: 'warn',
-      maxRetries: 2,
-    })
+    return createOpenAIClient(this.config, kind)
   }
 
   private buildOpenAIBody(
@@ -113,7 +123,7 @@ export class ModelProvider {
     const client = this.createOpenAIClient(kind)
     const stream = await client.chat.completions.create(
       { ...this.buildOpenAIBody(kind, messages, options), stream: true },
-      { signal: options.signal }
+      { signal: options.signal, timeout: STREAM_TIMEOUT_MS }
     )
     for await (const chunk of stream) {
       const text = chunk.choices[0]?.delta?.content
@@ -201,7 +211,7 @@ export class ModelProvider {
         role: m.role as 'user' | 'assistant',
         content: m.content,
       })),
-    }, { signal: options.signal })
+    }, { signal: options.signal, timeout: STREAM_TIMEOUT_MS })
 
     for await (const event of stream) {
       if (

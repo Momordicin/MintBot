@@ -1,6 +1,6 @@
 // src/settings/ModelConfigPanel.tsx — 设置窗口的"模型配置"面板：API Key / Ollama 地址 / 对话模型 / 摘要模型
-// 用法：SettingsApp 里渲染 <ModelConfigPanel />（无 props）；GET/PATCH /config/model
-// 对应文件：src/settings/SettingsApp.tsx / services/core/routes/config.ts / shared/types/index.ts
+// 用法：SettingsApp 里渲染 <ModelConfigPanel />（无 props）；GET/PATCH /config/model；GET /models?type=
+// 对应文件：src/settings/SettingsApp.tsx / services/core/routes/config.ts / services/core/routes/models.ts / shared/types/index.ts
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { ModelConfig } from '../../shared/types/index.js'
 import './settings.css'
@@ -47,6 +47,7 @@ interface ModelSelection {
 
 interface FormState {
   keyInputs: Record<KeyProvider, string>
+  keyEditing: Record<KeyProvider, boolean>
   fromEnv: Record<KeyProvider, boolean>
   openaiBaseUrl: string
   deepseekBaseUrl: string
@@ -96,6 +97,7 @@ function toFormState(data: ConfigModelResponse): FormState {
   const keys = chat?.keys ?? BLANK_KEYS
   return {
     keyInputs: { anthropic: '', openai: '', deepseek: '' },
+    keyEditing: { anthropic: false, openai: false, deepseek: false },
     fromEnv: { anthropic: keys.anthropic.fromEnv, openai: keys.openai.fromEnv, deepseek: keys.deepseek.fromEnv },
     openaiBaseUrl: chat?.openaiBaseUrl ?? '',
     deepseekBaseUrl: chat?.deepseekBaseUrl ?? '',
@@ -138,33 +140,76 @@ function buildGlobalPatch(form: FormState): Partial<ModelConfig> {
   return patch
 }
 
+function PencilIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+  )
+}
+
+function CloseIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M18 6 6 18" />
+      <path d="m6 6 12 12" />
+    </svg>
+  )
+}
+
 interface KeyGroupProps {
   provider: KeyProvider
   summary: KeySummary
   keyInput: string
+  editing: boolean
   fromEnv: boolean
   onKeyInputChange: (value: string) => void
+  onEditingChange: (editing: boolean) => void
   onFromEnvChange: (checked: boolean) => void
   baseUrl?: string
   onBaseUrlChange?: (value: string) => void
 }
 
-function KeyGroup({ provider, summary, keyInput, fromEnv, onKeyInputChange, onFromEnvChange, baseUrl, onBaseUrlChange }: KeyGroupProps) {
+function KeyGroup({ provider, summary, keyInput, editing, fromEnv, onKeyInputChange, onEditingChange, onFromEnvChange, baseUrl, onBaseUrlChange }: KeyGroupProps) {
   const envVar = ENV_VAR[provider]
+  const maskedValue = summary.hasKey ? `••••••••${summary.last4 ?? ''}` : '未填写'
   return (
     <div className="model-config-panel__group">
       <div className="model-config-panel__section-label">{PROVIDER_LABEL[provider]}</div>
       <div className="model-config-panel__field">
-        <label>{summary.hasKey ? `已保存 ••••${summary.last4 ?? ''}` : '未填写'}</label>
-        <input
-          type="password"
-          autoComplete="new-password"
-          spellCheck={false}
-          value={keyInput}
-          disabled={fromEnv}
-          placeholder="输入新的 API Key（留空则不修改）"
-          onChange={e => onKeyInputChange(e.target.value)}
-        />
+        <label>API Key</label>
+        <div className="model-config-panel__secret">
+          {fromEnv ? (
+            <input key="view" type="text" readOnly value={`使用环境变量 ${envVar}`} />
+          ) : editing ? (
+            <input
+              key="edit"
+              type="password"
+              autoFocus
+              autoComplete="new-password"
+              spellCheck={false}
+              value={keyInput}
+              placeholder="输入新的 API Key"
+              onChange={e => onKeyInputChange(e.target.value)}
+            />
+          ) : (
+            <input key="view" type="text" readOnly value={maskedValue} />
+          )}
+          {!fromEnv && (
+            <button
+              type="button"
+              className="model-config-panel__icon-btn"
+              aria-label={editing ? '取消编辑' : '编辑 API Key'}
+              onClick={() => {
+                onKeyInputChange('')
+                onEditingChange(!editing)
+              }}
+            >
+              {editing ? <CloseIcon /> : <PencilIcon />}
+            </button>
+          )}
+        </div>
       </div>
       <label className="model-config-panel__checkbox">
         <input
@@ -191,10 +236,61 @@ function KeyGroup({ provider, summary, keyInput, fromEnv, onKeyInputChange, onFr
 interface ModelSelectionFieldsProps {
   selection: ModelSelection
   providerOptions: ProviderType[]
+  reloadKey: number
   onChange: (next: ModelSelection) => void
 }
 
-function ModelSelectionFields({ selection, providerOptions, onChange }: ModelSelectionFieldsProps) {
+function ModelSelectionFields({ selection, providerOptions, reloadKey, onChange }: ModelSelectionFieldsProps) {
+  const [options, setOptions] = useState<string[]>([])
+  const [isLoadingOptions, setIsLoadingOptions] = useState(true)
+  const [optionsError, setOptionsError] = useState<string | null>(null)
+  const controllerRef = useRef<AbortController | null>(null)
+
+  const loadOptions = useCallback((type: ProviderType) => {
+    controllerRef.current?.abort()
+    const controller = new AbortController()
+    controllerRef.current = controller
+    setOptions([])
+    setOptionsError(null)
+    setIsLoadingOptions(true)
+    fetch(`${CORE_URL}/models?type=${type}`, { signal: controller.signal })
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      .then((body: { models: string[]; error?: string }) => {
+        if (controller.signal.aborted) return
+        controllerRef.current = null
+        setOptions(body.models)
+        setOptionsError(body.error ?? null)
+        setIsLoadingOptions(false)
+      })
+      .catch(err => {
+        if (err instanceof DOMException && err.name === 'AbortError') return
+        controllerRef.current = null
+        setOptionsError('获取模型列表失败')
+        setIsLoadingOptions(false)
+      })
+  }, [])
+
+  useEffect(() => {
+    loadOptions(selection.type)
+    return () => {
+      controllerRef.current?.abort()
+      controllerRef.current = null
+    }
+  }, [selection.type, reloadKey, loadOptions])
+
+  const current = selection.type === 'ollama' ? selection.ollamaModel : selection.modelName
+  const hasOptions = !isLoadingOptions && options.length > 0
+  const statusText = isLoadingOptions ? '加载中…' : (optionsError ?? '没有可用的模型')
+  const showStatusHint = !hasOptions && current !== ''
+  const choices = current !== '' && !options.includes(current) ? [current, ...options] : options
+
+  const retryLoad = () => {
+    if (!hasOptions && controllerRef.current === null) loadOptions(selection.type)
+  }
+
   return (
     <>
       <div className="model-config-panel__field">
@@ -208,23 +304,31 @@ function ModelSelectionFields({ selection, providerOptions, onChange }: ModelSel
           ))}
         </select>
       </div>
-      {selection.type === 'ollama' ? (
-        <div className="model-config-panel__field">
-          <label>Ollama 模型</label>
-          <input
-            value={selection.ollamaModel}
-            onChange={e => onChange({ ...selection, ollamaModel: e.target.value })}
-          />
-        </div>
-      ) : (
-        <div className="model-config-panel__field">
-          <label>模型名称</label>
-          <input
-            value={selection.modelName}
-            onChange={e => onChange({ ...selection, modelName: e.target.value })}
-          />
-        </div>
-      )}
+      <div className="model-config-panel__field">
+        <label>模型名称</label>
+        <select
+          value={current}
+          onMouseDown={retryLoad}
+          onFocus={retryLoad}
+          onChange={e => onChange(
+            selection.type === 'ollama'
+              ? { ...selection, ollamaModel: e.target.value }
+              : { ...selection, modelName: e.target.value }
+          )}
+        >
+          {hasOptions ? (
+            <>
+              {current === '' && <option value="">请选择</option>}
+              {choices.map(name => (
+                <option key={name} value={name}>{name}</option>
+              ))}
+            </>
+          ) : (
+            <option value={current}>{current !== '' ? current : statusText}</option>
+          )}
+        </select>
+        {showStatusHint && <span className="model-config-panel__hint">{statusText}</span>}
+      </div>
     </>
   )
 }
@@ -237,6 +341,7 @@ export function ModelConfigPanel() {
   const [isSaving, setIsSaving] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [saveNotice, setSaveNotice] = useState<string | null>(null)
+  const [modelsReloadKey, setModelsReloadKey] = useState(0)
   const patchControllerRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
@@ -297,6 +402,7 @@ export function ModelConfigPanel() {
 
       setKeys(data.modelProvider?.keys ?? BLANK_KEYS)
       setForm(toFormState(data))
+      setModelsReloadKey(prev => prev + 1)
       setSaveNotice('已保存')
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
@@ -327,31 +433,40 @@ export function ModelConfigPanel() {
   const setKeyInput = (provider: KeyProvider, value: string) =>
     setForm(prev => ({ ...prev, keyInputs: { ...prev.keyInputs, [provider]: value } }))
 
+  const setKeyEditing = (provider: KeyProvider, editing: boolean) =>
+    setForm(prev => ({ ...prev, keyEditing: { ...prev.keyEditing, [provider]: editing } }))
+
   const setFromEnv = (provider: KeyProvider, checked: boolean) =>
     setForm(prev => ({
       ...prev,
       fromEnv: { ...prev.fromEnv, [provider]: checked },
       keyInputs: checked ? { ...prev.keyInputs, [provider]: '' } : prev.keyInputs,
+      keyEditing: checked ? { ...prev.keyEditing, [provider]: false } : prev.keyEditing,
     }))
 
   return (
     <fieldset className="model-config-panel" disabled={isSaving}>
+      {isSaving && <div className="model-config-panel__saving"><div className="model-config-panel__saving-label">保存中…</div></div>}
       <div className="model-config-panel__section">
         <div className="model-config-panel__section-label">API Key</div>
         <KeyGroup
           provider="anthropic"
           summary={keys.anthropic}
           keyInput={form.keyInputs.anthropic}
+          editing={form.keyEditing.anthropic}
           fromEnv={form.fromEnv.anthropic}
           onKeyInputChange={value => setKeyInput('anthropic', value)}
+          onEditingChange={editing => setKeyEditing('anthropic', editing)}
           onFromEnvChange={checked => setFromEnv('anthropic', checked)}
         />
         <KeyGroup
           provider="openai"
           summary={keys.openai}
           keyInput={form.keyInputs.openai}
+          editing={form.keyEditing.openai}
           fromEnv={form.fromEnv.openai}
           onKeyInputChange={value => setKeyInput('openai', value)}
+          onEditingChange={editing => setKeyEditing('openai', editing)}
           onFromEnvChange={checked => setFromEnv('openai', checked)}
           baseUrl={form.openaiBaseUrl}
           onBaseUrlChange={value => setForm(prev => ({ ...prev, openaiBaseUrl: value }))}
@@ -360,8 +475,10 @@ export function ModelConfigPanel() {
           provider="deepseek"
           summary={keys.deepseek}
           keyInput={form.keyInputs.deepseek}
+          editing={form.keyEditing.deepseek}
           fromEnv={form.fromEnv.deepseek}
           onKeyInputChange={value => setKeyInput('deepseek', value)}
+          onEditingChange={editing => setKeyEditing('deepseek', editing)}
           onFromEnvChange={checked => setFromEnv('deepseek', checked)}
           baseUrl={form.deepseekBaseUrl}
           onBaseUrlChange={value => setForm(prev => ({ ...prev, deepseekBaseUrl: value }))}
@@ -384,6 +501,7 @@ export function ModelConfigPanel() {
         <ModelSelectionFields
           selection={form.chat}
           providerOptions={providerOptionsFor(form.chat.type)}
+          reloadKey={modelsReloadKey}
           onChange={chat => setForm(prev => ({ ...prev, chat }))}
         />
         <div className="model-config-panel__field">
@@ -414,6 +532,7 @@ export function ModelConfigPanel() {
           <ModelSelectionFields
             selection={form.summary}
             providerOptions={providerOptionsFor(form.summary.type)}
+            reloadKey={modelsReloadKey}
             onChange={summary => setForm(prev => ({ ...prev, summary }))}
           />
         )}
