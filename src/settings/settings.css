@@ -815,6 +815,7 @@
 .model-config-panel__secret {
   position: relative;
   flex: 1;
+  min-width: 0;
   display: flex;
 }
 
