@@ -848,6 +848,32 @@ describe('FTS (message_fts)', () => {
     expect(results).toHaveLength(1)
     expect(results[0].messageId).toBe(1)
   })
+
+  it('含标点和查询语法字符的输入不报错，按原文子串匹配', () => {
+    indexMessageFts(1, 's1', 'I like hiking, and swimming')
+    indexMessageFts(2, 's1', '他说"你好"就走了')
+
+    for (const query of ['hiking, ok?', "it's", 'AND OR NOT', '(', '*', 'a:b', 'NEAR(x)', '-x', '你好，吗？']) {
+      expect(() => searchMessagesFts(query)).not.toThrow()
+    }
+    expect(searchMessagesFts('hiking, and').map(r => r.messageId)).toEqual([1])
+    expect(searchMessagesFts('"你好"').map(r => r.messageId)).toEqual([2])
+  })
+
+  it('含 NUL 字符的输入不报错', () => {
+    indexMessageFts(1, 's1', 'cat likes fish')
+
+    expect(() => searchMessagesFts('a\0b')).not.toThrow()
+    expect(searchMessagesFts('ca\0t').map(r => r.messageId)).toEqual([1])
+  })
+
+  it('空白查询返回空结果', () => {
+    indexMessageFts(1, 's1', 'cat likes fish')
+
+    expect(searchMessagesFts('')).toEqual([])
+    expect(searchMessagesFts('   ')).toEqual([])
+    expect(searchMessagesFts('\0')).toEqual([])
+  })
 })
 
 // backfillMessageFts 是 v5 迁移（DIV-002：message_fts 分词器换成 simple）里"回填已 embedded

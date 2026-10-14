@@ -628,7 +628,9 @@ export function indexMessageFts(messageId: number, sessionId: string, content: s
 }
 
 export function searchMessagesFts(query: string, sessionId?: string, limit = 10): FtsSearchResult[] {
-  const params = { query, sessionId, limit }
+  const text = query.replace(/\0/g, '')
+  if (text.trim() === '') return []
+  const params = { query: `"${text.replace(/"/g, '""')}"`, sessionId, limit }
   const rows = (sessionId
     ? db.prepare(`
         SELECT message_id, session_id, rank FROM message_fts
