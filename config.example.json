@@ -1,54 +1,48 @@
-{ 
-  "modelProvider": { 
-    "type": "ollama", 
-    "ollamaBaseUrl": "http://localhost:11434", 
-    "ollamaModel": "qwen3", 
+{
+  "modelProvider": {
+    "type": "ollama",
+    "ollamaBaseUrl": "http://localhost:11434",
+    "ollamaModel": "qwen3",
+    "modelName": "",
+    "maxTokens": 1000,
     "anthropicApiKey": "",
+    "anthropicApiKeyFromEnv": false,
     "openaiApiKey": "",
+    "openaiApiKeyFromEnv": false,
     "openaiBaseUrl": "",
     "deepseekApiKey": "",
+    "deepseekApiKeyFromEnv": false,
     "deepseekBaseUrl": ""
   },
+  "backgroundModelProvider": null,
   "memory": {
     "recentTrackMaxMessages": 50,
     "recentTrackMaxMinutes": 30,
     "organizeWindowStartHour": 22,
     "organizeWindowEndHour": 8,
-    "embeddingQueuePollIntervalMinutes": 5,
-    "summaryTrigger": { 
-      "pendingCountThreshold": 100, 
-      "oldestPendingAgeMinutes": 120, 
-      "messageCountThreshold": 50, 
-      "lockScreenMinutes": 60, 
+    "summaryTrigger": {
+      "pendingCountThreshold": 100,
+      "oldestPendingAgeMinutes": 120,
+      "messageCountThreshold": 50,
+      "lockScreenMinutes": 60,
       "minMessagesForLockTrigger": 4
-    }, 
-    "contextBudget": { 
-      "total": 8000, 
-      "systemPrompt": 1000, 
-      "summary": 1500, 
-      "rag": 2000, 
-      "recentMessages": 3000, 
-      "responseReserve": 500 
-    } 
-  }, 
-  "voice": { 
-    "streamMode": true, 
-    "asrModel": "medium", 
-    "ttsKeepWarmDuringConversation": true 
-  }, 
-  "scheduler": { 
-    "emotionSustainedWindow": 10, 
-    "emotionSustainedMinCount": 6, 
-    "emotionSustainedMinIntensity": 0.6, 
-    "emotionShiftWindow": 5, 
-    "emotionShiftMinIntensity": 0.7, 
-    "cooldownMinutes": 30 
-  }, 
-  "overlay": { 
-    "fullscreenBehavior": "move-to-other-display", 
-    "whitelist": [], 
-    "blacklist": [] 
+    },
+    "contextBudget": {
+      "total": 8000,
+      "systemPrompt": 1000,
+      "summary": 1500,
+      "rag": 2000,
+      "recentMessages": 3000,
+      "responseReserve": 500
+    }
   },
-  "defaultPresetId": "preset-001", 
+  "windowBehavior": {
+    "chatPinMode": "off",
+    "petAvoidanceEnabled": true,
+    "petClickThrough": false,
+    "petCollapsed": false,
+    "appRules": []
+  },
+  "defaultPresetId": "preset-001",
   "streaming": true
-} 
+}
