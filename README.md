@@ -21,15 +21,20 @@ A locally-run AI character companion desktop app. Supports custom character pers
 
 **Chat**
 - Real-time conversation with a custom AI character — "typing" animation followed by the full message shown at once, an instant-messaging-style experience
+- Keep sending while the character is still replying; messages are answered in order
 - Full message history retention, with infinite-scroll-up pagination for older conversations
+- Per-character wallpaper and theme (light / dark / follow system, with an accent color)
 
-**Desktop overlay**  
-- An independent, transparent-background overlay window that lives alongside the chat window (each has its own visibility and avoidance; clicking the overlay opens the chat); character portrait switches in real time based on emotion tags (supports both animated GIF and static images)
-- Auto pin-on-top / hide / jump to another display based on the currently active window, with configurable fullscreen whitelist/blacklist
-- Enters a rest mode on lock screen / screen-off: switches to a sleeping portrait, pauses input monitoring, and preserves conversation context
+**Desktop pet**
+- An independent, transparent-background pet window that lives alongside the chat window (each has its own visibility and avoidance; clicking the pet opens the chat); the portrait switches in real time based on emotion tags (supports both animated GIF and static images)
+- Pixel and illustration forms, switchable per character, with an adjustable size; bored / asleep states and scripted transitions (waking up, being poked)
+- Right-click menu: click-through mode, window size, smart avoidance, form switch, and collapsing the pet into a single handle
+- Avoids fullscreen programs (games, fullscreen video, presentations) and apps you set rules for (allow / make way / avoid completely): moves to a free display, docks to the screen edge, or hides
+- Chat window pin-on-top modes: always / smart (follows the same avoidance) / off
+- Remembers its position on each display
 - Persists in the system tray in the background; double-click the tray icon to bring up the chat window
 
-**Voice** (Phase 4, in progress)
+**Voice** (Phase 4, not yet available)
 - Voice input (faster-whisper ASR)
 - Voice replies (GPT-SoVITS v2, streaming synthesis — playback starts on the first sentence)
 - Multi-part replies: model output is split at sentence boundaries and pushed incrementally to mimic natural conversation pacing, paired with the streaming TTS pipeline
@@ -37,9 +42,18 @@ A locally-run AI character companion desktop app. Supports custom character pers
 
 **Memory system**
 - Dual-track memory: recent conversation is injected directly into context, older conversation is retrieved via RAG
-- bge-m3 vector embeddings, local sqlite-vec indexing
-- Automatic summary compression, entity aggregation
+- bge-m3 vector embeddings, local sqlite-vec indexing, plus Chinese keyword search (SQLite FTS5)
+- Automatic summary compression, entity aggregation; organizing runs in the background without blocking chat
+- Delete a time range of conversation, together with the facts extracted from it; deleted content is erased from the database file
 - Emotion state engine (Phase 2 baseline): currently only the character's own (self) emotion is parsed and persisted; perceived user emotion (perceived_user) is a placeholder design — a full bidirectional emotion model (self and perceived_user influencing each other) is planned for later
+
+**Settings window**
+- Characters: create, switch, or import from a SillyTavern character card; edit name, persona, wallpaper and theme; delete a character together with all its chats and memories
+- Model providers: Anthropic, OpenAI, DeepSeek and Ollama, with model names picked from each provider's live model list
+- API keys are entered in MintBot (only the last 4 characters are shown once saved), or taken from the `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` environment variables if you tick that option
+- Separate models for chat and for background organizing; each character can use the global settings or its own model, API key and summary model
+- Memory management: browse a character's messages, extracted facts and summaries, see organizing progress, delete by time range
+- Window behavior: chat pin-on-top mode, pet smart avoidance and per-app rules
 
 **Human-computer interaction** (Phase 5 / 6, planned — not yet implemented)
 - Local system actions: launching apps, adjusting volume, taking screenshots, etc.
@@ -58,17 +72,17 @@ A locally-run AI character companion desktop app. Supports custom character pers
 |---|---|
 | Desktop framework | Electron + React |
 | Core service | Node.js + Fastify (PM2-managed) |
-| Model calls | @anthropic-ai/sdk / OpenAI API / Ollama |
+| Model calls | Anthropic SDK / OpenAI SDK (OpenAI, DeepSeek) / Ollama |
 | Local model | Ollama (optional, Qwen3 / ChatGLM etc.) |
-| ASR | faster-whisper (Python HTTP service) |
-| TTS | GPT-SoVITS v2 (Python HTTP service) |
-| Embedding | bge-m3 (Python HTTP service) |
+| ASR | faster-whisper (Python HTTP service, planned) |
+| TTS | GPT-SoVITS v2 (Python HTTP service, planned) |
+| Embedding / NER | bge-m3 / bert4ner (Python HTTP service) |
 | Database | SQLite + sqlite-vec |
 | Chinese FTS tokenizer | libsimple ([wangfenjin/simple](https://github.com/wangfenjin/simple), prebuilt binary + jieba dictionary) |
 | Win32 FFI | koffi |
 | Config hot-reload | chokidar |
 
-Model calls support both external APIs (Anthropic / OpenAI) and local Ollama, determined by the config file. All data stays on your machine — no dependency on any cloud storage.
+Model calls support both external APIs (Anthropic / OpenAI / DeepSeek) and local Ollama, chosen in the settings window. All data stays on your machine — no dependency on any cloud storage.
 
 ---
 
@@ -93,7 +107,7 @@ Model calls support both external APIs (Anthropic / OpenAI) and local Ollama, de
 - Node.js 20+
 - pnpm (version per `package.json`)
 - Python 3.10+
-- (Optional) either Ollama or an OpenAI / Anthropic API key
+- (Optional) either Ollama or an Anthropic / OpenAI / DeepSeek API key
 
 ```bash
 # Clone the repo
@@ -112,18 +126,12 @@ pnpm setup:vendor
 # Copy config files
 cp .env.example .env
 cp config.example.json config.json
-# Edit config.json: fill in an API key, or configure local Ollama
-# You can also optionally add a `backgroundModelProvider` field (same shape as
-# `modelProvider`): if omitted, background "housekeeping" tasks (summary generation, entity
-# extraction) reuse the `modelProvider` model; if configured, they use a separate model — handy
-# for using a cheap/fast model for the foreground and a stronger model for background
-# summarization/entity extraction.
-# To use DeepSeek: set `type` to "deepseek"; leave `deepseekBaseUrl` empty to default to
-# https://api.deepseek.com; model names are deepseek-v4-flash / deepseek-v4-pro (DeepSeek is
-# its own first-class provider type with its own deepseekApiKey/deepseekBaseUrl, and does not
-# share credentials with the "openai" provider type).
+# The example config uses local Ollama. Model providers, API keys and models can be changed
+# later in the settings window (Global model service), so you don't need to edit config.json
+# by hand. Ports default to 18300 (core service), 18765 (AI service) and 18173 (dev renderer);
+# change them in .env.
 
-# Initialize the database (idempotent — writes a test preset; required on first run)
+# Initialize the database (idempotent — writes two example characters; required on first run)
 pnpm seed
 
 # Set up the Python AI service's virtual environment (services/ai — local ASR/TTS/Embedding
@@ -155,42 +163,26 @@ The Python AI service (services/ai — local ASR / TTS / Embedding model service
 
 ## Character configuration
 
-Characters are defined via a config file, with portrait assets placed under `assets/characters/character-name/`:
+A character pack is a folder under `assets/characters/<character-name>/`, described by its `manifest.json`:
 
 ```
 assets/characters/my-character/
-  ├── manifest.json     # emotion tag → portrait file mapping
-  ├── avatar.png        # chat window avatar
-  ├── idle.gif
-  ├── happy.gif
-  └── ...
+  ├── manifest.json     # character info, emotion → portrait mapping, sticker pool, transitions
+  ├── avatar.png        # chat window and tray avatar
+  ├── gifs/             # pixel-form portraits (idle.gif, happy.gif, ...)
+  ├── full-body.png     # illustration-form portraits
+  └── emotes/           # stickers the character can send
 ```
 
-Example `manifest.json`:
+`manifest.json` (schema version 3) contains:
 
-```json
-{
-  "name": "my-character",
-  "version": "1.0",
-  "displayName": "Display name",
-  "description": "Character bio, shown on the settings page",
-  "tags": ["gentle", "healing"],
-  "avatar": "avatar.png",
-  "format": "gif",
-  "emotions": {
-    "idle":    { "gif": "idle.gif",    "png": "idle.png" },
-    "happy":   { "gif": "happy.gif",   "png": "happy.png" },
-    "curious": { "gif": "curious.gif", "png": "curious.png" },
-    "sleep":   { "gif": "sleep.gif",   "png": "sleep.png" }
-  },
-  "fallback": "idle",
-  "voice": {
-    "tts_model": "GPT-SoVITS-v2",
-    "reference_audio": "voice_ref.wav",
-    "language": "zh"
-  }
-}
-```
+- `name`, `displayName`, `description`, `tags`, `avatar`: basic character info
+- `emotionVocabulary`: the emotion tags the character can use
+- `portraits.pixel` / `portraits.illustration`: portraits for each form, each with `emotions` (emotion → one or more files, picked at random), a `fallback` emotion, and `reservedStates` (thinking, bored, sleeping, ...)
+- `emotePool`: stickers with tags
+- `transitions`: scripted animations for falling asleep, waking up and being poked
+
+See [`assets/characters/example/manifest.json`](assets/characters/example/manifest.json) for a complete example of every field.
 
 ---
 
@@ -209,7 +201,9 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
 ## Privacy
 
 - All conversation data is stored in local SQLite — nothing is uploaded to any server
-- When using an external API (Anthropic / OpenAI), conversation content is sent to that provider; for privacy-first use, we recommend configuring local Ollama instead
+- API keys stay on your machine: global keys in `config.json`, per-character keys in the local database. Keys taken from environment variables are read at startup and never saved
+- Deleted conversations are erased from the database file and can't be recovered from it
+- When using an external API (Anthropic / OpenAI / DeepSeek), conversation content is sent to that provider; for privacy-first use, we recommend configuring local Ollama instead
 
 ---
 

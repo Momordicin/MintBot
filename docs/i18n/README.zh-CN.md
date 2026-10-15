@@ -21,15 +21,20 @@
 
 **对话**
 - 与自定义 AI 角色实时对话，"对方输入中"动效 + 完整消息一次性显示，类即时通讯体验
+- 角色回复期间可以继续发送，消息按顺序依次回复
 - 消息历史完整留存，支持向上滑动分页加载更早的对话
+- 每个角色可设置壁纸和主题（日间 / 夜间 / 跟随系统，可选强调色）
 
-**桌面悬浮窗**
-- 聊天窗口最小化 / 关闭后自动切换至独立的透明背景悬浮窗，角色立绘根据情绪标签实时切换（支持 GIF 动图和静态图片）
-- 根据当前活跃窗口自动置顶 / 隐藏 / 跳转到其它显示器，全屏白名单与黑名单可配置
-- 锁屏 / 息屏时进入静息模式：切换为睡眠立绘、暂停输入监听、保留对话上下文
+**桌宠**
+- 独立的透明背景桌宠窗口，与聊天窗口并存（二者的显示和避让各自独立，点击桌宠打开聊天窗口）；角色立绘根据情绪标签实时切换（支持 GIF 动图和静态图片）
+- 像素与立绘两种形态，可按角色切换，大小可调；有无聊、睡着状态和脚本化转场（被唤醒、被戳）
+- 右键菜单：窗口穿透、窗口大小、智能避让、形态切换，以及把桌宠收起为一个手柄
+- 避开全屏程序（游戏、全屏视频、演示）和你设了规则的程序（允许 / 让位 / 完全避开）：移到空闲的显示器、贴到屏幕边缘，或隐藏
+- 聊天窗口置顶模式：始终 / 智能（按同样的规则避让）/ 关闭
+- 在每块显示器上分别记住位置
 - 系统托盘后台常驻，双击图标呼出聊天窗口
 
-**语音**（Phase 4，开发中）
+**语音**（Phase 4，尚未提供）
 - 语音输入（faster-whisper ASR）
 - 语音回复（GPT-SoVITS v2，流式合成，首句即播）
 - 多段回复：模型输出按句子边界切分推送，模拟真实对话节奏，与流式 TTS 管线配合实现
@@ -37,9 +42,18 @@
 
 **记忆系统**
 - 双轨记忆：近期对话直接注入 context，历史对话 RAG 召回
-- bge-m3 向量 embedding，sqlite-vec 本地索引
-- 自动摘要压缩，实体聚合
+- bge-m3 向量 embedding，sqlite-vec 本地索引，另有中文关键词检索（SQLite FTS5）
+- 自动摘要压缩，实体聚合；整理在后台进行，不阻塞对话
+- 可按时间范围删除对话，连同从中提取的事实一起删除；删除的内容会从数据库文件中擦除
 - 情绪状态引擎（Phase 2 基础版）：当前仅实现角色自身（self）情绪的解析与持久化；感知用户情绪（perceived_user）为占位设计，完整的双向情绪模型（self 与 perceived_user 互相影响）为后续规划
+
+**设置窗口**
+- 角色：新建、切换，或从 SillyTavern 角色卡导入；编辑名字、人设、壁纸和主题；删除角色时连同它的全部聊天记录和记忆一起删除
+- 模型提供方：Anthropic、OpenAI、DeepSeek 和 Ollama，模型名从各家实时的模型列表里选
+- API Key 在 MintBot 里填写（保存后只显示末尾 4 位），也可以勾选使用环境变量 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY`
+- 对话模型和后台整理模型可分开设置；每个角色可以用全局设置，也可以单独指定模型、API Key 和摘要模型
+- 记忆管理：浏览角色的消息、提取出的事实和摘要，查看整理进度，按时间范围删除
+- 窗口行为：聊天窗口置顶模式、桌宠智能避让和按程序设置的规则
 
 **人机交互**（Phase 5 / 6，规划中，尚未实现）
 - 本地系统操作：启动应用、调整音量、截图等
@@ -58,17 +72,17 @@
 |---|---|
 | 桌面框架 | Electron + React |
 | 核心服务 | Node.js + Fastify（PM2 守护） |
-| 模型调用 | @anthropic-ai/sdk / OpenAI API / Ollama |
+| 模型调用 | Anthropic SDK / OpenAI SDK（OpenAI、DeepSeek）/ Ollama |
 | 本地模型 | Ollama（可选，Qwen3 / ChatGLM 等） |
-| ASR | faster-whisper（Python HTTP 服务） |
-| TTS | GPT-SoVITS v2（Python HTTP 服务） |
-| Embedding | bge-m3（Python HTTP 服务） |
+| ASR | faster-whisper（Python HTTP 服务，规划中） |
+| TTS | GPT-SoVITS v2（Python HTTP 服务，规划中） |
+| Embedding / NER | bge-m3 / bert4ner（Python HTTP 服务） |
 | 数据库 | SQLite + sqlite-vec |
 | 中文全文检索分词 | libsimple（[wangfenjin/simple](https://github.com/wangfenjin/simple)，预编译动态库 + jieba 词典） |
 | Win32 FFI | koffi |
 | 配置热生效 | chokidar |
 
-模型调用支持外部 API（Anthropic / OpenAI）和本地 Ollama，由配置文件决定。数据完全留在本机，不依赖任何云端存储。
+模型调用支持外部 API（Anthropic / OpenAI / DeepSeek）和本地 Ollama，在设置窗口中选择。数据完全留在本机，不依赖任何云端存储。
 
 ---
 
@@ -93,7 +107,7 @@
 - Node.js 20+
 - pnpm（版本见 `package.json`）
 - Python 3.10+
-- （可选）Ollama 或 OpenAI / Anthropic API Key 二选一
+- （可选）Ollama 或 Anthropic / OpenAI / DeepSeek API Key 二选一
 
 ```bash
 # 克隆仓库
@@ -111,15 +125,11 @@ pnpm setup:vendor
 # 复制配置文件
 cp .env.example .env
 cp config.example.json config.json
-# 编辑 config.json，填入 API Key 或配置本地 Ollama
-# 另外可选加一个 backgroundModelProvider 字段（结构同 modelProvider）：不配置时整理模式
-# （摘要生成、实体抽取）沿用 modelProvider 的模型；配置了则用独立模型，方便前台用便宜快的
-# 模型、后台摘要/实体抽取用更强的模型
-# 若使用 DeepSeek：type 填 "deepseek"，deepseekBaseUrl 留空默认使用 https://api.deepseek.com，
-# 模型名用 deepseek-v4-flash / deepseek-v4-pro（DeepSeek 是独立的一等公民 provider 类型，
-# 有自己的 deepseekApiKey/deepseekBaseUrl，与 openai 类型的凭据互不共享）
+# 示例配置默认使用本地 Ollama。模型提供方、API Key 和模型之后都可以在设置窗口
+# （全局模型服务）里修改，不需要手动编辑 config.json。端口默认是 18300（核心服务）、
+# 18765（AI 服务）、18173（开发时的渲染进程），可在 .env 中修改
 
-# 初始化数据库（幂等写入测试 preset，首次运行必须执行）
+# 初始化数据库（幂等写入两个示例角色，首次运行必须执行）
 pnpm seed
 
 # 初始化 Python AI 服务的虚拟环境（services/ai，ASR/TTS/Embedding 等本地模型服务）
@@ -141,48 +151,32 @@ pnpm start:core
 pnpm dev
 ```
 
-Python AI 服务（services/ai，ASR / TTS / Embedding 等本地模型服务）由核心服务自动启停：`pnpm start:core` / `pnpm dev:core` 启动核心服务时，如果检测到 AI 服务还没在运行会自动拉起对应的 `.venv` 中的进程，退出核心服务时一并停掉本次由它自己启动的实例，不需要再手动跑 `pnpm dev:ai`。`pnpm dev:ai` 仍然保留，供需要热重载调试 Python 代码时手动启动使用——核心服务检测到它已经在跑就不会重复启动，但也不会在退出时帮你停掉这个手动启动的实例（需要自己 Ctrl+C）。这个"检测到已在运行"的判断依赖两边用同一个端口：`pnpm dev:ai` 目前硬编码 `--port 8765`，不读 `.env` 里的 `AI_PORT`，如果你改了 `AI_PORT` 又想用 `dev:ai` 热重载调试，需要手动把端口对齐，否则核心服务会以为没人在跑而额外启动第二个实例。
+Python AI 服务（services/ai，ASR / TTS / Embedding 等本地模型服务）由核心服务自动启停：`pnpm start:core` / `pnpm dev:core` 启动核心服务时，如果检测到 AI 服务还没在运行会自动拉起对应的 `.venv` 中的进程，退出核心服务时一并停掉本次由它自己启动的实例，不需要再手动跑 `pnpm dev:ai`。`pnpm dev:ai` 仍然保留，供需要热重载调试 Python 代码时手动启动使用——核心服务检测到它已经在跑就不会重复启动，但也不会在退出时帮你停掉这个手动启动的实例（需要自己 Ctrl+C）。这个"检测到已在运行"的判断依赖两边用同一个端口；`pnpm dev:ai` 和核心服务一样从 `.env` 读取 `AI_PORT`，所以两边会保持一致。
 
 ---
 
 ## 角色配置
 
-角色通过配置文件定义，立绘资源放在 `assets/characters/角色名/` 目录下：
+角色素材包是 `assets/characters/角色名/` 下的一个文件夹，由其中的 `manifest.json` 描述：
 
 ```
 assets/characters/my-character/
-  ├── manifest.json     # 情绪标签 → 立绘文件映射
-  ├── avatar.png        # 聊天窗口头像
-  ├── idle.gif
-  ├── happy.gif
-  └── ...
+  ├── manifest.json     # 角色信息、情绪 → 立绘映射、表情包池、转场
+  ├── avatar.png        # 聊天窗口和托盘头像
+  ├── gifs/             # 像素形态立绘（idle.gif、happy.gif……）
+  ├── full-body.png     # 立绘形态素材
+  └── emotes/           # 角色可以发送的表情包
 ```
 
-`manifest.json` 示例：
+`manifest.json`（schema 版本 3）包含：
 
-```json
-{
-  "name": "my-character",
-  "version": "1.0",
-  "displayName": "显示用名字",
-  "description": "角色简介，设置页展示用",
-  "tags": ["温柔", "治愈"],
-  "avatar": "avatar.png",
-  "format": "gif",
-  "emotions": {
-    "idle":    { "gif": "idle.gif",    "png": "idle.png" },
-    "happy":   { "gif": "happy.gif",   "png": "happy.png" },
-    "curious": { "gif": "curious.gif", "png": "curious.png" },
-    "sleep":   { "gif": "sleep.gif",   "png": "sleep.png" }
-  },
-  "fallback": "idle",
-  "voice": {
-    "tts_model": "GPT-SoVITS-v2",
-    "reference_audio": "voice_ref.wav",
-    "language": "zh"
-  }
-}
-```
+- `name`、`displayName`、`description`、`tags`、`avatar`：角色基本信息
+- `emotionVocabulary`：角色可用的情绪标签
+- `portraits.pixel` / `portraits.illustration`：两种形态各自的立绘，分别包含 `emotions`（情绪 → 一个或多个文件，随机选取）、`fallback` 默认情绪，以及 `reservedStates`（思考、无聊、睡着等）
+- `emotePool`：带标签的表情包
+- `transitions`：入睡、唤醒、被戳时的脚本化动画
+
+完整字段示例见 [`assets/characters/example/manifest.json`](../../assets/characters/example/manifest.json)。
 
 ---
 
@@ -201,7 +195,9 @@ assets/characters/my-character/
 ## 隐私说明
 
 - 所有对话数据存储在本地 SQLite，不上传任何服务器
-- 使用外部 API（Anthropic / OpenAI）时，对话内容会发送至对应服务商；隐私优先用户建议配置本地 Ollama
+- API Key 留在本机：全局 Key 存在 `config.json`，角色单独的 Key 存在本地数据库；从环境变量读取的 Key 只在启动时读入，不会保存
+- 删除的对话会从数据库文件中擦除，无法再从中恢复
+- 使用外部 API（Anthropic / OpenAI / DeepSeek）时，对话内容会发送至对应服务商；隐私优先用户建议配置本地 Ollama
 
 ---
 
