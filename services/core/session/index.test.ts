@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { initDb, db } from '../db/index.js'
 import { upsertPreset, upsertEmotionState, getEmotionState, updatePresetSystemPrompt } from './queries.js'
 import { loadSession, switchPreset, getCurrentState, refreshCurrentPresetIfActive, resolveStartupPresetId } from './index.js'
+import { getLastAttentionAt } from './attention.js'
 import * as BroadcastModule from '../events/broadcast.js'
 import * as ConfigModule from '../config/index.js'
 
@@ -124,6 +125,24 @@ describe('switchPreset', () => {
     expect(getCurrentState()?.preset.presetId).toBe('p1')
     expect(BroadcastModule.broadcastEvent).not.toHaveBeenCalled()
     expect(ConfigModule.setDefaultPresetId).not.toHaveBeenCalled()
+  })
+})
+
+describe('激活时刻作为搭理时间的回退', () => {
+  it('激活一个没有消息的 session 后，getLastAttentionAt 返回激活时刻', () => {
+    const before = Date.now()
+    const { session } = loadSession('p1')
+    const at = getLastAttentionAt(session.sessionId)
+    expect(at).not.toBeNull()
+    expect(at!).toBeGreaterThanOrEqual(before)
+    expect(at!).toBeLessThanOrEqual(Date.now())
+  })
+
+  it('switchPreset 激活的 session 同样记录激活时刻', () => {
+    loadSession('p1')
+    const before = Date.now()
+    const { session } = switchPreset('p2')
+    expect(getLastAttentionAt(session.sessionId)!).toBeGreaterThanOrEqual(before)
   })
 })
 

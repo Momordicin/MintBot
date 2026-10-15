@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { db, initDb } from '../db/index.js'
 import { appendMessage } from './queries.js'
-import { recordAttention, getLastAttentionAt, markExplicitSleep, isExplicitSleep } from './attention.js'
+import { recordAttention, getLastAttentionAt, markExplicitSleep, isExplicitSleep, noteSessionActivated } from './attention.js'
 
 initDb()
 
@@ -42,6 +42,30 @@ describe('session/attention', () => {
     expect(getLastAttentionAt('session-b')).toBeNull()
     expect(isExplicitSleep('session-a')).toBe(false)
     expect(isExplicitSleep('session-b')).toBe(true)
+  })
+
+  it('没有消息也没有搭理过时，回退到该 session 最近一次被激活的时刻', () => {
+    noteSessionActivated('session-empty', 3000)
+    expect(getLastAttentionAt('session-empty')).toBe(3000)
+
+    noteSessionActivated('session-empty', 4000)
+    expect(getLastAttentionAt('session-empty')).toBe(4000)
+  })
+
+  it('有历史消息或搭理记录时，激活时刻不参与', () => {
+    const sessionId = 'session-activated-with-history'
+    appendMessage({ sessionId, role: 'user', content: 'hi', createdAt: 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
+    noteSessionActivated(sessionId, 9000)
+    expect(getLastAttentionAt(sessionId)).toBe(1000)
+
+    recordAttention(sessionId, 5000)
+    expect(getLastAttentionAt(sessionId)).toBe(5000)
+  })
+
+  it('激活不清除显式睡着标记', () => {
+    markExplicitSleep('session-sleepy')
+    noteSessionActivated('session-sleepy', 3000)
+    expect(isExplicitSleep('session-sleepy')).toBe(true)
   })
 
   it('isExplicitSleep 默认返回 false', () => {
