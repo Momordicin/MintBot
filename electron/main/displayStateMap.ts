@@ -34,18 +34,20 @@ function findRule(rules: BlockingRules, exeName: string): AppRule | undefined {
   return rules.appRules.find(rule => rule.exeName.toLowerCase() === lower)
 }
 
-const SHELL_UI_EXE = 'explorer.exe'
-const SHELL_UI_CLASSES = new Set([
-  'XamlExplorerHostIslandWindow',
-  'MultitaskingViewFrame',
-  'ForegroundStaging',
-  'TaskSwitcherWnd',
-  'Progman',
-  'WorkerW',
+const SHELL_UI_CLASSES_BY_EXE = new Map<string, Set<string>>([
+  ['explorer.exe', new Set([
+    'XamlExplorerHostIslandWindow',
+    'MultitaskingViewFrame',
+    'ForegroundStaging',
+    'TaskSwitcherWnd',
+    'Progman',
+    'WorkerW',
+  ])],
+  ['lockapp.exe', new Set(['Windows.UI.Core.CoreWindow'])],
 ])
 
 export function isShellUiWindow(info: Pick<ExternalWindowInfo, 'exeName' | 'className'>): boolean {
-  return info.exeName !== null && info.exeName.toLowerCase() === SHELL_UI_EXE && SHELL_UI_CLASSES.has(info.className)
+  return info.exeName !== null && SHELL_UI_CLASSES_BY_EXE.get(info.exeName.toLowerCase())?.has(info.className) === true
 }
 
 function classify(

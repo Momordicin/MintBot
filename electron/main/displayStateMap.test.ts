@@ -213,6 +213,29 @@ describe('shell UI exclusion', () => {
     expect(map.get(1)?.severity).toBe('hard')
   })
 
+  it('LockApp.exe lock screen window creates no blocker', () => {
+    const map = applyExternalObservation(
+      new Map(),
+      shellInfo({ exeName: 'LockApp.exe', className: 'Windows.UI.Core.CoreWindow' }),
+      NO_RULES
+    )
+    expect(map.size).toBe(0)
+  })
+
+  it('still blocks a fullscreen CoreWindow from another process', () => {
+    const map = applyExternalObservation(
+      new Map(),
+      shellInfo({ exeName: 'game.exe', className: 'Windows.UI.Core.CoreWindow' }),
+      NO_RULES
+    )
+    expect(map.get(1)?.severity).toBe('hard')
+  })
+
+  it('still blocks a fullscreen LockApp.exe window of another class', () => {
+    const map = applyExternalObservation(new Map(), shellInfo({ exeName: 'LockApp.exe', className: 'OtherClass' }), NO_RULES)
+    expect(map.get(1)?.severity).toBe('hard')
+  })
+
   it('still blocks a non-explorer process using a listed class', () => {
     const map = applyExternalObservation(
       new Map(),
