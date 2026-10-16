@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify'
 import { recordSystemEvent } from '../system/lockState.js'
 import { getCurrentState } from '../session/index.js'
 import { recordAttention } from '../session/attention.js'
+import { invalidRequest } from '../../../shared/errorCodes.js'
 
 const VALID_TYPES = new Set(['lock-screen', 'unlock-screen'])
 
@@ -16,7 +17,7 @@ export async function internalRoutes(fastify: FastifyInstance) {
   }>('/internal/system-event', async (request, reply) => {
     const { type } = request.body
     if (!VALID_TYPES.has(type)) {
-      return reply.status(400).send({ error: 'Invalid system event type' })
+      return reply.status(400).send(invalidRequest('Invalid system event type'))
     }
 
     recordSystemEvent(type as 'lock-screen' | 'unlock-screen')
@@ -29,7 +30,7 @@ export async function internalRoutes(fastify: FastifyInstance) {
   }>('/internal/overlay-interaction', async (request, reply) => {
     const { type } = request.body
     if (!VALID_INTERACTION_TYPES.has(type)) {
-      return reply.status(400).send({ error: 'Invalid overlay interaction type' })
+      return reply.status(400).send(invalidRequest('Invalid overlay interaction type'))
     }
 
     const state = getCurrentState()

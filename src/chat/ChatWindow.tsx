@@ -1,7 +1,8 @@
 // src/chat/ChatWindow.tsx — 聊天窗口主界面：加载当前预设与历史消息，发送消息并读取回复，按预设显示配置应用壁纸、头像与主题色
 // 用法：App 渲染 <ChatWindow />；GET /state、/ai-available、/messages、/characters/:id/manifest.json，POST /chat（读 SSE：message_done / system），GET /events（preset-switched）；调用 electronAPI.setTitlebarOverlay
-// 对应文件：src/App.tsx / src/chat/MessageList.tsx / src/chat/InputBar.tsx / src/chat/TitleBar.tsx / src/chat/MessageBubble.tsx / src/chat/sse.ts / src/chat/theme.ts / src/eventsWatchdog.ts / services/core/index.ts / services/core/routes/chat.ts / services/core/routes/messages.ts / services/core/routes/status.ts / services/core/routes/events.ts / electron/main/index.ts（titlebar:set-overlay）
+// 对应文件：src/App.tsx / src/chat/MessageList.tsx / src/chat/InputBar.tsx / src/chat/TitleBar.tsx / src/chat/MessageBubble.tsx / src/chat/sse.ts / src/chat/theme.ts / src/eventsWatchdog.ts / src/errorText.ts / services/core/index.ts / services/core/routes/chat.ts / services/core/routes/messages.ts / services/core/routes/status.ts / services/core/routes/events.ts / electron/main/index.ts（titlebar:set-overlay）
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { MessageList } from './MessageList'
 import { InputBar } from './InputBar'
 import { TitleBar } from './TitleBar'
@@ -12,6 +13,8 @@ import { DEFAULT_CHAT_BG_OPACITY, DEFAULT_THEME_INPUT, resolveThemeMode, themeCs
 import { usePrefersDark } from '../usePrefersDark.js'
 import { createWatchdogEventSource } from '../eventsWatchdog.js'
 import type { AppState, PresetSnapshot } from '../../shared/types/index.js'
+import type { ErrorBody } from '../../shared/errorCodes.js'
+import { errorText } from '../errorText.js'
 import './chat.css'
 
 import { CORE_URL, resolveAssetUrl } from '../coreUrl.js'
@@ -78,6 +81,7 @@ async function fetchAvatarUrls(characterId: string, signal?: AbortSignal): Promi
 }
 
 export function ChatWindow() {
+  const { t, i18n } = useTranslation()
   const hasFetched = useRef(false)
   const [messages, setMessages] = useState<MessageData[]>([])
   const [isReplying, setIsReplying] = useState(false)
@@ -128,7 +132,7 @@ export function ChatWindow() {
         beginSession(state, true, controller.signal)
       })
       .catch(() => {
-        addSystemMessage('无法连接核心服务，请确认服务已启动', true)
+        addSystemMessage(i18n.t('无法连接核心服务，请确认服务已启动'), true)
       })
   }, [])
 
@@ -309,7 +313,7 @@ export function ChatWindow() {
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
-      addSystemMessage('加载历史消息失败', true)
+      addSystemMessage(i18n.t('加载历史消息失败'), true)
       applyNoHistoryAvatarDim(mode, signal)
     }
   }
@@ -338,7 +342,7 @@ export function ChatWindow() {
       }
     } catch (err) {
       if (!(err instanceof DOMException && err.name === 'AbortError')) {
-        addSystemMessage('加载历史消息失败', true)
+        addSystemMessage(i18n.t('加载历史消息失败'), true)
       }
     } finally {
       isLoadingMoreRef.current = false
@@ -404,15 +408,15 @@ export function ChatWindow() {
         }
 
         if (event === 'system') {
-          const { payload, sessionId: replySessionId } = data as { type: string; payload: { message: string }; sessionId: string }
+          const { payload, sessionId: replySessionId } = data as { type: string; payload: ErrorBody; sessionId: string }
           if (replySessionId !== appStateRef.current?.sessionId) continue
-          addSystemMessage(payload.message, true)
+          addSystemMessage(errorText(payload, i18n.t), true)
         }
 
       }
     } catch (err) {
       if (!(err instanceof DOMException && err.name === 'AbortError')) {
-        addSystemMessage('回复失败，请稍后重试', true)
+        addSystemMessage(i18n.t('回复失败，请稍后重试'), true)
       }
     } finally {
       activeControllersRef.current.delete(controller)
@@ -420,7 +424,7 @@ export function ChatWindow() {
     }
   }, [])
 
-  const displayName = appState?.presetSnapshot?.name ?? '角色'
+  const displayName = appState?.presetSnapshot?.name ?? t('角色')
 
   return (
     <div
@@ -431,7 +435,7 @@ export function ChatWindow() {
 
       {appState?.ollamaReady === false && (
         <div className="banner banner--warn">
-          Ollama 未运行，请先启动 Ollama
+          {t('Ollama 未运行，请先启动 Ollama')}
         </div>
       )}
 

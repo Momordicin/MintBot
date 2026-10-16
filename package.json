@@ -18,6 +18,8 @@
     "setup:ai": "tsx scripts/setup-ai-env.ts",
     "demo:fts": "tsx scripts/demos/fts-chinese-search.ts",
     "typecheck": "tsc --build tsconfig.json",
+    "i18n:extract": "i18next-cli extract",
+    "i18n:status": "i18next-cli status",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -42,11 +44,13 @@
     "color2k": "^2.0.4",
     "dotenv": "^17.4.2",
     "fastify": "^5.8.5",
+    "i18next": "^26.4.6",
     "koffi": "^3.1.6",
     "node-cron": "^4.6.0",
     "openai": "7.32.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
+    "react-i18next": "^17.0.18",
     "sqlite-vec": "^0.1.9"
   },
   "devDependencies": {
@@ -59,6 +63,7 @@
     "concurrently": "^10.0.3",
     "electron": "^42.4.1",
     "electron-vite": "^5.0.0",
+    "i18next-cli": "^1.75.3",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
     "vite": "^8.1.0",

@@ -11,5 +11,5 @@
     "rootDir": "../..",
     "outDir": "../../out/core"
   },
-  "include": ["./**/*", "../../shared/**/*"]
+  "include": ["./**/*", "../../shared/**/*", "../../shared/i18n/*.json"]
 }

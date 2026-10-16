@@ -3,6 +3,7 @@
 // 形状：props { sessionId: string }；删除结果含各类记录的删除条数
 // 对应文件：src/settings/memory/MemoryPanel.tsx / services/core/routes/forget.ts
 import React, { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { CORE_URL } from '../../coreUrl.js'
 
@@ -41,6 +42,7 @@ function datetimeLocalToEpoch(value: string): number | null {
 }
 
 export function ForgetRangePanel({ sessionId }: ForgetRangePanelProps) {
+  const { t } = useTranslation()
   const [fromValue, setFromValue] = useState('')
   const [toValue, setToValue] = useState('')
   const [validationError, setValidationError] = useState<string | null>(null)
@@ -75,11 +77,11 @@ export function ForgetRangePanel({ sessionId }: ForgetRangePanelProps) {
     setDeleteResult(null)
 
     if (fromTime === null || toTime === null) {
-      setValidationError('请输入起止时间')
+      setValidationError(t('请输入起止时间'))
       return
     }
     if (fromTime > toTime) {
-      setValidationError('起始时间不能晚于结束时间')
+      setValidationError(t('起始时间不能晚于结束时间'))
       return
     }
     setValidationError(null)
@@ -97,7 +99,7 @@ export function ForgetRangePanel({ sessionId }: ForgetRangePanelProps) {
       setAlsoDeleteAffectedSummaries(false)
       setConfirmStep(false)
     } catch {
-      setError('检查影响范围失败，请稍后重试')
+      setError(t('检查影响范围失败，请稍后重试'))
     } finally {
       setIsChecking(false)
     }
@@ -120,7 +122,7 @@ export function ForgetRangePanel({ sessionId }: ForgetRangePanelProps) {
         setCheckResult(impact)
         setCheckedRange({ fromTime: rangeFrom, toTime: rangeTo })
         setConfirmStep(false)
-        setConflictMessage('删除被拒绝：存在与所选时间段重叠的摘要，请勾选"同时删除这些摘要"后重试')
+        setConflictMessage(t('删除被拒绝：存在与所选时间段重叠的摘要，请勾选"同时删除这些摘要"后重试'))
         return
       }
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
@@ -131,7 +133,7 @@ export function ForgetRangePanel({ sessionId }: ForgetRangePanelProps) {
       setCheckedRange(null)
       setConfirmStep(false)
     } catch {
-      setError('删除失败，请稍后重试')
+      setError(t('删除失败，请稍后重试'))
     } finally {
       setIsDeleting(false)
     }
@@ -140,7 +142,7 @@ export function ForgetRangePanel({ sessionId }: ForgetRangePanelProps) {
   return (
     <div className="forget-panel">
       <div className="forget-panel__field">
-        <label>起始时间</label>
+        <label>{t('起始时间')}</label>
         <input
           type="datetime-local"
           value={fromValue}
@@ -149,7 +151,7 @@ export function ForgetRangePanel({ sessionId }: ForgetRangePanelProps) {
         />
       </div>
       <div className="forget-panel__field">
-        <label>结束时间</label>
+        <label>{t('结束时间')}</label>
         <input
           type="datetime-local"
           value={toValue}
@@ -161,7 +163,7 @@ export function ForgetRangePanel({ sessionId }: ForgetRangePanelProps) {
       {validationError && <div className="character-panel__error">{validationError}</div>}
 
       <button className="memory-btn" onClick={handleCheck} disabled={isChecking}>
-        {isChecking ? '检查中…' : '检查影响范围'}
+        {isChecking ? t('检查中…') : t('检查影响范围')}
       </button>
 
       {error && <div className="character-panel__error">{error}</div>}
@@ -169,17 +171,17 @@ export function ForgetRangePanel({ sessionId }: ForgetRangePanelProps) {
 
       {checkResult && (
         <div className="forget-panel__result">
-          <div>共 {checkResult.messageIds.length} 条消息将被删除</div>
+          <div>{t('共 {{count}} 条消息将被删除', { count: checkResult.messageIds.length })}</div>
           {checkResult.affectedSummaries.length > 0 && (
             <>
-              <div>有 {checkResult.affectedSummaries.length} 条摘要与所选时间段重叠</div>
+              <div>{t('有 {{count}} 条摘要与所选时间段重叠', { count: checkResult.affectedSummaries.length })}</div>
               <label className="forget-panel__checkbox">
                 <input
                   type="checkbox"
                   checked={alsoDeleteAffectedSummaries}
                   onChange={e => setAlsoDeleteAffectedSummaries(e.target.checked)}
                 />
-                同时删除这些摘要（否则删除会被拒绝）
+                {t('同时删除这些摘要（否则删除会被拒绝）')}
               </label>
             </>
           )}
@@ -188,26 +190,27 @@ export function ForgetRangePanel({ sessionId }: ForgetRangePanelProps) {
 
       {!confirmStep && (
         <button className="memory-btn memory-btn--danger" onClick={() => setConfirmStep(true)} disabled={isStale}>
-          删除
+          {t('删除')}
         </button>
       )}
 
       {confirmStep && checkResult && (
         <div className="forget-panel__confirm">
           <div>
-            此操作不可撤销，将删除 {checkResult.messageIds.length} 条消息
-            {checkResult.affectedSummaries.length > 0 && `，以及 ${checkResult.affectedSummaries.length} 条摘要`}
+            {checkResult.affectedSummaries.length > 0
+              ? t('此操作不可撤销，将删除 {{count}} 条消息，以及 {{summaries}} 条摘要', { count: checkResult.messageIds.length, summaries: checkResult.affectedSummaries.length })
+              : t('此操作不可撤销，将删除 {{count}} 条消息', { count: checkResult.messageIds.length })}
           </div>
-          <button className="memory-btn" onClick={() => setConfirmStep(false)}>取消</button>
+          <button className="memory-btn" onClick={() => setConfirmStep(false)}>{t('取消')}</button>
           <button className="memory-btn memory-btn--danger" onClick={handleConfirmDelete} disabled={isDeleting}>
-            {isDeleting ? '删除中…' : '确认删除'}
+            {isDeleting ? t('删除中…') : t('确认删除')}
           </button>
         </div>
       )}
 
       {deleteResult && (
         <div className="forget-panel__result">
-          已删除 {deleteResult.deletedMessages} 条消息、{deleteResult.deletedEntities} 条实体、{deleteResult.deletedSummaries} 条摘要
+          {t('已删除 {{messages}} 条消息、{{entities}} 条实体、{{summaries}} 条摘要', { messages: deleteResult.deletedMessages, entities: deleteResult.deletedEntities, summaries: deleteResult.deletedSummaries })}
         </div>
       )}
     </div>

@@ -7,6 +7,7 @@ import { computeEmbeddingQueueStatus } from '../memory/orchestrator.js'
 import { VALID_TYPES } from '../memory/entityExtractor.js'
 import { getCurrentState } from '../session/index.js'
 import type { MessageEntity } from '../../../shared/types/index.js'
+import { invalidRequest } from '../../../shared/errorCodes.js'
 
 const DEFAULT_LIMIT = 20
 const MIN_LIMIT = 1
@@ -19,18 +20,18 @@ export async function memoryRoutes(fastify: FastifyInstance) {
     const { sessionId, type, limit: limitRaw, beforeId: beforeIdRaw } = request.query
 
     if (!sessionId?.trim()) {
-      return reply.status(400).send({ error: 'sessionId is required' })
+      return reply.status(400).send(invalidRequest('sessionId is required'))
     }
 
     if (type !== undefined && type !== '' && !VALID_TYPES.has(type as MessageEntity['type'])) {
-      return reply.status(400).send({ error: 'invalid type' })
+      return reply.status(400).send(invalidRequest('invalid type'))
     }
 
     let limit = DEFAULT_LIMIT
     if (limitRaw !== undefined && limitRaw !== '') {
       const parsed = Number(limitRaw)
       if (!Number.isFinite(parsed)) {
-        return reply.status(400).send({ error: 'limit must be a number' })
+        return reply.status(400).send(invalidRequest('limit must be a number'))
       }
       limit = Math.min(MAX_LIMIT, Math.max(MIN_LIMIT, Math.trunc(parsed)))
     }
@@ -39,7 +40,7 @@ export async function memoryRoutes(fastify: FastifyInstance) {
     if (beforeIdRaw !== undefined && beforeIdRaw !== '') {
       const parsed = Number(beforeIdRaw)
       if (!Number.isInteger(parsed)) {
-        return reply.status(400).send({ error: 'beforeId must be an integer' })
+        return reply.status(400).send(invalidRequest('beforeId must be an integer'))
       }
       beforeId = parsed
     }
@@ -53,7 +54,7 @@ export async function memoryRoutes(fastify: FastifyInstance) {
     const { sessionId } = request.query
 
     if (!sessionId?.trim()) {
-      return reply.status(400).send({ error: 'sessionId is required' })
+      return reply.status(400).send(invalidRequest('sessionId is required'))
     }
 
     return getSummaries(sessionId)

@@ -8,6 +8,7 @@ import fs from 'fs'
 import crypto from 'crypto'
 import { parseCharacterCard } from '../characters/cardImport.js'
 import { CHARACTERS_ROOT } from '../characters/manifest.js'
+import { ERROR_CODES, errorBody } from '../../../shared/errorCodes.js'
 import type { BuiltContext, CompletionOptions } from '../../../shared/types/index.js'
 
 const ALLOWED_AVATAR_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif'])
@@ -99,8 +100,8 @@ export async function characterImportRoutes(fastify: FastifyInstance) {
 
   fastify.post<{ Body: Buffer }>('/characters/import/parse', { bodyLimit: 5 * 1024 * 1024 }, async (request, reply) => {
     const result = parseCharacterCard(request.body)
-    if ('error' in result) {
-      return reply.status(400).send({ error: result.error })
+    if ('code' in result) {
+      return reply.status(400).send(result)
     }
 
     return {
@@ -139,7 +140,7 @@ export async function characterImportRoutes(fastify: FastifyInstance) {
       return { systemPrompt }
     } catch (err) {
       request.log.error(err, 'Failed to generate character card system prompt')
-      return reply.status(502).send({ error: 'Failed to generate system prompt' })
+      return reply.status(502).send(errorBody(ERROR_CODES.SYSTEM_PROMPT_GENERATION_FAILED))
     }
   })
 
@@ -160,7 +161,7 @@ export async function characterImportRoutes(fastify: FastifyInstance) {
     }
     const ext = path.extname(filename).slice(1).toLowerCase()
     if (!ALLOWED_AVATAR_EXTENSIONS.has(ext)) {
-      return reply.status(400).send({ error: 'Unsupported file extension' })
+      return reply.status(400).send(errorBody(ERROR_CODES.WALLPAPER_UNSUPPORTED_EXTENSION))
     }
 
     const characterDir = path.join(CHARACTERS_ROOT, characterId)
@@ -179,7 +180,7 @@ export async function characterImportRoutes(fastify: FastifyInstance) {
       } catch {
       }
       request.log.error(err, 'Failed to save character avatar')
-      return reply.status(500).send({ error: 'Failed to save avatar' })
+      return reply.status(500).send(errorBody(ERROR_CODES.AVATAR_SAVE_FAILED))
     }
 
     return { avatar: avatarFilename }
@@ -202,7 +203,7 @@ export async function characterImportRoutes(fastify: FastifyInstance) {
       mergeManifestFields(characterId, fields)
     } catch (err) {
       request.log.error(err, 'Failed to save character metadata')
-      return reply.status(500).send({ error: 'Failed to save character metadata' })
+      return reply.status(500).send(errorBody(ERROR_CODES.CHARACTER_METADATA_SAVE_FAILED))
     }
 
     return { ok: true }

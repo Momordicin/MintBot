@@ -1,12 +1,15 @@
 // src/settings/WindowBehaviorPanel.tsx — 设置窗口的"窗口行为"面板：聊天窗口置顶模式、桌宠智能避让开关、应用规则
 // 用法：SettingsApp 里渲染 <WindowBehaviorPanel />；读写 GET/PATCH /config/window-behavior，监听 SSE window-behavior-changed；添加规则时调用 electronAPI.selectExeFile
-// 对应文件：shared/windowBehavior.ts（快照契约）/ src/eventsWatchdog.ts / services/core/routes/windowBehavior.ts / electron/main/index.ts（select-exe-file、托盘同一组开关）
+// 对应文件：shared/windowBehavior.ts（快照契约）/ src/eventsWatchdog.ts / src/errorText.ts / services/core/routes/windowBehavior.ts / electron/main/index.ts（select-exe-file、托盘同一组开关）
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import './settings.css'
 
 import { CORE_URL } from '../coreUrl.js'
 import { createWatchdogEventSource } from '../eventsWatchdog.js'
 import { isNewerSnapshot } from '../../shared/windowBehavior.js'
+import { isErrorBody } from '../../shared/errorCodes.js'
+import { errorText } from '../errorText.js'
 import type {
   AppRuleEffect,
   ChatPinMode,
@@ -14,19 +17,18 @@ import type {
   WindowBehaviorSnapshot,
 } from '../../shared/windowBehavior.js'
 
-const CHAT_PIN_MODE_OPTIONS: ReadonlyArray<{ value: ChatPinMode; label: string }> = [
-  { value: 'always', label: '始终置顶' },
-  { value: 'smart', label: '智能置顶' },
-  { value: 'off', label: '不置顶' },
-]
-
-const APP_RULE_EFFECT_OPTIONS: ReadonlyArray<{ value: AppRuleEffect; label: string }> = [
-  { value: 'allow', label: '不避让' },
-  { value: 'soft', label: '轻度避让' },
-  { value: 'hard', label: '完全隐藏' },
-]
-
 export function WindowBehaviorPanel() {
+  const { t } = useTranslation()
+  const chatPinModeOptions: ReadonlyArray<{ value: ChatPinMode; label: string }> = [
+    { value: 'always', label: t('始终置顶') },
+    { value: 'smart', label: t('智能置顶') },
+    { value: 'off', label: t('不置顶') },
+  ]
+  const appRuleEffectOptions: ReadonlyArray<{ value: AppRuleEffect; label: string }> = [
+    { value: 'allow', label: t('不避让') },
+    { value: 'soft', label: t('轻度避让') },
+    { value: 'hard', label: t('完全隐藏') },
+  ]
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [snapshot, setSnapshot] = useState<WindowBehaviorSnapshot | null>(null)
@@ -58,9 +60,9 @@ export function WindowBehaviorPanel() {
   useEffect(() => {
     fetchSnapshot()
       .then(applySnapshot)
-      .catch(() => setLoadError('加载窗口行为配置失败，请稍后重试'))
+      .catch(() => setLoadError(t('加载窗口行为配置失败，请稍后重试')))
       .finally(() => setLoading(false))
-  }, [fetchSnapshot, applySnapshot])
+  }, [fetchSnapshot, applySnapshot, t])
 
   useEffect(() => {
     const watchdog = createWatchdogEventSource({
@@ -101,17 +103,17 @@ export function WindowBehaviorPanel() {
 
       if (!response.ok) {
         const payload = await response.json().catch(() => null)
-        throw new Error(typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`)
+        throw new Error(isErrorBody(payload) ? errorText(payload, t) : `HTTP ${response.status}`)
       }
 
       applySnapshot((await response.json()) as WindowBehaviorSnapshot)
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
-      setErrorMessage(err instanceof Error ? err.message : '保存窗口行为配置失败，请稍后重试')
+      setErrorMessage(err instanceof Error ? err.message : t('保存窗口行为配置失败，请稍后重试'))
     } finally {
       if (!controller.signal.aborted) setSaving(false)
     }
-  }, [applySnapshot])
+  }, [applySnapshot, t])
 
   const handleAddRule = useCallback(async () => {
     const result = await window.electronAPI.selectExeFile()
@@ -139,11 +141,11 @@ export function WindowBehaviorPanel() {
   }, [snapshot, patchConfig])
 
   if (loading) {
-    return <div className="memory-loading">加载中…</div>
+    return <div className="memory-loading">{t('加载中…')}</div>
   }
 
   if (!snapshot) {
-    return <div className="character-panel__error">{loadError ?? '加载窗口行为配置失败，请稍后重试'}</div>
+    return <div className="character-panel__error">{loadError ?? t('加载窗口行为配置失败，请稍后重试')}</div>
   }
 
   const config = snapshot.config
@@ -151,9 +153,9 @@ export function WindowBehaviorPanel() {
   return (
     <div className="window-behavior-panel">
       <div className="window-behavior-panel__section">
-        <div className="window-behavior-panel__section-label">聊天窗口置顶</div>
-        <div className="character-panel__hint">只影响聊天窗口，不影响桌宠。</div>
-        {CHAT_PIN_MODE_OPTIONS.map(option => (
+        <div className="window-behavior-panel__section-label">{t('聊天窗口置顶')}</div>
+        <div className="character-panel__hint">{t('只影响聊天窗口，不影响桌宠。')}</div>
+        {chatPinModeOptions.map(option => (
           <label key={option.value} className="window-behavior-panel__choice">
             <input
               type="radio"
@@ -169,7 +171,7 @@ export function WindowBehaviorPanel() {
       </div>
 
       <div className="window-behavior-panel__section">
-        <div className="window-behavior-panel__section-label">智能避让</div>
+        <div className="window-behavior-panel__section-label">{t('智能避让')}</div>
         <label className="window-behavior-panel__choice">
           <input
             type="checkbox"
@@ -177,22 +179,22 @@ export function WindowBehaviorPanel() {
             disabled={saving}
             onChange={e => patchConfig({ petAvoidanceEnabled: e.target.checked })}
           />
-          <span>开启</span>
+          <span>{t('开启')}</span>
         </label>
         <div className="character-panel__hint">
           {config.petAvoidanceEnabled
-            ? '桌宠会避让全屏或指定应用，必要时自动移动到其他屏幕、贴边或暂时隐藏。'
-            : '桌宠保持悬浮，但不会再自动避让其他应用。'}
+            ? t('桌宠会避让全屏或指定应用，必要时自动移动到其他屏幕、贴边或暂时隐藏。')
+            : t('桌宠保持悬浮，但不会再自动避让其他应用。')}
         </div>
       </div>
 
       <div className="window-behavior-panel__section">
-        <div className="window-behavior-panel__section-label">应用规则</div>
+        <div className="window-behavior-panel__section-label">{t('应用规则')}</div>
         <div className="character-panel__hint">
-          为单个程序指定避让方式。「不避让」表示即使它全屏，桌宠也照常显示。
+          {t('为单个程序指定避让方式。「不避让」表示即使它全屏，桌宠也照常显示。')}
         </div>
         <div className="memory-list">
-          {config.appRules.length === 0 && <div className="memory-empty">暂无</div>}
+          {config.appRules.length === 0 && <div className="memory-empty">{t('暂无')}</div>}
           {config.appRules.map(rule => (
             <div key={rule.exeName} className="window-behavior-panel__list-row">
               <span>{rule.exeName}</span>
@@ -203,16 +205,16 @@ export function WindowBehaviorPanel() {
                   disabled={saving}
                   onChange={e => handleRuleEffectChange(rule.exeName, e.target.value as AppRuleEffect)}
                 >
-                  {APP_RULE_EFFECT_OPTIONS.map(option => (
+                  {appRuleEffectOptions.map(option => (
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
-                <button className="memory-btn memory-btn--danger" disabled={saving} onClick={() => handleRemoveRule(rule.exeName)}>删除</button>
+                <button className="memory-btn memory-btn--danger" disabled={saving} onClick={() => handleRemoveRule(rule.exeName)}>{t('删除')}</button>
               </div>
             </div>
           ))}
         </div>
-        <button className="memory-btn" disabled={saving} onClick={handleAddRule}>添加</button>
+        <button className="memory-btn" disabled={saving} onClick={handleAddRule}>{t('添加')}</button>
       </div>
 
       {errorMessage && <div className="character-panel__error">{errorMessage}</div>}

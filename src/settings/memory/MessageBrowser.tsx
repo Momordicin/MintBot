@@ -2,6 +2,7 @@
 // 用法：MemoryPanel 渲染 <MessageBrowser sessionId />；GET /messages?sessionId&limit&beforeId
 // 对应文件：src/settings/memory/MemoryPanel.tsx / services/core/routes/messages.ts
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { CORE_URL } from '../../coreUrl.js'
 const PAGE_SIZE = 20
@@ -18,17 +19,17 @@ interface MessagesPageResponse {
   hasMore: boolean
 }
 
-const ROLE_LABELS: Record<HistoryMessage['role'], string> = {
-  user: '用户',
-  assistant: '助手',
-  system: '系统',
-}
-
 interface MessageBrowserProps {
   sessionId: string
 }
 
 export function MessageBrowser({ sessionId }: MessageBrowserProps) {
+  const { t, i18n } = useTranslation()
+  const roleLabels: Record<HistoryMessage['role'], string> = {
+    user: t('用户'),
+    assistant: t('助手'),
+    system: t('系统'),
+  }
   const [messages, setMessages] = useState<HistoryMessage[]>([])
   const [hasMore, setHasMore] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
@@ -54,7 +55,7 @@ export function MessageBrowser({ sessionId }: MessageBrowserProps) {
       })
       .catch(err => {
         if (err instanceof DOMException && err.name === 'AbortError') return
-        setError('加载消息失败')
+        setError(i18n.t('加载消息失败'))
       })
       .finally(() => {
         if (controller.signal.aborted) return
@@ -90,7 +91,7 @@ export function MessageBrowser({ sessionId }: MessageBrowserProps) {
       setHasMore(page.hasMore)
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
-      setError('加载更早消息失败')
+      setError(i18n.t('加载更早消息失败'))
     } finally {
       if (!controller.signal.aborted) setIsLoadingMore(false)
     }
@@ -101,22 +102,22 @@ export function MessageBrowser({ sessionId }: MessageBrowserProps) {
       {error && (
         <div className="character-panel__error">
           {error}{' '}
-          <button className="memory-btn" onClick={() => loadInitial(sessionId)}>重试</button>
+          <button className="memory-btn" onClick={() => loadInitial(sessionId)}>{t('重试')}</button>
         </div>
       )}
-      {isLoading && <div className="memory-loading">加载中…</div>}
+      {isLoading && <div className="memory-loading">{t('加载中…')}</div>}
       {!isLoading && !error && (
         <>
           {hasMore && (
             <button className="memory-btn" onClick={loadMore} disabled={isLoadingMore}>
-              {isLoadingMore ? '加载中…' : '加载更早消息'}
+              {isLoadingMore ? t('加载中…') : t('加载更早消息')}
             </button>
           )}
           {messages.map(m => (
             <div key={m.id} className="memory-list-row">
               <div className="memory-list-row__meta">
-                <span>{ROLE_LABELS[m.role]}</span>
-                <span>{new Date(m.createdAt).toLocaleString()}</span>
+                <span>{roleLabels[m.role]}</span>
+                <span>{new Date(m.createdAt).toLocaleString(i18n.language)}</span>
               </div>
               <div className="memory-list-row__content">{m.content}</div>
             </div>

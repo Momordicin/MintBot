@@ -143,7 +143,7 @@ describe('POST /characters/import/parse', () => {
     })
 
     expect(response.statusCode).toBe(400)
-    expect(JSON.parse(response.payload)).toHaveProperty('error')
+    expect(JSON.parse(response.payload)).toHaveProperty('code')
   })
 
   // 回归测试：这条路由曾经没设 bodyLimit，继承 Fastify 全局默认 1MB，导致 Electron 侧
@@ -205,7 +205,7 @@ describe('POST /characters/import/generate', () => {
     })
 
     expect(response.statusCode).toBe(502)
-    expect(JSON.parse(response.payload)).toHaveProperty('error')
+    expect(JSON.parse(response.payload)).toHaveProperty('code')
   })
 })
 

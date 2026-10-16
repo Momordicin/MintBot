@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import Fastify from 'fastify'
 import { configRoutes } from './config.js'
 import * as ModelProviderModule from '../providers/ModelProvider.js'
-import { ConfigFileUnreadableError, CONFIG_FILE_UNREADABLE_MESSAGE } from '../config/configFileError.js'
+import { ConfigFileUnreadableError } from '../config/configFileError.js'
 
 // routes/config.ts 只负责路由层的校验 + 响应整形，实际的读写职责在 config/index.ts——
 // mock 掉整个 config 模块，测试聚焦于本文件自己的行为（校验规则、key 脱敏、undefined/null
@@ -505,7 +505,7 @@ describe('PATCH /config/model — API Key 环境变量与有效性', () => {
     const { response, body } = await patch({ modelProvider: { [flag]: true } })
 
     expect(response.statusCode).toBe(400)
-    expect(body.error).toBe(`未检测到环境变量 ${envVar}`)
+    expect(body).toEqual({ code: 'ENV_VAR_MISSING', params: { envVar } })
     expect(updateModelProviderConfigMock).not.toHaveBeenCalled()
   })
 
@@ -526,7 +526,7 @@ describe('PATCH /config/model — API Key 环境变量与有效性', () => {
     const { response, body } = await patch({ modelProvider: { type: 'openai', modelName: 'gpt-4o' } })
 
     expect(response.statusCode).toBe(400)
-    expect(body.error).toBe('API key 无效或未配置')
+    expect(body).toEqual({ code: 'API_KEY_INVALID' })
     expect(updateModelProviderConfigMock).not.toHaveBeenCalled()
   })
 
@@ -536,7 +536,7 @@ describe('PATCH /config/model — API Key 环境变量与有效性', () => {
     const { response, body } = await patch({ modelProvider: { modelName: 'gpt-4o-mini' } })
 
     expect(response.statusCode).toBe(400)
-    expect(body.error).toBe('API key 无效或未配置')
+    expect(body).toEqual({ code: 'API_KEY_INVALID' })
   })
 
   it('勾选环境变量但未检测到时，即使有已保存 key 也返回 400', async () => {
@@ -545,7 +545,7 @@ describe('PATCH /config/model — API Key 环境变量与有效性', () => {
     const { response, body } = await patch({ modelProvider: { modelName: 'gpt-4o-mini' } })
 
     expect(response.statusCode).toBe(400)
-    expect(body.error).toBe('API key 无效或未配置')
+    expect(body).toEqual({ code: 'API_KEY_INVALID' })
   })
 
   it('已为 true 的 FromEnv 标记在未检测到环境变量时重复发送：通过校验，只要选中的提供方已配置', async () => {
@@ -568,7 +568,7 @@ describe('PATCH /config/model — API Key 环境变量与有效性', () => {
     const { response, body } = await patch({ modelProvider: { type: 'openai', modelName: 'gpt-4o', openaiApiKeyFromEnv: true } })
 
     expect(response.statusCode).toBe(400)
-    expect(body.error).toBe('API key 无效或未配置')
+    expect(body).toEqual({ code: 'API_KEY_INVALID' })
   })
 
   it('当前为 false 的 FromEnv 标记在未检测到环境变量时打开：返回 400', async () => {
@@ -577,7 +577,7 @@ describe('PATCH /config/model — API Key 环境变量与有效性', () => {
     const { response, body } = await patch({ modelProvider: { openaiApiKeyFromEnv: true } })
 
     expect(response.statusCode).toBe(400)
-    expect(body.error).toBe('未检测到环境变量 OPENAI_API_KEY')
+    expect(body).toEqual({ code: 'ENV_VAR_MISSING', params: { envVar: 'OPENAI_API_KEY' } })
   })
 
   it.each([
@@ -599,7 +599,7 @@ describe('PATCH /config/model — API Key 环境变量与有效性', () => {
     const { response, body } = await patch({ modelProvider: { type: 'openai', modelName: 'gpt-4o', openaiApiKey: '  ' } })
 
     expect(response.statusCode).toBe(400)
-    expect(body.error).toBe('API key 无效或未配置')
+    expect(body).toEqual({ code: 'API_KEY_INVALID' })
   })
 
   it('对话提供方勾选环境变量且已检测到时视为已配置', async () => {
@@ -636,7 +636,7 @@ describe('PATCH /config/model — API Key 环境变量与有效性', () => {
     const { response, body } = await patch({ backgroundModelProvider: { type: 'deepseek', modelName: 'deepseek-v4-flash' } })
 
     expect(response.statusCode).toBe(400)
-    expect(body.error).toBe('API key 无效或未配置')
+    expect(body).toEqual({ code: 'API_KEY_INVALID' })
     expect(updateBackgroundModelProviderConfigMock).not.toHaveBeenCalled()
   })
 
@@ -732,7 +732,7 @@ describe('PATCH /config/model — config.json 无法读取', () => {
     errorSpy.mockRestore()
 
     expect(response.statusCode).toBe(500)
-    expect(JSON.parse(response.payload)).toEqual({ error: CONFIG_FILE_UNREADABLE_MESSAGE })
+    expect(JSON.parse(response.payload)).toEqual({ code: 'CONFIG_FILE_UNREADABLE' })
   })
 
   it('其他错误照常向外抛出，不使用 config.json 的提示文字', async () => {
@@ -749,6 +749,6 @@ describe('PATCH /config/model — config.json 无法读取', () => {
     })
 
     expect(response.statusCode).toBe(500)
-    expect(JSON.parse(response.payload).error).not.toBe(CONFIG_FILE_UNREADABLE_MESSAGE)
+    expect(JSON.parse(response.payload).code).not.toBe('CONFIG_FILE_UNREADABLE')
   })
 })

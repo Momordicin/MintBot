@@ -1,10 +1,13 @@
 // src/settings/SubscriptionLogin.tsx — "订阅登录"区块：Claude Code / Codex 各一行的登录与重新登录按钮
 // 用法：ModelConfigPanel 渲染 <SubscriptionLogin />（无 props）；GET /agents/status、POST /agents/:provider/login
-// 对应文件：src/settings/ModelConfigPanel.tsx / services/core/routes/agents.ts
+// 对应文件：src/settings/ModelConfigPanel.tsx / src/errorText.ts / services/core/routes/agents.ts
 import React, { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import './settings.css'
 
 import { CORE_URL } from '../coreUrl.js'
+import { isErrorBody } from '../../shared/errorCodes.js'
+import { errorText } from '../errorText.js'
 
 type AgentProvider = 'claude-code' | 'codex'
 
@@ -19,6 +22,7 @@ const ROWS: readonly { provider: AgentProvider; label: string }[] = [
 ]
 
 export function SubscriptionLogin() {
+  const { t, i18n } = useTranslation()
   const [loggedIn, setLoggedIn] = useState<Record<AgentProvider, boolean | null>>({ 'claude-code': null, codex: null })
   const [busy, setBusy] = useState<Record<AgentProvider, boolean>>({ 'claude-code': false, codex: false })
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -38,7 +42,7 @@ export function SubscriptionLogin() {
       .catch(err => {
         if (err instanceof DOMException && err.name === 'AbortError') return
         setLoggedIn({ 'claude-code': false, codex: false })
-        setErrorMessage('加载订阅登录状态失败，请稍后重试')
+        setErrorMessage(i18n.t('加载订阅登录状态失败，请稍后重试'))
       })
     return () => controller.abort()
   }, [])
@@ -59,14 +63,14 @@ export function SubscriptionLogin() {
       const response = await fetch(`${CORE_URL}/agents/${provider}/login`, { method: 'POST', signal: controller.signal })
       if (!response.ok) {
         const payload = await response.json().catch(() => null)
-        throw new Error(typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`)
+        throw new Error(isErrorBody(payload) ? errorText(payload, i18n.t) : `HTTP ${response.status}`)
       }
       const data: { loggedIn: boolean } = await response.json()
       setLoggedIn(prev => ({ ...prev, [provider]: data.loggedIn }))
-      if (!data.loggedIn) setRowErrors(prev => ({ ...prev, [provider]: '未检测到登录，请确认命令行已安装并完成登录' }))
+      if (!data.loggedIn) setRowErrors(prev => ({ ...prev, [provider]: i18n.t('未检测到登录，请确认命令行已安装并完成登录') }))
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
-      setRowErrors(prev => ({ ...prev, [provider]: err instanceof Error ? err.message : '登录失败，请稍后重试' }))
+      setRowErrors(prev => ({ ...prev, [provider]: err instanceof Error ? err.message : i18n.t('登录失败，请稍后重试') }))
     } finally {
       loginControllersRef.current.delete(controller)
       if (!controller.signal.aborted) setBusy(prev => ({ ...prev, [provider]: false }))
@@ -75,7 +79,7 @@ export function SubscriptionLogin() {
 
   return (
     <div className="model-config-panel__section">
-      <div className="model-config-panel__section-label">订阅登录</div>
+      <div className="model-config-panel__section-label">{t('订阅登录')}</div>
       {ROWS.map(({ provider, label }) => {
         const status = loggedIn[provider]
         const isBusy = busy[provider]
@@ -88,14 +92,14 @@ export function SubscriptionLogin() {
               onClick={() => startLogin(provider)}
               disabled={status !== false || isBusy}
             >
-              {isBusy ? '登录中…' : status === null ? '检测中…' : status ? '已配置' : '开始配置'}
+              {isBusy ? t('登录中…') : status === null ? t('检测中…') : status ? t('已配置') : t('开始配置')}
             </button>
             <button
               className="rename-btn"
               onClick={() => startLogin(provider)}
               disabled={isBusy || status === null}
             >
-              刷新
+              {t('刷新')}
             </button>
           </div>
           {rowErrors[provider] && <div className="character-panel__error">{rowErrors[provider]}</div>}

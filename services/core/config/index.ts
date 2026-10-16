@@ -1,5 +1,5 @@
 // services/core/config/index.ts — config.json 的读取、热重载与按段写回
-// 用法：core/index.ts 调 startConfigWatcher；其余模块用 getXxxConfig() 读取，用 update*Config / setDefaultPresetId 写回
+// 用法：core/index.ts 调 startConfigWatcher；其余模块用 getXxxConfig() 读取，用 update*Config / setDefaultPresetId 写回；界面语言由 routes/ui.ts 经 getUiLanguage / updateUiLanguage 直接读写 config.json 的 ui 段
 // 对应文件：services/core/config/configFileError.ts / services/core/config/index.test.ts
 import fs from 'fs'
 import path from 'path'
@@ -8,6 +8,8 @@ import chokidar from 'chokidar'
 import { ConfigFileUnreadableError } from './configFileError.js'
 import type { ModelConfig } from '../../../shared/types/index.js'
 import type { AppRule, AppRuleEffect, ChatPinMode, WindowBehaviorConfig } from '../../../shared/windowBehavior.js'
+import { VALID_UI_LANGUAGES } from '../../../shared/uiLocale.js'
+import type { UiLanguage } from '../../../shared/uiLocale.js'
 
 export interface SummaryTriggerConfig {
   pendingCountThreshold: number
@@ -354,7 +356,7 @@ function readRawConfig(): Record<string, unknown> {
   return parsed as Record<string, unknown>
 }
 
-function readRawSection(section: 'modelProvider' | 'backgroundModelProvider' | 'windowBehavior'): Record<string, unknown> {
+function readRawSection(section: 'modelProvider' | 'backgroundModelProvider' | 'windowBehavior' | 'ui'): Record<string, unknown> {
   const value = readRawConfig()[section]
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
 }
@@ -363,6 +365,7 @@ type ConfigSectionValue = {
   modelProvider: ModelConfig
   backgroundModelProvider: BackgroundModelConfig
   windowBehavior: WindowBehaviorConfig
+  ui: { language: UiLanguage }
   defaultPresetId: string
 }
 
@@ -419,6 +422,20 @@ export function updateWindowBehaviorConfig(partial: Partial<WindowBehaviorConfig
   applyWindowBehaviorConfig(merged)
   loaded = true
   return merged
+}
+
+export function getUiLanguage(): UiLanguage {
+  try {
+    const language = readRawSection('ui').language
+    return VALID_UI_LANGUAGES.includes(language as UiLanguage) ? (language as UiLanguage) : 'system'
+  } catch (err) {
+    if (!(err instanceof ConfigFileUnreadableError)) throw err
+    return 'system'
+  }
+}
+
+export function updateUiLanguage(language: UiLanguage): void {
+  writeConfigSection('ui', { ...readRawSection('ui'), language })
 }
 
 export function setDefaultPresetId(presetId: string): void {

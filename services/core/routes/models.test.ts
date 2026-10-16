@@ -127,7 +127,7 @@ describe('GET /models', () => {
     const { status, body } = await getModels('ollama')
 
     expect(status).toBe(200)
-    expect(body).toEqual({ models: [], error: 'Ollama 启动失败' })
+    expect(body).toEqual({ models: [], code: 'OLLAMA_START_FAILED' })
     expect(listOllamaModelsMock).not.toHaveBeenCalled()
   })
 
@@ -266,7 +266,7 @@ describe('GET /models', () => {
     const { status, body } = await getModels(type)
 
     expect(status).toBe(200)
-    expect(body).toEqual({ models: [], error: 'API key 无效或未配置' })
+    expect(body).toEqual({ models: [], code: 'API_KEY_INVALID' })
     expect(anthropicListMock).not.toHaveBeenCalled()
     expect(openaiListMock).not.toHaveBeenCalled()
   })
@@ -277,7 +277,7 @@ describe('GET /models', () => {
 
     const { body } = await getModels('openai')
 
-    expect(body).toEqual({ models: [], error: 'API key 无效或未配置' })
+    expect(body).toEqual({ models: [], code: 'API_KEY_INVALID' })
     expect(openaiListMock).not.toHaveBeenCalled()
   })
 
@@ -295,7 +295,7 @@ describe('GET /models', () => {
     const { status, body } = await getModels(type)
 
     expect(status).toBe(200)
-    expect(body).toEqual({ models: [], error: '获取模型列表失败' })
+    expect(body).toEqual({ models: [], code: 'MODEL_LIST_FAILED' })
     expect(JSON.stringify(body)).not.toContain('secret-detail')
     expect(errorSpy).toHaveBeenCalled()
   })
@@ -306,7 +306,7 @@ describe('GET /models', () => {
     const response = await fastify.inject({ method: 'GET', url: '/models' })
 
     expect(response.statusCode).toBe(400)
-    expect(JSON.parse(response.payload)).toHaveProperty('error')
+    expect(JSON.parse(response.payload)).toHaveProperty('code')
   })
 })
 
@@ -371,7 +371,7 @@ describe('GET /models?presetId', () => {
     const { status, body } = await getPresetModels(type, 'p1')
 
     expect(status).toBe(200)
-    expect(body).toEqual({ models: [], error: 'API key 无效或未配置' })
+    expect(body).toEqual({ models: [], code: 'API_KEY_INVALID' })
     expect(anthropicCtorMock).not.toHaveBeenCalled()
     expect(openaiCtorMock).not.toHaveBeenCalled()
     expect(anthropicListMock).not.toHaveBeenCalled()
@@ -384,7 +384,7 @@ describe('GET /models?presetId', () => {
 
     const { body } = await getPresetModels('deepseek', 'p1')
 
-    expect(body).toEqual({ models: [], error: 'API key 无效或未配置' })
+    expect(body).toEqual({ models: [], code: 'API_KEY_INVALID' })
     expect(openaiListMock).not.toHaveBeenCalled()
   })
 
@@ -493,7 +493,7 @@ describe('POST /models', () => {
     const { status, body } = await postModels({ type: 'openai', ...extra })
 
     expect(status).toBe(200)
-    expect(body).toEqual({ models: [], error: 'API key 无效或未配置' })
+    expect(body).toEqual({ models: [], code: 'API_KEY_INVALID' })
     expect(openaiCtorMock).not.toHaveBeenCalled()
     expect(openaiListMock).not.toHaveBeenCalled()
   })
@@ -508,7 +508,7 @@ describe('POST /models', () => {
 
     const { body } = await postModels({ type: 'openai', apiKey: 'sk-typed' })
 
-    expect(body).toEqual({ models: [], error: '获取模型列表失败' })
+    expect(body).toEqual({ models: [], code: 'MODEL_LIST_FAILED' })
     expect(JSON.stringify(body)).not.toContain('sk-typed')
   })
 
@@ -539,7 +539,7 @@ describe('POST /models', () => {
 
     const { body } = await postModels({ type: 'ollama' })
 
-    expect(body).toEqual({ models: [], error: 'Ollama 启动失败' })
+    expect(body).toEqual({ models: [], code: 'OLLAMA_START_FAILED' })
     expect(listOllamaModelsMock).not.toHaveBeenCalled()
   })
 
@@ -599,7 +599,7 @@ describe('GET /models?fromEnv=1', () => {
     const { status, body } = await getFromEnv(type)
 
     expect(status).toBe(200)
-    expect(body).toEqual({ models: [], error: 'API key 无效或未配置' })
+    expect(body).toEqual({ models: [], code: 'API_KEY_INVALID' })
     expect(anthropicCtorMock).not.toHaveBeenCalled()
     expect(openaiCtorMock).not.toHaveBeenCalled()
     expect(anthropicListMock).not.toHaveBeenCalled()
@@ -697,7 +697,7 @@ describe('GET /models?fromEnv=0', () => {
     const { status, body } = await getFromEnvOff(type)
 
     expect(status).toBe(200)
-    expect(body).toEqual({ models: [], error: 'API key 无效或未配置' })
+    expect(body).toEqual({ models: [], code: 'API_KEY_INVALID' })
     expect(anthropicCtorMock).not.toHaveBeenCalled()
     expect(openaiCtorMock).not.toHaveBeenCalled()
     expect(anthropicListMock).not.toHaveBeenCalled()
@@ -712,7 +712,7 @@ describe('GET /models?fromEnv=0', () => {
     const { status, body } = await getFromEnvOff(type, 'p1')
 
     expect(status).toBe(200)
-    expect(body).toEqual({ models: [], error: 'API key 无效或未配置' })
+    expect(body).toEqual({ models: [], code: 'API_KEY_INVALID' })
     expect(anthropicCtorMock).not.toHaveBeenCalled()
     expect(openaiCtorMock).not.toHaveBeenCalled()
     expect(anthropicListMock).not.toHaveBeenCalled()
@@ -763,7 +763,7 @@ describe('GET /models?purpose=summary', () => {
 
     const { body } = await getSummaryModels('openai')
 
-    expect(body).toEqual({ models: [], error: 'API key 无效或未配置' })
+    expect(body).toEqual({ models: [], code: 'API_KEY_INVALID' })
     expect(openaiCtorMock).not.toHaveBeenCalled()
     expect(openaiListMock).not.toHaveBeenCalled()
   })
@@ -809,7 +809,7 @@ describe('GET /models?purpose=summary', () => {
 
     const { body } = await getSummaryModels('openai', '&fromEnv=0')
 
-    expect(body).toEqual({ models: [], error: 'API key 无效或未配置' })
+    expect(body).toEqual({ models: [], code: 'API_KEY_INVALID' })
     expect(openaiListMock).not.toHaveBeenCalled()
   })
 

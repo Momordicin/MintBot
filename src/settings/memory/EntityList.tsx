@@ -2,6 +2,7 @@
 // 用法：MemoryPanel 渲染 <EntityList sessionId />；GET /entities?sessionId&limit&beforeId&type
 // 对应文件：src/settings/memory/MemoryPanel.tsx / services/core/routes/memory.ts
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { CORE_URL } from '../../coreUrl.js'
 const PAGE_SIZE = 20
@@ -20,19 +21,19 @@ interface EntitiesPageResponse {
   hasMore: boolean
 }
 
-const TYPE_LABELS: Record<EntityType, string> = {
-  person: '人物',
-  event: '事件',
-  preference: '偏好',
-  place: '地点',
-  other: '其他',
-}
-
 interface EntityListProps {
   sessionId: string
 }
 
 export function EntityList({ sessionId }: EntityListProps) {
+  const { t, i18n } = useTranslation()
+  const typeLabels: Record<EntityType, string> = {
+    person: t('人物'),
+    event: t('事件'),
+    preference: t('偏好'),
+    place: t('地点'),
+    other: t('其他'),
+  }
   const [type, setType] = useState<EntityType | ''>('')
   const [entities, setEntities] = useState<EntityRow[]>([])
   const [hasMore, setHasMore] = useState(false)
@@ -60,7 +61,7 @@ export function EntityList({ sessionId }: EntityListProps) {
       })
       .catch(err => {
         if (err instanceof DOMException && err.name === 'AbortError') return
-        setError('加载实体失败')
+        setError(i18n.t('加载实体失败'))
       })
       .finally(() => {
         if (controller.signal.aborted) return
@@ -97,7 +98,7 @@ export function EntityList({ sessionId }: EntityListProps) {
       setHasMore(page.hasMore)
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
-      setError('加载更多实体失败')
+      setError(i18n.t('加载更多实体失败'))
     } finally {
       if (!controller.signal.aborted) setIsLoadingMore(false)
     }
@@ -107,8 +108,8 @@ export function EntityList({ sessionId }: EntityListProps) {
     <div className="memory-list">
       <div className="memory-toolbar">
         <select value={type} onChange={e => setType(e.target.value as EntityType | '')}>
-          <option value="">全部</option>
-          {Object.entries(TYPE_LABELS).map(([value, label]) => (
+          <option value="">{t('全部')}</option>
+          {Object.entries(typeLabels).map(([value, label]) => (
             <option key={value} value={value}>{label}</option>
           ))}
         </select>
@@ -117,24 +118,24 @@ export function EntityList({ sessionId }: EntityListProps) {
       {error && (
         <div className="character-panel__error">
           {error}{' '}
-          <button className="memory-btn" onClick={() => loadInitial(sessionId, type)}>重试</button>
+          <button className="memory-btn" onClick={() => loadInitial(sessionId, type)}>{t('重试')}</button>
         </div>
       )}
-      {isLoading && <div className="memory-loading">加载中…</div>}
+      {isLoading && <div className="memory-loading">{t('加载中…')}</div>}
       {!isLoading && !error && (
         <>
           {entities.map(e => (
             <div key={e.id} className="memory-list-row">
               <div className="memory-list-row__meta">
-                <span>{TYPE_LABELS[e.type]}</span>
-                <span>{new Date(e.validFrom).toLocaleDateString()}</span>
+                <span>{typeLabels[e.type]}</span>
+                <span>{new Date(e.validFrom).toLocaleDateString(i18n.language)}</span>
               </div>
               <div className="memory-list-row__content">{e.value}</div>
             </div>
           ))}
           {hasMore && (
             <button className="memory-btn" onClick={loadMore} disabled={isLoadingMore}>
-              {isLoadingMore ? '加载中…' : '加载更多'}
+              {isLoadingMore ? t('加载中…') : t('加载更多')}
             </button>
           )}
         </>

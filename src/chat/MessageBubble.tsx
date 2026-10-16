@@ -3,6 +3,7 @@
 // 形状：props { message: MessageData, prevRole?, avatarUrl?, userAvatarUrl?, displayName? }；与上一条 role 相同时头像留空
 // 对应文件：src/chat/MessageList.tsx / src/chat/ChatWindow.tsx / src/chat/chat.css
 import React from 'react'
+import { useTranslation } from 'react-i18next'
 
 export interface MessageData {
   id: string
@@ -20,7 +21,7 @@ interface MessageBubbleProps {
   displayName?: string
 }
 
-function formatTime(ts: number): string {
+function formatTime(ts: number, locale: string): string {
   const d = new Date(ts)
   const now = new Date()
   const isToday =
@@ -29,10 +30,10 @@ function formatTime(ts: number): string {
     d.getDate() === now.getDate()
 
   if (isToday) {
-    return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
+    return d.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit', hour12: false })
   }
-  return d.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }) +
-    ' ' + d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
+  return d.toLocaleDateString(locale, { month: 'numeric', day: 'numeric' }) +
+    ' ' + d.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit', hour12: false })
 }
 
 export function MessageBubble({
@@ -42,6 +43,7 @@ export function MessageBubble({
   userAvatarUrl,
   displayName,
 }: MessageBubbleProps) {
+  const { t, i18n } = useTranslation()
   const { role, content, createdAt, isError } = message
   const showAvatar = role !== prevRole
 
@@ -61,7 +63,7 @@ export function MessageBubble({
         <div className="msg-avatar">
           {showAvatar && (
             avatarUrl
-              ? <img src={avatarUrl} alt={displayName ?? '角色'} />
+              ? <img src={avatarUrl} alt={displayName ?? t('角色')} />
               : <div className="msg-avatar__placeholder" />
           )}
         </div>
@@ -72,13 +74,13 @@ export function MessageBubble({
           <div className={`msg-bubble ${isUser ? 'msg-bubble--user' : 'msg-bubble--bot'} ${isError ? 'msg-bubble--error' : ''}`}>
             {content}
           </div>
-          <span className="msg-time">{formatTime(createdAt)}</span>
+          <span className="msg-time">{formatTime(createdAt, i18n.language)}</span>
         </div>
       </div>
 
       {isUser && userAvatarUrl && (
         <div className="msg-avatar">
-          {showAvatar && <img src={userAvatarUrl} alt="我" />}
+          {showAvatar && <img src={userAvatarUrl} alt={t('我')} />}
         </div>
       )}
     </div>

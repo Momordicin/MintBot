@@ -1,6 +1,6 @@
 // electron/main/index.ts — Electron 主进程入口：app ready 后创建聊天窗口、桌宠 overlay 与托盘，注册 IPC，启动前台窗口监控与 core /events 订阅，will-quit 时收尾
-// 用法：electron.vite.config.ts 的主进程 entry；第一条 import 为 logBootstrap；设置窗口按 open-settings-window IPC 按需创建；显示器拓扑变化时 handleDisplayTopologyChange 先调 clearStableDisplayKeyCache()
-// 对应文件：electron/preload/index.ts（暴露的 IPC 通道）/ electron/main/windowBehavior.ts / electron/main/petContextMenu.ts / electron/main/coreEventsConsumer.ts / electron/main/foregroundWorldModel.ts / electron/main/windowDragMonitor.ts / electron/main/nativeWindowDrag.ts / electron/main/startupGate.ts / electron/main/displayIdentity.ts / shared/windowBehavior.ts / shared/portraitForm.ts
+// 用法：electron.vite.config.ts 的主进程 entry；第一条 import 为 logBootstrap；注册 ui:get-locale，向窗口发 ui:locale-changed；设置窗口按 open-settings-window IPC 按需创建；显示器拓扑变化时 handleDisplayTopologyChange 先调 clearStableDisplayKeyCache()
+// 对应文件：electron/preload/index.ts（暴露的 IPC 通道）/ electron/main/windowBehavior.ts / electron/main/petContextMenu.ts / electron/main/coreEventsConsumer.ts / electron/main/i18n.ts / electron/main/foregroundWorldModel.ts / electron/main/windowDragMonitor.ts / electron/main/nativeWindowDrag.ts / electron/main/startupGate.ts / electron/main/displayIdentity.ts / shared/windowBehavior.ts / shared/portraitForm.ts
 import './logBootstrap'
 import { app, BrowserWindow, Menu, Tray, powerMonitor, ipcMain, dialog, screen, nativeImage } from 'electron'
 import type { MenuItemConstructorOptions } from 'electron'
@@ -13,6 +13,8 @@ import { noteDragStart, noteDragEnd, clearDragState } from './dragActivity'
 import { nextReconnectDelayMs, RECONNECT_BACKOFF_FLOOR_MS } from './reconnectBackoff'
 import { EVENTS_CLIENT_TIMEOUT_MS } from './eventsGeneration'
 import { createCoreEventsConsumer } from './coreEventsConsumer'
+import { i18n, getMainLocale, readUiLanguage, setMainLanguage } from './i18n'
+import type { UiLanguage } from '../../shared/uiLocale.js'
 import { CORE_URL } from './coreUrl'
 import { appendLogLine } from '../../shared/logFile.js'
 import { windowNameFromUrl } from './logWindowName'
@@ -142,11 +144,13 @@ const coreEventsConsumer = createCoreEventsConsumer({
     applyWindowBehaviorSnapshot(snapshot, mainWindow, overlayWindow)
     rebuildTrayMenu()
   },
+  onUiLanguageChanged: applyUiLanguage,
   log: {
     generationChanged: () =>
       console.log('[Events] Core service generation changed — the core process restarted, this is not the same server process we were talking to before (diagnostic only, does not itself trigger a resync)'),
     helloHeartbeatParseError: err => console.error('[Events] Failed to parse hello/heartbeat event:', err),
     windowBehaviorParseError: err => console.error('[WindowBehavior] Failed to parse window-behavior-changed event:', err),
+    uiLanguageParseError: err => console.error('[I18n] Failed to parse ui-language-changed event:', err),
   },
 })
 
@@ -240,28 +244,43 @@ async function patchWindowBehavior(partial: Partial<WindowBehaviorConfig>): Prom
   }
 }
 
+function applyUiLanguage(language: UiLanguage): void {
+  if (!setMainLanguage(language)) return
+  rebuildTrayMenu()
+  const locale = getMainLocale()
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send('ui:locale-changed', locale)
+  }
+}
+
+async function refreshUiLanguage(): Promise<void> {
+  applyUiLanguage(await readUiLanguage())
+}
+
+ipcMain.handle('ui:get-locale', () => getMainLocale())
+
 function rebuildTrayMenu(): void {
   if (!tray) return
   const { chatPinMode: currentChatPinMode, petAvoidanceEnabled } = getCachedWindowBehaviorConfig()
 
   const menu = Menu.buildFromTemplate([
     {
-      label: '聊天窗口置顶',
+      label: i18n.t('聊天窗口置顶'),
       submenu: [
         {
-          label: '始终',
+          label: i18n.t('始终'),
           type: 'radio',
           checked: currentChatPinMode === 'always',
           click: () => handleChatPinModeClick('always'),
         },
         {
-          label: '智能',
+          label: i18n.t('智能'),
           type: 'radio',
           checked: currentChatPinMode === 'smart',
           click: () => handleChatPinModeClick('smart'),
         },
         {
-          label: '关闭',
+          label: i18n.t('关闭'),
           type: 'radio',
           checked: currentChatPinMode === 'off',
           click: () => handleChatPinModeClick('off'),
@@ -269,13 +288,13 @@ function rebuildTrayMenu(): void {
       ],
     },
     {
-      label: '桌宠智能避让',
+      label: i18n.t('桌宠智能避让'),
       type: 'checkbox',
       checked: petAvoidanceEnabled,
       click: () => handlePetAvoidanceClick(!petAvoidanceEnabled),
     },
     {
-      label: '打开聊天窗口',
+      label: i18n.t('打开聊天窗口'),
       click: () => {
         mainWindow?.show()
         evaluateDesktopPresence(mainWindow, overlayWindow)
@@ -283,7 +302,7 @@ function rebuildTrayMenu(): void {
       },
     },
     {
-      label: '退出',
+      label: i18n.t('退出'),
       click: () => {
         isQuitting = true
         app.quit()
@@ -324,7 +343,7 @@ ipcMain.handle('select-wallpaper-file', async (event) => {
   if (!owner) return null
   const result = await dialog.showOpenDialog(owner, {
     properties: ['openFile'],
-    filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }]
+    filters: [{ name: i18n.t('图片'), extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }]
   })
   if (result.canceled || result.filePaths.length === 0) return null
 
@@ -343,7 +362,7 @@ ipcMain.handle('select-character-card-file', async (event) => {
   if (!owner) return null
   const result = await dialog.showOpenDialog(owner, {
     properties: ['openFile'],
-    filters: [{ name: 'Character Cards', extensions: ['json', 'png'] }]
+    filters: [{ name: i18n.t('角色卡'), extensions: ['json', 'png'] }]
   })
   if (result.canceled || result.filePaths.length === 0) return null
 
@@ -362,7 +381,7 @@ ipcMain.handle('select-exe-file', async (event) => {
   if (!owner) return null
   const result = await dialog.showOpenDialog(owner, {
     properties: ['openFile'],
-    filters: [{ name: 'Executable', extensions: ['exe'] }]
+    filters: [{ name: i18n.t('可执行文件'), extensions: ['exe'] }]
   })
   if (result.canceled || result.filePaths.length === 0) return null
 
@@ -757,10 +776,12 @@ app.whenReady().then(() => {
     },
     () => noteDragEnd('chat')
   )
+  applyUiLanguage('system')
   createTray()
 
   applyIconFromCurrentPreset()
   initWindowBehaviorConfig(mainWindow, overlayWindow)
+  void refreshUiLanguage()
   subscribeToCoreEvents()
 
   powerMonitor.on('lock-screen', () => {

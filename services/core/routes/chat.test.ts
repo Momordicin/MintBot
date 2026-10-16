@@ -636,7 +636,7 @@ describe('POST /chat', () => {
 
     expect(errorSpy).toHaveBeenCalled()
     expect(loggedText(errorSpy)).not.toContain('用户消息-内容-乙')
-    expect(parseSSE(response.payload).find(e => e.event === 'system')?.data).toMatchObject({ payload: { message: 'Model call failed' }, sessionId: session.sessionId })
+    expect(parseSSE(response.payload).find(e => e.event === 'system')?.data).toMatchObject({ payload: { code: 'MODEL_CALL_FAILED' }, sessionId: session.sessionId })
     expect(db.prepare('SELECT COUNT(*) as count FROM Messages WHERE sessionId = ?').get(session.sessionId)).toEqual({ count: 0 })
   })
 
@@ -649,7 +649,7 @@ describe('POST /chat', () => {
 
     expect(errorSpy).toHaveBeenCalled()
     expect(loggedText(errorSpy)).not.toContain('用户消息-内容-环境')
-    expect(parseSSE(response.payload).find(e => e.event === 'system')?.data).toMatchObject({ payload: { message: 'API key 无效或未配置' }, sessionId: session.sessionId })
+    expect(parseSSE(response.payload).find(e => e.event === 'system')?.data).toMatchObject({ payload: { code: 'API_KEY_INVALID' }, sessionId: session.sessionId })
     expect(db.prepare('SELECT COUNT(*) as count FROM Messages WHERE sessionId = ?').get(session.sessionId)).toEqual({ count: 0 })
   })
 
@@ -667,7 +667,7 @@ describe('POST /chat', () => {
     const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '用户消息-内容-丙' } })
 
     expect(response.statusCode).toBe(200)
-    expect(parseSSE(response.payload).find(e => e.event === 'system')?.data).toMatchObject({ payload: { message: 'Model call failed' }, sessionId: session.sessionId })
+    expect(parseSSE(response.payload).find(e => e.event === 'system')?.data).toMatchObject({ payload: { code: 'MODEL_CALL_FAILED' }, sessionId: session.sessionId })
     expect(loggedText(errorSpy)).not.toContain('用户消息-内容-丙')
     expect(db.prepare('SELECT COUNT(*) as count FROM Messages WHERE sessionId = ?').get(session.sessionId)).toEqual({ count: 0 })
   })
@@ -993,7 +993,7 @@ describe('POST /chat', () => {
       const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
 
       expect(response.statusCode).toBe(500)
-      expect(JSON.parse(response.payload)).toEqual({ error: 'Failed to build context' })
+      expect(JSON.parse(response.payload)).toEqual({ code: 'CONTEXT_BUILD_FAILED' })
     } finally {
       buildContextSpy.mockRestore()
     }
@@ -1130,7 +1130,7 @@ describe('POST /chat', () => {
 
     expect(events.find(e => e.event === 'message_done')).toBeUndefined()
     expect(events.find(e => e.event === 'emotion')).toBeUndefined()
-    expect(events.find(e => e.event === 'system')?.data).toMatchObject({ type: 'error', payload: { message: 'Session deleted' } })
+    expect(events.find(e => e.event === 'system')?.data).toMatchObject({ type: 'error', payload: { code: 'SESSION_DELETED' } })
     expect(db.prepare('SELECT COUNT(*) as count FROM Messages WHERE sessionId = ?').get(session.sessionId)).toEqual({ count: 0 })
     expect(getEmotionState(session.sessionId)).toBeNull()
     expect(broadcastCalls.filter(c => c[0] === 'emotion').length).toBe(emotionBroadcastsBefore)
@@ -1167,7 +1167,7 @@ describe('POST /chat', () => {
     const events = parseSSE(second.payload)
 
     expect(completeSyncMock).toHaveBeenCalledTimes(1)
-    expect(events.find(e => e.event === 'system')?.data).toMatchObject({ type: 'error', payload: { message: 'Session deleted' } })
+    expect(events.find(e => e.event === 'system')?.data).toMatchObject({ type: 'error', payload: { code: 'SESSION_DELETED' } })
     expect(db.prepare('SELECT COUNT(*) as count FROM Messages').get()).toEqual({ count: 0 })
   })
 })
@@ -1432,7 +1432,7 @@ describe('POST /chat — 角色单独配置的 API Key', () => {
 
     const { events, errorSpy } = await chatOnce()
 
-    expect(events.find(e => e.event === 'system')?.data.payload.message).toBe('Model call failed')
+    expect(events.find(e => e.event === 'system')?.data.payload.code).toBe('MODEL_CALL_FAILED')
     expect(openaiCtorMock).not.toHaveBeenCalled()
     expect(openaiCreateMock).not.toHaveBeenCalled()
     expect(JSON.stringify(errorSpy.mock.calls)).not.toContain('global-key')
@@ -1445,7 +1445,7 @@ describe('POST /chat — 角色单独配置的 API Key', () => {
 
     const { events } = await chatOnce()
 
-    expect(events.find(e => e.event === 'system')?.data.payload.message).toBe('API key 无效或未配置')
+    expect(events.find(e => e.event === 'system')?.data.payload.code).toBe('API_KEY_INVALID')
     expect(openaiCtorMock).not.toHaveBeenCalled()
     expect(openaiCreateMock).not.toHaveBeenCalled()
   })

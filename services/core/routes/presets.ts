@@ -1,7 +1,7 @@
 // services/core/routes/presets.ts — 预设（角色人设档案）的增删改、切换与壁纸上传路由
 // 用法：core/index.ts 里 fastify.register(presetRoutes)，并取其导出的 WALLPAPER_DIR 作 /wallpapers/ 静态目录；GET /presets、GET /presets/:presetId/model-keys、POST /presets、POST /switch-preset、POST /presets/:presetId/wallpaper、PATCH /presets/:presetId、DELETE /presets/:presetId；广播 preset-pet-display-changed
 // 形状：切换、壁纸、PATCH、DELETE 的响应为 buildStatePayload() 的状态载荷
-// 对应文件：src/settings/CharacterPanel.tsx（调用方）/ src/overlay/OverlayApp.tsx（消费 preset-pet-display-changed）/ services/core/session/queries.ts / services/core/session/index.ts / services/core/session/displayConfig.ts / services/core/state.ts / services/core/providers/envCredentials.ts / services/core/config/keySummary.ts / services/core/routes/presets.test.ts / services/core/routes/wallpaperGuard.test.ts
+// 对应文件：src/settings/CharacterPanel.tsx（调用方）/ src/overlay/OverlayApp.tsx（消费 preset-pet-display-changed）/ services/core/session/queries.ts / services/core/session/index.ts / services/core/session/displayConfig.ts / services/core/state.ts / services/core/providers/envCredentials.ts / services/core/config/keySummary.ts / services/core/routes/presets.test.ts / services/core/routes/wallpaperGuard.test.ts / shared/errorCodes.ts
 import type { FastifyInstance } from 'fastify'
 import path from 'path'
 import os from 'os'
@@ -26,6 +26,7 @@ import {
   DEFAULT_DISPLAY_CONFIG,
 } from '../session/displayConfig.js'
 import type { PresetDisplayConfig } from '../../../shared/types/index.js'
+import { ERROR_CODES, errorBody, invalidRequest } from '../../../shared/errorCodes.js'
 
 dotenv.config({ quiet: true })
 
@@ -37,8 +38,6 @@ if (process.env.VITEST && !WALLPAPER_DIR.startsWith(os.tmpdir() + path.sep)) {
 
 const ALLOWED_WALLPAPER_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif'])
 const VALID_MODEL_TYPES: readonly string[] = ['anthropic', 'openai', 'ollama', 'deepseek']
-const API_KEY_INVALID_MESSAGE = 'API key 无效或未配置'
-const SUMMARY_API_KEY_INVALID_MESSAGE = '摘要模型的 API key 无效或未配置'
 
 function isKeyProvider(type: string | null): type is PresetKeyProvider {
   return type === 'anthropic' || type === 'openai' || type === 'deepseek'
@@ -54,7 +53,7 @@ export async function presetRoutes(fastify: FastifyInstance) {
   }>('/presets/:presetId/model-keys', async (request, reply) => {
     const { presetId } = request.params
     if (!getPresetById(presetId)) {
-      return reply.status(404).send({ error: 'Preset not found' })
+      return reply.status(404).send(errorBody(ERROR_CODES.PRESET_NOT_FOUND))
     }
 
     const credentials = getPresetApiKeys(presetId)
@@ -80,17 +79,17 @@ export async function presetRoutes(fastify: FastifyInstance) {
 
     const trimmedName = name?.trim()
     if (!trimmedName) {
-      return reply.status(400).send({ error: 'name is required' })
+      return reply.status(400).send(invalidRequest('name is required'))
     }
 
     const trimmedCharacterId = characterId?.trim()
     if (!trimmedCharacterId) {
-      return reply.status(400).send({ error: 'characterId is required' })
+      return reply.status(400).send(invalidRequest('characterId is required'))
     }
 
     const trimmedSystemPrompt = systemPrompt?.trim()
     if (!trimmedSystemPrompt) {
-      return reply.status(400).send({ error: 'systemPrompt is required' })
+      return reply.status(400).send(invalidRequest('systemPrompt is required'))
     }
 
     const presetId = crypto.randomUUID()
@@ -114,7 +113,7 @@ export async function presetRoutes(fastify: FastifyInstance) {
   }>('/switch-preset', async (request, reply) => {
     const { presetId } = request.body
     if (!presetId?.trim()) {
-      return reply.status(400).send({ error: 'presetId is required' })
+      return reply.status(400).send(invalidRequest('presetId is required'))
     }
 
     try {
@@ -124,7 +123,7 @@ export async function presetRoutes(fastify: FastifyInstance) {
         console.error('[Presets] Switch preset failed:', err)
         throw err
       }
-      return reply.status(404).send({ error: 'Preset not found' })
+      return reply.status(404).send(errorBody(ERROR_CODES.PRESET_NOT_FOUND))
     }
 
     return buildStatePayload()
@@ -135,10 +134,10 @@ export async function presetRoutes(fastify: FastifyInstance) {
   }>('/presets/:presetId', async (request, reply) => {
     const { presetId } = request.params
     if (!getPresetById(presetId)) {
-      return reply.status(404).send({ error: 'Preset not found' })
+      return reply.status(404).send(errorBody(ERROR_CODES.PRESET_NOT_FOUND))
     }
     if (getAllPresets().length <= 1) {
-      return reply.status(409).send({ error: 'Cannot delete the last preset' })
+      return reply.status(409).send(errorBody(ERROR_CODES.LAST_PRESET_UNDELETABLE))
     }
 
     if (getCurrentState()?.session.presetId === presetId) {
@@ -149,7 +148,7 @@ export async function presetRoutes(fastify: FastifyInstance) {
           console.error('[Presets] Switch before delete failed:', err)
           throw err
         }
-        return reply.status(404).send({ error: 'Preset not found' })
+        return reply.status(404).send(errorBody(ERROR_CODES.PRESET_NOT_FOUND))
       }
     }
 
@@ -176,7 +175,7 @@ export async function presetRoutes(fastify: FastifyInstance) {
   }>('/presets/:presetId/wallpaper', { bodyLimit: 10 * 1024 * 1024 }, async (request, reply) => {
     const { presetId } = request.params
     if (!getPresetById(presetId)) {
-      return reply.status(404).send({ error: 'Preset not found' })
+      return reply.status(404).send(errorBody(ERROR_CODES.PRESET_NOT_FOUND))
     }
 
     const rawFilename = request.headers['x-filename']
@@ -190,7 +189,7 @@ export async function presetRoutes(fastify: FastifyInstance) {
     }
     const ext = path.extname(filename).slice(1).toLowerCase()
     if (!ALLOWED_WALLPAPER_EXTENSIONS.has(ext)) {
-      return reply.status(400).send({ error: 'Unsupported file extension' })
+      return reply.status(400).send(errorBody(ERROR_CODES.WALLPAPER_UNSUPPORTED_EXTENSION))
     }
 
     const savedFilename = `${presetId}-wallpaper.${ext}`
@@ -208,7 +207,7 @@ export async function presetRoutes(fastify: FastifyInstance) {
       } catch {
       }
       request.log.error(err, 'Failed to save wallpaper')
-      return reply.status(500).send({ error: 'Failed to save wallpaper' })
+      return reply.status(500).send(errorBody(ERROR_CODES.WALLPAPER_SAVE_FAILED))
     }
 
     return await buildStatePayload()
@@ -234,21 +233,21 @@ export async function presetRoutes(fastify: FastifyInstance) {
     const { presetId } = request.params
     const preset = getPresetById(presetId)
     if (!preset) {
-      return reply.status(404).send({ error: 'Preset not found' })
+      return reply.status(404).send(errorBody(ERROR_CODES.PRESET_NOT_FOUND))
     }
 
     const { name, displayConfig, systemPrompt, modelType, modelName, apiKeyFromEnv, summaryModelType, summaryModelName, summaryApiKeyFromEnv, applyNow } = request.body
     if (request.body.apiKey !== undefined && typeof request.body.apiKey !== 'string') {
-      return reply.status(400).send({ error: 'apiKey must be a string' })
+      return reply.status(400).send(invalidRequest('apiKey must be a string'))
     }
     if (apiKeyFromEnv !== undefined && typeof apiKeyFromEnv !== 'boolean') {
-      return reply.status(400).send({ error: 'apiKeyFromEnv must be a boolean' })
+      return reply.status(400).send(invalidRequest('apiKeyFromEnv must be a boolean'))
     }
     if (request.body.summaryApiKey !== undefined && typeof request.body.summaryApiKey !== 'string') {
-      return reply.status(400).send({ error: 'summaryApiKey must be a string' })
+      return reply.status(400).send(invalidRequest('summaryApiKey must be a string'))
     }
     if (summaryApiKeyFromEnv !== undefined && typeof summaryApiKeyFromEnv !== 'boolean') {
-      return reply.status(400).send({ error: 'summaryApiKeyFromEnv must be a boolean' })
+      return reply.status(400).send(invalidRequest('summaryApiKeyFromEnv must be a boolean'))
     }
     const apiKey = request.body.apiKey?.trim() || undefined
     const summaryApiKey = request.body.summaryApiKey?.trim() || undefined
@@ -265,84 +264,84 @@ export async function presetRoutes(fastify: FastifyInstance) {
       summaryApiKey === undefined &&
       summaryApiKeyFromEnv === undefined
     ) {
-      return reply.status(400).send({ error: 'name, displayConfig, systemPrompt, modelType, modelName, apiKey, apiKeyFromEnv, summaryModelType, summaryModelName, summaryApiKey or summaryApiKeyFromEnv is required' })
+      return reply.status(400).send(invalidRequest('name, displayConfig, systemPrompt, modelType, modelName, apiKey, apiKeyFromEnv, summaryModelType, summaryModelName, summaryApiKey or summaryApiKeyFromEnv is required'))
     }
 
     const trimmedName = name?.trim()
     if (name !== undefined && !trimmedName) {
-      return reply.status(400).send({ error: 'name is required' })
+      return reply.status(400).send(invalidRequest('name is required'))
     }
 
     if (displayConfig !== undefined) {
       if (displayConfig.chatBgRgb !== undefined && !isValidChatBgRgb(displayConfig.chatBgRgb)) {
-        return reply.status(400).send({ error: 'chatBgRgb must be an array of three integers in [0, 255]' })
+        return reply.status(400).send(invalidRequest('chatBgRgb must be an array of three integers in [0, 255]'))
       }
       if (displayConfig.chatBgOpacity !== undefined && !isValidChatBgOpacity(displayConfig.chatBgOpacity)) {
-        return reply.status(400).send({ error: 'chatBgOpacity must be a number in [0, 1]' })
+        return reply.status(400).send(invalidRequest('chatBgOpacity must be a number in [0, 1]'))
       }
       if (displayConfig.themeMode !== undefined && !isValidThemeMode(displayConfig.themeMode)) {
-        return reply.status(400).send({ error: 'themeMode must be one of day, night, auto' })
+        return reply.status(400).send(invalidRequest('themeMode must be one of day, night, auto'))
       }
       if (displayConfig.accentRgb !== undefined && !isValidAccentRgb(displayConfig.accentRgb)) {
-        return reply.status(400).send({ error: 'accentRgb must be an array of three integers in [0, 255]' })
+        return reply.status(400).send(invalidRequest('accentRgb must be an array of three integers in [0, 255]'))
       }
       if (displayConfig.tintStrength !== undefined && !isValidTintStrength(displayConfig.tintStrength)) {
-        return reply.status(400).send({ error: 'tintStrength must be a finite number' })
+        return reply.status(400).send(invalidRequest('tintStrength must be a finite number'))
       }
       if (displayConfig.currentPortrait !== undefined && !isValidCurrentPortrait(displayConfig.currentPortrait)) {
-        return reply.status(400).send({ error: 'currentPortrait must be one of pixel, illustration' })
+        return reply.status(400).send(invalidRequest('currentPortrait must be one of pixel, illustration'))
       }
       if (displayConfig.petScale !== undefined && !isValidPetScale(displayConfig.petScale)) {
-        return reply.status(400).send({ error: 'petScale must be an object with pixel and illustration each one of 0.5, 0.75, 1, 1.25, 1.5' })
+        return reply.status(400).send(invalidRequest('petScale must be an object with pixel and illustration each one of 0.5, 0.75, 1, 1.25, 1.5'))
       }
     }
 
     const trimmedSystemPrompt = systemPrompt?.trim()
     if (systemPrompt !== undefined && !trimmedSystemPrompt) {
-      return reply.status(400).send({ error: 'systemPrompt is required' })
+      return reply.status(400).send(invalidRequest('systemPrompt is required'))
     }
 
     if ((modelType !== undefined) !== (modelName !== undefined)) {
-      return reply.status(400).send({ error: 'modelType and modelName must be provided together' })
+      return reply.status(400).send(invalidRequest('modelType and modelName must be provided together'))
     }
 
     let modelConfig: { modelType: 'anthropic' | 'openai' | 'ollama' | 'deepseek' | null; modelName: string | null } | undefined
     if (modelType !== undefined) {
       if (modelType === null) {
         if (modelName !== null) {
-          return reply.status(400).send({ error: 'modelName must be null when modelType is null' })
+          return reply.status(400).send(invalidRequest('modelName must be null when modelType is null'))
         }
         modelConfig = { modelType: null, modelName: null }
       } else {
         if (!VALID_MODEL_TYPES.includes(modelType)) {
-          return reply.status(400).send({ error: 'modelType must be one of anthropic, openai, ollama, deepseek, or null' })
+          return reply.status(400).send(invalidRequest('modelType must be one of anthropic, openai, ollama, deepseek, or null'))
         }
         const trimmedModelName = (modelName ?? '').trim()
         if (!trimmedModelName) {
-          return reply.status(400).send({ error: 'modelName is required when modelType is set' })
+          return reply.status(400).send(invalidRequest('modelName is required when modelType is set'))
         }
         modelConfig = { modelType, modelName: trimmedModelName }
       }
     }
 
     if ((summaryModelType !== undefined) !== (summaryModelName !== undefined)) {
-      return reply.status(400).send({ error: 'summaryModelType and summaryModelName must be provided together' })
+      return reply.status(400).send(invalidRequest('summaryModelType and summaryModelName must be provided together'))
     }
 
     let summaryConfig: { modelType: PresetModelType | null; modelName: string | null } | undefined
     if (summaryModelType !== undefined) {
       if (summaryModelType === null) {
         if (summaryModelName !== null) {
-          return reply.status(400).send({ error: 'summaryModelName must be null when summaryModelType is null' })
+          return reply.status(400).send(invalidRequest('summaryModelName must be null when summaryModelType is null'))
         }
         summaryConfig = { modelType: null, modelName: null }
       } else {
         if (!VALID_MODEL_TYPES.includes(summaryModelType)) {
-          return reply.status(400).send({ error: 'summaryModelType must be one of anthropic, openai, ollama, deepseek, or null' })
+          return reply.status(400).send(invalidRequest('summaryModelType must be one of anthropic, openai, ollama, deepseek, or null'))
         }
         const trimmedSummaryModelName = (summaryModelName ?? '').trim()
         if (!trimmedSummaryModelName) {
-          return reply.status(400).send({ error: 'summaryModelName is required when summaryModelType is set' })
+          return reply.status(400).send(invalidRequest('summaryModelName is required when summaryModelType is set'))
         }
         summaryConfig = { modelType: summaryModelType, modelName: trimmedSummaryModelName }
       }
@@ -352,19 +351,19 @@ export async function presetRoutes(fastify: FastifyInstance) {
     const keyFieldsSent = apiKey !== undefined || apiKeyFromEnv !== undefined
     let keyUpdate: { provider: PresetKeyProvider; apiKey?: string; fromEnv?: boolean } | undefined
     if (keyFieldsSent && !isKeyProvider(resultingModelType)) {
-      return reply.status(400).send({ error: 'apiKey and apiKeyFromEnv only apply to anthropic, openai or deepseek' })
+      return reply.status(400).send(invalidRequest('apiKey and apiKeyFromEnv only apply to anthropic, openai or deepseek'))
     }
     if (isKeyProvider(resultingModelType)) {
       const saved = getPresetApiKeys(presetId)[resultingModelType]
       if (apiKeyFromEnv === true && !saved.fromEnv && !isEnvCredentialDetected(resultingModelType)) {
-        return reply.status(400).send({ error: `未检测到环境变量 ${ENV_VAR_BY_PROVIDER[resultingModelType]}` })
+        return reply.status(400).send(errorBody(ERROR_CODES.ENV_VAR_MISSING, { envVar: ENV_VAR_BY_PROVIDER[resultingModelType] }))
       }
       if (modelConfig !== undefined || keyFieldsSent) {
         const mergedFromEnv = apiKeyFromEnv ?? saved.fromEnv
         const mergedApiKey = apiKey ?? saved.apiKey
         const configured = mergedFromEnv ? isEnvCredentialDetected(resultingModelType) : !!mergedApiKey
         if (!configured) {
-          return reply.status(400).send({ error: API_KEY_INVALID_MESSAGE })
+          return reply.status(400).send(errorBody(ERROR_CODES.API_KEY_INVALID))
         }
       }
       if (keyFieldsSent) {
@@ -375,23 +374,23 @@ export async function presetRoutes(fastify: FastifyInstance) {
     const summaryKeyFieldsSent = summaryApiKey !== undefined || summaryApiKeyFromEnv !== undefined
     let summaryKeyUpdate: PresetApiKeyUpdate | undefined
     if ((summaryConfig !== undefined || summaryKeyFieldsSent) && resultingModelType === null) {
-      return reply.status(400).send({ error: 'summary settings require a role-specific model config' })
+      return reply.status(400).send(invalidRequest('summary settings require a role-specific model config'))
     }
     const resultingSummaryType = summaryConfig !== undefined ? summaryConfig.modelType : preset.summaryModelType
     if (summaryKeyFieldsSent && !isKeyProvider(resultingSummaryType)) {
-      return reply.status(400).send({ error: 'summaryApiKey and summaryApiKeyFromEnv only apply to anthropic, openai or deepseek' })
+      return reply.status(400).send(invalidRequest('summaryApiKey and summaryApiKeyFromEnv only apply to anthropic, openai or deepseek'))
     }
     if (resultingModelType !== null && isKeyProvider(resultingSummaryType)) {
       const saved = getPresetApiKeys(presetId)[resultingSummaryType]
       if (summaryApiKeyFromEnv === true && !saved.summaryFromEnv && !isEnvCredentialDetected(resultingSummaryType)) {
-        return reply.status(400).send({ error: `未检测到环境变量 ${ENV_VAR_BY_PROVIDER[resultingSummaryType]}` })
+        return reply.status(400).send(errorBody(ERROR_CODES.ENV_VAR_MISSING, { envVar: ENV_VAR_BY_PROVIDER[resultingSummaryType] }))
       }
       if (modelConfig !== undefined || summaryConfig !== undefined || summaryKeyFieldsSent) {
         const mergedFromEnv = summaryApiKeyFromEnv ?? saved.summaryFromEnv
         const mergedApiKey = summaryApiKey ?? saved.summaryApiKey
         const configured = mergedFromEnv ? isEnvCredentialDetected(resultingSummaryType) : !!mergedApiKey
         if (!configured) {
-          return reply.status(400).send({ error: SUMMARY_API_KEY_INVALID_MESSAGE })
+          return reply.status(400).send(errorBody(ERROR_CODES.SUMMARY_API_KEY_INVALID))
         }
       }
       if (summaryKeyFieldsSent) {

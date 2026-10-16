@@ -3,6 +3,7 @@
 // 形状：props { messages, isReplying, avatarUrl?, userAvatarUrl?, displayName?, hasMoreHistory?, onLoadMore?, scrollToBottomSignal? }
 // 对应文件：src/chat/ChatWindow.tsx / src/chat/MessageBubble.tsx / src/chat/TypingIndicator.tsx
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { MessageBubble, MessageData } from './MessageBubble'
 import { TypingIndicator } from './TypingIndicator'
 
@@ -29,6 +30,7 @@ export function MessageList({
   onLoadMore,
   scrollToBottomSignal,
 }: MessageListProps) {
+  const { t } = useTranslation()
   const bottomRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
@@ -97,7 +99,7 @@ export function MessageList({
       </div>
 
       {showScrollBtn && (
-        <button className="scroll-btn" onClick={scrollToBottom} aria-label="跳转到最新消息">
+        <button className="scroll-btn" onClick={scrollToBottom} aria-label={t('跳转到最新消息')}>
           ⌄
         </button>
       )}

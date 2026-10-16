@@ -13,6 +13,7 @@ import {
   type TransitionChainResponse,
   type TransitionForm,
 } from '../../../shared/transitionChain.js'
+import { invalidRequest } from '../../../shared/errorCodes.js'
 
 function isSafeCharacterId(characterId: string): boolean {
   return characterId !== '' && characterId !== '.' && characterId !== '..' && !/[/\\]/.test(characterId)
@@ -33,13 +34,13 @@ export async function transitionChainRoutes(fastify: FastifyInstance) {
   }>('/overlay/transition-chain', async (request, reply) => {
     const { characterId, trigger, form } = request.query
     if (typeof characterId !== 'string' || !isSafeCharacterId(characterId)) {
-      return reply.status(400).send({ error: 'Invalid characterId' })
+      return reply.status(400).send(invalidRequest('Invalid characterId'))
     }
     if (typeof trigger !== 'string' || trigger === '') {
-      return reply.status(400).send({ error: 'Invalid trigger' })
+      return reply.status(400).send(invalidRequest('Invalid trigger'))
     }
     if (typeof form !== 'string' || !(TRANSITION_FORMS as readonly string[]).includes(form)) {
-      return reply.status(400).send({ error: `form must be one of ${TRANSITION_FORMS.join(', ')}` })
+      return reply.status(400).send(invalidRequest(`form must be one of ${TRANSITION_FORMS.join(', ')}`))
     }
 
     const characterDir = path.join(CHARACTERS_ROOT, characterId)

@@ -1,16 +1,16 @@
 // services/core/routes/models.ts — 按提供商类型返回可选模型名列表
 // 用法：core/index.ts 里 fastify.register(modelsRoutes)；GET /models?type=ollama|anthropic|openai|deepseek[&presetId=...][&fromEnv=1|0][&purpose=summary]、POST /models
-// 对应文件：src/settings/ModelConfigPanel.tsx / src/settings/useCharacterPanel.ts / services/core/providers/ModelProvider.ts / services/core/providers/ollama.ts / services/core/config/index.ts / services/core/session/queries.ts / services/core/routes/models.test.ts
+// 对应文件：src/settings/ModelConfigPanel.tsx / src/settings/useCharacterPanel.ts / services/core/providers/ModelProvider.ts / services/core/providers/ollama.ts / services/core/config/index.ts / services/core/session/queries.ts / services/core/routes/models.test.ts / shared/errorCodes.ts
 import type { FastifyInstance } from 'fastify'
 import { ensureOllama, listOllamaModels, getOllamaBaseUrl } from '../providers/ollama.js'
 import { createAnthropicClient, createOpenAIClient } from '../providers/ModelProvider.js'
 import { getModelProviderConfig } from '../config/index.js'
 import { getPresetById, getPresetApiKeys } from '../session/queries.js'
 import type { ModelConfig } from '../../../shared/types/index.js'
+import { ERROR_CODES, errorBody, invalidRequest } from '../../../shared/errorCodes.js'
 
 type KeyType = 'anthropic' | 'openai' | 'deepseek'
 
-const API_KEY_INVALID_MESSAGE = 'API key 无效或未配置'
 const KEY_FIELD = {
   anthropic: { key: 'anthropicApiKey', fromEnv: 'anthropicApiKeyFromEnv' },
   openai: { key: 'openaiApiKey', fromEnv: 'openaiApiKeyFromEnv' },
@@ -47,7 +47,7 @@ function getBaseConfig(type: KeyType): ModelConfig {
 async function listOllama() {
   const baseUrl = getOllamaBaseUrl(getModelProviderConfig().ollamaBaseUrl)
   if (!(await ensureOllama(baseUrl))) {
-    return { models: [], error: 'Ollama 启动失败' }
+    return { models: [], ...errorBody(ERROR_CODES.OLLAMA_START_FAILED) }
   }
   return { models: await listOllamaModels(baseUrl) }
 }
@@ -63,7 +63,7 @@ async function listProviderModels(type: KeyType, config: ModelConfig) {
       list = () => client.models.list(LIST_REQUEST_OPTIONS)
     }
   } catch {
-    return { models: [], error: API_KEY_INVALID_MESSAGE }
+    return { models: [], ...errorBody(ERROR_CODES.API_KEY_INVALID) }
   }
   try {
     const ids = await collectIds(list())
@@ -71,7 +71,7 @@ async function listProviderModels(type: KeyType, config: ModelConfig) {
     return { models }
   } catch (err) {
     console.error(`[models] failed to list ${type} models:`, err)
-    return { models: [], error: '获取模型列表失败' }
+    return { models: [], ...errorBody(ERROR_CODES.MODEL_LIST_FAILED) }
   }
 }
 
@@ -85,7 +85,7 @@ export async function modelsRoutes(fastify: FastifyInstance) {
 
     if (isKeyType(type)) {
       if (presetId !== undefined && !getPresetById(presetId)) {
-        return reply.status(404).send({ error: 'Preset not found' })
+        return reply.status(404).send(errorBody(ERROR_CODES.PRESET_NOT_FOUND))
       }
       if (fromEnvFlag === '1') {
         return listProviderModels(type, { ...getBaseConfig(type), [KEY_FIELD[type].fromEnv]: true })
@@ -104,7 +104,7 @@ export async function modelsRoutes(fastify: FastifyInstance) {
       return listProviderModels(type, { ...getBaseConfig(type), [key]: savedKey, [fromEnv]: fromEnvFlag === '0' ? false : savedFromEnv })
     }
 
-    return reply.status(400).send({ error: 'type must be one of ollama|anthropic|openai|deepseek' })
+    return reply.status(400).send(invalidRequest('type must be one of ollama|anthropic|openai|deepseek'))
   })
 
   fastify.post<{ Body: { type?: string; apiKey?: string } }>('/models', async (request, reply) => {
@@ -120,6 +120,6 @@ export async function modelsRoutes(fastify: FastifyInstance) {
       return listProviderModels(type, { ...getBaseConfig(type), [key]: given, [fromEnv]: false })
     }
 
-    return reply.status(400).send({ error: 'type must be one of ollama|anthropic|openai|deepseek' })
+    return reply.status(400).send(invalidRequest('type must be one of ollama|anthropic|openai|deepseek'))
   })
 }

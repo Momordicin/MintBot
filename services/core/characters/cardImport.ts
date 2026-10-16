@@ -1,8 +1,9 @@
 // services/core/characters/cardImport.ts — 解析 SillyTavern 角色卡（PNG 的 ccv3/chara tEXt 块或 JSON 文件）为 MintBot 角色草稿
 // 用法：routes/characterImport.ts 的 POST /characters/import/parse 调 parseCharacterCard(buffer)
-// 形状：Buffer -> ParsedCharacterCard（name/systemPrompt/suggestedCharacterId/avatarCandidate 等）| { error }
-// 对应文件：services/core/routes/characterImport.ts / services/core/characters/cardImport.test.ts
+// 形状：Buffer -> ParsedCharacterCard（name/systemPrompt/suggestedCharacterId/avatarCandidate 等）| ErrorBody
+// 对应文件：services/core/routes/characterImport.ts / services/core/characters/cardImport.test.ts / shared/errorCodes.ts
 import crypto from 'crypto'
+import { ERROR_CODES, errorBody, type ErrorBody } from '../../../shared/errorCodes.js'
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
@@ -139,7 +140,7 @@ export interface ParsedCharacterCard {
   systemPromptRaw: string
 }
 
-export type ParseCharacterCardResult = ParsedCharacterCard | { error: string }
+export type ParseCharacterCardResult = ParsedCharacterCard | ErrorBody
 
 export function parseCharacterCard(buffer: Buffer): ParseCharacterCardResult {
   let jsonText: string
@@ -149,12 +150,12 @@ export function parseCharacterCard(buffer: Buffer): ParseCharacterCardResult {
     const textChunks = extractTextChunks(buffer)
     const raw = textChunks.get('ccv3') ?? textChunks.get('chara')
     if (raw === undefined) {
-      return { error: 'PNG 文件中未找到角色卡数据（缺少 ccv3/chara 文本块）' }
+      return errorBody(ERROR_CODES.CARD_DATA_NOT_FOUND)
     }
     try {
       jsonText = Buffer.from(raw, 'base64').toString('utf-8')
     } catch {
-      return { error: '角色卡数据 base64 解码失败' }
+      return errorBody(ERROR_CODES.CARD_BASE64_INVALID)
     }
     avatarCandidate = buffer
   } else {
@@ -165,7 +166,7 @@ export function parseCharacterCard(buffer: Buffer): ParseCharacterCardResult {
   try {
     raw = JSON.parse(jsonText)
   } catch {
-    return { error: '角色卡 JSON 解析失败，文件已损坏或格式不受支持' }
+    return errorBody(ERROR_CODES.CARD_JSON_INVALID)
   }
 
   const card = normalizeCard(raw)

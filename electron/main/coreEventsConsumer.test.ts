@@ -7,10 +7,12 @@ function createHandlers(): CoreEventsConsumerHandlers {
     converge: vi.fn(),
     onPresetSwitched: vi.fn(),
     onWindowBehaviorChanged: vi.fn(),
+    onUiLanguageChanged: vi.fn(),
     log: {
       generationChanged: vi.fn(),
       helloHeartbeatParseError: vi.fn(),
       windowBehaviorParseError: vi.fn(),
+      uiLanguageParseError: vi.fn(),
     },
   }
 }

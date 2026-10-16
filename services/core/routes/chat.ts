@@ -1,6 +1,6 @@
 // services/core/routes/chat.ts — 一轮聊天：建上下文、调模型，经 SSE 把回复交给发起请求的窗口
 // 用法：core/index.ts 注册 chatRoutes；POST /chat { message }
-// 对应文件：src/chat/ChatWindow.tsx / services/core/context/buildContext.ts / services/core/routes/chat.test.ts
+// 对应文件：src/chat/ChatWindow.tsx / services/core/context/buildContext.ts / services/core/routes/chat.test.ts / shared/errorCodes.ts
 import type { FastifyInstance } from 'fastify'
 import type { OutgoingHttpHeaders } from 'node:http'
 import { requireCurrentState } from '../session/index.js'
@@ -15,6 +15,7 @@ import { getModelProviderConfig } from '../config/index.js'
 import { isEmptyReply } from '../reply/interceptor.js'
 import { detectSleepiness } from '../reply/sleepDetector.js'
 import { parseJsonSalvage } from '../util/jsonSalvage.js'
+import { ERROR_CODES, errorBody, invalidRequest } from '../../../shared/errorCodes.js'
 
 let queueTail: Promise<void> = Promise.resolve()
 
@@ -55,14 +56,14 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
     const { message } = request.body
     if (!message?.trim()) {
-      return reply.status(400).send({ error: 'message is required' })
+      return reply.status(400).send(invalidRequest('message is required'))
     }
 
     let state
     try {
       state = requireCurrentState()
     } catch {
-      return reply.status(503).send({ error: 'No active session' })
+      return reply.status(503).send(errorBody(ERROR_CODES.NO_ACTIVE_SESSION))
     }
 
     const sessionId = state.session.sessionId
@@ -94,7 +95,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
       const rejectDeletedSession = () => {
         openStream()
-        send('system', { type: 'error', payload: { message: 'Session deleted' }, sessionId })
+        send('system', { type: 'error', payload: errorBody(ERROR_CODES.SESSION_DELETED), sessionId })
         reply.raw.end()
       }
 
@@ -111,7 +112,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
           return
         }
         logChatError('[Chat] buildContext failed:', err, message)
-        return reply.status(500).send({ error: 'Failed to build context' })
+        return reply.status(500).send(errorBody(ERROR_CODES.CONTEXT_BUILD_FAILED))
       }
 
       if (reply.raw.destroyed || reply.raw.writableEnded || abortController.signal.aborted) {
@@ -147,7 +148,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
         }
 
         if (!sessionExists(sessionId)) {
-          send('system', { type: 'error', payload: { message: 'Session deleted' }, sessionId })
+          send('system', { type: 'error', payload: errorBody(ERROR_CODES.SESSION_DELETED), sessionId })
           return
         }
 
@@ -161,7 +162,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
             `[Chat] Empty reply body (sessionId=${sessionId}, modelType=${modelType}): ` +
             JSON.stringify(fullReply)
           )
-          send('system', { type: 'error', payload: { message: 'Model call failed' }, sessionId })
+          send('system', { type: 'error', payload: errorBody(ERROR_CODES.MODEL_CALL_FAILED), sessionId })
           return
         }
 
@@ -207,10 +208,10 @@ export async function chatRoutes(fastify: FastifyInstance) {
         if (!abortController.signal.aborted) {
           logChatError('[Chat] Error:', err, message)
         }
-        const errorMessage = err instanceof Error && ENV_KEY_UNAVAILABLE_PATTERN.test(err.message)
-          ? 'API key 无效或未配置'
-          : 'Model call failed'
-        send('system', { type: 'error', payload: { message: errorMessage }, sessionId })
+        const errorCode = err instanceof Error && ENV_KEY_UNAVAILABLE_PATTERN.test(err.message)
+          ? ERROR_CODES.API_KEY_INVALID
+          : ERROR_CODES.MODEL_CALL_FAILED
+        send('system', { type: 'error', payload: errorBody(errorCode), sessionId })
       } finally {
         if (!reply.raw.writableEnded && !reply.raw.destroyed) {
           reply.raw.end()

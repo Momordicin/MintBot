@@ -3,6 +3,7 @@
 // 形状：props { sessionId: string | null }
 // 对应文件：src/settings/SettingsApp.tsx / src/settings/memory/MessageBrowser.tsx / src/settings/memory/EntityList.tsx / src/settings/memory/SummaryList.tsx / src/settings/memory/EmbeddingQueueStatus.tsx / src/settings/memory/ForgetRangePanel.tsx
 import React, { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { MessageBrowser } from './MessageBrowser'
 import { EntityList } from './EntityList'
 import { SummaryList } from './SummaryList'
@@ -15,25 +16,26 @@ interface MemoryPanelProps {
   sessionId: string | null
 }
 
-const SUB_TABS: Array<{ key: SubTab; label: string }> = [
-  { key: 'messages', label: '消息浏览' },
-  { key: 'entities', label: '实体列表' },
-  { key: 'summaries', label: '摘要列表' },
-  { key: 'embedding', label: 'Embedding 状态' },
-  { key: 'forget', label: '按时间段删除' },
-]
-
 export function MemoryPanel({ sessionId }: MemoryPanelProps) {
+  const { t } = useTranslation()
   const [activeSubTab, setActiveSubTab] = useState<SubTab>('messages')
 
   if (!sessionId) {
-    return <div className="memory-panel__empty">当前无活跃会话</div>
+    return <div className="memory-panel__empty">{t('当前无活跃会话')}</div>
   }
+
+  const subTabs: Array<{ key: SubTab; label: string }> = [
+    { key: 'messages', label: t('消息浏览') },
+    { key: 'entities', label: t('实体列表') },
+    { key: 'summaries', label: t('摘要列表') },
+    { key: 'embedding', label: t('Embedding 状态') },
+    { key: 'forget', label: t('按时间段删除') },
+  ]
 
   return (
     <div className="memory-panel">
       <div className="memory-subtabs">
-        {SUB_TABS.map(tab => (
+        {subTabs.map(tab => (
           <button
             key={tab.key}
             className={`memory-subtab${activeSubTab === tab.key ? ' memory-subtab--active' : ''}`}

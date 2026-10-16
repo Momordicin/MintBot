@@ -447,7 +447,7 @@ describe('POST /presets/:presetId/wallpaper', () => {
     renameSpy.mockRestore()
 
     expect(response.statusCode).toBe(500)
-    expect(JSON.parse(response.payload)).toEqual({ error: 'Failed to save wallpaper' })
+    expect(JSON.parse(response.payload)).toEqual({ code: 'WALLPAPER_SAVE_FAILED' })
 
     const leftoverTmp = fs.readdirSync(WALLPAPER_DIR)
       .filter(f => f.startsWith('p1-wallpaper.png.tmp-'))
@@ -835,7 +835,7 @@ describe('PATCH /presets/:presetId', () => {
     const response = await fastify.inject({ method: 'PATCH', url: '/presets/p1', payload: { displayConfig: { chatBgOpacity: 0.2, petScale } } })
 
     expect(response.statusCode).toBe(400)
-    expect(JSON.parse(response.payload).error).toContain('petScale')
+    expect(JSON.parse(response.payload).params.detail).toContain('petScale')
     expect(getPresetById('p1')!.displayConfig).toEqual(DEFAULT_DISPLAY_CONFIG)
     expect(BroadcastModule.broadcastEvent).not.toHaveBeenCalled()
   })
@@ -1413,14 +1413,14 @@ describe('PATCH /presets/:presetId — 角色 API Key', () => {
     const response = await patch({ modelType: 'openai', modelName: 'gpt-4o-mini', apiKey: '  ' })
 
     expect(response.statusCode).toBe(400)
-    expect(JSON.parse(response.payload).error).toBe('API key 无效或未配置')
+    expect(JSON.parse(response.payload)).toEqual({ code: 'API_KEY_INVALID' })
   })
 
   it('apiKeyFromEnv 由 false 变 true 且未检测到环境变量：400 且什么都不写', async () => {
     const response = await patch({ name: '新名字', modelType: 'openai', modelName: 'gpt-4o-mini', apiKey: 'sk-role-key', apiKeyFromEnv: true })
 
     expect(response.statusCode).toBe(400)
-    expect(JSON.parse(response.payload).error).toBe('未检测到环境变量 OPENAI_API_KEY')
+    expect(JSON.parse(response.payload)).toEqual({ code: 'ENV_VAR_MISSING', params: { envVar: 'OPENAI_API_KEY' } })
     expect(getPresetById('p1')!.name).toBe('角色一')
     expect(getPresetById('p1')!.modelType).toBe('ollama')
     expect(getPresetApiKeys('p1').openai).toEqual({ fromEnv: false, summaryFromEnv: false })
@@ -1451,14 +1451,14 @@ describe('PATCH /presets/:presetId — 角色 API Key', () => {
     const response = await patch({ modelType: 'openai', modelName: 'gpt-4o-mini', apiKeyFromEnv: true })
 
     expect(response.statusCode).toBe(400)
-    expect(JSON.parse(response.payload).error).toBe('API key 无效或未配置')
+    expect(JSON.parse(response.payload)).toEqual({ code: 'API_KEY_INVALID' })
   })
 
   it('key provider 未配置（无 key、未勾选环境变量）：400 且 name 等其它字段也不写', async () => {
     const response = await patch({ name: '新名字', systemPrompt: '新人设', modelType: 'anthropic', modelName: 'claude-sonnet' })
 
     expect(response.statusCode).toBe(400)
-    expect(JSON.parse(response.payload).error).toBe('API key 无效或未配置')
+    expect(JSON.parse(response.payload)).toEqual({ code: 'API_KEY_INVALID' })
     const preset = getPresetById('p1')!
     expect(preset.name).toBe('角色一')
     expect(preset.systemPrompt).toBe('你是角色一')
@@ -1472,7 +1472,7 @@ describe('PATCH /presets/:presetId — 角色 API Key', () => {
     const response = await patch({ modelType: 'openai', modelName: 'gpt-4o-mini' })
 
     expect(response.statusCode).toBe(400)
-    expect(JSON.parse(response.payload).error).toBe('API key 无效或未配置')
+    expect(JSON.parse(response.payload)).toEqual({ code: 'API_KEY_INVALID' })
   })
 
   it('取消勾选环境变量且已有保存的 key：通过，写入 fromEnv=false 并保留 key', async () => {
@@ -1641,7 +1641,7 @@ describe('角色摘要模型与摘要 key', () => {
     const response = await patch({ summaryModelType: 'openai', summaryModelName: 'gpt-4o-mini' })
 
     expect(response.statusCode).toBe(400)
-    expect(JSON.parse(response.payload).error).toBe('摘要模型的 API key 无效或未配置')
+    expect(JSON.parse(response.payload)).toEqual({ code: 'SUMMARY_API_KEY_INVALID' })
     expect(getPresetById('p1')!.summaryModelType).toBeNull()
   })
 
@@ -1649,7 +1649,7 @@ describe('角色摘要模型与摘要 key', () => {
     const response = await patch({ name: '新名字', summaryModelType: 'anthropic', summaryModelName: 'claude-sonnet' })
 
     expect(response.statusCode).toBe(400)
-    expect(JSON.parse(response.payload).error).toBe('摘要模型的 API key 无效或未配置')
+    expect(JSON.parse(response.payload)).toEqual({ code: 'SUMMARY_API_KEY_INVALID' })
     const preset = getPresetById('p1')!
     expect(preset.name).toBe('角色一')
     expect(preset.summaryModelType).toBeNull()
@@ -1715,7 +1715,7 @@ describe('角色摘要模型与摘要 key', () => {
     const response = await patch({ summaryModelType: 'deepseek', summaryModelName: 'deepseek-v4-flash', summaryApiKey: 'sk-ds', summaryApiKeyFromEnv: true })
 
     expect(response.statusCode).toBe(400)
-    expect(JSON.parse(response.payload).error).toBe('未检测到环境变量 DEEPSEEK_API_KEY')
+    expect(JSON.parse(response.payload)).toEqual({ code: 'ENV_VAR_MISSING', params: { envVar: 'DEEPSEEK_API_KEY' } })
     expect(getPresetById('p1')!.summaryModelType).toBeNull()
     expect(getPresetApiKeys('p1').deepseek.summaryApiKey).toBeUndefined()
   })
@@ -1730,7 +1730,7 @@ describe('角色摘要模型与摘要 key', () => {
     expect(first.statusCode).toBe(200)
     expect(getPresetApiKeys('p1').deepseek.summaryFromEnv).toBe(true)
     expect(second.statusCode).toBe(400)
-    expect(JSON.parse(second.payload).error).toBe('摘要模型的 API key 无效或未配置')
+    expect(JSON.parse(second.payload)).toEqual({ code: 'SUMMARY_API_KEY_INVALID' })
   })
 
   it('摘要 key 字段与 ollama 或 null 的结果摘要模型同时出现：400，不写任何东西', async () => {
@@ -1839,7 +1839,7 @@ describe('PATCH /presets/:presetId — 错误文案', () => {
     })
 
     expect(response.statusCode).toBe(400)
-    expect(JSON.parse(response.payload).error).toBe('API key 无效或未配置')
+    expect(JSON.parse(response.payload)).toEqual({ code: 'API_KEY_INVALID' })
   })
 
   it('只有摘要 key 未配置时报摘要专用文案', async () => {
@@ -1853,14 +1853,14 @@ describe('PATCH /presets/:presetId — 错误文案', () => {
     })
 
     expect(response.statusCode).toBe(400)
-    expect(JSON.parse(response.payload).error).toBe('摘要模型的 API key 无效或未配置')
+    expect(JSON.parse(response.payload)).toEqual({ code: 'SUMMARY_API_KEY_INVALID' })
   })
 
   it('没有任何可更新字段时文案列出全部可更新字段', async () => {
     const response = await patch({})
 
     expect(response.statusCode).toBe(400)
-    const message = JSON.parse(response.payload).error as string
+    const message = JSON.parse(response.payload).params.detail as string
     for (const field of ['name', 'displayConfig', 'systemPrompt', 'modelType', 'modelName', 'apiKey', 'apiKeyFromEnv', 'summaryModelType', 'summaryModelName', 'summaryApiKey', 'summaryApiKeyFromEnv']) {
       expect(message).toContain(field)
     }

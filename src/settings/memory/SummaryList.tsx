@@ -2,6 +2,7 @@
 // 用法：MemoryPanel 渲染 <SummaryList sessionId />；GET /summaries?sessionId
 // 对应文件：src/settings/memory/MemoryPanel.tsx / services/core/routes/memory.ts
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { CORE_URL } from '../../coreUrl.js'
 
@@ -18,6 +19,7 @@ interface SummaryListProps {
 }
 
 export function SummaryList({ sessionId }: SummaryListProps) {
+  const { t, i18n } = useTranslation()
   const [summaries, setSummaries] = useState<SummaryRow[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -38,7 +40,7 @@ export function SummaryList({ sessionId }: SummaryListProps) {
       .then((list: SummaryRow[]) => setSummaries(list))
       .catch(err => {
         if (err instanceof DOMException && err.name === 'AbortError') return
-        setError('加载摘要失败')
+        setError(i18n.t('加载摘要失败'))
       })
       .finally(() => {
         if (controller.signal.aborted) return
@@ -58,19 +60,19 @@ export function SummaryList({ sessionId }: SummaryListProps) {
       {error && (
         <div className="character-panel__error">
           {error}{' '}
-          <button className="memory-btn" onClick={() => load(sessionId)}>重试</button>
+          <button className="memory-btn" onClick={() => load(sessionId)}>{t('重试')}</button>
         </div>
       )}
-      {isLoading && <div className="memory-loading">加载中…</div>}
+      {isLoading && <div className="memory-loading">{t('加载中…')}</div>}
       {!isLoading && !error && summaries.length === 0 && (
-        <div className="memory-empty">暂无摘要</div>
+        <div className="memory-empty">{t('暂无摘要')}</div>
       )}
       {!isLoading && !error && summaries.map(s => (
         <div key={s.id} className="memory-list-row">
           <div className="memory-list-row__content">{s.content}</div>
           <div className="memory-list-row__meta">
-            <span>消息 #{s.fromMessageId}–#{s.toMessageId}</span>
-            <span>{new Date(s.createdAt).toLocaleDateString()}</span>
+            <span>{t('消息 #{{from}}–#{{to}}', { from: s.fromMessageId, to: s.toMessageId })}</span>
+            <span>{new Date(s.createdAt).toLocaleDateString(i18n.language)}</span>
           </div>
         </div>
       ))}

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import Fastify from 'fastify'
 import { windowBehaviorRoutes } from './windowBehavior.js'
-import { ConfigFileUnreadableError, CONFIG_FILE_UNREADABLE_MESSAGE } from '../config/configFileError.js'
+import { ConfigFileUnreadableError } from '../config/configFileError.js'
 
 // mock 掉 config 与 broadcast 模块，只测路由本身；校验逻辑会读 VALID_* 常量，mock 里必须一并导出
 const {
@@ -122,7 +122,7 @@ describe('PATCH /config/window-behavior — 校验', () => {
     })
 
     expect(response.statusCode).toBe(400)
-    expect(JSON.parse(response.payload).error).toContain(field)
+    expect(JSON.parse(response.payload).params.detail).toContain(field)
     expect(updateWindowBehaviorConfigMock).not.toHaveBeenCalled()
   })
 
@@ -312,7 +312,7 @@ describe('PATCH /config/window-behavior — config.json 无法读取', () => {
     errorSpy.mockRestore()
 
     expect(response.statusCode).toBe(500)
-    expect(JSON.parse(response.payload)).toEqual({ error: CONFIG_FILE_UNREADABLE_MESSAGE })
+    expect(JSON.parse(response.payload)).toEqual({ code: 'CONFIG_FILE_UNREADABLE' })
     expect(broadcastEventMock).not.toHaveBeenCalled()
   })
 
@@ -329,6 +329,6 @@ describe('PATCH /config/window-behavior — config.json 无法读取', () => {
     })
 
     expect(response.statusCode).toBe(500)
-    expect(JSON.parse(response.payload).error).not.toBe(CONFIG_FILE_UNREADABLE_MESSAGE)
+    expect(JSON.parse(response.payload).code).not.toBe('CONFIG_FILE_UNREADABLE')
   })
 })

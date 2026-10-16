@@ -6,9 +6,10 @@
     "strict": true,
     "types": ["node"],
     "skipLibCheck": true,
+    "resolveJsonModule": true,
     "composite": true,
     "outDir": "./dist",
     "declarationDir": "./dist"
   },
-  "include": ["./**/*"]
+  "include": ["./**/*", "./i18n/*.json"]
 }

@@ -1,8 +1,11 @@
 // src/settings/ModelConfigPanel.tsx — 设置窗口的"模型配置"面板：API Key / Ollama 地址 / 对话模型 / 摘要模型
 // 用法：SettingsApp 里渲染 <ModelConfigPanel />（无 props）；GET/PATCH /config/model
-// 对应文件：src/settings/SettingsApp.tsx / src/settings/SubscriptionLogin.tsx / src/settings/ApiKeyField.tsx / src/settings/ModelNameField.tsx / services/core/routes/config.ts / shared/types/index.ts
+// 对应文件：src/settings/SettingsApp.tsx / src/settings/SubscriptionLogin.tsx / src/settings/ApiKeyField.tsx / src/settings/ModelNameField.tsx / src/errorText.ts / services/core/routes/config.ts / shared/types/index.ts
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { ModelConfig } from '../../shared/types/index.js'
+import { isErrorBody } from '../../shared/errorCodes.js'
+import { errorText } from '../errorText.js'
 import './settings.css'
 
 import { CORE_URL } from '../coreUrl.js'
@@ -150,6 +153,7 @@ interface KeyGroupProps {
 }
 
 function KeyGroup({ provider, summary, keyInput, editing, fromEnv, onKeyInputChange, onEditingChange, onFromEnvChange, baseUrl, onBaseUrlChange }: KeyGroupProps) {
+  const { t } = useTranslation()
   return (
     <div className="model-config-panel__group">
       <div className="model-config-panel__section-label">{PROVIDER_LABEL[provider]}</div>
@@ -166,7 +170,7 @@ function KeyGroup({ provider, summary, keyInput, editing, fromEnv, onKeyInputCha
       />
       {onBaseUrlChange && (
         <div className="model-config-panel__field">
-          <label>Base URL（可选）</label>
+          <label>{t('Base URL（可选）')}</label>
           <input value={baseUrl ?? ''} onChange={e => onBaseUrlChange(e.target.value)} />
         </div>
       )}
@@ -184,13 +188,14 @@ interface ModelSelectionFieldsProps {
 }
 
 function ModelSelectionFields({ selection, providerOptions, reloadKey, typedKeys, fromEnvs, onChange }: ModelSelectionFieldsProps) {
+  const { t } = useTranslation()
   const current = selection.type === 'ollama' ? selection.ollamaModel : selection.modelName
   const typedKey = selection.type === 'ollama' ? '' : typedKeys[selection.type].trim()
 
   return (
     <>
       <div className="model-config-panel__field">
-        <label>类型</label>
+        <label>{t('类型')}</label>
         <select
           value={selection.type}
           onChange={e => onChange({ ...selection, type: e.target.value as ProviderType, modelName: '' })}
@@ -217,6 +222,7 @@ function ModelSelectionFields({ selection, providerOptions, reloadKey, typedKeys
 }
 
 export function ModelConfigPanel() {
+  const { t, i18n } = useTranslation()
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [keys, setKeys] = useState<Record<KeyProvider, KeySummary>>(BLANK_KEYS)
@@ -246,7 +252,7 @@ export function ModelConfigPanel() {
       })
       .catch(err => {
         if (err instanceof DOMException && err.name === 'AbortError') return
-        setLoadError('加载模型配置失败，请稍后重试')
+        setLoadError(i18n.t('加载模型配置失败，请稍后重试'))
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false)
@@ -277,7 +283,7 @@ export function ModelConfigPanel() {
 
       if (!response.ok) {
         const payload = await response.json().catch(() => null)
-        throw new Error(typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`)
+        throw new Error(isErrorBody(payload) ? errorText(payload, i18n.t) : `HTTP ${response.status}`)
       }
 
       const data: ConfigModelResponse = await response.json()
@@ -286,17 +292,17 @@ export function ModelConfigPanel() {
       setKeys(data.modelProvider?.keys ?? BLANK_KEYS)
       setForm(toFormState(data))
       setModelsReloadKey(prev => prev + 1)
-      setSaveNotice('已保存')
+      setSaveNotice(i18n.t('已保存'))
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
-      setErrorMessage(err instanceof Error ? err.message : '保存模型配置失败，请稍后重试')
+      setErrorMessage(err instanceof Error ? err.message : i18n.t('保存模型配置失败，请稍后重试'))
     } finally {
       setIsSaving(false)
     }
   }, [form])
 
   if (loading) {
-    return <div className="memory-loading">加载中…</div>
+    return <div className="memory-loading">{t('加载中…')}</div>
   }
 
   if (loadError) {
@@ -329,9 +335,9 @@ export function ModelConfigPanel() {
 
   return (
     <fieldset className="model-config-panel" disabled={isSaving}>
-      {isSaving && <div className="model-config-panel__saving"><div className="model-config-panel__saving-label">保存中…</div></div>}
+      {isSaving && <div className="model-config-panel__saving"><div className="model-config-panel__saving-label">{t('保存中…')}</div></div>}
       <div className="model-config-panel__section">
-        <div className="model-config-panel__section-label">API Key</div>
+        <div className="model-config-panel__section-label">{t('API Key')}</div>
         <KeyGroup
           provider="anthropic"
           summary={keys.anthropic}
@@ -382,7 +388,7 @@ export function ModelConfigPanel() {
       <SubscriptionLogin />
 
       <div className="model-config-panel__section">
-        <div className="model-config-panel__section-label">对话模型</div>
+        <div className="model-config-panel__section-label">{t('对话模型')}</div>
         <ModelSelectionFields
           selection={form.chat}
           providerOptions={providerOptionsFor(form.chat.type)}
@@ -392,13 +398,13 @@ export function ModelConfigPanel() {
           onChange={chat => setForm(prev => ({ ...prev, chat }))}
         />
         <div className="model-config-panel__field model-config-panel__field--short">
-          <label>最大回复 token 数（max_tokens）</label>
+          <label>{t('最大回复 token 数（max_tokens）')}</label>
           <input
             type="number"
             min={MIN_MAX_TOKENS}
             max={MAX_MAX_TOKENS}
             step={1}
-            placeholder="默认 1000"
+            placeholder={t('默认 1000')}
             value={form.maxTokens}
             onChange={e => setForm(prev => ({ ...prev, maxTokens: e.target.value }))}
           />
@@ -406,14 +412,14 @@ export function ModelConfigPanel() {
       </div>
 
       <div className="model-config-panel__section">
-        <div className="model-config-panel__section-label">摘要模型</div>
+        <div className="model-config-panel__section-label">{t('摘要模型')}</div>
         <label className="model-config-panel__checkbox">
           <input
             type="checkbox"
             checked={form.sameAsChat}
             onChange={e => setForm(prev => ({ ...prev, sameAsChat: e.target.checked }))}
           />
-          使用与对话模型相同
+          {t('使用与对话模型相同')}
         </label>
         {!form.sameAsChat && (
           <ModelSelectionFields
@@ -428,7 +434,7 @@ export function ModelConfigPanel() {
       </div>
 
       <button className="rename-btn" onClick={handleSave} disabled={isSaving}>
-        {isSaving ? '保存中…' : '保存'}
+        {isSaving ? t('保存中…') : t('保存')}
       </button>
 
       {errorMessage && <div className="character-panel__error">{errorMessage}</div>}

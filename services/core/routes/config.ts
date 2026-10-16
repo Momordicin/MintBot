@@ -1,6 +1,6 @@
 // services/core/routes/config.ts — 模型配置的读取与修改路由
 // 用法：core/index.ts 注册 configRoutes；GET /config/model、PATCH /config/model
-// 对应文件：src/settings/ModelConfigPanel.tsx / services/core/config/index.ts / services/core/config/keySummary.ts / services/core/providers/envCredentials.ts / services/core/routes/config.test.ts
+// 对应文件：src/settings/ModelConfigPanel.tsx / services/core/config/index.ts / services/core/config/keySummary.ts / services/core/providers/envCredentials.ts / services/core/routes/config.test.ts / shared/errorCodes.ts
 import type { FastifyInstance } from 'fastify'
 import {
   getModelProviderConfig,
@@ -11,16 +11,16 @@ import {
   type BackgroundModelConfig,
 } from '../config/index.js'
 import { summarizeSavedKey } from '../config/keySummary.js'
-import { ConfigFileUnreadableError, CONFIG_FILE_UNREADABLE_MESSAGE } from '../config/configFileError.js'
+import { ConfigFileUnreadableError } from '../config/configFileError.js'
 import { createModelProvider } from '../providers/ModelProvider.js'
 import { ENV_VAR_BY_PROVIDER, isEnvCredentialDetected, type KeyProvider } from '../providers/envCredentials.js'
 import type { ModelConfig } from '../../../shared/types/index.js'
+import { ERROR_CODES, errorBody, invalidRequest, type ErrorBody } from '../../../shared/errorCodes.js'
 
 const VALID_MODEL_TYPES: readonly string[] = ['anthropic', 'openai', 'ollama', 'deepseek']
 const MIN_MAX_TOKENS = 1
 const MAX_MAX_TOKENS = 32000
 const KEY_PROVIDERS: readonly KeyProvider[] = ['anthropic', 'openai', 'deepseek']
-const API_KEY_INVALID_MESSAGE = 'API key 无效或未配置'
 
 const KEY_FIELD = {
   anthropic: { key: 'anthropicApiKey', fromEnv: 'anthropicApiKeyFromEnv' },
@@ -89,18 +89,18 @@ function isProviderConfigured(global: Partial<ModelConfig>, provider: KeyProvide
   return typeof saved === 'string' && saved.length > 0
 }
 
-function validateProviderSelection(selected: Partial<ModelConfig>, global: Partial<ModelConfig>): string | null {
+function validateProviderSelection(selected: Partial<ModelConfig>, global: Partial<ModelConfig>): ErrorBody | null {
   const trimmedModelName = selected.modelName?.trim()
   if (selected.type === 'ollama') {
-    if (!selected.ollamaModel) return 'ollamaModel is required when type is ollama'
+    if (!selected.ollamaModel) return invalidRequest('ollamaModel is required when type is ollama')
     return null
   }
   if (selected.type === 'anthropic' || selected.type === 'openai' || selected.type === 'deepseek') {
-    if (!isProviderConfigured(global, selected.type)) return API_KEY_INVALID_MESSAGE
-    if (!trimmedModelName) return `modelName is required when type is ${selected.type}`
+    if (!isProviderConfigured(global, selected.type)) return errorBody(ERROR_CODES.API_KEY_INVALID)
+    if (!trimmedModelName) return invalidRequest(`modelName is required when type is ${selected.type}`)
     return null
   }
-  return 'type is required'
+  return invalidRequest('type is required')
 }
 
 function dropEmptyKeys(partial: Partial<ModelConfig> | undefined): Partial<ModelConfig> | undefined {
@@ -114,27 +114,27 @@ function dropEmptyKeys(partial: Partial<ModelConfig> | undefined): Partial<Model
   return cleaned
 }
 
-function validateType(type: string | undefined): string | null {
+function validateType(type: string | undefined): ErrorBody | null {
   if (type !== undefined && !VALID_MODEL_TYPES.includes(type)) {
-    return 'type must be one of anthropic, openai, ollama, deepseek'
+    return invalidRequest('type must be one of anthropic, openai, ollama, deepseek')
   }
   return null
 }
 
-function validateGlobalPartial(partial: Partial<ModelConfig>, current: Partial<ModelConfig>): string | null {
+function validateGlobalPartial(partial: Partial<ModelConfig>, current: Partial<ModelConfig>): ErrorBody | null {
   const typeError = validateType(partial.type)
   if (typeError) return typeError
 
   if (partial.maxTokens !== undefined) {
     if (!Number.isInteger(partial.maxTokens) || partial.maxTokens < MIN_MAX_TOKENS || partial.maxTokens > MAX_MAX_TOKENS) {
-      return `maxTokens must be an integer between ${MIN_MAX_TOKENS} and ${MAX_MAX_TOKENS}`
+      return invalidRequest(`maxTokens must be an integer between ${MIN_MAX_TOKENS} and ${MAX_MAX_TOKENS}`)
     }
   }
 
   for (const provider of KEY_PROVIDERS) {
     const flag = KEY_FIELD[provider].fromEnv
     if (partial[flag] === true && current[flag] !== true && !isEnvCredentialDetected(provider)) {
-      return `未检测到环境变量 ${ENV_VAR_BY_PROVIDER[provider]}`
+      return errorBody(ERROR_CODES.ENV_VAR_MISSING, { envVar: ENV_VAR_BY_PROVIDER[provider] })
     }
   }
 
@@ -146,7 +146,7 @@ function validateBackgroundPartial(
   partial: Partial<ModelConfig>,
   current: Partial<ModelConfig>,
   mergedGlobal: Partial<ModelConfig>
-): string | null {
+): ErrorBody | null {
   const typeError = validateType(partial.type)
   if (typeError) return typeError
   return validateProviderSelection({ ...current, ...partial }, mergedGlobal)
@@ -196,7 +196,7 @@ export async function configRoutes(fastify: FastifyInstance) {
     if (modelProvider !== undefined) {
       const error = validateGlobalPartial(modelProvider, currentModelProvider)
       if (error) {
-        return reply.status(400).send({ error })
+        return reply.status(400).send(error)
       }
     }
 
@@ -205,7 +205,7 @@ export async function configRoutes(fastify: FastifyInstance) {
       const currentBackground = getRawBackgroundModelProviderConfig() ?? {}
       const error = validateBackgroundPartial(backgroundPartial, currentBackground, mergedGlobal)
       if (error) {
-        return reply.status(400).send({ error })
+        return reply.status(400).send(error)
       }
     }
 
@@ -228,7 +228,7 @@ export async function configRoutes(fastify: FastifyInstance) {
     } catch (err) {
       if (!(err instanceof ConfigFileUnreadableError)) throw err
       console.error(err.message)
-      return reply.status(500).send({ error: CONFIG_FILE_UNREADABLE_MESSAGE })
+      return reply.status(500).send(errorBody(ERROR_CODES.CONFIG_FILE_UNREADABLE))
     }
 
     if (modelProvider !== undefined || backgroundModelProvider !== undefined) {

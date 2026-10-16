@@ -1,5 +1,5 @@
 // src/electron-api.d.ts — 渲染进程里 window.electronAPI 的类型声明（preload 暴露的接口与桌宠状态载荷）
-// 用法：渲染代码通过 window.electronAPI.* 调用：InputBar、ChatWindow、OverlayApp、CharacterPanel、WindowBehaviorPanel、handle/main.ts
+// 用法：渲染代码通过 window.electronAPI.* 调用：InputBar、ChatWindow、OverlayApp、CharacterPanel、WindowBehaviorPanel、handle/main.ts、i18n.ts
 // 对应文件：electron/preload/index.ts（contextBridge 实现）/ electron/main/index.ts（ipcMain 处理）
 export interface DesktopPresencePayload {
   presence: 'ACTIVE' | 'AMBIENT' | 'EDGE' | 'HIDDEN'
@@ -38,6 +38,8 @@ export interface ElectronAPI {
   startOverlayDrag: () => void
   openPetHandleContextMenu: () => void
   onDesktopPresenceChanged: (callback: (payload: DesktopPresencePayload) => void) => () => void
+  getUiLocale: () => Promise<'zh-CN' | 'en'>
+  onUiLocaleChanged: (callback: (locale: 'zh-CN' | 'en') => void) => () => void
   setTitlebarOverlay: (overlay: { color: string; symbolColor: string }) => void
 }
 

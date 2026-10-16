@@ -1,12 +1,15 @@
 // src/settings/useCharacterPanel.ts — 设置窗口角色相关页面（角色 / 外观 / 人设与模型）共用的状态与操作
 // 用法：SettingsApp 调用 useCharacterPanel({ presetSnapshot, onSwitched })，把返回值传给 CharacterPanel / AppearancePanel / PersonaModelPanel，并用其中的 presets / switchPreset 渲染左栏角色下拉框；GET /presets、/presets/:id/model-keys、/config/model、/characters、/characters/:id/manifest.json，POST /switch-preset、/presets、/presets/:id/wallpaper、/characters/import/{parse,generate}、/characters/:id/{avatar,metadata}，PATCH /presets/:id，DELETE /presets/:id；electronAPI.selectWallpaperFile / selectCharacterCardFile
-// 对应文件：src/settings/SettingsApp.tsx / src/settings/CharacterPanel.tsx / src/settings/AppearancePanel.tsx / src/settings/PersonaModelPanel.tsx / src/settings/themeControls.ts / src/chat/theme.ts / src/chat/themeVars.ts / shared/portraitForm.ts / services/core/index.ts / services/core/routes/presets.ts / services/core/routes/characterImport.ts / electron/main/index.ts（select-wallpaper-file、select-character-card-file）
+// 对应文件：src/settings/SettingsApp.tsx / src/settings/CharacterPanel.tsx / src/settings/AppearancePanel.tsx / src/settings/PersonaModelPanel.tsx / src/errorText.ts / src/settings/themeControls.ts / src/chat/theme.ts / src/chat/themeVars.ts / shared/portraitForm.ts / services/core/index.ts / services/core/routes/presets.ts / services/core/routes/characterImport.ts / electron/main/index.ts（select-wallpaper-file、select-character-card-file）
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { AppState, ModelConfig, PresetDisplayConfig, PresetSnapshot } from '../../shared/types/index.js'
 import { hexToRgb, percentToTintStrength } from './themeControls.js'
 import { deriveTheme } from '../chat/theme.js'
 import { resolveThemeMode, themeCssVars } from '../chat/themeVars.js'
 import { usePrefersDark } from '../usePrefersDark.js'
+import { isErrorBody } from '../../shared/errorCodes.js'
+import { errorText } from '../errorText.js'
 import type { ApiKeySummary, KeyProvider } from './ApiKeyField.js'
 import { isPortraitFormAvailable, resolveEffectiveForm, type PortraitFormName, type PortraitFormShape } from '../../shared/portraitForm.js'
 
@@ -47,6 +50,7 @@ interface UseCharacterPanelArgs {
 }
 
 export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPanelArgs) {
+  const { i18n } = useTranslation()
   const [presets, setPresets] = useState<PresetOption[]>([])
   const [characterIds, setCharacterIds] = useState<string[]>([])
   const [isUploadingWallpaper, setIsUploadingWallpaper] = useState(false)
@@ -267,7 +271,7 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
       })
       .then((body: { characterIds: string[] }) => setCharacterIds(body.characterIds))
       .catch(() => {
-        setCharacterError('角色文件夹列表加载失败，无法创建新角色，请检查核心服务后重试')
+        setCharacterError(i18n.t('角色文件夹列表加载失败，无法创建新角色，请检查核心服务后重试'))
       })
   }, [])
 
@@ -354,7 +358,7 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
       onSwitched(state)
     } catch (err) {
       if (!(err instanceof DOMException && err.name === 'AbortError')) {
-        setSwitchError('切换角色失败，请稍后重试')
+        setSwitchError(i18n.t('切换角色失败，请稍后重试'))
       }
     } finally {
       if (switchPresetControllerRef.current === controller && !controller.signal.aborted) {
@@ -401,10 +405,10 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
       if (err instanceof Error && err.message.includes('file-too-large')) {
-        setAppearanceError('图片文件过大，请选择小于 10MB 的图片')
+        setAppearanceError(i18n.t('图片文件过大，请选择小于 10MB 的图片'))
         return
       }
-      setAppearanceError('更换壁纸失败，请稍后重试')
+      setAppearanceError(i18n.t('更换壁纸失败，请稍后重试'))
     } finally {
       setIsUploadingWallpaper(false)
     }
@@ -439,7 +443,7 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
 
     const trimmedName = renameValue.trim()
     if (!trimmedName) {
-      setCharacterError('名称不能为空')
+      setCharacterError(i18n.t('名称不能为空'))
       return
     }
 
@@ -471,7 +475,7 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
       setIsRenaming(false)
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
-      setCharacterError('重命名失败，请稍后重试')
+      setCharacterError(i18n.t('重命名失败，请稍后重试'))
     } finally {
       setIsSavingRename(false)
     }
@@ -513,7 +517,7 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
       })
 
       if (response.status === 409) {
-        setCharacterError('至少需要保留一个角色')
+        setCharacterError(i18n.t('至少需要保留一个角色'))
         return
       }
       if (!response.ok) {
@@ -527,7 +531,7 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
       setPresets(prev => prev.filter(p => p.presetId !== presetId))
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
-      setCharacterError('删除失败，请稍后重试')
+      setCharacterError(i18n.t('删除失败，请稍后重试'))
     } finally {
       if (deleteControllerRef.current === controller && !controller.signal.aborted) {
         setIsDeleting(false)
@@ -580,7 +584,7 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
 
       if (!response.ok) {
         const body = await response.json().catch(() => null)
-        throw new Error(typeof body?.error === 'string' ? body.error : `HTTP ${response.status}`)
+        throw new Error(isErrorBody(body) ? errorText(body, i18n.t) : `HTTP ${response.status}`)
       }
 
       const parsed = await response.json()
@@ -607,10 +611,10 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
       if (err instanceof Error && err.message.includes('file-too-large')) {
-        setCharacterError('角色卡文件过大，请选择小于 5MB 的文件')
+        setCharacterError(i18n.t('角色卡文件过大，请选择小于 5MB 的文件'))
         return
       }
-      setCharacterError(err instanceof Error && err.message ? err.message : '导入角色卡失败，请稍后重试')
+      setCharacterError(err instanceof Error && err.message ? err.message : i18n.t('导入角色卡失败，请稍后重试'))
     } finally {
       setIsImportingCard(false)
     }
@@ -643,7 +647,7 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
       setCreateSystemPrompt(systemPrompt)
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
-      setCharacterError('模型辅助改写失败，请稍后重试')
+      setCharacterError(i18n.t('模型辅助改写失败，请稍后重试'))
     } finally {
       setIsGeneratingSystemPrompt(false)
     }
@@ -654,15 +658,15 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
     const trimmedCharacterId = createCharacterId.trim()
     const trimmedSystemPrompt = createSystemPrompt.trim()
     if (!trimmedName) {
-      setCharacterError('名称不能为空')
+      setCharacterError(i18n.t('名称不能为空'))
       return
     }
     if (!trimmedCharacterId) {
-      setCharacterError('角色包 ID 不能为空')
+      setCharacterError(i18n.t('角色包 ID 不能为空'))
       return
     }
     if (!trimmedSystemPrompt) {
-      setCharacterError('人设内容不能为空')
+      setCharacterError(i18n.t('人设内容不能为空'))
       return
     }
 
@@ -724,7 +728,7 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
       void switchPreset(presetId)
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
-      setCharacterError('创建角色失败，请稍后重试')
+      setCharacterError(i18n.t('创建角色失败，请稍后重试'))
     } finally {
       setIsSavingCreate(false)
     }
@@ -744,7 +748,7 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
 
   const handleSystemPromptSaveClick = useCallback(() => {
     if (!systemPromptValue.trim()) {
-      setPersonaError('人设内容不能为空')
+      setPersonaError(i18n.t('人设内容不能为空'))
       return
     }
     setPersonaError(null)
@@ -794,14 +798,14 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
       if (state.presetSnapshot?.presetId === presetSnapshotRef.current?.presetId) {
         onSwitched(state)
         if (!applyNow) {
-          setSystemPromptNotice(`此次修改将在下次重新启用『${presetSnapshotRef.current?.name ?? ''}』时生效。`)
+          setSystemPromptNotice(i18n.t('此次修改将在下次重新启用『{{name}}』时生效。', { name: presetSnapshotRef.current?.name ?? '' }))
         }
         setSystemPromptStep('idle')
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
       if (presetId !== presetSnapshotRef.current?.presetId) return
-      setPersonaError('保存人设失败，请稍后重试')
+      setPersonaError(i18n.t('保存人设失败，请稍后重试'))
       setSystemPromptStep('editing')
     }
   }, [systemPromptValue, onSwitched])
@@ -877,11 +881,11 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
 
   const handleModelOverrideSaveClick = useCallback(() => {
     if (!useGlobalModel && !overrideModelName.trim()) {
-      setPersonaError('模型名称不能为空')
+      setPersonaError(i18n.t('模型名称不能为空'))
       return
     }
     if (!useGlobalModel && !summarySameAsChat && !summaryModelName.trim()) {
-      setPersonaError('摘要模型名称不能为空')
+      setPersonaError(i18n.t('摘要模型名称不能为空'))
       return
     }
     if (!overrideKeysReady) return
@@ -949,7 +953,7 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
 
       if (!response.ok) {
         const payload = await response.json().catch(() => null)
-        if (typeof payload?.error === 'string') serverError = payload.error
+        if (isErrorBody(payload)) serverError = errorText(payload, i18n.t)
         throw new Error(`HTTP ${response.status}`)
       }
 
@@ -962,14 +966,14 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
         resetSummaryKeyState()
         if (needsModelKeys) loadModelKeys(presetId)
         if (!applyNow) {
-          setModelOverrideNotice(`此次修改将在下次重新启用『${presetSnapshotRef.current?.name ?? ''}』时生效。`)
+          setModelOverrideNotice(i18n.t('此次修改将在下次重新启用『{{name}}』时生效。', { name: presetSnapshotRef.current?.name ?? '' }))
         }
         setModelOverrideStep('idle')
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
       if (presetId !== presetSnapshotRef.current?.presetId) return
-      setPersonaError(serverError ?? '保存模型设置失败，请稍后重试')
+      setPersonaError(serverError ?? i18n.t('保存模型设置失败，请稍后重试'))
       setModelOverrideStep('editing')
     }
   }, [useGlobalModel, overrideModelType, overrideModelName, overrideKeyInput, overrideFromEnvChoice, summarySameAsChat, summaryModelType, summaryModelName, summaryKeyInput, summaryFromEnvChoice, needsModelKeys, modelKeys, onSwitched, resetOverrideKeyState, resetSummaryKeyState, loadModelKeys])
@@ -997,7 +1001,7 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
       })
       .catch(err => {
         if (err instanceof DOMException && err.name === 'AbortError') return
-        setAppearanceError('颜色/透明度保存失败，请稍后重试')
+        setAppearanceError(i18n.t('颜色/透明度保存失败，请稍后重试'))
       })
   }, [onSwitched])
 
@@ -1086,13 +1090,13 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
         }
       })
       .catch(() => {
-        setAppearanceError('形态切换失败，请稍后重试')
+        setAppearanceError(i18n.t('形态切换失败，请稍后重试'))
       })
       .finally(() => setIsSwitchingPortrait(false))
   }, [otherPortrait, onSwitched])
 
   const characterIdOptions = importedCardFields && createCharacterId && !characterIds.includes(createCharacterId)
-    ? [{ value: createCharacterId, label: `（新导入）${createCharacterId}` }, ...characterIds.map(id => ({ value: id, label: id }))]
+    ? [{ value: createCharacterId, label: i18n.t('（新导入）{{id}}', { id: createCharacterId }) }, ...characterIds.map(id => ({ value: id, label: id }))]
     : characterIds.map(id => ({ value: id, label: id }))
 
   const overrideKeySummary = (overrideKeyProvider && modelKeys?.[overrideKeyProvider]) || BLANK_MODEL_KEY

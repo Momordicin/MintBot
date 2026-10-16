@@ -22,6 +22,7 @@ import { memoryRoutes } from './routes/memory.js'
 import { configRoutes } from './routes/config.js'
 import { agentRoutes } from './routes/agents.js'
 import { windowBehaviorRoutes, broadcastWindowBehaviorSnapshot } from './routes/windowBehavior.js'
+import { uiRoutes } from './routes/ui.js'
 import { transitionChainRoutes } from './routes/transitionChain.js'
 import { createModelProvider, ModelProvider } from './providers/ModelProvider.js'
 import { wipeCredentialEnv } from './providers/envCredentials.js'
@@ -155,6 +156,7 @@ async function start() {
   await fastify.register(configRoutes)
   await fastify.register(agentRoutes)
   await fastify.register(windowBehaviorRoutes)
+  await fastify.register(uiRoutes)
   await fastify.register(transitionChainRoutes)
   await fastify.listen({ port: PORT, host: LOOPBACK_HOST })
   console.log(`[Core] Running on port ${PORT}`)

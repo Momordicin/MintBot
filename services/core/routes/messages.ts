@@ -3,6 +3,7 @@
 // 对应文件：src/chat/ChatWindow.tsx / src/settings/memory/MessageBrowser.tsx / services/core/session/queries.ts（getMessagesPage）/ services/core/routes/messages.test.ts
 import type { FastifyInstance } from 'fastify'
 import { getMessagesPage } from '../session/queries.js'
+import { invalidRequest } from '../../../shared/errorCodes.js'
 
 const DEFAULT_LIMIT = 20
 const MIN_LIMIT = 1
@@ -15,14 +16,14 @@ export async function messageRoutes(fastify: FastifyInstance) {
     const { sessionId, limit: limitRaw, beforeId: beforeIdRaw } = request.query
 
     if (!sessionId?.trim()) {
-      return reply.status(400).send({ error: 'sessionId is required' })
+      return reply.status(400).send(invalidRequest('sessionId is required'))
     }
 
     let limit = DEFAULT_LIMIT
     if (limitRaw !== undefined && limitRaw !== '') {
       const parsed = Number(limitRaw)
       if (!Number.isFinite(parsed)) {
-        return reply.status(400).send({ error: 'limit must be a number' })
+        return reply.status(400).send(invalidRequest('limit must be a number'))
       }
       limit = Math.min(MAX_LIMIT, Math.max(MIN_LIMIT, Math.trunc(parsed)))
     }
@@ -31,7 +32,7 @@ export async function messageRoutes(fastify: FastifyInstance) {
     if (beforeIdRaw !== undefined && beforeIdRaw !== '') {
       const parsed = Number(beforeIdRaw)
       if (!Number.isInteger(parsed)) {
-        return reply.status(400).send({ error: 'beforeId must be an integer' })
+        return reply.status(400).send(invalidRequest('beforeId must be an integer'))
       }
       beforeId = parsed
     }

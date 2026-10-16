@@ -4,6 +4,7 @@
 // 对应文件：src/settings/memory/ForgetRangePanel.tsx（调用方）/ services/core/memory/forget.ts / services/core/routes/forget.test.ts
 import type { FastifyInstance } from 'fastify'
 import { checkForgetImpact, forgetTimeRange, ForgetConflictError } from '../memory/forget.js'
+import { invalidRequest, type ErrorBody } from '../../../shared/errorCodes.js'
 
 interface ForgetCheckBody {
   sessionId?: string
@@ -15,18 +16,18 @@ interface ForgetBody extends ForgetCheckBody {
   alsoDeleteAffectedSummaries?: boolean
 }
 
-function validateTimeRange(body: ForgetCheckBody): string | null {
+function validateTimeRange(body: ForgetCheckBody): ErrorBody | null {
   if (!body.sessionId?.trim()) {
-    return 'sessionId is required'
+    return invalidRequest('sessionId is required')
   }
   if (typeof body.fromTime !== 'number' || !Number.isFinite(body.fromTime)) {
-    return 'fromTime must be a number'
+    return invalidRequest('fromTime must be a number')
   }
   if (typeof body.toTime !== 'number' || !Number.isFinite(body.toTime)) {
-    return 'toTime must be a number'
+    return invalidRequest('toTime must be a number')
   }
   if (body.fromTime > body.toTime) {
-    return 'fromTime must not be greater than toTime'
+    return invalidRequest('fromTime must not be greater than toTime')
   }
   return null
 }
@@ -35,7 +36,7 @@ export async function forgetRoutes(fastify: FastifyInstance) {
   fastify.post<{ Body: ForgetCheckBody }>('/forget/check', async (request, reply) => {
     const error = validateTimeRange(request.body)
     if (error) {
-      return reply.status(400).send({ error })
+      return reply.status(400).send(error)
     }
 
     const { sessionId, fromTime, toTime } = request.body as Required<ForgetCheckBody>
@@ -45,7 +46,7 @@ export async function forgetRoutes(fastify: FastifyInstance) {
   fastify.post<{ Body: ForgetBody }>('/forget', async (request, reply) => {
     const error = validateTimeRange(request.body)
     if (error) {
-      return reply.status(400).send({ error })
+      return reply.status(400).send(error)
     }
 
     const { sessionId, fromTime, toTime, alsoDeleteAffectedSummaries } = request.body as Required<ForgetCheckBody> & ForgetBody

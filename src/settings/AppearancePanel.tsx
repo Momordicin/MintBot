@@ -3,20 +3,21 @@
 // 形状：props { panel: CharacterPanelModel }
 // 对应文件：src/settings/SettingsApp.tsx / src/settings/useCharacterPanel.ts / src/settings/themeControls.ts / shared/portraitForm.ts
 import React from 'react'
+import { useTranslation } from 'react-i18next'
 import type { PresetDisplayConfig } from '../../shared/types/index.js'
 import { rgbToHex, tintStrengthToPercent } from './themeControls.js'
 import type { CharacterPanelModel } from './useCharacterPanel'
-
-const PORTRAIT_FORM_LABELS: Record<PresetDisplayConfig['currentPortrait'], string> = {
-  pixel: '像素',
-  illustration: '立绘',
-}
 
 interface AppearancePanelProps {
   panel: CharacterPanelModel
 }
 
 export function AppearancePanel({ panel }: AppearancePanelProps) {
+  const { t } = useTranslation()
+  const portraitFormLabels: Record<PresetDisplayConfig['currentPortrait'], string> = {
+    pixel: t('像素'),
+    illustration: t('立绘'),
+  }
   const {
     presetSnapshot, presets, appearanceError, deleteTarget, isDeleting, isUploadingWallpaper, isSwitchingPortrait,
     portraitForms, canSwitchPortrait, otherPortrait, effectivePortrait, chatBgOpacity, themeMode, accentRgb,
@@ -29,39 +30,39 @@ export function AppearancePanel({ panel }: AppearancePanelProps) {
     <div className="character-panel">
       {presets.length > 0 && (
         <>
-          <div className="character-panel__section-title">壁纸与形态</div>
+          <div className="character-panel__section-title">{t('壁纸与形态')}</div>
           <div className="character-panel__row">
             <button
               className="wallpaper-btn"
               onClick={handleWallpaperPick}
               disabled={isUploadingWallpaper || deleteTarget !== null || isDeleting}
-              title="更换壁纸"
+              title={t('更换壁纸')}
             >
-              {isUploadingWallpaper ? '更换中…' : '更换壁纸'}
+              {isUploadingWallpaper ? t('更换中…') : t('更换壁纸')}
             </button>
             <button
               className="rename-btn"
               onClick={handlePortraitToggle}
               disabled={!canSwitchPortrait || isSwitchingPortrait || deleteTarget !== null || isDeleting}
               title={portraitForms !== null && !canSwitchPortrait
-                ? `该角色没有${PORTRAIT_FORM_LABELS[otherPortrait]}`
-                : '切换桌宠形态'}
+                ? t('该角色没有{{form}}', { form: portraitFormLabels[otherPortrait] })
+                : t('切换桌宠形态')}
             >
-              {PORTRAIT_FORM_LABELS[effectivePortrait]}
+              {portraitFormLabels[effectivePortrait]}
             </button>
           </div>
-          <div className="character-panel__section-title character-panel__section-title--divided">主题</div>
+          <div className="character-panel__section-title character-panel__section-title--divided">{t('主题')}</div>
           <div className="character-panel__row">
             <button
               type="button"
               className={`character-panel__no-color-btn${chatBgOpacity === 0 ? ' character-panel__no-color-btn--active' : ''}`}
               onClick={handleNoColorClick}
-              title="无色（不透明度设为 0）"
-              aria-label="无色"
+              title={t('无色（不透明度设为 0）')}
+              aria-label={t('无色')}
               aria-pressed={chatBgOpacity === 0}
             />
-            <label className="character-panel__display-label" title="聊天区域背景不透明度">
-              不透明度
+            <label className="character-panel__display-label" title={t('聊天区域背景不透明度')}>
+              {t('不透明度')}
               <input
                 className="character-panel__opacity-input"
                 type="range"
@@ -74,16 +75,16 @@ export function AppearancePanel({ panel }: AppearancePanelProps) {
             </label>
           </div>
           <div className="character-panel__row">
-            <label className="character-panel__display-label" title="聊天窗口跟随日间/夜间，还是跟随系统外观">
-              模式
+            <label className="character-panel__display-label" title={t('聊天窗口跟随日间/夜间，还是跟随系统外观')}>
+              {t('模式')}
               <select value={themeMode} onChange={handleThemeModeChange}>
-                <option value="day">日间</option>
-                <option value="night">夜间</option>
-                <option value="auto">跟随系统</option>
+                <option value="day">{t('日间')}</option>
+                <option value="night">{t('夜间')}</option>
+                <option value="auto">{t('跟随系统')}</option>
               </select>
             </label>
-            <label className="character-panel__display-label" title="主题强调色（唯一一个用户选的颜色，其余全部自动派生）">
-              强调色
+            <label className="character-panel__display-label" title={t('主题强调色（唯一一个用户选的颜色，其余全部自动派生）')}>
+              {t('强调色')}
               <input
                 className="character-panel__color-input"
                 type="color"
@@ -93,8 +94,8 @@ export function AppearancePanel({ panel }: AppearancePanelProps) {
             </label>
           </div>
           <div className="character-panel__row">
-            <label className="character-panel__display-label" title="强调色向中性表面/文字染色的强度，0 = 基准配色">
-              染色强度
+            <label className="character-panel__display-label" title={t('强调色向中性表面/文字染色的强度，0 = 基准配色')}>
+              {t('染色强度')}
               <input
                 className="character-panel__opacity-input"
                 type="range"
@@ -110,17 +111,17 @@ export function AppearancePanel({ panel }: AppearancePanelProps) {
               className="rename-btn"
               onClick={handleResetTint}
               disabled={tintStrength === 0}
-              title="把染色强度重置为 0，恢复逐字节等于参考发布值的配色"
+              title={t('把染色强度重置为 0，恢复逐字节等于参考发布值的配色')}
             >
-              回到基准配色
+              {t('回到基准配色')}
             </button>
           </div>
           <div className="character-panel__theme-preview-wrap">
             <div className="character-panel__theme-preview-label">
-              主题预览
+              {t('主题预览')}
               {themeMode === 'auto' && (
                 <span className="character-panel__theme-preview-resolved">
-                  （当前跟随系统解析为{previewResolvedMode === 'night' ? '夜间' : '日间'}）
+                  {previewResolvedMode === 'night' ? t('（当前跟随系统解析为夜间）') : t('（当前跟随系统解析为日间）')}
                 </span>
               )}
             </div>
@@ -132,18 +133,18 @@ export function AppearancePanel({ panel }: AppearancePanelProps) {
               } as React.CSSProperties}
             >
               <div className="character-panel__theme-preview-titlebar">
-                {presetSnapshot?.name ?? '角色'}
+                {presetSnapshot?.name ?? t('角色')}
               </div>
               <div className="character-panel__theme-preview-messages">
                 <div className="character-panel__theme-preview-bubble character-panel__theme-preview-bubble--user">
-                  你好呀
+                  {t('你好呀')}
                 </div>
                 <div className="character-panel__theme-preview-bubble character-panel__theme-preview-bubble--bot">
-                  嗯，在的
+                  {t('嗯，在的')}
                 </div>
                 <div className="character-panel__theme-preview-timestamp">14:32</div>
               </div>
-              <div className="character-panel__theme-preview-input">输入消息…</div>
+              <div className="character-panel__theme-preview-input">{t('输入消息…')}</div>
             </div>
           </div>
         </>

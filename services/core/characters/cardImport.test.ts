@@ -48,7 +48,7 @@ const v2Card = {
 describe('parseCharacterCard — V2 JSON', () => {
   it('完整字段映射：name/description/personality/scenario/mes_example 合成进 systemPrompt，tags/creator/creatorNotes 独立返回', () => {
     const result = parseCharacterCard(Buffer.from(JSON.stringify(v2Card), 'utf-8'))
-    if ('error' in result) throw new Error(`expected success, got error: ${result.error}`)
+    if ('code' in result) throw new Error(`expected success, got error: ${result.code}`)
 
     expect(result.name).toBe('Mint')
     expect(result.tags).toEqual(['猫娘', '治愈'])
@@ -66,7 +66,7 @@ describe('parseCharacterCard — V2 JSON', () => {
 
   it('<START> 分隔的 mes_example 按分隔符拆分，不在正文里残留 <START> 字面量', () => {
     const result = parseCharacterCard(Buffer.from(JSON.stringify(v2Card), 'utf-8'))
-    if ('error' in result) throw new Error('expected success')
+    if ('code' in result) throw new Error('expected success')
 
     expect(result.systemPrompt).not.toContain('<START>')
     // 拆分出的两段示例都应该出现（宏替换后 {{user}}/{{char}} 已被替换）
@@ -86,7 +86,7 @@ describe('parseCharacterCard — V1 平铺 JSON', () => {
       mes_example: '<START>\n{{user}}: 在吗\n{{char}}: 在的',
     }
     const result = parseCharacterCard(Buffer.from(JSON.stringify(v1Card), 'utf-8'))
-    if ('error' in result) throw new Error(`expected success, got error: ${result.error}`)
+    if ('code' in result) throw new Error(`expected success, got error: ${result.code}`)
 
     expect(result.name).toBe('阿墨')
     expect(result.tags).toEqual([])
@@ -103,7 +103,7 @@ describe('parseCharacterCard — V1 平铺 JSON', () => {
 describe('parseCharacterCard — character_version', () => {
   it('V2 卡片设置了 character_version 时原样捕获', () => {
     const result = parseCharacterCard(Buffer.from(JSON.stringify(v2Card), 'utf-8'))
-    if ('error' in result) throw new Error('expected success')
+    if ('code' in result) throw new Error('expected success')
 
     expect(result.characterVersion).toBe('1.0')
   })
@@ -118,7 +118,7 @@ describe('parseCharacterCard — character_version', () => {
       mes_example: '',
     }
     const result = parseCharacterCard(Buffer.from(JSON.stringify(v1Card), 'utf-8'))
-    if ('error' in result) throw new Error('expected success')
+    if ('code' in result) throw new Error('expected success')
 
     expect(result.characterVersion).toBe('')
   })
@@ -131,7 +131,7 @@ describe('parseCharacterCard — system_prompt/{{original}} 合并规则', () =>
       data: { ...v2Card.data, system_prompt: '【自定义开头】\n{{original}}\n【自定义结尾】' },
     }
     const result = parseCharacterCard(Buffer.from(JSON.stringify(card), 'utf-8'))
-    if ('error' in result) throw new Error('expected success')
+    if ('code' in result) throw new Error('expected success')
 
     expect(result.systemPrompt).toContain('【自定义开头】')
     expect(result.systemPrompt).toContain('【自定义结尾】')
@@ -144,7 +144,7 @@ describe('parseCharacterCard — system_prompt/{{original}} 合并规则', () =>
       data: { ...v2Card.data, system_prompt: '完全自定义的人设正文，不含占位符' },
     }
     const result = parseCharacterCard(Buffer.from(JSON.stringify(card), 'utf-8'))
-    if ('error' in result) throw new Error('expected success')
+    if ('code' in result) throw new Error('expected success')
 
     expect(result.systemPrompt).toBe('完全自定义的人设正文，不含占位符')
     expect(result.systemPrompt).not.toContain('外貌与背景')
@@ -153,7 +153,7 @@ describe('parseCharacterCard — system_prompt/{{original}} 合并规则', () =>
   it('system_prompt 全空白：等价于未提供，回退默认模板', () => {
     const card = { ...v2Card, data: { ...v2Card.data, system_prompt: '   ' } }
     const result = parseCharacterCard(Buffer.from(JSON.stringify(card), 'utf-8'))
-    if ('error' in result) throw new Error('expected success')
+    if ('code' in result) throw new Error('expected success')
 
     expect(result.systemPrompt).toContain('外貌与背景：一只薄荷绿的猫娘')
   })
@@ -178,7 +178,7 @@ describe('parseCharacterCard — 宏替换', () => {
       },
     }
     const result = parseCharacterCard(Buffer.from(JSON.stringify(card), 'utf-8'))
-    if ('error' in result) throw new Error('expected success')
+    if ('code' in result) throw new Error('expected success')
 
     expect(result.systemPrompt).toBe('Mint 喜欢和 你 聊天，Mint 也喜欢猫')
   })
@@ -194,7 +194,7 @@ describe('parseCharacterCard — PNG 内嵌', () => {
     ])
 
     const result = parseCharacterCard(png)
-    if ('error' in result) throw new Error(`expected success, got error: ${result.error}`)
+    if ('code' in result) throw new Error(`expected success, got error: ${result.code}`)
 
     expect(result.name).toBe('FromCcv3')
     // PNG 路径应带上原始图片字节作为可选 avatar 候选
@@ -205,7 +205,7 @@ describe('parseCharacterCard — PNG 内嵌', () => {
     const png = buildPngFixture([{ keyword: 'chara', text: base64Json(v2Card) }])
 
     const result = parseCharacterCard(png)
-    if ('error' in result) throw new Error(`expected success, got error: ${result.error}`)
+    if ('code' in result) throw new Error(`expected success, got error: ${result.code}`)
 
     expect(result.name).toBe('Mint')
   })
@@ -214,14 +214,14 @@ describe('parseCharacterCard — PNG 内嵌', () => {
     const png = buildPngFixture([{ keyword: 'other-key', text: base64Json(v2Card) }])
 
     const result = parseCharacterCard(png)
-    expect('error' in result).toBe(true)
+    expect('code' in result).toBe(true)
   })
 
   it('PNG 信号匹配但完全没有 tEXt 块时返回清晰错误', () => {
     const png = Buffer.concat([PNG_SIGNATURE, buildChunk('IEND', Buffer.alloc(0))])
 
     const result = parseCharacterCard(png)
-    expect('error' in result).toBe(true)
+    expect('code' in result).toBe(true)
   })
 
   it('tEXt chunk 声明长度超出实际剩余 buffer（畸形/截断数据）时干净地返回错误，不抛出、不越界读取', () => {
@@ -237,7 +237,7 @@ describe('parseCharacterCard — PNG 内嵌', () => {
 
     const result = parseCharacterCard(png)
     // 视为"未找到"而不是抛错/挂起——边界检查生效后扫描直接停止，找不到 ccv3/chara
-    expect('error' in result).toBe(true)
+    expect('code' in result).toBe(true)
   })
 })
 
@@ -245,7 +245,7 @@ describe('parseCharacterCard — suggestedCharacterId 兜底值', () => {
   it('name 清理后为空字符串（全 emoji/非 ASCII 安全字符）时，回退到非空的、文件系统安全的默认值', () => {
     const card = { ...v2Card, data: { ...v2Card.data, name: '🐱🐱🐱' } }
     const result = parseCharacterCard(Buffer.from(JSON.stringify(card), 'utf-8'))
-    if ('error' in result) throw new Error('expected success')
+    if ('code' in result) throw new Error('expected success')
 
     expect(result.suggestedCharacterId.length).toBeGreaterThan(0)
     expect(result.suggestedCharacterId).toMatch(/^[a-zA-Z0-9_-]+$/)
@@ -255,13 +255,13 @@ describe('parseCharacterCard — suggestedCharacterId 兜底值', () => {
 describe('parseCharacterCard — 畸形输入', () => {
   it('非 PNG 且不是合法 JSON 时返回清晰错误，不抛出异常', () => {
     const result = parseCharacterCard(Buffer.from('这不是 JSON', 'utf-8'))
-    expect('error' in result).toBe(true)
+    expect('code' in result).toBe(true)
   })
 
   it('PNG 内嵌的 base64 解码出的内容不是合法 JSON 时返回清晰错误', () => {
     const png = buildPngFixture([{ keyword: 'ccv3', text: Buffer.from('not json', 'utf-8').toString('base64') }])
 
     const result = parseCharacterCard(png)
-    expect('error' in result).toBe(true)
+    expect('code' in result).toBe(true)
   })
 })
