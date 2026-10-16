@@ -52,6 +52,7 @@ A locally-run AI character companion desktop app. Supports custom character pers
 - Model providers: Anthropic, OpenAI, DeepSeek and Ollama, with model names picked from each provider's live model list
 - API keys are entered in MintBot (only the last 4 characters are shown once saved), or taken from the `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` environment variables if you tick that option
 - Separate models for chat and for background organizing; each character can use the global settings or its own model, API key and summary model
+- Sign in to your own Claude Code and Codex subscriptions. The official command-line tool opens your default browser to sign in. MintBot keeps this login separate from your usual Claude Code / Codex setup.
 - Memory management: browse a character's messages, extracted facts and summaries, see organizing progress, delete by time range
 - Window behavior: chat pin-on-top mode, pet smart avoidance and per-app rules
 
@@ -108,6 +109,7 @@ Model calls support both external APIs (Anthropic / OpenAI / DeepSeek) and local
 - pnpm (version per `package.json`)
 - Python 3.10+
 - (Optional) either Ollama or an Anthropic / OpenAI / DeepSeek API key
+- (Optional) the `claude` and/or `codex` command-line tool on PATH, to sign in to those subscriptions
 
 ```bash
 # Clone the repo
@@ -202,6 +204,7 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
 
 - All conversation data is stored in local SQLite — nothing is uploaded to any server
 - API keys stay on your machine: global keys in `config.json`, per-character keys in the local database. Keys taken from environment variables are read at startup and never saved
+- Claude Code / Codex subscription logins are handled entirely by the official command-line tools and your browser. MintBot never sees the account or its credentials; the tools store them in MintBot's own local data folder
 - Deleted conversations are erased from the database file and can't be recovered from it
 - When using an external API (Anthropic / OpenAI / DeepSeek), conversation content is sent to that provider; for privacy-first use, we recommend configuring local Ollama instead
 

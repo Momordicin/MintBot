@@ -52,6 +52,7 @@
 - 模型提供方：Anthropic、OpenAI、DeepSeek 和 Ollama，模型名从各家实时的模型列表里选
 - API Key 在 MintBot 里填写（保存后只显示末尾 4 位），也可以勾选使用环境变量 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY`
 - 对话模型和后台整理模型可分开设置；每个角色可以用全局设置，也可以单独指定模型、API Key 和摘要模型
+- 登录你自己的 Claude Code 和 Codex 订阅（全局模型服务 → 订阅登录），由官方命令行打开你的默认浏览器完成登录；MintBot 的登录状态和你平时用的 Claude Code / Codex 分开。
 - 记忆管理：浏览角色的消息、提取出的事实和摘要，查看整理进度，按时间范围删除
 - 窗口行为：聊天窗口置顶模式、桌宠智能避让和按程序设置的规则
 
@@ -108,6 +109,7 @@
 - pnpm（版本见 `package.json`）
 - Python 3.10+
 - （可选）Ollama 或 Anthropic / OpenAI / DeepSeek API Key 二选一
+- （可选）PATH 上有 `claude` 和/或 `codex` 命令行，用于登录对应的订阅
 
 ```bash
 # 克隆仓库
@@ -196,6 +198,7 @@ assets/characters/my-character/
 
 - 所有对话数据存储在本地 SQLite，不上传任何服务器
 - API Key 留在本机：全局 Key 存在 `config.json`，角色单独的 Key 存在本地数据库；从环境变量读取的 Key 只在启动时读入，不会保存
+- Claude Code / Codex 订阅的登录完全由官方命令行和你的浏览器完成，MintBot 不接触账号和凭据；凭据由命令行保存在 MintBot 自己的本地数据目录里
 - 删除的对话会从数据库文件中擦除，无法再从中恢复
 - 使用外部 API（Anthropic / OpenAI / DeepSeek）时，对话内容会发送至对应服务商；隐私优先用户建议配置本地 Ollama
 
