@@ -1,6 +1,6 @@
 // src/settings/ModelConfigPanel.tsx — 设置窗口的"模型配置"面板：API Key / Ollama 地址 / 对话模型 / 摘要模型
 // 用法：SettingsApp 里渲染 <ModelConfigPanel />（无 props）；GET/PATCH /config/model
-// 对应文件：src/settings/SettingsApp.tsx / src/settings/ApiKeyField.tsx / src/settings/ModelNameField.tsx / services/core/routes/config.ts / shared/types/index.ts
+// 对应文件：src/settings/SettingsApp.tsx / src/settings/SubscriptionLogin.tsx / src/settings/ApiKeyField.tsx / src/settings/ModelNameField.tsx / services/core/routes/config.ts / shared/types/index.ts
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { ModelConfig } from '../../shared/types/index.js'
 import './settings.css'
@@ -8,6 +8,7 @@ import './settings.css'
 import { CORE_URL } from '../coreUrl.js'
 import { ApiKeyField, ENV_VAR, type KeyProvider } from './ApiKeyField.js'
 import { ModelNameField } from './ModelNameField.js'
+import { SubscriptionLogin } from './SubscriptionLogin.js'
 
 type ProviderType = 'anthropic' | 'openai' | 'ollama' | 'deepseek'
 
@@ -377,6 +378,8 @@ export function ModelConfigPanel() {
           />
         </div>
       </div>
+
+      <SubscriptionLogin />
 
       <div className="model-config-panel__section">
         <div className="model-config-panel__section-label">对话模型</div>

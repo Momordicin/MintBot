@@ -20,6 +20,7 @@ import { messageRoutes } from './routes/messages.js'
 import { forgetRoutes } from './routes/forget.js'
 import { memoryRoutes } from './routes/memory.js'
 import { configRoutes } from './routes/config.js'
+import { agentRoutes } from './routes/agents.js'
 import { windowBehaviorRoutes, broadcastWindowBehaviorSnapshot } from './routes/windowBehavior.js'
 import { transitionChainRoutes } from './routes/transitionChain.js'
 import { createModelProvider, ModelProvider } from './providers/ModelProvider.js'
@@ -152,6 +153,7 @@ async function start() {
   await fastify.register(forgetRoutes)
   await fastify.register(memoryRoutes)
   await fastify.register(configRoutes)
+  await fastify.register(agentRoutes)
   await fastify.register(windowBehaviorRoutes)
   await fastify.register(transitionChainRoutes)
   await fastify.listen({ port: PORT, host: LOOPBACK_HOST })

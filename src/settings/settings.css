@@ -774,6 +774,10 @@
   color: var(--label2);
 }
 
+.model-config-panel__row-label--wide {
+  flex-basis: 96px;
+}
+
 .model-config-panel__field--compact {
   flex: 1 1 110px;
   min-width: 0;
