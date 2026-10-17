@@ -1,6 +1,6 @@
 // electron/main/windowAnimation.ts — BrowserWindow 位置移动动画：同显示器内补间，跨显示器则滑出淡出、瞬移、滑入淡入
-// 用法：animateTo(win, target, onComplete, { instant, finalOpacity }) 返回 cancel 函数（立即落到目标并回调 onComplete）；窗口 minimize / hide / close 时同样落到目标；isAnimating(win) 查询
-// 对应文件：electron/main/windowBehavior.ts（moveToDisplay、贴边移动、拖拽回滚）/ electron/main/windowAnimation.test.ts
+// 用法：animateTo(win, target, onComplete, { instant, finalOpacity }) 返回 cancel 函数（立即落到目标并回调 onComplete）；窗口 minimize / hide / close 时同样落到目标；isAnimating(win) 查询；chatReveal.ts 调 finishAnimation(win) / fadeIn(win, durationMs)
+// 对应文件：electron/main/windowBehavior.ts（moveToDisplay、贴边移动、拖拽回滚）/ electron/main/chatReveal.ts / electron/main/windowAnimation.test.ts
 import { BrowserWindow, screen } from 'electron'
 
 const FRAME_MS = 16
@@ -12,8 +12,54 @@ const OFFSET_PX = 24
 
 const activeCancels = new Map<BrowserWindow, () => void>()
 
+function settleOnTarget(win: BrowserWindow, target: Electron.Rectangle, opacity: number): void {
+  const current = win.getBounds()
+  if (current.x !== target.x || current.y !== target.y || current.width !== target.width || current.height !== target.height) {
+    win.setBounds(target)
+  }
+  if (win.getOpacity() !== opacity) win.setOpacity(opacity)
+}
+
 export function isAnimating(win: BrowserWindow): boolean {
   return activeCancels.has(win)
+}
+
+export function finishAnimation(win: BrowserWindow): void {
+  activeCancels.get(win)?.()
+}
+
+export function easeInOut(p: number): number {
+  const clamped = Math.min(Math.max(p, 0), 1)
+  return clamped * clamped * (3 - 2 * clamped)
+}
+
+export function fadeIn(win: BrowserWindow, durationMs: number): void {
+  if (win.isDestroyed() || activeCancels.has(win)) return
+  const fadeStart = Date.now()
+  let timer: ReturnType<typeof setTimeout> | null = null
+
+  function finish(): void {
+    if (timer) clearTimeout(timer)
+    activeCancels.delete(win)
+    if (!win.isDestroyed() && win.getOpacity() !== 1) win.setOpacity(1)
+  }
+
+  function frame(): void {
+    if (win.isDestroyed()) {
+      activeCancels.delete(win)
+      return
+    }
+    const t = Math.min((Date.now() - fadeStart) / durationMs, 1)
+    if (t >= 1) {
+      finish()
+      return
+    }
+    win.setOpacity(easeInOut(t))
+    timer = setTimeout(frame, FRAME_MS)
+  }
+
+  activeCancels.set(win, finish)
+  timer = setTimeout(frame, 0)
 }
 
 export function evaluateAnimationGuards(
@@ -105,8 +151,7 @@ export function animateTo(
         `start=${start.width}x${start.height}@${start.x},${start.y} -> ` +
         `target=${target.width}x${target.height}@${target.x},${target.y}`
     )
-    win.setBounds(target)
-    win.setOpacity(finalOpacity)
+    settleOnTarget(win, target, finalOpacity)
     cancelled = true
     onComplete?.()
     return () => {}
@@ -146,8 +191,7 @@ export function animateTo(
       return
     }
     try {
-      win.setBounds(target)
-      win.setOpacity(finalOpacity)
+      settleOnTarget(win, target, finalOpacity)
     } catch (err) {
       console.error('[WindowAnimation] Failed to snap to target:', err)
     }
@@ -175,8 +219,7 @@ export function animateTo(
         const t = Math.min((Date.now() - tweenStart) / SAME_DISPLAY_TWEEN_DURATION_MS, 1)
 
         if (t >= 1) {
-          win.setBounds(target)
-          win.setOpacity(finalOpacity)
+          settleOnTarget(win, target, finalOpacity)
           stopAndUntrack()
           cancelled = true
           onComplete?.()
@@ -255,8 +298,7 @@ export function animateTo(
         const t = Math.min((Date.now() - entranceStart) / ENTRANCE_DURATION_MS, 1)
 
         if (t >= 1) {
-          win.setBounds(target)
-          win.setOpacity(finalOpacity)
+          settleOnTarget(win, target, finalOpacity)
           stopAndUntrack()
           cancelled = true
           onComplete?.()

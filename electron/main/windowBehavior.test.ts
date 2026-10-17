@@ -84,6 +84,10 @@ vi.mock('./windowAnimation', () => ({
   }),
 }))
 
+vi.mock('./chatReveal', () => ({
+  revealChat: vi.fn((_win: unknown, show: () => void) => show()),
+}))
+
 vi.mock('./dragActivity', () => ({
   isWindowDragInProgress: (windowKey: 'overlay' | 'chat') => testState.dragging[windowKey],
   // 此处 testState.dragging 就是拖拽状态，置 false 即收掉松手尾巴
@@ -109,6 +113,7 @@ import {
   cancelProgrammaticMoveOnDragStart,
   applyOverlaySize,
   armPetSizeGate,
+  prepareChatForShow,
 } from './windowBehavior'
 
 let testRevision = 0
@@ -544,6 +549,124 @@ describe('Fix 1 (second rework pass) — per-window drag state, not one global f
 
     evaluateDesktopPresence(chatWin as unknown as Electron.BrowserWindow, null)
 
+    expect(animateTo).not.toHaveBeenCalled()
+  })
+})
+
+describe('prepareChatForShow — chat is placed while hidden so the first show needs no move', () => {
+  function makeHiddenChatWindow(bounds: { x: number; y: number; width: number; height: number }) {
+    let visible = false
+    return {
+      isDestroyed: () => false,
+      isMinimized: () => false,
+      isVisible: () => visible,
+      isFocused: () => false,
+      show: () => {
+        visible = true
+      },
+      showInactive: vi.fn(),
+      hide: vi.fn(),
+      setAlwaysOnTop: vi.fn(),
+      setBounds: vi.fn(),
+      getBounds: () => bounds,
+    }
+  }
+
+  it('smart mode: places the hidden window, then the post-show evaluation does not move it', () => {
+    const display1 = makeDisplay(1, 0)
+    const display2 = makeDisplay(2, 1920)
+    testState.displays = [display1, display2]
+    testState.homeDisplayId = 2
+    testState.blockerMap = new Map()
+    const chatWin = makeHiddenChatWindow({ x: 0, y: 0, width: 290, height: 520 })
+    updateCachedWindowBehaviorConfig({ chatPinMode: 'smart', petAvoidanceEnabled: true, appRules: [] }, null, null)
+    vi.clearAllMocks()
+
+    const shouldShow = prepareChatForShow(chatWin as unknown as Electron.BrowserWindow)
+    expect(shouldShow).toBe(true)
+    expect(chatWin.setBounds).toHaveBeenCalledWith({ x: 1920, y: 0, width: 290, height: 520 })
+    expect(animateTo).not.toHaveBeenCalled()
+
+    chatWin.show()
+    evaluateDesktopPresence(chatWin as unknown as Electron.BrowserWindow, null)
+    expect(animateTo).not.toHaveBeenCalled()
+  })
+
+  it('smart mode: does not touch bounds that already match the target', () => {
+    testState.displays = [makeDisplay(1, 0)]
+    testState.homeDisplayId = 1
+    testState.blockerMap = new Map()
+    const chatWin = makeHiddenChatWindow({ x: 0, y: 0, width: 290, height: 520 })
+    updateCachedWindowBehaviorConfig({ chatPinMode: 'smart', petAvoidanceEnabled: true, appRules: [] }, null, null)
+    vi.clearAllMocks()
+
+    prepareChatForShow(chatWin as unknown as Electron.BrowserWindow)
+
+    expect(chatWin.setBounds).not.toHaveBeenCalled()
+  })
+
+  it('smart mode with the only display hard-blocked: reports not to show and leaves the window unmoved', () => {
+    testState.displays = [makeDisplay(1, 0)]
+    testState.homeDisplayId = 1
+    testState.blockerMap = new Map([
+      [1, { hwnd: 1n, pid: 1, exeName: null, displayId: 1, reasons: new Set(['fullscreen']), severity: 'hard' }],
+    ])
+    const chatWin = makeHiddenChatWindow({ x: 500, y: 0, width: 290, height: 520 })
+    updateCachedWindowBehaviorConfig({ chatPinMode: 'smart', petAvoidanceEnabled: true, appRules: [] }, null, null)
+    vi.clearAllMocks()
+
+    const shouldShow = prepareChatForShow(chatWin as unknown as Electron.BrowserWindow)
+
+    expect(shouldShow).toBe(false)
+    expect(chatWin.setBounds).not.toHaveBeenCalled()
+    expect(chatWin.showInactive).not.toHaveBeenCalled()
+    expect(animateTo).not.toHaveBeenCalled()
+  })
+
+  it('smart mode: a show request while the only display is hard-blocked is kept and shown once the blocker clears', () => {
+    testState.displays = [makeDisplay(1, 0)]
+    testState.homeDisplayId = 1
+    testState.blockerMap = new Map([
+      [1, { hwnd: 1n, pid: 1, exeName: null, displayId: 1, reasons: new Set(['fullscreen']), severity: 'hard' }],
+    ])
+    const chatWin = makeHiddenChatWindow({ x: 0, y: 0, width: 290, height: 520 })
+    updateCachedWindowBehaviorConfig({ chatPinMode: 'smart', petAvoidanceEnabled: true, appRules: [] }, null, null)
+    vi.clearAllMocks()
+
+    expect(prepareChatForShow(chatWin as unknown as Electron.BrowserWindow)).toBe(false)
+    evaluateDesktopPresence(chatWin as unknown as Electron.BrowserWindow, null)
+    expect(chatWin.showInactive).not.toHaveBeenCalled()
+
+    testState.blockerMap = new Map()
+    evaluateDesktopPresence(chatWin as unknown as Electron.BrowserWindow, null)
+    expect(chatWin.showInactive).toHaveBeenCalledTimes(1)
+  })
+
+  it('smart mode: a chat window that was never asked to show stays hidden when a blocker clears', () => {
+    testState.displays = [makeDisplay(1, 0)]
+    testState.homeDisplayId = 1
+    testState.blockerMap = new Map([
+      [1, { hwnd: 1n, pid: 1, exeName: null, displayId: 1, reasons: new Set(['fullscreen']), severity: 'hard' }],
+    ])
+    const chatWin = makeHiddenChatWindow({ x: 0, y: 0, width: 290, height: 520 })
+    updateCachedWindowBehaviorConfig({ chatPinMode: 'smart', petAvoidanceEnabled: true, appRules: [] }, null, null)
+    evaluateDesktopPresence(chatWin as unknown as Electron.BrowserWindow, null)
+    vi.clearAllMocks()
+
+    testState.blockerMap = new Map()
+    evaluateDesktopPresence(chatWin as unknown as Electron.BrowserWindow, null)
+    expect(chatWin.showInactive).not.toHaveBeenCalled()
+  })
+
+  it('always mode: pins topmost and shows without moving', () => {
+    testState.displays = [makeDisplay(1, 0)]
+    testState.blockerMap = new Map()
+    const chatWin = makeHiddenChatWindow({ x: 0, y: 0, width: 290, height: 520 })
+    updateCachedWindowBehaviorConfig({ chatPinMode: 'always', petAvoidanceEnabled: true, appRules: [] }, null, null)
+    vi.clearAllMocks()
+
+    expect(prepareChatForShow(chatWin as unknown as Electron.BrowserWindow)).toBe(true)
+    expect(chatWin.setBounds).not.toHaveBeenCalled()
     expect(animateTo).not.toHaveBeenCalled()
   })
 })

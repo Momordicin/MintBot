@@ -150,10 +150,11 @@ pnpm setup:ai
 pnpm dev:all
 
 # Everyday use: build the desktop app and the core service once (run it again after changing
-# code or pulling new code), then run the built version. `pnpm start` starts the built core
-# service and the built Electron app (loaded from app://mintbot/); quitting the app (tray
-# Quit) also stops the core service. It uses less memory than dev mode because there is no
-# dev server or dev tooling.
+# code or pulling new code), then run the built version. `pnpm start` starts the built
+# Electron app (loaded from app://mintbot/); if the core service is not already running, the
+# app starts the built core service itself and stops it when you quit (tray Quit). It uses
+# less memory than dev mode because there is no dev server or dev tooling. Autostart at
+# login can be enabled in Settings → General; it runs the output of the last `pnpm build:all`.
 pnpm build:all
 pnpm start
 ```

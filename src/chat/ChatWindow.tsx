@@ -1,6 +1,6 @@
 // src/chat/ChatWindow.tsx — 聊天窗口主界面：加载当前预设与历史消息，发送消息并读取回复，按预设显示配置应用壁纸、头像与主题色
-// 用法：App 渲染 <ChatWindow />；GET /state、/ai-available、/messages、/characters/:id/manifest.json，POST /chat（读 SSE：message_done / system），GET /events（preset-switched）；调用 electronAPI.setTitlebarOverlay
-// 对应文件：src/App.tsx / src/chat/MessageList.tsx / src/chat/InputBar.tsx / src/chat/TitleBar.tsx / src/chat/MessageBubble.tsx / src/chat/sse.ts / src/chat/theme.ts / src/eventsWatchdog.ts / src/errorText.ts / services/core/index.ts / services/core/routes/chat.ts / services/core/routes/messages.ts / services/core/routes/status.ts / services/core/routes/events.ts / electron/main/index.ts（titlebar:set-overlay）
+// 用法：App 渲染 <ChatWindow />；GET /state、/ai-available、/messages、/characters/:id/manifest.json，POST /chat（读 SSE：message_done / system），GET /events（preset-switched）；调用 electronAPI.setTitlebarOverlay / notifyChatReady / onChatShown / notifyChatPainted
+// 对应文件：src/App.tsx / src/chat/MessageList.tsx / src/chat/InputBar.tsx / src/chat/TitleBar.tsx / src/chat/MessageBubble.tsx / src/chat/sse.ts / src/chat/theme.ts / src/eventsWatchdog.ts / src/errorText.ts / services/core/index.ts / services/core/routes/chat.ts / services/core/routes/messages.ts / services/core/routes/status.ts / services/core/routes/events.ts / electron/main/index.ts（titlebar:set-overlay / chat:ready / chat:painted）/ electron/main/chatReveal.ts（chat:shown）
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { MessageList } from './MessageList'
@@ -19,6 +19,7 @@ import './chat.css'
 
 import { CORE_URL, resolveAssetUrl } from '../coreUrl.js'
 const DEFAULT_WALLPAPER_URL = `${CORE_URL}/wallpapers/bg.jpg`
+const WALLPAPER_TIMING_ID = 'chat-wallpaper'
 const INITIAL_HISTORY_LIMIT = 3
 const LOAD_MORE_HISTORY_LIMIT = 20
 const AVATAR_DIM_AFTER_MS = 20 * 60 * 1000
@@ -100,6 +101,15 @@ export function ChatWindow() {
   const appStateRef = useRef<AppState | null>(null)
   const avatarDimTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const startupHandledRef = useRef(false)
+  const [bootParts, setBootParts] = useState({ state: false, wallpaper: false, history: false })
+  const wallpaperPreloadStartedRef = useRef(false)
+  const chatReadyNotifiedRef = useRef(false)
+  const [revealToken, setRevealToken] = useState(0)
+  const paintedRevealTokenRef = useRef(0)
+
+  function markBootPart(part: 'state' | 'wallpaper' | 'history') {
+    setBootParts(prev => (prev[part] ? prev : { ...prev, [part]: true }))
+  }
 
   useEffect(() => {
     appStateRef.current = appState
@@ -114,7 +124,10 @@ export function ChatWindow() {
     fetch(`${CORE_URL}/state`)
       .then(r => r.json())
       .then((state: AppState) => {
-        if (startupHandledRef.current) return
+        if (startupHandledRef.current) {
+          markBootPart('state')
+          return
+        }
         startupHandledRef.current = true
         const controller = new AbortController()
         sessionSyncControllerRef.current = controller
@@ -130,11 +143,56 @@ export function ChatWindow() {
           })
         }
         beginSession(state, true, controller.signal)
+        markBootPart('state')
       })
       .catch(() => {
         addSystemMessage(i18n.t('无法连接核心服务，请确认服务已启动'), true)
+        markBootPart('state')
+        markBootPart('history')
       })
   }, [])
+
+  useEffect(() => {
+    if (!bootParts.state || wallpaperPreloadStartedRef.current) return
+    wallpaperPreloadStartedRef.current = true
+    if (!wallpaperUrl) {
+      markBootPart('wallpaper')
+      return
+    }
+    const image = new Image()
+    image.src = wallpaperUrl
+    image.decode().then(() => markBootPart('wallpaper'), () => markBootPart('wallpaper'))
+  }, [bootParts.state, wallpaperUrl])
+
+  useEffect(() => {
+    if (!bootParts.state || !bootParts.wallpaper || !bootParts.history || chatReadyNotifiedRef.current) return
+    chatReadyNotifiedRef.current = true
+    const markShown = () => setRevealToken(token => Math.max(token, 1))
+    window.electronAPI.notifyChatReady().then(markShown, markShown)
+  }, [bootParts])
+
+  useEffect(() => window.electronAPI.onChatShown(() => setRevealToken(token => token + 1)), [])
+
+  useEffect(() => {
+    if (revealToken === 0 || paintedRevealTokenRef.current === revealToken) return
+    const notifyPainted = () => {
+      if (paintedRevealTokenRef.current === revealToken) return
+      paintedRevealTokenRef.current = revealToken
+      window.electronAPI.notifyChatPainted()
+    }
+    if (!wallpaperUrl) {
+      requestAnimationFrame(() => requestAnimationFrame(notifyPainted))
+      return
+    }
+    const observer = new PerformanceObserver(list => {
+      const painted = list.getEntries().some(entry => (entry as PerformanceEntry & { identifier?: string }).identifier === `${WALLPAPER_TIMING_ID}-${revealToken}`)
+      if (!painted) return
+      observer.disconnect()
+      notifyPainted()
+    })
+    observer.observe({ type: 'element', buffered: true })
+    return () => observer.disconnect()
+  }, [revealToken, wallpaperUrl])
 
   useEffect(() => {
     const syncSessionOnFocus = async () => {
@@ -285,6 +343,7 @@ export function ChatWindow() {
       loadInitialMessages(state.sessionId, signal, mode)
     } else {
       applyNoHistoryAvatarDim(mode, signal)
+      markBootPart('history')
     }
   }
 
@@ -315,6 +374,8 @@ export function ChatWindow() {
       if (err instanceof DOMException && err.name === 'AbortError') return
       addSystemMessage(i18n.t('加载历史消息失败'), true)
       applyNoHistoryAvatarDim(mode, signal)
+    } finally {
+      markBootPart('history')
     }
   }
 
@@ -429,8 +490,17 @@ export function ChatWindow() {
   return (
     <div
       className={`chat-window${avatarDimmed ? ' chat-window--avatar-dimmed' : ''}`}
-      style={wallpaperUrl ? { backgroundImage: `url(${wallpaperUrl})` } : undefined}
     >
+      {wallpaperUrl && revealToken > 0 && (
+        <img
+          key={revealToken}
+          className="chat-window__wallpaper"
+          src={wallpaperUrl}
+          alt=""
+          draggable={false}
+          {...{ elementtiming: `${WALLPAPER_TIMING_ID}-${revealToken}` }}
+        />
+      )}
       <TitleBar avatarUrl={avatarUrl} displayName={displayName} />
 
       {appState?.ollamaReady === false && (

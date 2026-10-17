@@ -1,9 +1,9 @@
 // electron/main/index.ts — Electron 主进程入口：app ready 后创建聊天窗口、桌宠 overlay 与托盘，注册 IPC，启动前台窗口监控与 core /events 订阅，will-quit 时收尾
-// 用法：electron.vite.config.ts 的主进程 entry；打包运行时窗口经 app://mintbot/ 加载，由 protocol.handle('app') 映射到 out/renderer；第一条 import 为 logBootstrap；注册 ui:get-locale，向窗口发 ui:locale-changed；设置窗口按 open-settings-window IPC 按需创建；显示器拓扑变化时 handleDisplayTopologyChange 先调 clearStableDisplayKeyCache()
-// 对应文件：electron/preload/index.ts（暴露的 IPC 通道）/ electron/main/windowBehavior.ts / electron/main/petContextMenu.ts / electron/main/coreEventsConsumer.ts / electron/main/i18n.ts / electron/main/foregroundWorldModel.ts / electron/main/windowDragMonitor.ts / electron/main/nativeWindowDrag.ts / electron/main/startupGate.ts / electron/main/displayIdentity.ts / electron/main/appOrigin.ts / electron/main/appAssetPath.ts / shared/windowBehavior.ts / shared/portraitForm.ts
+// 用法：electron.vite.config.ts 的主进程 entry；注册 autostart:get / autostart:set；监听 second-instance；注册 app 协议 protocol.handle('app')；第一条 import 为 logBootstrap；注册 chat:ready（聊天窗口首次显示）/ chat:painted（聊天窗口唤起后淡入）；注册 ui:get-locale，向窗口发 ui:locale-changed；设置窗口按 open-settings-window IPC 按需创建；显示器拓扑变化时 handleDisplayTopologyChange 先调 clearStableDisplayKeyCache()
+// 对应文件：electron/preload/index.ts（暴露的 IPC 通道）/ electron/main/windowBehavior.ts / electron/main/petContextMenu.ts / electron/main/coreEventsConsumer.ts / electron/main/i18n.ts / electron/main/foregroundWorldModel.ts / electron/main/windowDragMonitor.ts / electron/main/nativeWindowDrag.ts / electron/main/startupGate.ts / electron/main/displayIdentity.ts / electron/main/appOrigin.ts / electron/main/appAssetPath.ts / electron/main/coreProcess.ts / electron/main/autostart.ts / electron/main/chatFirstShow.ts / electron/main/chatReveal.ts / shared/windowBehavior.ts / shared/portraitForm.ts
 import './logBootstrap'
 import { app, BrowserWindow, Menu, Tray, powerMonitor, ipcMain, dialog, screen, nativeImage, protocol, net } from 'electron'
-import type { MenuItemConstructorOptions } from 'electron'
+import type { IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron'
 import { join, basename } from 'path'
 import { pathToFileURL } from 'url'
 import { readFile, stat } from 'fs/promises'
@@ -21,12 +21,17 @@ import { appendLogLine } from '../../shared/logFile.js'
 import { windowNameFromUrl } from './logWindowName'
 import { APP_ORIGIN } from './appOrigin'
 import { resolveAppAssetPath } from './appAssetPath'
+import { ensureCoreRunning, stopSpawnedCore } from './coreProcess'
+import { hasAutostartFlag, loginItemOptions } from './autostart'
+import { CHAT_READY_TIMEOUT_MS, shouldShowChatOnFirstReady } from './chatFirstShow'
+import { notifyChatPainted, revealChat } from './chatReveal'
 import type { ChatPinMode, WindowBehaviorConfig, WindowBehaviorSnapshot } from '../../shared/windowBehavior.js'
 import {
   initWindowBehaviorConfig,
   applyWindowBehaviorSnapshot,
   getCachedWindowBehaviorConfig,
   evaluateDesktopPresence,
+  prepareChatForShow,
   handleWindowMoved,
   markProgrammaticWindowPlacement,
   closeStartupGate,
@@ -73,6 +78,11 @@ protocol.registerSchemesAsPrivileged([
 ])
 
 const RENDERER_ROOT = join(__dirname, '../renderer')
+
+const isDevMode = is.dev && Boolean(process.env['ELECTRON_RENDERER_URL'])
+const launchedByAutostart = hasAutostartFlag(process.argv)
+const hasSingleInstanceLock = isDevMode || app.requestSingleInstanceLock()
+if (!hasSingleInstanceLock) app.quit()
 
 let stopDesktopObservation: (() => void) | null = null
 
@@ -268,6 +278,54 @@ async function refreshUiLanguage(): Promise<void> {
 
 ipcMain.handle('ui:get-locale', () => getMainLocale())
 
+function readAutostart(): { available: boolean; enabled: boolean } {
+  if (isDevMode) return { available: false, enabled: false }
+  const { path, args } = loginItemOptions(process.execPath, app.getAppPath())
+  return { available: true, enabled: app.getLoginItemSettings({ path, args }).openAtLogin }
+}
+
+ipcMain.handle('autostart:get', () => readAutostart())
+
+ipcMain.handle('autostart:set', (_event, enabled: unknown) => {
+  if (isDevMode) throw new Error('autostart-unavailable')
+  if (typeof enabled !== 'boolean') throw new Error('invalid-autostart-value')
+  app.setLoginItemSettings({ openAtLogin: enabled, ...loginItemOptions(process.execPath, app.getAppPath()) })
+  return readAutostart()
+})
+
+let pendingShowChat = false
+let chatFirstShown = false
+
+function showChatWindow(): void {
+  const win = mainWindow
+  if (!win || win.isDestroyed()) return
+  const onScreen = win.isVisible() && !win.isMinimized()
+  if (!onScreen && !prepareChatForShow(win)) return
+  revealChat(win, () => {
+    if (win.isMinimized()) win.restore()
+    win.show()
+  })
+  evaluateDesktopPresence(mainWindow, overlayWindow)
+  win.focus()
+}
+
+function requestShowChat(): void {
+  if (mainWindow && chatFirstShown) showChatWindow()
+  else pendingShowChat = true
+}
+
+let handleChatReady: ((event: IpcMainInvokeEvent) => void) | null = null
+
+ipcMain.handle('chat:ready', event => {
+  handleChatReady?.(event)
+})
+
+ipcMain.on('chat:painted', event => {
+  notifyChatPainted(event.sender)
+})
+
+app.on('second-instance', () => requestShowChat())
+
 function rebuildTrayMenu(): void {
   if (!tray) return
   const { chatPinMode: currentChatPinMode, petAvoidanceEnabled } = getCachedWindowBehaviorConfig()
@@ -304,11 +362,7 @@ function rebuildTrayMenu(): void {
     },
     {
       label: i18n.t('打开聊天窗口'),
-      click: () => {
-        mainWindow?.show()
-        evaluateDesktopPresence(mainWindow, overlayWindow)
-        mainWindow?.focus()
-      },
+      click: () => requestShowChat(),
     },
     {
       label: i18n.t('退出'),
@@ -333,11 +387,7 @@ async function handlePetAvoidanceClick(petAvoidanceEnabled: boolean): Promise<vo
 
 function createTray(): void {
   tray = new Tray(nativeImage.createEmpty())
-  tray.on('double-click', () => {
-    mainWindow?.show()
-    evaluateDesktopPresence(mainWindow, overlayWindow)
-    mainWindow?.focus()
-  })
+  tray.on('double-click', () => requestShowChat())
   rebuildTrayMenu()
 }
 
@@ -643,17 +693,39 @@ function createWindow(): BrowserWindow {
   })
 
   mainWindow = win
+  chatFirstShown = false
 
-  win.on('ready-to-show', () => {
-    win.show()
+  let firstShowDone = false
+  handleChatReady = event => {
+    if (event.sender === win.webContents) performFirstShow()
+  }
+  const firstShowTimer = setTimeout(() => performFirstShow(), CHAT_READY_TIMEOUT_MS)
+
+  function disposeFirstShow(): void {
+    clearTimeout(firstShowTimer)
+    handleChatReady = null
+  }
+
+  function performFirstShow(): void {
+    if (firstShowDone) return
+    firstShowDone = true
+    disposeFirstShow()
+    chatFirstShown = true
+    if (win.isDestroyed()) return
+    if (shouldShowChatOnFirstReady(pendingShowChat, launchedByAutostart)) {
+      pendingShowChat = false
+      showChatWindow()
+      return
+    }
     evaluateDesktopPresence(mainWindow, overlayWindow)
-  })
+  }
 
   win.on('restore', () => {
     evaluateDesktopPresence(mainWindow, overlayWindow)
   })
 
   win.on('closed', () => {
+    disposeFirstShow()
     mainWindow = null
     clearDragState('chat')
   })
@@ -682,11 +754,7 @@ function createWindow(): BrowserWindow {
   return win
 }
 
-ipcMain.on('overlay:activate', () => {
-  mainWindow?.show()
-  evaluateDesktopPresence(mainWindow, overlayWindow)
-  mainWindow?.focus()
-})
+ipcMain.on('overlay:activate', () => requestShowChat())
 
 ipcMain.on('overlay:edge-hover', (_event, hovered: unknown) => {
   requestOverlayEdgeHover(overlayWindow, hovered === true)
@@ -736,7 +804,9 @@ ipcMain.on('titlebar:set-overlay', (_event, overlay: { color?: unknown; symbolCo
   }
 })
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  if (!hasSingleInstanceLock) return
+
   protocol.handle('app', async (request) => {
     const file = resolveAppAssetPath(RENDERER_ROOT, request.url)
     if (!file) return new Response('Not Found', { status: 404 })
@@ -760,6 +830,8 @@ app.whenReady().then(() => {
       appendLogLine({ level: details.level === 'error' ? 'error' : 'warn', source, text: details.message })
     })
   })
+
+  if (!isDevMode) await ensureCoreRunning(CORE_URL, app.getAppPath())
 
   if (shouldDistrustHomeAtStartup(queryUserNotificationState())) {
     closeStartupGate()
@@ -840,6 +912,7 @@ app.whenReady().then(() => {
 })
 
 app.on('will-quit', () => {
+  stopSpawnedCore()
   stopActiveWindowMonitoring()
   screen.removeListener('display-added', handleDisplayTopologyChange)
   screen.removeListener('display-removed', handleDisplayTopologyChange)
@@ -849,6 +922,10 @@ app.on('will-quit', () => {
     clearTimeout(coreEventsReconnectTimer)
     coreEventsReconnectTimer = null
   }
+})
+
+app.on('quit', () => {
+  stopSpawnedCore()
 })
 
 app.on('window-all-closed', () => {

@@ -8,7 +8,7 @@
     "dev:core": "tsx watch services/core/index.ts",
     "dev:ai": "tsx scripts/dev-ai.ts",
     "dev:all": "concurrently -k -n core,app -c cyan,green \"pnpm exec tsx services/core/index.ts\" \"pnpm exec tsx scripts/wait-core.ts && pnpm dev\"",
-    "start": "concurrently -k -n core,app -c cyan,green \"node scripts/run-core-prod.mjs\" \"pnpm exec tsx scripts/wait-core.ts && electron .\"",
+    "start": "electron .",
     "start:core": "pm2 start ecosystem.config.cjs",
     "build": "electron-vite build",
     "build:all": "pnpm build && pnpm build:core",

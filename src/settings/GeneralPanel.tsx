@@ -1,5 +1,5 @@
-// src/settings/GeneralPanel.tsx — 设置窗口的"通用"面板：界面语言选择（跟随系统 / 中文 / English）
-// 用法：SettingsApp 里渲染 <GeneralPanel />；GET、PATCH /config/ui
+// src/settings/GeneralPanel.tsx — 设置窗口的"通用"面板：界面语言选择（跟随系统 / 中文 / English）与开机自启开关
+// 用法：SettingsApp 里渲染 <GeneralPanel />；GET、PATCH /config/ui；electronAPI.getAutostart / setAutostart
 // 对应文件：shared/uiLocale.ts / src/i18n.ts / src/errorText.ts / services/core/routes/ui.ts / src/settings/SettingsApp.tsx
 import React, { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -16,6 +16,15 @@ export function GeneralPanel() {
   const [saving, setSaving] = useState(false)
   const [loadFailed, setLoadFailed] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [autostart, setAutostart] = useState<{ available: boolean; enabled: boolean } | null>(null)
+  const [autostartSaving, setAutostartSaving] = useState(false)
+  const [autostartError, setAutostartError] = useState<string | null>(null)
+
+  useEffect(() => {
+    window.electronAPI.getAutostart()
+      .then(setAutostart)
+      .catch(() => setAutostartError(t('加载开机自启状态失败，请稍后重试')))
+  }, [])
 
   useEffect(() => {
     fetch(`${CORE_URL}/config/ui`)
@@ -48,6 +57,18 @@ export function GeneralPanel() {
     }
   }
 
+  const handleAutostartChange = async (enabled: boolean) => {
+    setAutostartSaving(true)
+    setAutostartError(null)
+    try {
+      setAutostart(await window.electronAPI.setAutostart(enabled))
+    } catch {
+      setAutostartError(t('保存开机自启设置失败，请稍后重试'))
+    } finally {
+      setAutostartSaving(false)
+    }
+  }
+
   if (loadFailed) return <div className="character-panel__error">{t('加载界面语言失败，请稍后重试')}</div>
   if (language === null) return <div className="memory-loading">{t('加载中…')}</div>
 
@@ -66,7 +87,20 @@ export function GeneralPanel() {
           <option value="en">English</option>
         </select>
       </div>
+      <div className="window-behavior-panel__section">
+        <label className="model-config-panel__checkbox">
+          <input
+            type="checkbox"
+            checked={autostart?.enabled ?? false}
+            disabled={autostart === null || !autostart.available || autostartSaving}
+            onChange={e => handleAutostartChange(e.target.checked)}
+          />
+          {t('开机自启')}
+        </label>
+        {autostart !== null && !autostart.available && <div className="memory-loading">{t('仅在正式版本中可用')}</div>}
+      </div>
       {errorMessage && <div className="character-panel__error">{errorMessage}</div>}
+      {autostartError && <div className="character-panel__error">{autostartError}</div>}
     </div>
   )
 }

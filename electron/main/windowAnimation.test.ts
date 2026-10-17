@@ -29,7 +29,13 @@ import {
   interpolateRect,
   easeEntrance,
   animateTo,
+  fadeIn,
+  finishAnimation,
+  easeInOut,
+  isAnimating,
   SAME_DISPLAY_TWEEN_DURATION_MS,
+  EXIT_DURATION_MS,
+  ENTRANCE_DURATION_MS,
 } from './windowAnimation'
 
 // 供 animateTo 测试使用的假窗口：只实现 animateTo 实际会调用的那几个方法，行为足够真实
@@ -351,7 +357,7 @@ describe('animateTo', () => {
 
       expect(win.setBounds).toHaveBeenCalledTimes(1)
       expect(win.setBounds).toHaveBeenCalledWith(target)
-      expect(win.setOpacity).toHaveBeenCalledWith(1)
+      expect(win.setOpacity).not.toHaveBeenCalled()
       expect(onComplete).toHaveBeenCalledTimes(1)
 
       // No timer was scheduled for the instant path — advancing time must not do anything else,
@@ -361,6 +367,57 @@ describe('animateTo', () => {
       cancel()
       expect(win.setBounds).toHaveBeenCalledTimes(1)
       expect(onComplete).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('unchanged values are not re-applied on settle', () => {
+    it('instant path skips setBounds and setOpacity when bounds and opacity already match', () => {
+      const bounds = { x: 10, y: 20, width: 300, height: 500 }
+      const win = makeFakeWindow(bounds)
+
+      animateTo(win as unknown as Electron.BrowserWindow, { ...bounds }, undefined, { instant: true })
+
+      expect(win.setBounds).not.toHaveBeenCalled()
+      expect(win.setOpacity).not.toHaveBeenCalled()
+    })
+
+    it('instant path still applies a differing opacity but skips matching bounds', () => {
+      const bounds = { x: 10, y: 20, width: 300, height: 500 }
+      const win = makeFakeWindow(bounds)
+
+      animateTo(win as unknown as Electron.BrowserWindow, { ...bounds }, undefined, { instant: true, finalOpacity: 0.6 })
+
+      expect(win.setBounds).not.toHaveBeenCalled()
+      expect(win.setOpacity).toHaveBeenCalledWith(0.6)
+    })
+
+    it('same-display tween to the current bounds never calls setOpacity and ends on target', () => {
+      const bounds = { x: 10, y: 20, width: 300, height: 500 }
+      const win = makeFakeWindow(bounds)
+      const onComplete = vi.fn()
+
+      animateTo(win as unknown as Electron.BrowserWindow, { ...bounds }, onComplete)
+      vi.advanceTimersByTime(SAME_DISPLAY_TWEEN_DURATION_MS * 2)
+
+      expect(win.setOpacity).not.toHaveBeenCalled()
+      expect(win.getBounds()).toEqual(bounds)
+      expect(onComplete).toHaveBeenCalledTimes(1)
+    })
+
+    it('cross-display path still stages opacity 0 and restores finalOpacity', () => {
+      testState.displayForBounds = (bounds) =>
+        bounds.x < 1920
+          ? { id: 1, workArea: { x: 0, y: 0, width: 1920, height: 1080 } }
+          : { id: 2, workArea: { x: 1920, y: 0, width: 1920, height: 1080 } }
+      const win = makeFakeWindow({ x: 100, y: 100, width: 300, height: 500 })
+      const target = { x: 2020, y: 100, width: 300, height: 500 }
+
+      animateTo(win as unknown as Electron.BrowserWindow, target)
+      vi.advanceTimersByTime(EXIT_DURATION_MS + ENTRANCE_DURATION_MS + 200)
+
+      expect(win.setOpacity).toHaveBeenCalledWith(0)
+      expect(win.getOpacity()).toBe(1)
+      expect(win.getBounds()).toEqual(target)
     })
   })
 
@@ -398,7 +455,7 @@ describe('animateTo', () => {
       // and fire onComplete exactly once.
       vi.advanceTimersByTime(SAME_DISPLAY_TWEEN_DURATION_MS)
       expect(win.setBounds).toHaveBeenLastCalledWith(target)
-      expect(win.setOpacity).toHaveBeenCalledWith(1)
+      expect(win.getOpacity()).toBe(1)
       expect(onComplete).toHaveBeenCalledTimes(1)
 
       // Mandatory "at most once" contract: advancing further, or calling the returned cancel
@@ -424,7 +481,7 @@ describe('animateTo', () => {
       cancel()
 
       expect(win.setBounds).toHaveBeenLastCalledWith(target)
-      expect(win.setOpacity).toHaveBeenLastCalledWith(1)
+      expect(win.getOpacity()).toBe(1)
       expect(onComplete).toHaveBeenCalledTimes(1)
 
       // The tween's own timer must have been cleared by cancellation — advancing further, or
@@ -505,5 +562,70 @@ describe('animateTo', () => {
       expect(values).toContain(0)
       expect(win.getOpacity()).toBe(0.6)
     })
+  })
+})
+
+describe('easeInOut', () => {
+  it('starts at 0, is symmetric around the midpoint and ends at 1', () => {
+    expect(easeInOut(0)).toBe(0)
+    expect(easeInOut(0.5)).toBe(0.5)
+    expect(easeInOut(1)).toBe(1)
+    expect(easeInOut(0.25) + easeInOut(0.75)).toBeCloseTo(1)
+  })
+})
+
+describe('fadeIn', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('raises opacity from 0 to exactly 1 over the duration and stops animating', () => {
+    const win = makeFakeWindow({ x: 0, y: 0, width: 300, height: 500 })
+    win.setOpacity(0)
+    fadeIn(win as unknown as Electron.BrowserWindow, 200)
+    expect(isAnimating(win as unknown as Electron.BrowserWindow)).toBe(true)
+    vi.advanceTimersByTime(100)
+    expect(win.getOpacity()).toBeGreaterThan(0)
+    expect(win.getOpacity()).toBeLessThan(1)
+    vi.advanceTimersByTime(200)
+    expect(win.getOpacity()).toBe(1)
+    expect(isAnimating(win as unknown as Electron.BrowserWindow)).toBe(false)
+  })
+
+  it('is cancelled by a following animateTo, which leaves the window opaque', () => {
+    const win = makeFakeWindow({ x: 0, y: 0, width: 300, height: 500 })
+    win.setOpacity(0)
+    fadeIn(win as unknown as Electron.BrowserWindow, 200)
+    vi.advanceTimersByTime(50)
+    animateTo(win as unknown as Electron.BrowserWindow, { x: 0, y: 0, width: 300, height: 500 }, undefined, { instant: true })
+    expect(win.getOpacity()).toBe(1)
+    expect(isAnimating(win as unknown as Electron.BrowserWindow)).toBe(false)
+  })
+
+  it('finishAnimation ends a running fade at full opacity', () => {
+    const win = makeFakeWindow({ x: 0, y: 0, width: 300, height: 500 })
+    win.setOpacity(0)
+    fadeIn(win as unknown as Electron.BrowserWindow, 200)
+    vi.advanceTimersByTime(50)
+    finishAnimation(win as unknown as Electron.BrowserWindow)
+    expect(win.getOpacity()).toBe(1)
+    expect(isAnimating(win as unknown as Electron.BrowserWindow)).toBe(false)
+  })
+
+  it('finishAnimation snaps a running move to its target', () => {
+    const win = makeFakeWindow({ x: 0, y: 0, width: 300, height: 500 })
+    animateTo(win as unknown as Electron.BrowserWindow, { x: 40, y: 0, width: 300, height: 500 })
+    finishAnimation(win as unknown as Electron.BrowserWindow)
+    expect(win.getBounds()).toEqual({ x: 40, y: 0, width: 300, height: 500 })
+    expect(win.getOpacity()).toBe(1)
+    expect(isAnimating(win as unknown as Electron.BrowserWindow)).toBe(false)
+  })
+
+  it('does nothing while another animation owns the window', () => {
+    const win = makeFakeWindow({ x: 0, y: 0, width: 300, height: 500 })
+    animateTo(win as unknown as Electron.BrowserWindow, { x: 40, y: 0, width: 300, height: 500 })
+    win.setOpacity.mockClear()
+    fadeIn(win as unknown as Electron.BrowserWindow, 200)
+    vi.advanceTimersByTime(10)
+    expect(win.setOpacity).not.toHaveBeenCalled()
   })
 })
