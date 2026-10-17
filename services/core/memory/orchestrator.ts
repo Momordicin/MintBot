@@ -31,7 +31,7 @@ import type { EmbeddingQueueStatus, Message } from '../../../shared/types/index.
 import { getMemoryConfig, getModelProviderConfig } from '../config/index.js'
 
 const ACTIVE_CONVERSATION_WINDOW_MS = 5 * 60 * 1000
-const IDLE_UNLOAD_THRESHOLD_MS = 20 * 60 * 1000
+const IDLE_UNLOAD_THRESHOLD_MS = 5 * 60 * 1000
 
 let lastEmbeddingRun = 0
 

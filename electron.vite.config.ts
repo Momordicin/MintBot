@@ -1,7 +1,7 @@
 import { defineConfig } from 'electron-vite'
 import { resolve } from 'path'
 import react from '@vitejs/plugin-react'
-import { CORE_URL, RENDERER_HOST, RENDERER_PORT } from './services/core/config/ports'
+import { APP_ORIGIN, CORE_URL, RENDERER_HOST, RENDERER_PORT } from './services/core/config/ports'
 
 export default defineConfig({
   main: {
@@ -11,7 +11,8 @@ export default defineConfig({
       }
     },
     define: {
-      __CORE_URL__: JSON.stringify(CORE_URL)
+      __CORE_URL__: JSON.stringify(CORE_URL),
+      __APP_ORIGIN__: JSON.stringify(APP_ORIGIN)
     }
   },
   preload: {

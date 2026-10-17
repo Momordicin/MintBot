@@ -428,7 +428,7 @@ describe('runOrganizeModeTick — 当前激活角色的摘要插队', () => {
 // aiActivity 是进程级单例模块（没有 reset 接口），每个用例开始前自己调用一次 recordActivity()
 // 校准基准，不依赖模块的初始值或其它用例是否碰过它——保证用例之间互不干扰
 describe('runOrganizeModeTick — 空闲释放（embedding + NER unload）', () => {
-  it('距离最近一次 AI 活动已超过 20 分钟时，tick 结束时会调用 embedding.unload() 和 ner.unload()', async () => {
+  it('距离最近一次 AI 活动已超过 5 分钟时，tick 结束时会调用 embedding.unload() 和 ner.unload()', async () => {
     recordActivity()
     const embeddingUnload = vi.fn(async () => true)
     const nerUnload = vi.fn(async () => true)
@@ -438,14 +438,14 @@ describe('runOrganizeModeTick — 空闲释放（embedding + NER unload）', () 
     await runOrganizeModeTick(
       { embedding, ner, model: emptyModel() },
       200,
-      () => Date.now() + 21 * MIN
+      () => Date.now() + 6 * MIN
     )
 
     expect(embeddingUnload).toHaveBeenCalledTimes(1)
     expect(nerUnload).toHaveBeenCalledTimes(1)
   })
 
-  it('距离最近一次 AI 活动不足 20 分钟时，不调用 unload', async () => {
+  it('距离最近一次 AI 活动不足 5 分钟时，不调用 unload', async () => {
     recordActivity()
     const embeddingUnload = vi.fn(async () => true)
     const nerUnload = vi.fn(async () => true)
@@ -494,7 +494,7 @@ describe('runOrganizeModeTick — 空闲释放（embedding + NER unload）', () 
 
       // 模拟很久以前（tick 开始前）发生过一次 AI 活动
       recordActivity()
-      // 推进系统时钟到超过 20 分钟空闲阈值的时间点，再开始这次 tick——如果 tick 自己
+      // 推进系统时钟到超过 5 分钟空闲阈值的时间点，再开始这次 tick——如果 tick 自己
       // 批次内的 embedding/ner 调用不产生新的活动记录，末尾的空闲检查会误判为已空闲
       vi.setSystemTime(NOW_IN_WINDOW + 21 * MIN)
 

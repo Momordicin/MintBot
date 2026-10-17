@@ -1,10 +1,11 @@
 import { defineConfig } from 'vitest/config'
 import './vitest.env'
-import { CORE_URL } from './services/core/config/ports'
+import { APP_ORIGIN, CORE_URL } from './services/core/config/ports'
 
 export default defineConfig({
   define: {
-    __CORE_URL__: JSON.stringify(CORE_URL)
+    __CORE_URL__: JSON.stringify(CORE_URL),
+    __APP_ORIGIN__: JSON.stringify(APP_ORIGIN)
   },
   test: {
     globals: true,

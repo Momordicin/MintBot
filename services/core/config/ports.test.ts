@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 vi.mock('dotenv', () => ({ default: { config: vi.fn() }, config: vi.fn() }))
 
-const ENV_KEYS = ['CORE_PORT', 'AI_PORT', 'VITE_PORT'] as const
+const ENV_KEYS = ['CORE_PORT', 'AI_PORT', 'VITE_PORT', 'NODE_ENV'] as const
 
 const savedEnv: Record<string, string | undefined> = {}
 
@@ -28,7 +28,7 @@ afterEach(() => {
 
 describe('ports.ts', () => {
   it('env 变量缺失时使用默认端口', async () => {
-    const { CORE_PORT, AI_PORT, RENDERER_PORT, CORE_URL, AI_URL, RENDERER_ORIGIN, RENDERER_ORIGINS } = await import('./ports.js')
+    const { CORE_PORT, AI_PORT, RENDERER_PORT, CORE_URL, AI_URL, RENDERER_ORIGIN } = await import('./ports.js')
 
     expect(CORE_PORT).toBe(18300)
     expect(AI_PORT).toBe(18765)
@@ -36,7 +36,6 @@ describe('ports.ts', () => {
     expect(CORE_URL).toBe('http://127.0.0.1:18300')
     expect(AI_URL).toBe('http://127.0.0.1:18765')
     expect(RENDERER_ORIGIN).toBe('http://localhost:18173')
-    expect(RENDERER_ORIGINS).toEqual(['http://localhost:18173', 'http://127.0.0.1:18173'])
   })
 
   it('env 变量存在时覆盖默认端口', async () => {
@@ -67,5 +66,24 @@ describe('ports.ts', () => {
     expect(warnSpy).toHaveBeenCalledTimes(3)
 
     warnSpy.mockRestore()
+  })
+
+  it('NODE_ENV=production 时 RENDERER_ORIGINS 只含 app://mintbot', async () => {
+    process.env.NODE_ENV = 'production'
+
+    const { RENDERER_ORIGINS, APP_ORIGIN } = await import('./ports.js')
+
+    expect(APP_ORIGIN).toBe('app://mintbot')
+    expect(RENDERER_ORIGINS).toEqual(['app://mintbot'])
+  })
+
+  it('非 production（dev / 未设置）时 RENDERER_ORIGINS 只含两个开发来源', async () => {
+    delete process.env.NODE_ENV
+
+    const { RENDERER_ORIGINS, allowedRendererOrigins } = await import('./ports.js')
+
+    expect(RENDERER_ORIGINS).toEqual(['http://localhost:18173', 'http://127.0.0.1:18173'])
+    expect(allowedRendererOrigins('development')).toEqual(['http://localhost:18173', 'http://127.0.0.1:18173'])
+    expect(allowedRendererOrigins('production')).toEqual(['app://mintbot'])
   })
 })

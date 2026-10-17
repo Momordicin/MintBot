@@ -89,19 +89,20 @@ pnpm dev:core
 pnpm dev
 ```
 
-### 6. 生产环境启动（PM2）
+### 6. 日常使用（构建后运行）
 
-先编译：
+先构建桌面应用和核心服务（修改代码或拉取新代码后需要重新运行）：
 ```bash
-pnpm build:core
+pnpm build:all
 ```
 
 再启动：
 ```bash
-# Windows 用户首次运行需要管理员终端，之后普通终端即可
-# Linux/macOS 用户直接运行
-pnpm start:core
+# 启动构建后的核心服务和 Electron 应用；退出应用（托盘“退出”）时核心服务也会一并停止
+pnpm start
 ```
+
+核心服务只接受与自身模式一致的窗口发来的请求：生产模式的核心服务（`pnpm start`）只接受构建后的应用，开发模式的核心服务（`pnpm dev:core` / `pnpm dev:all`）只接受开发服务器的窗口，所以不要混用两种模式。
 
 ### 7. 运行测试
 

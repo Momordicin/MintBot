@@ -1,10 +1,11 @@
 // electron/main/index.ts — Electron 主进程入口：app ready 后创建聊天窗口、桌宠 overlay 与托盘，注册 IPC，启动前台窗口监控与 core /events 订阅，will-quit 时收尾
-// 用法：electron.vite.config.ts 的主进程 entry；第一条 import 为 logBootstrap；注册 ui:get-locale，向窗口发 ui:locale-changed；设置窗口按 open-settings-window IPC 按需创建；显示器拓扑变化时 handleDisplayTopologyChange 先调 clearStableDisplayKeyCache()
-// 对应文件：electron/preload/index.ts（暴露的 IPC 通道）/ electron/main/windowBehavior.ts / electron/main/petContextMenu.ts / electron/main/coreEventsConsumer.ts / electron/main/i18n.ts / electron/main/foregroundWorldModel.ts / electron/main/windowDragMonitor.ts / electron/main/nativeWindowDrag.ts / electron/main/startupGate.ts / electron/main/displayIdentity.ts / shared/windowBehavior.ts / shared/portraitForm.ts
+// 用法：electron.vite.config.ts 的主进程 entry；打包运行时窗口经 app://mintbot/ 加载，由 protocol.handle('app') 映射到 out/renderer；第一条 import 为 logBootstrap；注册 ui:get-locale，向窗口发 ui:locale-changed；设置窗口按 open-settings-window IPC 按需创建；显示器拓扑变化时 handleDisplayTopologyChange 先调 clearStableDisplayKeyCache()
+// 对应文件：electron/preload/index.ts（暴露的 IPC 通道）/ electron/main/windowBehavior.ts / electron/main/petContextMenu.ts / electron/main/coreEventsConsumer.ts / electron/main/i18n.ts / electron/main/foregroundWorldModel.ts / electron/main/windowDragMonitor.ts / electron/main/nativeWindowDrag.ts / electron/main/startupGate.ts / electron/main/displayIdentity.ts / electron/main/appOrigin.ts / electron/main/appAssetPath.ts / shared/windowBehavior.ts / shared/portraitForm.ts
 import './logBootstrap'
-import { app, BrowserWindow, Menu, Tray, powerMonitor, ipcMain, dialog, screen, nativeImage } from 'electron'
+import { app, BrowserWindow, Menu, Tray, powerMonitor, ipcMain, dialog, screen, nativeImage, protocol, net } from 'electron'
 import type { MenuItemConstructorOptions } from 'electron'
 import { join, basename } from 'path'
+import { pathToFileURL } from 'url'
 import { readFile, stat } from 'fs/promises'
 import { is } from '@electron-toolkit/utils'
 import { startWindowDragMonitor } from './windowDragMonitor'
@@ -18,6 +19,8 @@ import type { UiLanguage } from '../../shared/uiLocale.js'
 import { CORE_URL } from './coreUrl'
 import { appendLogLine } from '../../shared/logFile.js'
 import { windowNameFromUrl } from './logWindowName'
+import { APP_ORIGIN } from './appOrigin'
+import { resolveAppAssetPath } from './appAssetPath'
 import type { ChatPinMode, WindowBehaviorConfig, WindowBehaviorSnapshot } from '../../shared/windowBehavior.js'
 import {
   initWindowBehaviorConfig,
@@ -64,6 +67,12 @@ import {
 import type { Bounds } from './windowPositions'
 import { clearStableDisplayKeyCache } from './displayIdentity'
 import { PET_SCALE_OPTIONS } from '../../shared/portraitForm.js'
+
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }
+])
+
+const RENDERER_ROOT = join(__dirname, '../renderer')
 
 let stopDesktopObservation: (() => void) | null = null
 
@@ -426,7 +435,7 @@ function createSettingsWindow(): BrowserWindow {
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/settings/index.html`)
   } else {
-    win.loadFile(join(__dirname, '../renderer/settings/index.html'))
+    win.loadURL(`${APP_ORIGIN}/settings/index.html`)
   }
 
   return win
@@ -524,7 +533,7 @@ function createPetHandle(overlay: BrowserWindow): BrowserWindow {
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     handle.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/handle/index.html`)
   } else {
-    handle.loadFile(join(__dirname, '../renderer/handle/index.html'))
+    handle.loadURL(`${APP_ORIGIN}/handle/index.html`)
   }
   return handle
 }
@@ -585,7 +594,7 @@ function createOverlayWindow(): BrowserWindow {
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/overlay/index.html`)
   } else {
-    win.loadFile(join(__dirname, '../renderer/overlay/index.html'))
+    win.loadURL(`${APP_ORIGIN}/overlay/index.html`)
   }
 
   return win
@@ -667,7 +676,7 @@ function createWindow(): BrowserWindow {
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
-    win.loadFile(join(__dirname, '../renderer/index.html'))
+    win.loadURL(`${APP_ORIGIN}/index.html`)
   }
 
   return win
@@ -728,6 +737,16 @@ ipcMain.on('titlebar:set-overlay', (_event, overlay: { color?: unknown; symbolCo
 })
 
 app.whenReady().then(() => {
+  protocol.handle('app', async (request) => {
+    const file = resolveAppAssetPath(RENDERER_ROOT, request.url)
+    if (!file) return new Response('Not Found', { status: 404 })
+    try {
+      return await net.fetch(pathToFileURL(file).toString())
+    } catch {
+      return new Response('Not Found', { status: 404 })
+    }
+  })
+
   app.on('browser-window-created', (_event, win) => {
     win.webContents.on('before-input-event', (event, input) => {
       if (input.type === 'keyDown' && (input.control || input.meta) && input.shift && input.code === 'KeyI') {

@@ -72,7 +72,7 @@ A locally-run AI character companion desktop app. Supports custom character pers
 | Layer | Technology |
 |---|---|
 | Desktop framework | Electron + React |
-| Core service | Node.js + Fastify (PM2-managed) |
+| Core service | Node.js + Fastify (its own process) |
 | Model calls | Anthropic SDK / OpenAI SDK (OpenAI, DeepSeek) / Ollama |
 | Local model | Ollama (optional, Qwen3 / ChatGLM etc.) |
 | ASR | faster-whisper (Python HTTP service, planned) |
@@ -145,21 +145,22 @@ pnpm seed
 # are fast.
 pnpm setup:ai
 
-# Start the core service (Fastify, its own process)
-# Development: pnpm dev:core
-# Production: build first, then run persistently via pm2 (pnpm start:core just runs
-# `pm2 start ecosystem.config.cjs`, which depends on out/core/services/core/index.js — skipping build:core
-# will fail immediately with a missing-file error)
-# Production: on Windows, the first run needs administrator privileges; after that,
-# `pm2 stop mintbot-core; pm2 kill` and you can run it from a regular terminal going forward
-pnpm build:core
-pnpm start:core
+# Development: start the core service (tsx) and, once it is up, the desktop app (Electron + the
+# Vite dev server)
+pnpm dev:all
 
-# Start the desktop app (Electron + React)
-pnpm dev
+# Everyday use: build the desktop app and the core service once (run it again after changing
+# code or pulling new code), then run the built version. `pnpm start` starts the built core
+# service and the built Electron app (loaded from app://mintbot/); quitting the app (tray
+# Quit) also stops the core service. It uses less memory than dev mode because there is no
+# dev server or dev tooling.
+pnpm build:all
+pnpm start
 ```
 
-The Python AI service (services/ai — local ASR / TTS / Embedding model services) is started and stopped automatically by the core service: when `pnpm start:core` / `pnpm dev:core` starts the core service, if it detects the AI service isn't already running, it automatically spins up the corresponding process from `.venv`, and stops that instance when the core service exits — you don't need to run `pnpm dev:ai` manually. `pnpm dev:ai` still exists for cases where you want to manually start it for hot-reload debugging of the Python code — the core service will detect it's already running and won't start a duplicate, but it also won't stop that manually-started instance for you on exit (you'll need to Ctrl+C it yourself). This "already running" detection relies on both sides using the same port; `pnpm dev:ai` reads `AI_PORT` from `.env` the same way the core service does, so they stay aligned.
+The core service only accepts requests from the windows of the matching mode: a production core (`pnpm start`) only accepts the built app, and a dev core (`pnpm dev:all`) only accepts the dev-server windows, so don't mix the two modes.
+
+The Python AI service (services/ai — local ASR / TTS / Embedding model services) is started and stopped automatically by the core service: when `pnpm start` / `pnpm dev:all` starts the core service, if it detects the AI service isn't already running, it automatically spins up the corresponding process from `.venv`, and stops that instance when the core service exits — you don't need to run `pnpm dev:ai` manually. `pnpm dev:ai` still exists for cases where you want to manually start it for hot-reload debugging of the Python code — the core service will detect it's already running and won't start a duplicate, but it also won't stop that manually-started instance for you on exit (you'll need to Ctrl+C it yourself). This "already running" detection relies on both sides using the same port; `pnpm dev:ai` reads `AI_PORT` from `.env` the same way the core service does, so they stay aligned.
 
 ---
 

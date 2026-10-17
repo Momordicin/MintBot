@@ -72,7 +72,7 @@
 | 层级 | 技术选型 |
 |---|---|
 | 桌面框架 | Electron + React |
-| 核心服务 | Node.js + Fastify（PM2 守护） |
+| 核心服务 | Node.js + Fastify（独立进程） |
 | 模型调用 | Anthropic SDK / OpenAI SDK（OpenAI、DeepSeek）/ Ollama |
 | 本地模型 | Ollama（可选，Qwen3 / ChatGLM 等） |
 | ASR | faster-whisper（Python HTTP 服务，规划中） |
@@ -141,19 +141,20 @@ pnpm seed
 # 情况可能要等一段时间，权重会缓存在本地（~/.cache/huggingface/），之后重跑这一步会很快
 pnpm setup:ai
 
-# 启动核心服务（Fastify，独立进程）
-# 开发阶段：pnpm dev:core
-# 生产环境：先编译再用 pm2 常驻（pnpm start:core 就是 pm2 start ecosystem.config.cjs，
-# 依赖 out/core/services/core/index.js，跳过 build:core 会直接报错找不到文件）
-# 生产环境：Windows 用户首次运行需要管理员权限，之后 pm2 stop mintbot-core; pm2 kill; 最后就可以在普通终端运行了
-pnpm build:core
-pnpm start:core
+# 开发阶段：启动核心服务（tsx），待其就绪后再启动桌面应用（Electron + Vite 开发服务器）
+pnpm dev:all
 
-# 启动桌面应用（Electron + React）
-pnpm dev
+# 日常使用：先一次性构建桌面应用和核心服务（修改代码或拉取新代码后需要重新运行），
+# 再运行构建后的版本。pnpm start 会启动构建后的核心服务和构建后的 Electron 应用
+# （窗口从 app://mintbot/ 加载）；退出应用（托盘“退出”）时核心服务也会一并停止。
+# 因为没有开发服务器和开发工具，占用的内存比开发模式更少
+pnpm build:all
+pnpm start
 ```
 
-Python AI 服务（services/ai，ASR / TTS / Embedding 等本地模型服务）由核心服务自动启停：`pnpm start:core` / `pnpm dev:core` 启动核心服务时，如果检测到 AI 服务还没在运行会自动拉起对应的 `.venv` 中的进程，退出核心服务时一并停掉本次由它自己启动的实例，不需要再手动跑 `pnpm dev:ai`。`pnpm dev:ai` 仍然保留，供需要热重载调试 Python 代码时手动启动使用——核心服务检测到它已经在跑就不会重复启动，但也不会在退出时帮你停掉这个手动启动的实例（需要自己 Ctrl+C）。这个"检测到已在运行"的判断依赖两边用同一个端口；`pnpm dev:ai` 和核心服务一样从 `.env` 读取 `AI_PORT`，所以两边会保持一致。
+核心服务只接受与自身模式一致的窗口发来的请求：生产模式的核心服务（`pnpm start`）只接受构建后的应用，开发模式的核心服务（`pnpm dev:all`）只接受开发服务器的窗口，所以不要混用两种模式。
+
+Python AI 服务（services/ai，ASR / TTS / Embedding 等本地模型服务）由核心服务自动启停：`pnpm start` / `pnpm dev:all` 启动核心服务时，如果检测到 AI 服务还没在运行会自动拉起对应的 `.venv` 中的进程，退出核心服务时一并停掉本次由它自己启动的实例，不需要再手动跑 `pnpm dev:ai`。`pnpm dev:ai` 仍然保留，供需要热重载调试 Python 代码时手动启动使用——核心服务检测到它已经在跑就不会重复启动，但也不会在退出时帮你停掉这个手动启动的实例（需要自己 Ctrl+C）。这个"检测到已在运行"的判断依赖两边用同一个端口；`pnpm dev:ai` 和核心服务一样从 `.env` 读取 `AI_PORT`，所以两边会保持一致。
 
 ---
 
