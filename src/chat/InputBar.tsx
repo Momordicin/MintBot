@@ -2,19 +2,45 @@
 // 用法：ChatWindow 渲染 <InputBar onSend />；设置按钮调用 electronAPI.openSettingsWindow
 // 形状：props { onSend(text: string), disabled? }
 // 对应文件：src/chat/ChatWindow.tsx / electron/preload/index.ts / electron/main/index.ts（open-settings-window）
-import React, { useRef, useState } from 'react'
+import React, { useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import sendPlane from '../assets/paperplane.png'
+import { appendVoiceText } from './appendVoiceText'
+
+export interface InputBarHandle {
+  appendVoice: (texts: string[]) => void
+}
 
 interface InputBarProps {
   onSend: (text: string) => void
   disabled?: boolean
+  ref?: React.Ref<InputBarHandle>
 }
 
-export function InputBar({ onSend, disabled }: InputBarProps) {
+export function InputBar({ onSend, disabled, ref }: InputBarProps) {
   const { t } = useTranslation()
   const [value, setValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const savedViewRef = useRef<{ start: number; end: number; scrollTop: number } | null>(null)
+
+  useImperativeHandle(ref, () => ({
+    appendVoice(texts: string[]) {
+      const textarea = textareaRef.current
+      if (textarea) {
+        savedViewRef.current = { start: textarea.selectionStart, end: textarea.selectionEnd, scrollTop: textarea.scrollTop }
+      }
+      setValue(current => appendVoiceText(current, texts))
+    },
+  }), [])
+
+  useLayoutEffect(() => {
+    const saved = savedViewRef.current
+    const textarea = textareaRef.current
+    if (!saved || !textarea) return
+    savedViewRef.current = null
+    textarea.setSelectionRange(saved.start, saved.end)
+    textarea.scrollTop = saved.scrollTop
+  }, [value])
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {

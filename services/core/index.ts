@@ -31,6 +31,8 @@ import { Bert4NerProvider, type NERProvider } from './providers/NERProvider.js'
 import { startConfigWatcher, getModelProviderConfig, getBackgroundModelProviderConfig, getDefaultPresetId } from './config/index.js'
 import { ensureOllama, shouldEnsureOllama, stopOllamaIfManaged } from './providers/ollama.js'
 import { ensureAiService, stopAiServiceIfManaged } from './providers/aiService.js'
+import { startVoice, stopVoice } from './voice/agent.js'
+import { voiceRoutes } from './voice/routes.js'
 import { startOrganizeModeScheduler } from './memory/orchestrator.js'
 import { buildStatePayload } from './state.js'
 import { CHARACTERS_ROOT } from './characters/manifest.js'
@@ -78,6 +80,7 @@ async function start() {
     organizeModeTask?.stop()
     await stopOllamaIfManaged()
     await stopAiServiceIfManaged()
+    await stopVoice()
     process.exit(0)
   })
 
@@ -85,6 +88,7 @@ async function start() {
     organizeModeTask?.stop()
     await stopOllamaIfManaged()
     await stopAiServiceIfManaged()
+    await stopVoice()
     process.exit(0)
   })
 
@@ -100,6 +104,7 @@ async function start() {
       return fastify.embeddingProvider.embed('ping', undefined, 30000)
     })
     .catch(err => console.error('[Startup] AI service startup / embedding warm-up failed:', err))
+  startVoice().catch(err => console.error('[Voice] Startup failed:', err))
 
   startConfigWatcher(({ windowBehaviorChanged }) => {
     if (windowBehaviorChanged) broadcastWindowBehaviorSnapshot()
@@ -158,6 +163,7 @@ async function start() {
   await fastify.register(windowBehaviorRoutes)
   await fastify.register(uiRoutes)
   await fastify.register(transitionChainRoutes)
+  await fastify.register(voiceRoutes)
   await fastify.listen({ port: PORT, host: LOOPBACK_HOST })
   console.log(`[Core] Running on port ${PORT}`)
 
