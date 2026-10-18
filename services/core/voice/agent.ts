@@ -3,15 +3,65 @@
 // 对应文件：services/core/voice/install.ts / services/core/voice/routes.ts / services/core/events/broadcast.ts / services/core/voice/agent.test.ts
 import fs from 'fs'
 import path from 'path'
-import { VoiceAgentSupervisor, type AgentEvent } from '@mintbot/voice-agent-client'
+import { VoiceAgentSupervisor, type AgentEvent, type SupervisorState } from '@mintbot/voice-agent-client'
+import { ERROR_CODES, type ErrorCode } from '../../../shared/errorCodes.js'
+import { getVoiceListenEnabled, setVoiceListenEnabled } from '../config/index.js'
 import { broadcastEvent } from '../events/broadcast.js'
 import { readVoiceInstallation } from './install.js'
 
 export const VOICE_DATA_DIR = path.resolve(process.cwd(), 'data', 'voice')
 
+const MODE_TIMEOUT_MS = 10 * 60 * 1000
+const MIN_COMMIT_UTTERANCES = 5
+const MODE_HISTORY_LIMIT = 8
+
+export type VoiceMode = 'normal' | 'enrolling' | 'testing'
+
+export interface TestResult {
+  kind: 'owner' | 'other' | 'unenrolled'
+  score?: number
+  uncertain: boolean
+  durationMs: number
+  text?: string
+}
+
+export interface SpeakerStatus {
+  enrolled: boolean
+  utterances: number
+  speechMs: number
+  enrolling: boolean
+  enrollUtterances: number
+  enrollSpeechMs: number
+  enrollReady: boolean
+}
+
+export interface VoiceStatus {
+  installed: boolean
+  phase: string | null
+  listening: boolean
+  errorCode: string | null
+  speaker: SpeakerStatus | null
+  mode: VoiceMode
+  listenEnabled: boolean
+  test: { results: TestResult[] }
+}
+
+export class VoiceOperationError extends Error {
+  constructor(readonly status: number, readonly errorCode: ErrorCode) {
+    super(errorCode)
+  }
+}
+
 let supervisor: VoiceAgentSupervisor | null = null
 let transcriptsPath = path.join(VOICE_DATA_DIR, 'transcripts.jsonl')
 let pending: string[] = []
+let latestState: SupervisorState | null = null
+let mode: VoiceMode = 'normal'
+let modeSeq = 0
+let modeHistory: Array<{ mode: VoiceMode; since: number }> = [{ mode: 'normal', since: Date.now() }]
+let listenEnabled = false
+let testResults: TestResult[] = []
+let modeTimer: ReturnType<typeof setTimeout> | null = null
 
 export function takePending(): string[] {
   const texts = pending
@@ -19,18 +69,96 @@ export function takePending(): string[] {
   return texts
 }
 
+function notifyStatusChanged(): void {
+  broadcastEvent('voice-status-changed', {})
+}
+
+function clearModeTimer(): void {
+  if (modeTimer) {
+    clearTimeout(modeTimer)
+    modeTimer = null
+  }
+}
+
+function applyListening(): void {
+  supervisor?.setListening(listenEnabled || mode !== 'normal')
+}
+
+function recordMode(next: VoiceMode): void {
+  modeHistory.push({ mode: next, since: Date.now() })
+  if (modeHistory.length > MODE_HISTORY_LIMIT) modeHistory.shift()
+}
+
+function ownerMode(data: Record<string, unknown>): VoiceMode {
+  const { end_unix_ms: endUnixMs, end_ms: endMs, start_ms: startMs } = data
+  if (!Number.isFinite(endUnixMs) || !Number.isFinite(endMs) || !Number.isFinite(startMs)) return mode
+  const startedAt = (endUnixMs as number) - ((endMs as number) - (startMs as number))
+  let owner: VoiceMode = 'normal'
+  for (const entry of modeHistory) {
+    if (entry.since <= startedAt) owner = entry.mode
+  }
+  return owner
+}
+
+function endMode(): void {
+  clearModeTimer()
+  mode = 'normal'
+  recordMode('normal')
+  modeSeq++
+  applyListening()
+  notifyStatusChanged()
+}
+
+function armModeTimer(onTimeout: () => Promise<void>): void {
+  clearModeTimer()
+  modeTimer = setTimeout(() => {
+    modeTimer = null
+    onTimeout().catch(() => {})
+  }, MODE_TIMEOUT_MS)
+  modeTimer.unref()
+}
+
+function num(value: unknown): number {
+  return typeof value === 'number' ? value : 0
+}
+
+function testResult(kind: TestResult['kind'], data: Record<string, unknown>, text?: string): TestResult {
+  const result: TestResult = {
+    kind,
+    uncertain: data.speaker_uncertain === true,
+    durationMs: num(data.end_ms) - num(data.start_ms),
+  }
+  if (typeof data.speaker_score === 'number') result.score = data.speaker_score
+  if (text !== undefined) result.text = text
+  return result
+}
+
 function handleEvent(ev: AgentEvent): void {
+  if (ev.type === 'enroll_progress' || ev.type === 'speaker') {
+    notifyStatusChanged()
+    return
+  }
+  if (ev.type === 'speech_other') {
+    const otherData = ev.data ?? {}
+    if (ownerMode(otherData) !== 'testing') return
+    testResults.push(testResult('other', otherData))
+    notifyStatusChanged()
+    return
+  }
   if (ev.type !== 'final') return
   const data = ev.data ?? {}
   if (data.enrolling === true) return
   const text = data.text
   if (typeof text !== 'string' || text.trim() === '') return
+  const owner = ownerMode(data)
+  if (owner === 'enrolling') return
 
   const record: Record<string, unknown> = {
     at: data.end_unix_ms,
     text,
     language: data.language,
     emotion: data.emotion,
+    mode: owner,
   }
   if (data.speaker_score !== undefined) record.speaker_score = data.speaker_score
   if (data.is_owner !== undefined) record.is_owner = data.is_owner
@@ -40,13 +168,167 @@ function handleEvent(ev: AgentEvent): void {
     console.error('[Voice] Failed to append transcript:', err, record)
   }
 
-  pending.push(text)
-  broadcastEvent('voice-pending', {})
+  if (owner === 'testing') {
+    const kind = data.speaker_enrolled !== true ? 'unenrolled' : data.is_owner === true ? 'owner' : 'other'
+    testResults.push(testResult(kind, data, text))
+    notifyStatusChanged()
+    return
+  }
+
+  if (owner === 'normal' && listenEnabled) {
+    pending.push(text)
+    broadcastEvent('voice-pending', {})
+  }
+}
+
+function resetState(): void {
+  clearModeTimer()
+  latestState = null
+  mode = 'normal'
+  modeHistory = [{ mode: 'normal', since: Date.now() }]
+  modeSeq++
+  listenEnabled = false
+  testResults = []
+}
+
+function readSpeaker(raw: Record<string, unknown>): SpeakerStatus {
+  return {
+    enrolled: raw.enrolled === true,
+    utterances: num(raw.utterances),
+    speechMs: num(raw.speech_ms),
+    enrolling: raw.enrolling === true,
+    enrollUtterances: num(raw.enroll_utterances),
+    enrollSpeechMs: num(raw.enroll_speech_ms),
+    enrollReady: raw.enroll_ready === true,
+  }
+}
+
+async function fetchSpeaker(current: VoiceAgentSupervisor): Promise<SpeakerStatus | null> {
+  try {
+    return readSpeaker(await current.call('GET', '/v1/speaker'))
+  } catch {
+    return null
+  }
+}
+
+export async function getVoiceStatus(): Promise<VoiceStatus> {
+  const current = supervisor
+  const running = current !== null && latestState?.phase === 'running'
+  return {
+    installed: current !== null,
+    phase: latestState?.phase ?? null,
+    listening: latestState?.listening ?? false,
+    errorCode: latestState?.error?.code ?? null,
+    speaker: running ? await fetchSpeaker(current) : null,
+    mode,
+    listenEnabled,
+    test: { results: testResults },
+  }
+}
+
+function requireRunning(): VoiceAgentSupervisor {
+  if (!supervisor || latestState?.phase !== 'running') {
+    throw new VoiceOperationError(503, ERROR_CODES.VOICE_UNAVAILABLE)
+  }
+  return supervisor
+}
+
+async function callAgent(
+  current: VoiceAgentSupervisor,
+  agentPath: string,
+  conflictCode: ErrorCode
+): Promise<void> {
+  try {
+    await current.call('POST', agentPath)
+  } catch (err) {
+    if ((err as { status?: unknown }).status === 409) throw new VoiceOperationError(409, conflictCode)
+    throw new VoiceOperationError(503, ERROR_CODES.VOICE_UNAVAILABLE)
+  }
+}
+
+export async function startEnroll(): Promise<void> {
+  const current = requireRunning()
+  if (mode !== 'normal') throw new VoiceOperationError(409, ERROR_CODES.VOICE_BUSY)
+  mode = 'enrolling'
+  recordMode('enrolling')
+  const seq = ++modeSeq
+  applyListening()
+  armModeTimer(cancelEnroll)
+  notifyStatusChanged()
+
+  const speaker = await fetchSpeaker(current)
+  if (seq !== modeSeq) return
+  if (!speaker) {
+    endMode()
+    throw new VoiceOperationError(503, ERROR_CODES.VOICE_UNAVAILABLE)
+  }
+  if (speaker.enrolled) {
+    endMode()
+    throw new VoiceOperationError(409, ERROR_CODES.VOICE_ALREADY_ENROLLED)
+  }
+  try {
+    await callAgent(current, '/v1/speaker/enroll/start', ERROR_CODES.VOICE_BUSY)
+  } catch (err) {
+    if (seq === modeSeq) endMode()
+    throw err
+  }
+  if (seq !== modeSeq) await callAgent(current, '/v1/speaker/enroll/cancel', ERROR_CODES.VOICE_BUSY).catch(() => {})
+}
+
+export async function commitEnroll(): Promise<void> {
+  const current = requireRunning()
+  if (mode !== 'enrolling') throw new VoiceOperationError(409, ERROR_CODES.VOICE_BUSY)
+  const seq = modeSeq
+  const speaker = await fetchSpeaker(current)
+  if (!speaker) throw new VoiceOperationError(503, ERROR_CODES.VOICE_UNAVAILABLE)
+  if (speaker.enrollUtterances < MIN_COMMIT_UTTERANCES) {
+    throw new VoiceOperationError(409, ERROR_CODES.VOICE_ENROLL_NOT_READY)
+  }
+  await callAgent(current, '/v1/speaker/enroll/commit', ERROR_CODES.VOICE_ENROLL_NOT_READY)
+  if (seq === modeSeq) endMode()
+}
+
+export async function cancelEnroll(): Promise<void> {
+  if (mode === 'enrolling') endMode()
+  const current = requireRunning()
+  try {
+    await callAgent(current, '/v1/speaker/enroll/cancel', ERROR_CODES.VOICE_BUSY)
+  } catch (err) {
+    if (err instanceof VoiceOperationError && err.status === 409) return
+    throw err
+  }
+}
+
+export async function startTest(): Promise<void> {
+  requireRunning()
+  if (mode !== 'normal') throw new VoiceOperationError(409, ERROR_CODES.VOICE_BUSY)
+  testResults = []
+  mode = 'testing'
+  recordMode('testing')
+  modeSeq++
+  applyListening()
+  armModeTimer(stopTest)
+  notifyStatusChanged()
+}
+
+export async function stopTest(): Promise<void> {
+  if (mode === 'testing') endMode()
+  requireRunning()
+}
+
+export function setListenEnabled(enabled: boolean): void {
+  if (!supervisor) throw new VoiceOperationError(503, ERROR_CODES.VOICE_UNAVAILABLE)
+  if (mode !== 'normal') throw new VoiceOperationError(409, ERROR_CODES.VOICE_BUSY)
+  setVoiceListenEnabled(enabled)
+  listenEnabled = enabled
+  applyListening()
+  notifyStatusChanged()
 }
 
 export async function startVoice(dataDir: string = VOICE_DATA_DIR): Promise<void> {
   fs.mkdirSync(dataDir, { recursive: true })
   transcriptsPath = path.join(dataDir, 'transcripts.jsonl')
+  resetState()
 
   const installation = await readVoiceInstallation()
   if (!installation) {
@@ -54,10 +336,20 @@ export async function startVoice(dataDir: string = VOICE_DATA_DIR): Promise<void
     return
   }
 
+  listenEnabled = getVoiceListenEnabled()
   supervisor = new VoiceAgentSupervisor({
     installation,
+    listen: listenEnabled,
     voiceprintPath: path.join(dataDir, 'owner.voiceprint.json'),
     onEvent: handleEvent,
+    onState: state => {
+      latestState = state
+      if (state.phase !== 'running' && mode === 'enrolling') {
+        endMode()
+        return
+      }
+      notifyStatusChanged()
+    },
   })
   await supervisor.start()
 }
@@ -65,6 +357,7 @@ export async function startVoice(dataDir: string = VOICE_DATA_DIR): Promise<void
 export async function stopVoice(): Promise<void> {
   const current = supervisor
   supervisor = null
+  resetState()
   if (!current) return
   try {
     await current.stop()

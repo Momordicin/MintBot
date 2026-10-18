@@ -11,13 +11,22 @@ export interface InputBarHandle {
   appendVoice: (texts: string[]) => void
 }
 
+export interface VoiceInputState {
+  installed: boolean
+  listenEnabled: boolean
+  mode: 'normal' | 'enrolling' | 'testing'
+}
+
 interface InputBarProps {
   onSend: (text: string) => void
   disabled?: boolean
+  voice: VoiceInputState | null
+  voiceBusy?: boolean
+  onToggleVoice: () => void
   ref?: React.Ref<InputBarHandle>
 }
 
-export function InputBar({ onSend, disabled, ref }: InputBarProps) {
+export function InputBar({ onSend, disabled, voice, voiceBusy, onToggleVoice, ref }: InputBarProps) {
   const { t } = useTranslation()
   const [value, setValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -48,6 +57,13 @@ export function InputBar({ onSend, disabled, ref }: InputBarProps) {
       handleSend()
     }
   }
+
+  const voiceActive = voice !== null && voice.installed && voice.listenEnabled && voice.mode === 'normal'
+  const voiceDisabled = voice === null || !voice.installed || voice.mode !== 'normal' || voiceBusy === true
+  let voiceTitle = t('开启语音输入')
+  if (voice !== null && !voice.installed) voiceTitle = t('语音组件未安装')
+  else if (voice !== null && voice.mode !== 'normal') voiceTitle = t('录入或测试中，语音输入暂停')
+  else if (voiceActive) voiceTitle = t('关闭语音输入')
 
   function handleSend() {
     const text = value.trim()
@@ -97,7 +113,12 @@ export function InputBar({ onSend, disabled, ref }: InputBarProps) {
             <polyline points="21 15 16 10 5 21" />
           </svg>
         </button>
-        <button className="tool-btn" disabled title={t('语音（即将推出）')}>
+        <button
+          className={`tool-btn${voiceActive ? ' tool-btn--active' : ''}`}
+          disabled={voiceDisabled}
+          title={voiceTitle}
+          onClick={onToggleVoice}
+        >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
             <path d="M19 10v2a7 7 0 0 1-14 0v-2" />

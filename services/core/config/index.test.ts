@@ -1126,3 +1126,57 @@ describe('config/index — setDefaultPresetId', () => {
     expect(writtenJson.memory).toEqual({ recentTrackMaxMessages: 200 })
   })
 })
+
+describe('config/index — voice.listenEnabled', () => {
+  it('默认 false：没有 voice 段、文件不存在或文件不可读时都按 false', async () => {
+    const { getVoiceListenEnabled } = await import('./index.js')
+
+    readFileSyncMock.mockReturnValue(JSON.stringify({ memory: {} }))
+    expect(getVoiceListenEnabled()).toBe(false)
+
+    readFileSyncMock.mockReturnValue(JSON.stringify({ voice: { listenEnabled: 'yes' } }))
+    expect(getVoiceListenEnabled()).toBe(false)
+
+    readFileSyncMock.mockImplementation(() => {
+      throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+    })
+    expect(getVoiceListenEnabled()).toBe(false)
+
+    readFileSyncMock.mockImplementation(() => '{ not json')
+    expect(getVoiceListenEnabled()).toBe(false)
+  })
+
+  it('读到 voice.listenEnabled 为 true 时返回 true', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({ voice: { listenEnabled: true } }))
+    const { getVoiceListenEnabled } = await import('./index.js')
+    expect(getVoiceListenEnabled()).toBe(true)
+  })
+
+  it('setVoiceListenEnabled 原子写回 voice 段且保留其它顶层字段与 voice 段内其它字段', async () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({
+      defaultPresetId: 'preset-001',
+      voice: { other: 1 },
+    }))
+    const { setVoiceListenEnabled, CONFIG_PATH } = await import('./index.js')
+
+    setVoiceListenEnabled(true)
+
+    expect(writeFileSyncMock).toHaveBeenCalledTimes(1)
+    const [tempPath, written] = writeFileSyncMock.mock.calls[0]
+    expect(tempPath).not.toBe(CONFIG_PATH)
+    expect(renameSyncMock).toHaveBeenCalledWith(tempPath, CONFIG_PATH)
+    expect(JSON.parse(written as string)).toEqual({
+      defaultPresetId: 'preset-001',
+      voice: { other: 1, listenEnabled: true },
+    })
+  })
+
+  it('config.json 不可读时 setVoiceListenEnabled 抛 ConfigFileUnreadableError 且不写入', async () => {
+    readFileSyncMock.mockImplementation(() => '{ not json')
+    const { setVoiceListenEnabled } = await import('./index.js')
+    const { ConfigFileUnreadableError } = await import('./configFileError.js')
+
+    expect(() => setVoiceListenEnabled(true)).toThrow(ConfigFileUnreadableError)
+    expect(writeFileSyncMock).not.toHaveBeenCalled()
+  })
+})

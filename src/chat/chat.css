@@ -511,6 +511,20 @@
   transition: opacity 0.15s, background 0.15s;
 }
 
+.tool-btn:not(:disabled) {
+  cursor: pointer;
+  opacity: 1;
+}
+
+.tool-btn:not(:disabled):hover {
+  background: var(--fill2);
+}
+
+.tool-btn--active {
+  color: var(--accent);
+  background: var(--fill2);
+}
+
 /* ─── 设置按钮（和工具栏左侧隔离） ────────────────────── */
 
 .settings-btn {

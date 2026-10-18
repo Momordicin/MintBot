@@ -14,16 +14,17 @@ import { PersonaModelPanel } from './PersonaModelPanel'
 import { useCharacterPanel } from './useCharacterPanel'
 import { WindowBehaviorPanel } from './WindowBehaviorPanel'
 import { GeneralPanel } from './GeneralPanel'
+import { VoicePanel } from './VoicePanel'
 import { useTranslation } from 'react-i18next'
 import './settings.css'
 
 import { CORE_URL } from '../coreUrl.js'
 
-type Page = 'character' | 'appearance' | 'persona' | 'memory' | 'modelService' | 'window' | 'general'
+type Page = 'character' | 'appearance' | 'persona' | 'memory' | 'modelService' | 'window' | 'voice' | 'general'
 
 const PRIMARY_NAV: Page[] = ['character', 'appearance', 'persona', 'memory']
 
-const SECONDARY_NAV: Page[] = ['modelService', 'window']
+const SECONDARY_NAV: Page[] = ['modelService', 'window', 'voice']
 
 interface SettingsBodyProps {
   appState: AppState | null
@@ -53,6 +54,7 @@ function SettingsBody({ appState, onSwitched }: SettingsBodyProps) {
       case 'memory': return t('记忆')
       case 'modelService': return t('全局模型服务')
       case 'window': return t('窗口行为')
+      case 'voice': return t('语音')
       case 'general': return t('通用')
     }
   }
@@ -104,6 +106,7 @@ function SettingsBody({ appState, onSwitched }: SettingsBodyProps) {
         {activePage === 'memory' && <MemoryPanel sessionId={appState?.sessionId ?? null} />}
         {activePage === 'modelService' && <ModelConfigPanel />}
         {activePage === 'window' && <WindowBehaviorPanel />}
+        {activePage === 'voice' && <VoicePanel />}
         {activePage === 'general' && <GeneralPanel />}
       </div>
     </div>

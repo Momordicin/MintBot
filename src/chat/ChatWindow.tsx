@@ -4,7 +4,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { MessageList } from './MessageList'
-import { InputBar, type InputBarHandle } from './InputBar'
+import { InputBar, type InputBarHandle, type VoiceInputState } from './InputBar'
 import { TitleBar } from './TitleBar'
 import { MessageData } from './MessageBubble'
 import { parseSSE } from './sse'
@@ -107,6 +107,9 @@ export function ChatWindow() {
   const [revealToken, setRevealToken] = useState(0)
   const inputBarRef = useRef<InputBarHandle>(null)
   const paintedRevealTokenRef = useRef(0)
+  const [voice, setVoice] = useState<VoiceInputState | null>(null)
+  const [voiceBusy, setVoiceBusy] = useState(false)
+  const voiceLoadSeqRef = useRef(0)
 
   function markBootPart(part: 'state' | 'wallpaper' | 'history') {
     setBootParts(prev => (prev[part] ? prev : { ...prev, [part]: true }))
@@ -183,9 +186,37 @@ export function ChatWindow() {
     }
   }, [])
 
+  const refreshVoice = useCallback(async () => {
+    const seq = ++voiceLoadSeqRef.current
+    try {
+      const response = await fetch(`${CORE_URL}/voice/status`)
+      if (!response.ok) return
+      const { installed, listenEnabled, mode } = await response.json() as VoiceInputState
+      if (seq !== voiceLoadSeqRef.current) return
+      setVoice({ installed, listenEnabled, mode })
+    } catch {
+    }
+  }, [])
+
+  const toggleVoice = useCallback(async () => {
+    if (!voice) return
+    setVoiceBusy(true)
+    try {
+      await fetch(`${CORE_URL}/voice/listen`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !voice.listenEnabled }),
+      })
+    } catch {
+    }
+    await refreshVoice()
+    setVoiceBusy(false)
+  }, [voice, refreshVoice])
+
   useEffect(() => window.electronAPI.onChatShown(() => {
     setRevealToken(token => token + 1)
     takeVoiceText()
+    refreshVoice()
   }), [])
 
   useEffect(() => {
@@ -252,6 +283,7 @@ export function ChatWindow() {
     const handler = () => {
       syncSessionOnFocus()
       takeVoiceText()
+      refreshVoice()
     }
     window.addEventListener('focus', handler)
 
@@ -264,10 +296,14 @@ export function ChatWindow() {
         'voice-pending': () => {
           takeVoiceText()
         },
+        'voice-status-changed': () => {
+          refreshVoice()
+        },
       },
       onOpen: () => {
         syncSessionOnFocus()
         takeVoiceText()
+        refreshVoice()
       },
     })
 
@@ -544,7 +580,7 @@ export function ChatWindow() {
       </div>
 
       <div className="input-area">
-        <InputBar ref={inputBarRef} onSend={sendMessage} />
+        <InputBar ref={inputBarRef} onSend={sendMessage} voice={voice} voiceBusy={voiceBusy} onToggleVoice={toggleVoice} />
       </div>
     </div>
   )
