@@ -7,13 +7,14 @@ import { VoiceAgentSupervisor, type AgentEvent, type SupervisorState } from '@mi
 import { ERROR_CODES, type ErrorCode } from '../../../shared/errorCodes.js'
 import { getVoiceListenEnabled, setVoiceListenEnabled } from '../config/index.js'
 import { broadcastEvent } from '../events/broadcast.js'
-import { readVoiceInstallation } from './install.js'
+import { installVoice, readVoiceInstallation, resolveManifestUrl } from './install.js'
 
 export const VOICE_DATA_DIR = path.resolve(process.cwd(), 'data', 'voice')
 
 const MODE_TIMEOUT_MS = 10 * 60 * 1000
 const MIN_COMMIT_UTTERANCES = 5
 const MODE_HISTORY_LIMIT = 8
+const INSTALL_NOTIFY_INTERVAL_MS = 500
 
 export type VoiceMode = 'normal' | 'enrolling' | 'testing'
 
@@ -40,6 +41,16 @@ export interface EnrollSentence {
   durationMs: number
 }
 
+export interface InstallStatus {
+  state: 'idle' | 'installing' | 'failed'
+  package?: 'agent' | 'models'
+  phase?: 'starting' | 'skip' | 'download' | 'verify' | 'extract' | 'done'
+  bytes?: number
+  total?: number
+  errorCode?: string
+  errorDetails?: Record<string, unknown>
+}
+
 export interface VoiceStatus {
   installed: boolean
   phase: string | null
@@ -50,6 +61,7 @@ export interface VoiceStatus {
   listenEnabled: boolean
   enroll: { completed: EnrollSentence[]; current: EnrollSentence[] }
   test: { results: TestResult[]; hasRun: boolean }
+  install: InstallStatus
 }
 
 export class VoiceOperationError extends Error {
@@ -59,6 +71,7 @@ export class VoiceOperationError extends Error {
 }
 
 let supervisor: VoiceAgentSupervisor | null = null
+let voiceDataDir = VOICE_DATA_DIR
 let transcriptsPath = path.join(VOICE_DATA_DIR, 'transcripts.jsonl')
 let pending: string[] = []
 let latestState: SupervisorState | null = null
@@ -74,6 +87,10 @@ let enrollCurrent: EnrollSentence[] = []
 let enrollSeq: number | null = null
 let committedSeq: number | null = null
 let modeTimer: ReturnType<typeof setTimeout> | null = null
+let install: InstallStatus = { state: 'idle' }
+let installAbort: AbortController | null = null
+let installTask: Promise<void> | null = null
+let skipInstallRecovery = false
 
 export function takePending(): string[] {
   const texts = pending
@@ -259,6 +276,7 @@ export async function getVoiceStatus(): Promise<VoiceStatus> {
     listenEnabled,
     enroll: { completed: enrollCompleted, current: enrollCurrent },
     test: { results: testResults, hasRun: testHasRun },
+    install: { ...install },
   }
 }
 
@@ -388,6 +406,7 @@ export function setListenEnabled(enabled: boolean): void {
 
 export async function startVoice(dataDir: string = VOICE_DATA_DIR): Promise<void> {
   fs.mkdirSync(dataDir, { recursive: true })
+  voiceDataDir = dataDir
   transcriptsPath = path.join(dataDir, 'transcripts.jsonl')
   resetState()
 
@@ -413,6 +432,65 @@ export async function startVoice(dataDir: string = VOICE_DATA_DIR): Promise<void
     },
   })
   await supervisor.start()
+}
+
+async function runInstall(manifest: string, signal: AbortSignal): Promise<void> {
+  let lastNotifyAt = 0
+  let outcome: InstallStatus = { state: 'idle' }
+  try {
+    await stopVoice()
+    await installVoice(manifest, msg => console.log('[Voice] install:', msg), {
+      signal,
+      onStep: step => {
+        const changed = step.package !== install.package || step.phase !== install.phase
+        install = { state: 'installing', package: step.package, phase: step.phase, bytes: step.bytes, total: step.total }
+        const now = Date.now()
+        if (changed || now - lastNotifyAt >= INSTALL_NOTIFY_INTERVAL_MS) {
+          lastNotifyAt = now
+          notifyStatusChanged()
+        }
+      },
+    })
+  } catch (err) {
+    const failure = err as { name?: string; code?: string; details?: Record<string, unknown> }
+    if (failure.name !== 'AbortError') {
+      console.error('[Voice] Install failed:', err)
+      outcome = { state: 'failed', errorCode: failure.code ?? 'UNKNOWN', errorDetails: failure.details ?? {} }
+    }
+  } finally {
+    installAbort = null
+  }
+  if (!skipInstallRecovery) {
+    install = { state: 'installing', phase: 'starting' }
+    notifyStatusChanged()
+    await startVoice(voiceDataDir).catch(err => console.error('[Voice] Startup after install failed:', err))
+  }
+  install = outcome
+  notifyStatusChanged()
+}
+
+export function startInstall(): void {
+  if (install.state === 'installing' || mode !== 'normal') {
+    throw new VoiceOperationError(409, ERROR_CODES.VOICE_BUSY)
+  }
+  const manifest = resolveManifestUrl()
+  if (manifest === null) throw new VoiceOperationError(503, ERROR_CODES.VOICE_INSTALL_UNCONFIGURED)
+  const controller = new AbortController()
+  installAbort = controller
+  skipInstallRecovery = false
+  install = { state: 'installing' }
+  notifyStatusChanged()
+  installTask = runInstall(manifest, controller.signal).catch(err => console.error('[Voice] Install task error:', err))
+}
+
+export function cancelInstall(): void {
+  installAbort?.abort()
+}
+
+export async function cancelInstallForShutdown(): Promise<void> {
+  skipInstallRecovery = true
+  cancelInstall()
+  await installTask
 }
 
 export async function stopVoice(): Promise<void> {

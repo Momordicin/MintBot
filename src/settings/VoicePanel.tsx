@@ -3,6 +3,7 @@
 // 对应文件：src/settings/SettingsApp.tsx / src/settings/voiceTestSummary.ts / services/core/voice/routes.ts / services/core/voice/agent.ts
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import './settings.css'
 
 import { CORE_URL } from '../coreUrl.js'
@@ -34,6 +35,16 @@ interface EnrollSentence {
   durationMs: number
 }
 
+interface InstallStatus {
+  state: 'idle' | 'installing' | 'failed'
+  package?: 'agent' | 'models'
+  phase?: 'starting' | 'skip' | 'download' | 'verify' | 'extract' | 'done'
+  bytes?: number
+  total?: number
+  errorCode?: string
+  errorDetails?: Record<string, unknown>
+}
+
 interface VoiceStatus {
   installed: boolean
   phase: string | null
@@ -44,6 +55,7 @@ interface VoiceStatus {
   listenEnabled: boolean
   enroll: { completed: EnrollSentence[]; current: EnrollSentence[] }
   test: { results: VoiceTestResult[]; hasRun: boolean }
+  install: InstallStatus
 }
 
 const MIN_ENROLL_UTTERANCES = 5
@@ -51,6 +63,41 @@ const MIN_ENROLL_SECONDS = 10
 
 function seconds(ms: number, digits: number): string {
   return (ms / 1000).toFixed(digits)
+}
+
+const BYTES_PER_MB = 1024 * 1024
+
+function megabytes(bytes: number | undefined): string {
+  return ((bytes ?? 0) / BYTES_PER_MB).toFixed(1)
+}
+
+function installErrorText(install: InstallStatus, t: TFunction): string {
+  const details = install.errorDetails ?? {}
+  switch (install.errorCode) {
+    case 'NETWORK_ERROR':
+      return t('网络连接失败，请检查网络后重试')
+    case 'HTTP_STATUS':
+      return t('下载地址不可用（HTTP {{status}}）', { status: String(details.status) })
+    case 'SHA256_MISMATCH':
+      return t('下载的文件已损坏，请重试')
+    case 'API_VERSION_MISMATCH':
+      return t('语音组件版本与 MintBot 不兼容')
+    case 'ENOSPC_PRECHECK':
+      return t('磁盘空间不足：需要 {{required}} MB，剩余 {{available}} MB', {
+        required: Math.round(Number(details.required) / BYTES_PER_MB),
+        available: Math.round(Number(details.available) / BYTES_PER_MB),
+      })
+    case 'INVALID_MANIFEST':
+      return t('安装信息无效')
+    case 'EXTRACT_FAILED':
+      return t('解压失败，请重试')
+    case 'VERSION_MISMATCH':
+      return t('安装后的程序版本不符')
+    case 'UNSUPPORTED_PLATFORM':
+      return t('只支持 Windows x64')
+    default:
+      return t('安装失败，请重试')
+  }
 }
 
 function scoreText(score: number | null | undefined): string {
@@ -154,6 +201,9 @@ export function VoicePanel() {
   const remainingSentences = Math.max(0, MIN_ENROLL_UTTERANCES - (speaker?.enrollUtterances ?? 0))
   const remainingSeconds = Math.max(0, Math.ceil(MIN_ENROLL_SECONDS - (speaker?.enrollSpeechMs ?? 0) / 1000))
   const summary = summarizeVoiceTest(results)
+  const { install } = status
+  const installing = install.state === 'installing'
+  const locked = busy || installing
 
   let statusLabel: string
   if (!status.installed) statusLabel = t('未安装')
@@ -182,8 +232,8 @@ export function VoicePanel() {
       <div className="window-behavior-panel__section">
         <div className="window-behavior-panel__section-label">{t('状态')}</div>
         <div>
-          {statusLabel}
-          {status.installed && micDenied && (
+          {installing ? t('正在安装语音组件') : statusLabel}
+          {status.installed && !installing && micDenied && (
             <button
               className="memory-btn"
               onClick={() => window.electronAPI.openMicSettings().catch(() => setActionError(t('操作失败，请稍后重试')))}
@@ -191,7 +241,44 @@ export function VoicePanel() {
               {t('打开麦克风设置')}
             </button>
           )}
+          {!status.installed && !installing && install.state === 'idle' && (
+            <button className="memory-btn" disabled={locked} onClick={() => post('/voice/install')}>
+              {t('下载并安装语音组件')}
+            </button>
+          )}
+          {status.installed && !installing && install.state === 'idle' && status.phase === 'failed' && (
+            <button className="memory-btn" disabled={locked} onClick={() => post('/voice/install')}>
+              {t('修复语音组件')}
+            </button>
+          )}
         </div>
+        {installing && (
+          <div>
+            {install.phase === 'starting' && t('正在启动语音组件')}
+            {install.phase === 'download' &&
+              (install.package === 'models'
+                ? t('正在下载语音模型（{{done}} / {{total}} MB）', { done: megabytes(install.bytes), total: megabytes(install.total) })
+                : t('正在下载语音程序（{{done}} / {{total}} MB）', { done: megabytes(install.bytes), total: megabytes(install.total) }))}
+            {install.phase === 'download' && (install.total ?? 0) > 0 && (
+              <progress value={install.bytes ?? 0} max={install.total} />
+            )}
+            {install.phase === 'verify' && t('正在校验…')}
+            {install.phase === 'extract' && t('正在解压…')}
+            {install.phase !== 'starting' && (
+              <button className="memory-btn" disabled={busy} onClick={() => post('/voice/install/cancel')}>
+                {t('取消')}
+              </button>
+            )}
+          </div>
+        )}
+        {install.state === 'failed' && (
+          <div>
+            <span className="character-panel__error">{installErrorText(install, t)}</span>
+            <button className="memory-btn" disabled={locked} onClick={() => post('/voice/install')}>
+              {t('重试')}
+            </button>
+          </div>
+        )}
       </div>
 
       {status.installed && (mode === 'enrolling' || speaker !== null) && (
@@ -210,12 +297,12 @@ export function VoicePanel() {
               {remainingSeconds > 0 && <div>{t('还需要 {{count}} 秒', { count: remainingSeconds })}</div>}
               <button
                 className="memory-btn"
-                disabled={busy || !speaker || speaker.enrollUtterances < MIN_ENROLL_UTTERANCES || !speaker.enrollReady}
+                disabled={locked || !speaker || speaker.enrollUtterances < MIN_ENROLL_UTTERANCES || !speaker.enrollReady}
                 onClick={() => post('/voice/enroll/commit')}
               >
                 {t('完成')}
               </button>
-              <button className="memory-btn" disabled={busy} onClick={() => post('/voice/enroll/cancel')}>
+              <button className="memory-btn" disabled={locked} onClick={() => post('/voice/enroll/cancel')}>
                 {t('取消')}
               </button>
               {sentenceList(t('本次录入'), enrollCurrent)}
@@ -226,14 +313,14 @@ export function VoicePanel() {
               <div>{t('已录入（{{n}} 句，{{sec}} 秒）', { n: speaker.utterances, sec: seconds(speaker.speechMs, 1) })}</div>
               <button
                 className="memory-btn"
-                disabled={busy || mode !== 'normal' || !running}
+                disabled={locked || mode !== 'normal' || !running}
                 onClick={() => post('/voice/enroll/start')}
               >
                 {t('重新录入')}
               </button>
               <button
                 className="memory-btn"
-                disabled={busy || mode !== 'normal'}
+                disabled={locked || mode !== 'normal'}
                 onClick={() => setConfirmingDelete(true)}
               >
                 {t('删除声纹')}
@@ -241,12 +328,12 @@ export function VoicePanel() {
               {confirmingDelete && (
                 <div className="character-panel__confirm-row">
                   <span>{t('删除声纹？删除后所有人的声音都会被识别，需要重新录入。')}</span>
-                  <button className="memory-btn" disabled={busy} onClick={() => setConfirmingDelete(false)}>
+                  <button className="memory-btn" disabled={locked} onClick={() => setConfirmingDelete(false)}>
                     {t('取消')}
                   </button>
                   <button
                     className="memory-btn"
-                    disabled={busy || mode !== 'normal'}
+                    disabled={locked || mode !== 'normal'}
                     onClick={async () => {
                       setConfirmingDelete(false)
                       await request('/voice/speaker', 'DELETE')
@@ -263,7 +350,7 @@ export function VoicePanel() {
               <div>{t('未录入，所有人的声音都会被识别')}</div>
               <button
                 className="memory-btn"
-                disabled={busy || mode !== 'normal' || !running}
+                disabled={locked || mode !== 'normal' || !running}
                 onClick={() => post('/voice/enroll/start')}
               >
                 {t('开始录入')}
@@ -278,20 +365,20 @@ export function VoicePanel() {
         <div className="window-behavior-panel__section">
           <div className="window-behavior-panel__section-label">{t('自由测试')}</div>
           {mode === 'testing' ? (
-            <button className="memory-btn" disabled={busy} onClick={() => post('/voice/test/stop')}>
+            <button className="memory-btn" disabled={locked} onClick={() => post('/voice/test/stop')}>
               {t('结束测试')}
             </button>
           ) : (
             <button
               className="memory-btn"
-              disabled={busy || mode !== 'normal' || !running}
+              disabled={locked || mode !== 'normal' || !running}
               onClick={() => post('/voice/test/start')}
             >
               {status.test.hasRun ? t('重新测试') : t('开始测试')}
             </button>
           )}
           {mode !== 'testing' && results.length > 0 && (
-            <button className="memory-btn" disabled={busy} onClick={() => post('/voice/test/clear')}>
+            <button className="memory-btn" disabled={locked} onClick={() => post('/voice/test/clear')}>
               {t('清空测试结果')}
             </button>
           )}

@@ -5,6 +5,8 @@ import path from 'path'
 
 const mocks = vi.hoisted(() => ({
   readVoiceInstallation: vi.fn(),
+  installVoice: vi.fn(),
+  resolveManifestUrl: vi.fn(),
   broadcastEvent: vi.fn(),
   supervisorOptions: null as { onEvent: (ev: unknown) => void; onState: (s: unknown) => void; listen?: boolean } | null,
   start: vi.fn(async () => {}),
@@ -16,7 +18,11 @@ const mocks = vi.hoisted(() => ({
   setVoiceListenEnabled: vi.fn(),
 }))
 
-vi.mock('./install.js', () => ({ readVoiceInstallation: mocks.readVoiceInstallation }))
+vi.mock('./install.js', () => ({
+  readVoiceInstallation: mocks.readVoiceInstallation,
+  installVoice: mocks.installVoice,
+  resolveManifestUrl: mocks.resolveManifestUrl,
+}))
 vi.mock('../events/broadcast.js', () => ({ broadcastEvent: mocks.broadcastEvent }))
 vi.mock('../config/index.js', () => ({
   getVoiceListenEnabled: mocks.getVoiceListenEnabled,
@@ -215,6 +221,7 @@ describe('voice settings page', () => {
       phase: 'running',
       listening: true,
       errorCode: 'mic_access_denied',
+      install: { state: 'idle' },
       speaker: {
         enrolled: true,
         utterances: 6,
@@ -251,6 +258,7 @@ describe('voice settings page', () => {
       phase: null,
       listening: false,
       errorCode: null,
+      install: { state: 'idle' },
       speaker: null,
       mode: 'normal',
       listenEnabled: false,

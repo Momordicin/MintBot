@@ -7,12 +7,14 @@ import { ConfigFileUnreadableError } from '../config/configFileError.js'
 import {
   VoiceOperationError,
   cancelEnroll,
+  cancelInstall,
   clearTest,
   commitEnroll,
   deleteSpeaker,
   getVoiceStatus,
   setListenEnabled,
   startEnroll,
+  startInstall,
   startTest,
   stopTest,
   takePending,
@@ -53,6 +55,21 @@ export async function voiceRoutes(fastify: FastifyInstance) {
       throw err
     }
     return reply.status(200).send(await getVoiceStatus())
+  })
+
+  fastify.post('/voice/install', async (_request, reply) => {
+    try {
+      startInstall()
+    } catch (err) {
+      if (err instanceof VoiceOperationError) return reply.status(err.status).send(errorBody(err.errorCode))
+      throw err
+    }
+    return reply.status(202).send({ ok: true })
+  })
+
+  fastify.post('/voice/install/cancel', async (_request, reply) => {
+    cancelInstall()
+    return reply.status(200).send({ ok: true })
   })
 
   fastify.post('/voice/enroll/start', (_request, reply) => runOperation(reply, startEnroll))

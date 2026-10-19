@@ -191,9 +191,9 @@ export function ChatWindow() {
     try {
       const response = await fetch(`${CORE_URL}/voice/status`)
       if (!response.ok) return
-      const { installed, listenEnabled, mode } = await response.json() as VoiceInputState
+      const { installed, listenEnabled, mode, install } = await response.json() as Omit<VoiceInputState, 'installing'> & { install: { state: string } }
       if (seq !== voiceLoadSeqRef.current) return
-      setVoice({ installed, listenEnabled, mode })
+      setVoice({ installed, listenEnabled, mode, installing: install.state === 'installing' })
     } catch {
     }
   }, [])

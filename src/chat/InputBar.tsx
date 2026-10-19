@@ -15,6 +15,7 @@ export interface VoiceInputState {
   installed: boolean
   listenEnabled: boolean
   mode: 'normal' | 'enrolling' | 'testing'
+  installing: boolean
 }
 
 interface InputBarProps {
@@ -58,10 +59,11 @@ export function InputBar({ onSend, disabled, voice, voiceBusy, onToggleVoice, re
     }
   }
 
-  const voiceActive = voice !== null && voice.installed && voice.listenEnabled && voice.mode === 'normal'
-  const voiceDisabled = voice === null || !voice.installed || voice.mode !== 'normal' || voiceBusy === true
+  const voiceActive = voice !== null && !voice.installing && voice.installed && voice.listenEnabled && voice.mode === 'normal'
+  const voiceDisabled = voice === null || voice.installing || !voice.installed || voice.mode !== 'normal' || voiceBusy === true
   let voiceTitle = t('开启语音输入')
-  if (voice !== null && !voice.installed) voiceTitle = t('语音组件未安装')
+  if (voice !== null && voice.installing) voiceTitle = t('正在安装语音组件')
+  else if (voice !== null && !voice.installed) voiceTitle = t('语音组件未安装')
   else if (voice !== null && voice.mode !== 'normal') voiceTitle = t('录入或测试中，语音输入暂停')
   else if (voiceActive) voiceTitle = t('关闭语音输入')
 

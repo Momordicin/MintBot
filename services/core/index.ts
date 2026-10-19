@@ -31,7 +31,7 @@ import { Bert4NerProvider, type NERProvider } from './providers/NERProvider.js'
 import { startConfigWatcher, getModelProviderConfig, getBackgroundModelProviderConfig, getDefaultPresetId } from './config/index.js'
 import { ensureOllama, shouldEnsureOllama, stopOllamaIfManaged } from './providers/ollama.js'
 import { ensureAiService, stopAiServiceIfManaged } from './providers/aiService.js'
-import { startVoice, stopVoice } from './voice/agent.js'
+import { cancelInstallForShutdown, startVoice, stopVoice } from './voice/agent.js'
 import { voiceRoutes } from './voice/routes.js'
 import { startOrganizeModeScheduler } from './memory/orchestrator.js'
 import { buildStatePayload } from './state.js'
@@ -80,6 +80,7 @@ async function start() {
     organizeModeTask?.stop()
     await stopOllamaIfManaged()
     await stopAiServiceIfManaged()
+    await cancelInstallForShutdown()
     await stopVoice()
     process.exit(0)
   })
@@ -88,6 +89,7 @@ async function start() {
     organizeModeTask?.stop()
     await stopOllamaIfManaged()
     await stopAiServiceIfManaged()
+    await cancelInstallForShutdown()
     await stopVoice()
     process.exit(0)
   })
