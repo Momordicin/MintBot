@@ -48,6 +48,14 @@ export function errorText(body: ErrorBody, t: TFunction): string {
       return t('模型调用失败')
     case 'SESSION_DELETED':
       return t('会话已删除')
+    case 'VOICE_UNAVAILABLE':
+      return t('语音组件未安装或未运行')
+    case 'VOICE_BUSY':
+      return t('当前状态下无法执行此操作')
+    case 'VOICE_ENROLL_NOT_READY':
+      return t('说的话还不够，请继续说')
+    case 'VOICE_INSTALL_UNCONFIGURED':
+      return t('语音组件的下载地址尚未配置')
     case 'INVALID_REQUEST':
       return t('请求无效（错误代码：{{code}}）', { code: body.code })
     default:

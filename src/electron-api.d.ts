@@ -42,6 +42,7 @@ export interface ElectronAPI {
   onUiLocaleChanged: (callback: (locale: 'zh-CN' | 'en') => void) => () => void
   getAutostart: () => Promise<{ available: boolean; enabled: boolean }>
   setAutostart: (enabled: boolean) => Promise<{ available: boolean; enabled: boolean }>
+  openMicSettings: () => Promise<void>
   notifyChatReady: () => Promise<void>
   onChatShown: (callback: () => void) => () => void
   notifyChatPainted: () => void

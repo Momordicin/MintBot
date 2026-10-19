@@ -4,7 +4,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { MessageList } from './MessageList'
-import { InputBar } from './InputBar'
+import { InputBar, type InputBarHandle, type VoiceInputState } from './InputBar'
 import { TitleBar } from './TitleBar'
 import { MessageData } from './MessageBubble'
 import { parseSSE } from './sse'
@@ -105,7 +105,11 @@ export function ChatWindow() {
   const wallpaperPreloadStartedRef = useRef(false)
   const chatReadyNotifiedRef = useRef(false)
   const [revealToken, setRevealToken] = useState(0)
+  const inputBarRef = useRef<InputBarHandle>(null)
   const paintedRevealTokenRef = useRef(0)
+  const [voice, setVoice] = useState<VoiceInputState | null>(null)
+  const [voiceBusy, setVoiceBusy] = useState(false)
+  const voiceLoadSeqRef = useRef(0)
 
   function markBootPart(part: 'state' | 'wallpaper' | 'history') {
     setBootParts(prev => (prev[part] ? prev : { ...prev, [part]: true }))
@@ -171,7 +175,49 @@ export function ChatWindow() {
     window.electronAPI.notifyChatReady().then(markShown, markShown)
   }, [bootParts])
 
-  useEffect(() => window.electronAPI.onChatShown(() => setRevealToken(token => token + 1)), [])
+  const takeVoiceText = useCallback(async () => {
+    try {
+      const response = await fetch(`${CORE_URL}/voice/take`, { method: 'POST' })
+      if (!response.ok) return
+      const { texts } = await response.json() as { texts: string[] }
+      if (texts.length === 0) return
+      inputBarRef.current?.appendVoice(texts)
+    } catch {
+    }
+  }, [])
+
+  const refreshVoice = useCallback(async () => {
+    const seq = ++voiceLoadSeqRef.current
+    try {
+      const response = await fetch(`${CORE_URL}/voice/status`)
+      if (!response.ok) return
+      const { installed, listenEnabled, mode, install } = await response.json() as Omit<VoiceInputState, 'installing'> & { install: { state: string } }
+      if (seq !== voiceLoadSeqRef.current) return
+      setVoice({ installed, listenEnabled, mode, installing: install.state === 'installing' })
+    } catch {
+    }
+  }, [])
+
+  const toggleVoice = useCallback(async () => {
+    if (!voice) return
+    setVoiceBusy(true)
+    try {
+      await fetch(`${CORE_URL}/voice/listen`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !voice.listenEnabled }),
+      })
+    } catch {
+    }
+    await refreshVoice()
+    setVoiceBusy(false)
+  }, [voice, refreshVoice])
+
+  useEffect(() => window.electronAPI.onChatShown(() => {
+    setRevealToken(token => token + 1)
+    takeVoiceText()
+    refreshVoice()
+  }), [])
 
   useEffect(() => {
     if (revealToken === 0 || paintedRevealTokenRef.current === revealToken) return
@@ -236,6 +282,8 @@ export function ChatWindow() {
 
     const handler = () => {
       syncSessionOnFocus()
+      takeVoiceText()
+      refreshVoice()
     }
     window.addEventListener('focus', handler)
 
@@ -245,9 +293,17 @@ export function ChatWindow() {
         'preset-switched': () => {
           syncSessionOnFocus()
         },
+        'voice-pending': () => {
+          takeVoiceText()
+        },
+        'voice-status-changed': () => {
+          refreshVoice()
+        },
       },
       onOpen: () => {
         syncSessionOnFocus()
+        takeVoiceText()
+        refreshVoice()
       },
     })
 
@@ -524,7 +580,7 @@ export function ChatWindow() {
       </div>
 
       <div className="input-area">
-        <InputBar onSend={sendMessage} />
+        <InputBar ref={inputBarRef} onSend={sendMessage} voice={voice} voiceBusy={voiceBusy} onToggleVoice={toggleVoice} />
       </div>
     </div>
   )

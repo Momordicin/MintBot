@@ -58,6 +58,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   getAutostart: (): Promise<{ available: boolean; enabled: boolean }> => ipcRenderer.invoke('autostart:get'),
   setAutostart: (enabled: boolean): Promise<{ available: boolean; enabled: boolean }> => ipcRenderer.invoke('autostart:set', enabled),
+  openMicSettings: (): Promise<void> => ipcRenderer.invoke('voice:open-mic-settings'),
   notifyChatReady: (): Promise<void> => ipcRenderer.invoke('chat:ready'),
   onChatShown: (callback: () => void) => {
     const listener = () => callback()

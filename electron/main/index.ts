@@ -2,7 +2,7 @@
 // 用法：electron.vite.config.ts 的主进程 entry；注册 autostart:get / autostart:set；监听 second-instance；注册 app 协议 protocol.handle('app')；第一条 import 为 logBootstrap；注册 chat:ready（聊天窗口首次显示）/ chat:painted（聊天窗口唤起后淡入）；注册 ui:get-locale，向窗口发 ui:locale-changed；设置窗口按 open-settings-window IPC 按需创建；显示器拓扑变化时 handleDisplayTopologyChange 先调 clearStableDisplayKeyCache()
 // 对应文件：electron/preload/index.ts（暴露的 IPC 通道）/ electron/main/windowBehavior.ts / electron/main/petContextMenu.ts / electron/main/coreEventsConsumer.ts / electron/main/i18n.ts / electron/main/foregroundWorldModel.ts / electron/main/windowDragMonitor.ts / electron/main/nativeWindowDrag.ts / electron/main/startupGate.ts / electron/main/displayIdentity.ts / electron/main/appOrigin.ts / electron/main/appAssetPath.ts / electron/main/coreProcess.ts / electron/main/autostart.ts / electron/main/chatFirstShow.ts / electron/main/chatReveal.ts / shared/windowBehavior.ts / shared/portraitForm.ts
 import './logBootstrap'
-import { app, BrowserWindow, Menu, Tray, powerMonitor, ipcMain, dialog, screen, nativeImage, protocol, net } from 'electron'
+import { app, BrowserWindow, Menu, Tray, powerMonitor, ipcMain, dialog, screen, nativeImage, protocol, net, shell } from 'electron'
 import type { IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron'
 import { join, basename } from 'path'
 import { pathToFileURL } from 'url'
@@ -285,6 +285,8 @@ function readAutostart(): { available: boolean; enabled: boolean } {
 }
 
 ipcMain.handle('autostart:get', () => readAutostart())
+
+ipcMain.handle('voice:open-mic-settings', () => shell.openExternal('ms-settings:privacy-microphone'))
 
 ipcMain.handle('autostart:set', (_event, enabled: unknown) => {
   if (isDevMode) throw new Error('autostart-unavailable')

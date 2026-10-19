@@ -356,7 +356,7 @@ function readRawConfig(): Record<string, unknown> {
   return parsed as Record<string, unknown>
 }
 
-function readRawSection(section: 'modelProvider' | 'backgroundModelProvider' | 'windowBehavior' | 'ui'): Record<string, unknown> {
+function readRawSection(section: 'modelProvider' | 'backgroundModelProvider' | 'windowBehavior' | 'ui' | 'voice'): Record<string, unknown> {
   const value = readRawConfig()[section]
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
 }
@@ -366,6 +366,7 @@ type ConfigSectionValue = {
   backgroundModelProvider: BackgroundModelConfig
   windowBehavior: WindowBehaviorConfig
   ui: { language: UiLanguage }
+  voice: { listenEnabled: boolean }
   defaultPresetId: string
 }
 
@@ -436,6 +437,19 @@ export function getUiLanguage(): UiLanguage {
 
 export function updateUiLanguage(language: UiLanguage): void {
   writeConfigSection('ui', { ...readRawSection('ui'), language })
+}
+
+export function getVoiceListenEnabled(): boolean {
+  try {
+    return readRawSection('voice').listenEnabled === true
+  } catch (err) {
+    if (!(err instanceof ConfigFileUnreadableError)) throw err
+    return false
+  }
+}
+
+export function setVoiceListenEnabled(enabled: boolean): void {
+  writeConfigSection('voice', { ...readRawSection('voice'), listenEnabled: enabled })
 }
 
 export function setDefaultPresetId(presetId: string): void {

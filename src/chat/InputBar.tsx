@@ -2,19 +2,55 @@
 // 用法：ChatWindow 渲染 <InputBar onSend />；设置按钮调用 electronAPI.openSettingsWindow
 // 形状：props { onSend(text: string), disabled? }
 // 对应文件：src/chat/ChatWindow.tsx / electron/preload/index.ts / electron/main/index.ts（open-settings-window）
-import React, { useRef, useState } from 'react'
+import React, { useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import sendPlane from '../assets/paperplane.png'
+import { appendVoiceText } from './appendVoiceText'
+
+export interface InputBarHandle {
+  appendVoice: (texts: string[]) => void
+}
+
+export interface VoiceInputState {
+  installed: boolean
+  listenEnabled: boolean
+  mode: 'normal' | 'enrolling' | 'testing'
+  installing: boolean
+}
 
 interface InputBarProps {
   onSend: (text: string) => void
   disabled?: boolean
+  voice: VoiceInputState | null
+  voiceBusy?: boolean
+  onToggleVoice: () => void
+  ref?: React.Ref<InputBarHandle>
 }
 
-export function InputBar({ onSend, disabled }: InputBarProps) {
+export function InputBar({ onSend, disabled, voice, voiceBusy, onToggleVoice, ref }: InputBarProps) {
   const { t } = useTranslation()
   const [value, setValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const savedViewRef = useRef<{ start: number; end: number; scrollTop: number } | null>(null)
+
+  useImperativeHandle(ref, () => ({
+    appendVoice(texts: string[]) {
+      const textarea = textareaRef.current
+      if (textarea) {
+        savedViewRef.current = { start: textarea.selectionStart, end: textarea.selectionEnd, scrollTop: textarea.scrollTop }
+      }
+      setValue(current => appendVoiceText(current, texts))
+    },
+  }), [])
+
+  useLayoutEffect(() => {
+    const saved = savedViewRef.current
+    const textarea = textareaRef.current
+    if (!saved || !textarea) return
+    savedViewRef.current = null
+    textarea.setSelectionRange(saved.start, saved.end)
+    textarea.scrollTop = saved.scrollTop
+  }, [value])
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -22,6 +58,14 @@ export function InputBar({ onSend, disabled }: InputBarProps) {
       handleSend()
     }
   }
+
+  const voiceActive = voice !== null && !voice.installing && voice.installed && voice.listenEnabled && voice.mode === 'normal'
+  const voiceDisabled = voice === null || voice.installing || !voice.installed || voice.mode !== 'normal' || voiceBusy === true
+  let voiceTitle = t('开启语音输入')
+  if (voice !== null && voice.installing) voiceTitle = t('正在安装语音组件')
+  else if (voice !== null && !voice.installed) voiceTitle = t('语音组件未安装')
+  else if (voice !== null && voice.mode !== 'normal') voiceTitle = t('录入或测试中，语音输入暂停')
+  else if (voiceActive) voiceTitle = t('关闭语音输入')
 
   function handleSend() {
     const text = value.trim()
@@ -71,7 +115,12 @@ export function InputBar({ onSend, disabled }: InputBarProps) {
             <polyline points="21 15 16 10 5 21" />
           </svg>
         </button>
-        <button className="tool-btn" disabled title={t('语音（即将推出）')}>
+        <button
+          className={`tool-btn${voiceActive ? ' tool-btn--active' : ''}`}
+          disabled={voiceDisabled}
+          title={voiceTitle}
+          onClick={onToggleVoice}
+        >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
             <path d="M19 10v2a7 7 0 0 1-14 0v-2" />

@@ -219,6 +219,9 @@ importers:
       '@fastify/static':
         specifier: ^10.1.3
         version: 10.1.3
+      '@mintbot/voice-agent-client':
+        specifier: file:vendor/mintbot-voice-agent-client-0.3.0.tgz
+        version: file:vendor/mintbot-voice-agent-client-0.3.0.tgz
       better-sqlite3:
         specifier: ^12.11.1
         version: 12.11.1
@@ -1035,6 +1038,11 @@ packages:
   '@lukeed/ms@2.0.2':
     resolution: {integrity: sha512-9I2Zn6+NJLfaGoz9jN3lpwDgAYvfGeNYdbAIjJOqzs4Tpc+VU3Jqq4IofSUBKajiDS8k9fZIg18/z13mpk1bsA==}
     engines: {node: '>=8'}
+
+  '@mintbot/voice-agent-client@file:vendor/mintbot-voice-agent-client-0.3.0.tgz':
+    resolution: {integrity: sha512-Qii1Oqad6ajFUFiSwzeaVnkOnl9fB/qI60smpcKOlJJigdnf2tRhyI3wwrvFR29SNbSjm/JeJZFPlxu50vjXMQ==, tarball: file:vendor/mintbot-voice-agent-client-0.3.0.tgz}
+    version: 0.3.0
+    engines: {node: '>=22'}
 
   '@napi-rs/wasm-runtime@1.1.6':
     resolution: {integrity: sha512-ZLv/JdUfkvOy9eCnnBaGfiO+XimbjebAeO+MRQqD/B+FR1tnRN0tpKSJHRbE8sFfS6aqsXZ67TQjfwfsxULVbg==}
@@ -3077,7 +3085,7 @@ snapshots:
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:
-      '@jridgewell/sourcemap-codec': 1.5.5
+      '@jridgewell/sourcemap-codec': 1.6.0
       '@jridgewell/trace-mapping': 0.3.31
 
   '@jridgewell/remapping@2.3.5':
@@ -3094,7 +3102,7 @@ snapshots:
   '@jridgewell/trace-mapping@0.3.31':
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
-      '@jridgewell/sourcemap-codec': 1.5.5
+      '@jridgewell/sourcemap-codec': 1.6.0
 
   '@koromix/koffi-darwin-arm64@3.1.6':
     optional: true
@@ -3142,6 +3150,8 @@ snapshots:
     optional: true
 
   '@lukeed/ms@2.0.2': {}
+
+  '@mintbot/voice-agent-client@file:vendor/mintbot-voice-agent-client-0.3.0.tgz': {}
 
   '@napi-rs/wasm-runtime@1.1.6(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)':
     dependencies:
