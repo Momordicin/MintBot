@@ -75,6 +75,7 @@ export function VoicePanel() {
       const next: VoiceStatus = await response.json()
       if (seq !== loadSeqRef.current) return true
       modeRef.current = next.mode
+      if (next.mode !== 'normal' || !next.speaker?.enrolled) setConfirmingDelete(false)
       setStatus(next)
       setLoadFailed(false)
       return true
@@ -202,11 +203,11 @@ export function VoicePanel() {
               <div>
                 {t('已录 {{n}} 句 / {{sec}} 秒', {
                   n: speaker?.enrollUtterances ?? 0,
-                  sec: seconds(speaker?.enrollSpeechMs ?? 0, 1),
+                  sec: (Math.floor((speaker?.enrollSpeechMs ?? 0) / 100) / 10).toFixed(1),
                 })}
               </div>
-              {remainingSentences > 0 && <div>{t('还需要 {{n}} 句', { n: remainingSentences })}</div>}
-              {remainingSeconds > 0 && <div>{t('还需要 {{sec}} 秒', { sec: remainingSeconds })}</div>}
+              {remainingSentences > 0 && <div>{t('还需要 {{count}} 句', { count: remainingSentences })}</div>}
+              {remainingSeconds > 0 && <div>{t('还需要 {{count}} 秒', { count: remainingSeconds })}</div>}
               <button
                 className="memory-btn"
                 disabled={busy || !speaker || speaker.enrollUtterances < MIN_ENROLL_UTTERANCES || !speaker.enrollReady}

@@ -71,6 +71,8 @@ let testSeq: number | null = null
 let testHasRun = false
 let enrollCompleted: EnrollSentence[] = []
 let enrollCurrent: EnrollSentence[] = []
+let enrollSeq: number | null = null
+let committedSeq: number | null = null
 let modeTimer: ReturnType<typeof setTimeout> | null = null
 
 export function takePending(): string[] {
@@ -114,6 +116,7 @@ function endMode(): void {
   clearModeTimer()
   mode = 'normal'
   enrollCurrent = []
+  enrollSeq = null
   modeSeq++
   recordMode('normal')
   applyListening()
@@ -161,9 +164,16 @@ function handleEvent(ev: AgentEvent): void {
   const data = ev.data ?? {}
   const text = data.text
   if (data.enrolling === true) {
-    if (mode === 'enrolling' && typeof text === 'string' && text.trim() !== '') {
-      enrollCurrent.push({ text, durationMs: num(data.end_ms) - num(data.start_ms) })
-      notifyStatusChanged()
+    if (typeof text === 'string' && text.trim() !== '') {
+      const enrollOwner = ownerMode(data)
+      const sentence = { text, durationMs: num(data.end_ms) - num(data.start_ms) }
+      if (enrollOwner.seq === enrollSeq && enrollOwner.mode === 'enrolling') {
+        enrollCurrent.push(sentence)
+        notifyStatusChanged()
+      } else if (enrollOwner.seq === committedSeq) {
+        enrollCompleted.push(sentence)
+        notifyStatusChanged()
+      }
     }
     return
   }
@@ -212,6 +222,8 @@ function resetState(): void {
   testHasRun = false
   enrollCompleted = []
   enrollCurrent = []
+  enrollSeq = null
+  committedSeq = null
 }
 
 function readSpeaker(raw: Record<string, unknown>): SpeakerStatus {
@@ -276,6 +288,7 @@ export async function startEnroll(): Promise<void> {
   mode = 'enrolling'
   enrollCurrent = []
   const seq = ++modeSeq
+  enrollSeq = seq
   recordMode('enrolling')
   applyListening()
   armModeTimer(cancelEnroll)
@@ -308,6 +321,7 @@ export async function commitEnroll(): Promise<void> {
   await callAgent(current, '/v1/speaker/enroll/commit', ERROR_CODES.VOICE_ENROLL_NOT_READY)
   if (seq === modeSeq) {
     enrollCompleted = enrollCurrent
+    committedSeq = enrollSeq
     endMode()
   }
 }
@@ -322,6 +336,7 @@ export async function deleteSpeaker(): Promise<void> {
   }
   enrollCompleted = []
   enrollCurrent = []
+  committedSeq = null
   notifyStatusChanged()
 }
 

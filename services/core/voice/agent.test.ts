@@ -372,6 +372,55 @@ describe('voice settings page', () => {
       expect(await lists()).toEqual({ completed: [], current: [] })
     })
 
+    describe('late sentences by round', () => {
+      const T0 = new Date('2026-01-01T00:00:00Z').getTime()
+
+      function lateEnrolling(text: string, startOffsetMs: number, endOffsetMs: number) {
+        final({ text, enrolling: true, start_ms: 0, end_ms: endOffsetMs - startOffsetMs, end_unix_ms: T0 + endOffsetMs })
+      }
+
+      beforeEach(() => {
+        vi.useFakeTimers()
+        vi.setSystemTime(T0)
+      })
+
+      it('a sentence of the committed round that arrives after commit joins completed', async () => {
+        await post('/voice/enroll/start')
+        lateEnrolling('甲', 100, 1000)
+        speaker = { ...speaker, enrolling: true, enroll_utterances: 5, enroll_ready: true }
+        vi.setSystemTime(T0 + 5000)
+        await post('/voice/enroll/commit')
+        lateEnrolling('乙', 3000, 4000)
+        expect(await lists()).toEqual({
+          completed: [
+            { text: '甲', durationMs: 900 },
+            { text: '乙', durationMs: 1000 },
+          ],
+          current: [],
+        })
+      })
+
+      it('a late sentence of a cancelled round does not enter the next round', async () => {
+        await post('/voice/enroll/start')
+        vi.setSystemTime(T0 + 1000)
+        await post('/voice/enroll/cancel')
+        vi.setSystemTime(T0 + 2000)
+        await post('/voice/enroll/start')
+        lateEnrolling('迟到', 500, 900)
+        expect(await lists()).toEqual({ completed: [], current: [] })
+      })
+
+      it('a late sentence of the committed round after delete speaker is discarded', async () => {
+        await post('/voice/enroll/start')
+        speaker = { ...speaker, enrolling: true, enroll_utterances: 5, enroll_ready: true }
+        vi.setSystemTime(T0 + 5000)
+        await post('/voice/enroll/commit')
+        expect((await app.inject({ method: 'DELETE', url: '/voice/speaker' })).statusCode).toBe(200)
+        lateEnrolling('迟到', 3000, 4000)
+        expect(await lists()).toEqual({ completed: [], current: [] })
+      })
+    })
+
     it('a restart clears both lists', async () => {
       await commitOne('甲', 1000)
       await post('/voice/enroll/start')
