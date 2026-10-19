@@ -35,6 +35,11 @@ export interface SpeakerStatus {
   enrollReady: boolean
 }
 
+export interface EnrollSentence {
+  text: string
+  durationMs: number
+}
+
 export interface VoiceStatus {
   installed: boolean
   phase: string | null
@@ -43,7 +48,8 @@ export interface VoiceStatus {
   speaker: SpeakerStatus | null
   mode: VoiceMode
   listenEnabled: boolean
-  test: { results: TestResult[] }
+  enroll: { completed: EnrollSentence[]; current: EnrollSentence[] }
+  test: { results: TestResult[]; hasRun: boolean }
 }
 
 export class VoiceOperationError extends Error {
@@ -58,9 +64,13 @@ let pending: string[] = []
 let latestState: SupervisorState | null = null
 let mode: VoiceMode = 'normal'
 let modeSeq = 0
-let modeHistory: Array<{ mode: VoiceMode; since: number }> = [{ mode: 'normal', since: Date.now() }]
+let modeHistory: Array<{ mode: VoiceMode; since: number; seq: number }> = [{ mode: 'normal', since: Date.now(), seq: 0 }]
 let listenEnabled = false
 let testResults: TestResult[] = []
+let testSeq: number | null = null
+let testHasRun = false
+let enrollCompleted: EnrollSentence[] = []
+let enrollCurrent: EnrollSentence[] = []
 let modeTimer: ReturnType<typeof setTimeout> | null = null
 
 export function takePending(): string[] {
@@ -85,17 +95,17 @@ function applyListening(): void {
 }
 
 function recordMode(next: VoiceMode): void {
-  modeHistory.push({ mode: next, since: Date.now() })
+  modeHistory.push({ mode: next, since: Date.now(), seq: modeSeq })
   if (modeHistory.length > MODE_HISTORY_LIMIT) modeHistory.shift()
 }
 
-function ownerMode(data: Record<string, unknown>): VoiceMode {
+function ownerMode(data: Record<string, unknown>): { mode: VoiceMode; seq: number } {
   const { end_unix_ms: endUnixMs, end_ms: endMs, start_ms: startMs } = data
-  if (!Number.isFinite(endUnixMs) || !Number.isFinite(endMs) || !Number.isFinite(startMs)) return mode
+  if (!Number.isFinite(endUnixMs) || !Number.isFinite(endMs) || !Number.isFinite(startMs)) return { mode, seq: modeSeq }
   const startedAt = (endUnixMs as number) - ((endMs as number) - (startMs as number))
-  let owner: VoiceMode = 'normal'
+  let owner: { mode: VoiceMode; seq: number } = { mode: 'normal', seq: 0 }
   for (const entry of modeHistory) {
-    if (entry.since <= startedAt) owner = entry.mode
+    if (entry.since <= startedAt) owner = { mode: entry.mode, seq: entry.seq }
   }
   return owner
 }
@@ -103,8 +113,9 @@ function ownerMode(data: Record<string, unknown>): VoiceMode {
 function endMode(): void {
   clearModeTimer()
   mode = 'normal'
-  recordMode('normal')
+  enrollCurrent = []
   modeSeq++
+  recordMode('normal')
   applyListening()
   notifyStatusChanged()
 }
@@ -140,17 +151,24 @@ function handleEvent(ev: AgentEvent): void {
   }
   if (ev.type === 'speech_other') {
     const otherData = ev.data ?? {}
-    if (ownerMode(otherData) !== 'testing') return
+    const otherOwner = ownerMode(otherData)
+    if (otherOwner.mode !== 'testing' || otherOwner.seq !== testSeq) return
     testResults.push(testResult('other', otherData))
     notifyStatusChanged()
     return
   }
   if (ev.type !== 'final') return
   const data = ev.data ?? {}
-  if (data.enrolling === true) return
   const text = data.text
+  if (data.enrolling === true) {
+    if (mode === 'enrolling' && typeof text === 'string' && text.trim() !== '') {
+      enrollCurrent.push({ text, durationMs: num(data.end_ms) - num(data.start_ms) })
+      notifyStatusChanged()
+    }
+    return
+  }
   if (typeof text !== 'string' || text.trim() === '') return
-  const owner = ownerMode(data)
+  const { mode: owner, seq: ownerSeq } = ownerMode(data)
   if (owner === 'enrolling') return
 
   const record: Record<string, unknown> = {
@@ -169,6 +187,7 @@ function handleEvent(ev: AgentEvent): void {
   }
 
   if (owner === 'testing') {
+    if (ownerSeq !== testSeq) return
     const kind = data.speaker_enrolled !== true ? 'unenrolled' : data.is_owner === true ? 'owner' : 'other'
     testResults.push(testResult(kind, data, text))
     notifyStatusChanged()
@@ -185,10 +204,14 @@ function resetState(): void {
   clearModeTimer()
   latestState = null
   mode = 'normal'
-  modeHistory = [{ mode: 'normal', since: Date.now() }]
   modeSeq++
+  modeHistory = [{ mode: 'normal', since: Date.now(), seq: modeSeq }]
   listenEnabled = false
   testResults = []
+  testSeq = null
+  testHasRun = false
+  enrollCompleted = []
+  enrollCurrent = []
 }
 
 function readSpeaker(raw: Record<string, unknown>): SpeakerStatus {
@@ -222,7 +245,8 @@ export async function getVoiceStatus(): Promise<VoiceStatus> {
     speaker: running ? await fetchSpeaker(current) : null,
     mode,
     listenEnabled,
-    test: { results: testResults },
+    enroll: { completed: enrollCompleted, current: enrollCurrent },
+    test: { results: testResults, hasRun: testHasRun },
   }
 }
 
@@ -250,8 +274,9 @@ export async function startEnroll(): Promise<void> {
   const current = requireRunning()
   if (mode !== 'normal') throw new VoiceOperationError(409, ERROR_CODES.VOICE_BUSY)
   mode = 'enrolling'
-  recordMode('enrolling')
+  enrollCurrent = []
   const seq = ++modeSeq
+  recordMode('enrolling')
   applyListening()
   armModeTimer(cancelEnroll)
   notifyStatusChanged()
@@ -261,10 +286,6 @@ export async function startEnroll(): Promise<void> {
   if (!speaker) {
     endMode()
     throw new VoiceOperationError(503, ERROR_CODES.VOICE_UNAVAILABLE)
-  }
-  if (speaker.enrolled) {
-    endMode()
-    throw new VoiceOperationError(409, ERROR_CODES.VOICE_ALREADY_ENROLLED)
   }
   try {
     await callAgent(current, '/v1/speaker/enroll/start', ERROR_CODES.VOICE_BUSY)
@@ -285,7 +306,23 @@ export async function commitEnroll(): Promise<void> {
     throw new VoiceOperationError(409, ERROR_CODES.VOICE_ENROLL_NOT_READY)
   }
   await callAgent(current, '/v1/speaker/enroll/commit', ERROR_CODES.VOICE_ENROLL_NOT_READY)
-  if (seq === modeSeq) endMode()
+  if (seq === modeSeq) {
+    enrollCompleted = enrollCurrent
+    endMode()
+  }
+}
+
+export async function deleteSpeaker(): Promise<void> {
+  const current = requireRunning()
+  if (mode !== 'normal') throw new VoiceOperationError(409, ERROR_CODES.VOICE_BUSY)
+  try {
+    await current.call('DELETE', '/v1/speaker')
+  } catch {
+    throw new VoiceOperationError(503, ERROR_CODES.VOICE_UNAVAILABLE)
+  }
+  enrollCompleted = []
+  enrollCurrent = []
+  notifyStatusChanged()
 }
 
 export async function cancelEnroll(): Promise<void> {
@@ -303,11 +340,20 @@ export async function startTest(): Promise<void> {
   requireRunning()
   if (mode !== 'normal') throw new VoiceOperationError(409, ERROR_CODES.VOICE_BUSY)
   testResults = []
+  testHasRun = true
   mode = 'testing'
-  recordMode('testing')
   modeSeq++
+  testSeq = modeSeq
+  recordMode('testing')
   applyListening()
   armModeTimer(stopTest)
+  notifyStatusChanged()
+}
+
+export function clearTest(): void {
+  if (mode === 'testing') throw new VoiceOperationError(409, ERROR_CODES.VOICE_BUSY)
+  testResults = []
+  testSeq = null
   notifyStatusChanged()
 }
 

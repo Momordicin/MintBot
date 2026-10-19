@@ -52,8 +52,6 @@ export function errorText(body: ErrorBody, t: TFunction): string {
       return t('语音组件未安装或未运行')
     case 'VOICE_BUSY':
       return t('当前状态下无法执行此操作')
-    case 'VOICE_ALREADY_ENROLLED':
-      return t('已录入声纹')
     case 'VOICE_ENROLL_NOT_READY':
       return t('说的话还不够，请继续说')
     case 'INVALID_REQUEST':

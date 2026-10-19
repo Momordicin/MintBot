@@ -226,7 +226,8 @@ describe('voice settings page', () => {
       },
       mode: 'normal',
       listenEnabled: true,
-      test: { results: [] },
+      enroll: { completed: [], current: [] },
+      test: { results: [], hasRun: false },
     })
   })
 
@@ -253,7 +254,8 @@ describe('voice settings page', () => {
       speaker: null,
       mode: 'normal',
       listenEnabled: false,
-      test: { results: [] },
+      enroll: { completed: [], current: [] },
+      test: { results: [], hasRun: false },
     })
     for (const url of ['/voice/enroll/start', '/voice/enroll/commit', '/voice/enroll/cancel', '/voice/test/start', '/voice/test/stop']) {
       const res = await post(url)
@@ -276,12 +278,235 @@ describe('voice settings page', () => {
     expect(mocks.broadcastEvent).toHaveBeenCalledWith('voice-status-changed', {})
   })
 
-  it('enroll start is rejected with 409 when already enrolled', async () => {
+  it('enroll start is allowed when already enrolled', async () => {
     speaker = { ...speaker, enrolled: true }
     const res = await post('/voice/enroll/start')
-    expect(res.statusCode).toBe(409)
-    expect(res.json()).toEqual({ code: 'VOICE_ALREADY_ENROLLED' })
-    expect(calledPaths()).not.toContain('POST /v1/speaker/enroll/start')
+    expect(res.statusCode).toBe(200)
+    expect(calledPaths()).toContain('POST /v1/speaker/enroll/start')
+    expect((await status()).mode).toBe('enrolling')
+  })
+
+  describe('enrollment sentence lists', () => {
+    function enrolling(text: string, startMs: number, endMs: number) {
+      final({ text, enrolling: true, start_ms: startMs, end_ms: endMs })
+    }
+
+    async function lists() {
+      return (await status()).enroll
+    }
+
+    async function commitOne(text: string, durationMs: number) {
+      await post('/voice/enroll/start')
+      enrolling(text, 0, durationMs)
+      speaker = { ...speaker, enrolling: true, enroll_utterances: 5, enroll_ready: true }
+      await post('/voice/enroll/commit')
+    }
+
+    it('appends enrolling sentences to the current list and notifies', async () => {
+      await post('/voice/enroll/start')
+      expect(await lists()).toEqual({ completed: [], current: [] })
+      mocks.broadcastEvent.mockClear()
+      enrolling('第一句', 1000, 6500)
+      expect(mocks.broadcastEvent).toHaveBeenCalledWith('voice-status-changed', {})
+      enrolling('   ', 0, 100)
+      enrolling('第二句', 7000, 9000)
+      expect(await lists()).toEqual({
+        completed: [],
+        current: [
+          { text: '第一句', durationMs: 5500 },
+          { text: '第二句', durationMs: 2000 },
+        ],
+      })
+      expect(takePending()).toEqual([])
+      expect(fs.existsSync(path.join(dataDir, 'transcripts.jsonl'))).toBe(false)
+    })
+
+    it('commit moves the current list to completed and a new start keeps completed', async () => {
+      await commitOne('甲', 1000)
+      expect(await lists()).toEqual({ completed: [{ text: '甲', durationMs: 1000 }], current: [] })
+      await post('/voice/enroll/start')
+      expect(await lists()).toEqual({ completed: [{ text: '甲', durationMs: 1000 }], current: [] })
+      enrolling('乙', 0, 2000)
+      expect(await lists()).toEqual({
+        completed: [{ text: '甲', durationMs: 1000 }],
+        current: [{ text: '乙', durationMs: 2000 }],
+      })
+    })
+
+    it('cancel discards the current list and keeps completed', async () => {
+      await commitOne('甲', 1000)
+      await post('/voice/enroll/start')
+      enrolling('乙', 0, 2000)
+      await post('/voice/enroll/cancel')
+      expect(await lists()).toEqual({ completed: [{ text: '甲', durationMs: 1000 }], current: [] })
+      enrolling('迟到', 0, 500)
+      expect((await lists()).current).toEqual([])
+    })
+
+    it('a timeout and the agent leaving running discard the current list', async () => {
+      vi.useFakeTimers()
+      await post('/voice/enroll/start')
+      enrolling('甲', 0, 1000)
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000)
+      expect((await lists()).current).toEqual([])
+      await post('/voice/enroll/start')
+      enrolling('乙', 0, 1000)
+      setState({ phase: 'restarting', listening: false, restarts: 1 })
+      expect((await lists()).current).toEqual([])
+    })
+
+    it('delete speaker clears both lists', async () => {
+      await commitOne('甲', 1000)
+      await post('/voice/enroll/start')
+      enrolling('乙', 0, 2000)
+      expect(await lists()).toEqual({
+        completed: [{ text: '甲', durationMs: 1000 }],
+        current: [{ text: '乙', durationMs: 2000 }],
+      })
+      await post('/voice/enroll/cancel')
+      await commitOne('丙', 3000)
+      await post('/voice/enroll/start')
+      enrolling('丁', 0, 1000)
+      await post('/voice/enroll/cancel')
+      expect((await app.inject({ method: 'DELETE', url: '/voice/speaker' })).statusCode).toBe(200)
+      expect(await lists()).toEqual({ completed: [], current: [] })
+    })
+
+    it('a restart clears both lists', async () => {
+      await commitOne('甲', 1000)
+      await post('/voice/enroll/start')
+      enrolling('乙', 0, 2000)
+      await stopVoice()
+      await startVoice(dataDir)
+      setState(running)
+      expect(await lists()).toEqual({ completed: [], current: [] })
+    })
+  })
+
+  describe('delete speaker', () => {
+    function del() {
+      return app.inject({ method: 'DELETE', url: '/voice/speaker' })
+    }
+
+    it('forwards DELETE to the agent and notifies', async () => {
+      const res = await del()
+      expect(res.statusCode).toBe(200)
+      expect(res.json()).toEqual({ ok: true })
+      expect(calledPaths()).toContain('DELETE /v1/speaker')
+      expect(mocks.broadcastEvent).toHaveBeenCalledWith('voice-status-changed', {})
+    })
+
+    it('is 409 VOICE_BUSY while enrolling or testing and does not call the agent', async () => {
+      await post('/voice/enroll/start')
+      const whileEnrolling = await del()
+      expect(whileEnrolling.statusCode).toBe(409)
+      expect(whileEnrolling.json()).toEqual({ code: 'VOICE_BUSY' })
+      await post('/voice/enroll/cancel')
+      await post('/voice/test/start')
+      expect((await del()).statusCode).toBe(409)
+      expect(calledPaths()).not.toContain('DELETE /v1/speaker')
+    })
+
+    it('is 503 VOICE_UNAVAILABLE when the agent call fails or the agent is not running', async () => {
+      mocks.call.mockImplementation(async (method: string) => {
+        if (method === 'DELETE') throw new Error('down')
+        return {}
+      })
+      const failed = await del()
+      expect(failed.statusCode).toBe(503)
+      expect(failed.json()).toEqual({ code: 'VOICE_UNAVAILABLE' })
+      setState({ phase: 'restarting', listening: false, restarts: 1 })
+      expect((await del()).statusCode).toBe(503)
+    })
+  })
+
+  describe('test rounds', () => {
+    const T0 = new Date('2026-01-01T00:00:00Z').getTime()
+
+    function at(offsetMs: number) {
+      vi.setSystemTime(T0 + offsetMs)
+    }
+
+    function timed(text: string, startOffsetMs: number, endOffsetMs: number) {
+      final({ text, start_ms: 0, end_ms: endOffsetMs - startOffsetMs, end_unix_ms: T0 + endOffsetMs, speaker_enrolled: false })
+    }
+
+    function other(startOffsetMs: number, endOffsetMs: number) {
+      mocks.supervisorOptions!.onEvent({
+        id: 1,
+        type: 'speech_other',
+        data: { start_ms: 0, end_ms: endOffsetMs - startOffsetMs, end_unix_ms: T0 + endOffsetMs },
+      })
+    }
+
+    function records(): Array<Record<string, unknown>> {
+      const file = path.join(dataDir, 'transcripts.jsonl')
+      if (!fs.existsSync(file)) return []
+      return fs.readFileSync(file, 'utf-8').trim().split('\n').map(l => JSON.parse(l))
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers()
+      at(0)
+    })
+
+    it('a late result from the previous test does not enter the new test but is still recorded', async () => {
+      at(1000)
+      await post('/voice/test/start')
+      at(5000)
+      await post('/voice/test/stop')
+      at(6000)
+      await post('/voice/test/start')
+      at(7000)
+      timed('上一次测试说的', 2000, 4000)
+      other(2500, 3500)
+      expect((await status()).test.results).toEqual([])
+      expect(records().map(r => r.mode)).toEqual(['testing'])
+      timed('这一次测试说的', 6200, 6800)
+      expect((await status()).test.results).toHaveLength(1)
+      expect(records().map(r => r.mode)).toEqual(['testing', 'testing'])
+    })
+
+    it('a result arriving after clear is not listed but is still recorded', async () => {
+      at(1000)
+      await post('/voice/test/start')
+      at(5000)
+      await post('/voice/test/stop')
+      at(6000)
+      expect((await post('/voice/test/clear')).statusCode).toBe(200)
+      at(7000)
+      timed('清空后才到', 2000, 4000)
+      other(2500, 3500)
+      expect((await status()).test.results).toEqual([])
+      expect(records().map(r => r.mode)).toEqual(['testing'])
+    })
+
+    it('clear is 409 while testing and empties results otherwise', async () => {
+      await post('/voice/test/start')
+      final({ text: 'a', start_ms: 0, end_ms: 1000, speaker_enrolled: false })
+      const busy = await post('/voice/test/clear')
+      expect(busy.statusCode).toBe(409)
+      expect(busy.json()).toEqual({ code: 'VOICE_BUSY' })
+      expect((await status()).test.results).toHaveLength(1)
+      await post('/voice/test/stop')
+      mocks.broadcastEvent.mockClear()
+      expect((await post('/voice/test/clear')).statusCode).toBe(200)
+      expect(mocks.broadcastEvent).toHaveBeenCalledWith('voice-status-changed', {})
+      expect((await status()).test.results).toEqual([])
+    })
+
+    it('hasRun turns true on start, survives stop and clear, and resets on restart', async () => {
+      expect((await status()).test.hasRun).toBe(false)
+      await post('/voice/test/start')
+      expect((await status()).test.hasRun).toBe(true)
+      await post('/voice/test/stop')
+      await post('/voice/test/clear')
+      expect((await status()).test.hasRun).toBe(true)
+      await stopVoice()
+      await startVoice(dataDir)
+      setState(running)
+      expect((await status()).test.hasRun).toBe(false)
+    })
   })
 
   it('enroll commit is rejected below 5 utterances and when the agent reports 409', async () => {
@@ -809,7 +1034,7 @@ describe('voice input toggle', () => {
     await expectNoModeTimer()
   })
 
-  it('a failed speaker read or an existing enrollment releases the occupied mode', async () => {
+  it('a failed speaker read releases the occupied mode', async () => {
     vi.useFakeTimers()
     await begin(false)
     mocks.call.mockImplementationOnce(async () => {
@@ -820,12 +1045,6 @@ describe('voice input toggle', () => {
     expect((await status()).mode).toBe('normal')
     expect(lastListening()).toBe(false)
 
-    speaker = { ...speaker, enrolled: true }
-    const already = await post('/voice/enroll/start')
-    expect(already.statusCode).toBe(409)
-    expect(already.json()).toEqual({ code: 'VOICE_ALREADY_ENROLLED' })
-    expect((await status()).mode).toBe('normal')
-    expect(lastListening()).toBe(false)
     await expectNoModeTimer()
   })
 
