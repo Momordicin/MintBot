@@ -72,6 +72,7 @@ describe('handle shape follows the display scale', () => {
     const created = mocks.constructed[0] as unknown as {
       setShape: ReturnType<typeof vi.fn>
       setBounds: ReturnType<typeof vi.fn>
+      getBounds: ReturnType<typeof vi.fn>
       isDestroyed: () => boolean
       isVisible: () => boolean
       showInactive: ReturnType<typeof vi.fn>
@@ -101,6 +102,16 @@ describe('handle shape follows the display scale', () => {
     expect(handle.setShape).toHaveBeenCalledTimes(1)
   })
 
+  it('still reapplies the shape when the scale changed but the bounds are already in place', () => {
+    const handle = makeHandle(1)
+    handle.getBounds = vi.fn(() => petHandleBounds(overlay.getBounds(), workArea))
+    mocks.matchDisplay.mockReturnValue({ scaleFactor: 1.5, workArea })
+    syncPetHandleBounds(asWindow(handle), asWindow(overlay))
+    expect(handle.setBounds).not.toHaveBeenCalled()
+    expect(handle.setShape).toHaveBeenCalledTimes(1)
+    expect(handle.setShape).toHaveBeenCalledWith(rect)
+  })
+
   it('reapplies on show when the scale changed while the handle was hidden', () => {
     const handle = makeHandle(1)
     handle.isVisible = () => false
@@ -122,12 +133,22 @@ describe('syncPetHandleBounds', () => {
 
   it('sets the handle bounds derived from the overlay bounds and its display work area', () => {
     mocks.matchDisplay.mockReturnValue({ workArea })
-    const handle = { isDestroyed: () => false, setBounds: vi.fn() }
+    const handle = { isDestroyed: () => false, getBounds: () => ({ x: 0, y: 0, width: 51, height: 51 }), setBounds: vi.fn() }
 
     syncPetHandleBounds(asWindow(handle), asWindow(makeOverlay()))
 
     expect(mocks.matchDisplay).toHaveBeenCalledWith(petBounds)
+    expect(handle.setBounds).toHaveBeenCalledTimes(1)
     expect(handle.setBounds).toHaveBeenCalledWith(petHandleBounds(petBounds, workArea))
+  })
+
+  it('does not set the handle bounds when they already match the target', () => {
+    mocks.matchDisplay.mockReturnValue({ workArea })
+    const handle = { isDestroyed: () => false, getBounds: () => ({ ...petHandleBounds(petBounds, workArea) }), setBounds: vi.fn() }
+
+    syncPetHandleBounds(asWindow(handle), asWindow(makeOverlay()))
+
+    expect(handle.setBounds).not.toHaveBeenCalled()
   })
 
   it('does nothing when the handle is destroyed', () => {

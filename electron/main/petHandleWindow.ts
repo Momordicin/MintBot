@@ -50,7 +50,11 @@ export function syncPetHandleBounds(handle: BrowserWindow, overlay: BrowserWindo
   if (handle.isDestroyed() || overlay.isDestroyed()) return
   const pet = overlay.getBounds()
   const workArea = screen.getDisplayMatching(pet).workArea
-  handle.setBounds(petHandleBounds(pet, workArea))
+  const target = petHandleBounds(pet, workArea)
+  const current = handle.getBounds()
+  if (current.x !== target.x || current.y !== target.y || current.width !== target.width || current.height !== target.height) {
+    handle.setBounds(target)
+  }
   reapplyHandleShapeIfScaleChanged(handle)
 }
 

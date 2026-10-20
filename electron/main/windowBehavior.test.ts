@@ -2373,6 +2373,7 @@ describe('pet interaction mode, collapsed handle geometry', () => {
       hide: vi.fn(() => {
         visible = false
       }),
+      getBounds: () => ({ x: 0, y: 0, width: 0, height: 0 }),
       setBounds: vi.fn(),
     }
   }
