@@ -72,28 +72,30 @@ export function CharacterPanel({ panel }: CharacterPanelProps) {
             {t('创建角色')}
           </button>
         )}
-        {!isCreating && (
-          <button className="rename-btn" onClick={handleImportCardPick} disabled={isImportingCard || deleteTarget !== null || isDeleting} title={t('导入角色卡')}>
-            {isImportingCard ? t('导入中…') : t('导入角色卡')}
-          </button>
-        )}
       </div>
       {presets.length === 0 && !isCreating && (
         <div className="character-panel__hint">{t('还没有角色，创建一个开始')}</div>
       )}
       {isCreating && (
         <div className="character-panel__create-form">
+          <button
+            className="rename-btn"
+            onClick={handleImportCardPick}
+            disabled={isSavingCreate || isImportingCard || isGeneratingSystemPrompt}
+          >
+            {isImportingCard ? t('导入中…') : t('导入角色卡配置')}
+          </button>
           <input
             className="character-panel__rename-input"
             value={createName}
             onChange={e => setCreateName(e.target.value)}
             placeholder={t('角色名称')}
-            disabled={isSavingCreate}
+            disabled={isSavingCreate || isImportingCard}
           />
           <select
             value={createCharacterId}
             onChange={e => setCreateCharacterId(e.target.value)}
-            disabled={isSavingCreate}
+            disabled={isSavingCreate || isImportingCard}
           >
             {characterIdOptions.map(opt => (
               <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -104,23 +106,23 @@ export function CharacterPanel({ panel }: CharacterPanelProps) {
             value={createSystemPrompt}
             onChange={e => setCreateSystemPrompt(e.target.value)}
             placeholder={t('人设正文')}
-            disabled={isSavingCreate}
+            disabled={isSavingCreate || isImportingCard}
           />
           {importedCardFields && (
             <button
               className="rename-btn"
               onClick={handleRegenerateSystemPrompt}
-              disabled={isSavingCreate || isGeneratingSystemPrompt}
+              disabled={isSavingCreate || isImportingCard || isGeneratingSystemPrompt}
               title={t('用后台模型把角色卡字段改写成更连贯的人设正文')}
             >
               {isGeneratingSystemPrompt ? t('改写中…') : t('使用模型辅助改写')}
             </button>
           )}
           <div className="character-panel__row">
-            <button className="rename-btn" onClick={handleCreateCancel} disabled={isSavingCreate}>
+            <button className="rename-btn" onClick={handleCreateCancel} disabled={isSavingCreate || isImportingCard}>
               {t('取消')}
             </button>
-            <button className="rename-btn" onClick={handleCreateSave} disabled={isSavingCreate}>
+            <button className="rename-btn" onClick={handleCreateSave} disabled={isSavingCreate || isImportingCard}>
               {isSavingCreate ? t('创建中…') : t('创建')}
             </button>
           </div>

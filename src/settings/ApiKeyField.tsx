@@ -57,8 +57,8 @@ export function ApiKeyField({ summary, envDetected, envVar, fromEnv, keyInput, e
   const maskedValue = summary.hasKey ? `••••••••${summary.last4 ?? ''}` : t('未填写')
   const keyReady = keyStatus === 'ready'
   const pending = !keyReady || envStatus !== 'ready'
-  const envLabel = t('自动配置 API Key（使用环境变量 {{envVar}}）', { envVar })
-  const envHint = envStatus === 'ready' && !envDetected ? t('自动配置 API Key（使用环境变量 {{envVar}}）。未检测到环境变量 {{envVar}}；修改环境变量后需重启 MintBot', { envVar }) : envLabel
+  const envLabel = t('自动配置（使用环境变量 {{envVar}}）', { envVar })
+  const envHint = envStatus === 'ready' && !envDetected ? t('自动配置（使用环境变量 {{envVar}}）。未检测到环境变量 {{envVar}}；修改环境变量后需重启 MintBot', { envVar }) : envLabel
   return (
     <>
       <div className={compact ? 'model-config-panel__field model-config-panel__field--compact' : 'model-config-panel__field'}>

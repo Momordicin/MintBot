@@ -749,7 +749,14 @@
 }
 
 .model-config-panel__field--short input {
-  flex: 0 1 33%;
+  flex: 0 1 16.5%;
+}
+
+.model-config-panel__inline-hint {
+  flex: none;
+  white-space: nowrap;
+  color: var(--label2);
+  font-size: 12px;
 }
 
 .model-config-panel__error-mark {

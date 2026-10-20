@@ -408,8 +408,8 @@ export function ModelConfigPanel() {
             value={form.maxTokens}
             onChange={e => setForm(prev => ({ ...prev, maxTokens: e.target.value }))}
           />
+          <span className="model-config-panel__inline-hint">{t('Ollama 不受此限制')}</span>
         </div>
-        <div className="character-panel__hint">{t('Ollama 不受此限制')}</div>
       </div>
 
       <div className="model-config-panel__section">
