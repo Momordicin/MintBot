@@ -88,6 +88,10 @@ vi.mock('./chatReveal', () => ({
   revealChat: vi.fn((_win: unknown, show: () => void) => show()),
 }))
 
+vi.mock('./petTopmostGuard', () => ({
+  checkAndRepairPetTopmost: vi.fn(),
+}))
+
 vi.mock('./dragActivity', () => ({
   isWindowDragInProgress: (windowKey: 'overlay' | 'chat') => testState.dragging[windowKey],
   // 此处 testState.dragging 就是拖拽状态，置 false 即收掉松手尾巴
@@ -2640,6 +2644,23 @@ describe('startup gate on the first window-behavior config fetch', () => {
 
     expect(fetchMock.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal)
     expect(win.showInactive).toHaveBeenCalled()
+  })
+
+  it('runs one topmost check when the hidden pet becomes shown', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false }))
+    const guard = await import('./petTopmostGuard')
+    let visible = false
+    const win = makeFakeOverlayWindow({ x: 0, y: 0, width: 132, height: 132 })
+    win.isVisible = () => visible
+    win.showInactive = vi.fn(() => {
+      visible = true
+    })
+
+    await fresh.initWindowBehaviorConfig(null, win as unknown as Electron.BrowserWindow)
+
+    expect(win.showInactive).toHaveBeenCalledTimes(1)
+    expect(guard.checkAndRepairPetTopmost).toHaveBeenCalledTimes(1)
+    expect(guard.checkAndRepairPetTopmost).toHaveBeenCalledWith(win)
   })
 
   it('proceeds with the fetched config after a successful fetch', async () => {

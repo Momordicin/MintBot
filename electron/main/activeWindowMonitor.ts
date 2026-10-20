@@ -90,7 +90,7 @@ export type ForegroundObservation =
   | { kind: 'unavailable' }
 
 
-function resolvePid(hwnd: unknown): number | null {
+export function resolvePid(hwnd: unknown): number | null {
   if (!GetWindowThreadProcessId) return null
   const pidBuf = [0]
   GetWindowThreadProcessId(hwnd, pidBuf)
@@ -98,21 +98,21 @@ function resolvePid(hwnd: unknown): number | null {
   return pid || null
 }
 
-function resolveClassName(hwnd: unknown): string {
+export function resolveClassName(hwnd: unknown): string {
   if (!GetClassNameW) return ''
   const classBuf = ['\0'.repeat(255)]
   const len = GetClassNameW(hwnd, classBuf, 256)
   return len > 0 ? classBuf[0].slice(0, len) : ''
 }
 
-function isCloaked(hwnd: unknown): boolean {
+export function isCloaked(hwnd: unknown): boolean {
   if (!DwmGetWindowAttribute) return false
   const cloakedBuf = [0]
   const hr = DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, cloakedBuf, 4)
   return hr === 0 && cloakedBuf[0] !== 0
 }
 
-function resolveExeName(pid: number): string | null {
+export function resolveExeName(pid: number): string | null {
   if (!OpenProcess || !QueryFullProcessImageNameW || !CloseHandle) {
     return null
   }
