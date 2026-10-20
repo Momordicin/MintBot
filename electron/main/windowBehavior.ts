@@ -5,7 +5,7 @@
 import { BrowserWindow, screen } from 'electron'
 import { animateTo } from './windowAnimation'
 import { revealChat } from './chatReveal'
-import { syncPetHandleBounds, setPetHandleVisible } from './petHandleWindow'
+import { syncPetHandleBounds, setPetHandleVisible, petShapeScaleStale, currentShapeScale } from './petHandleWindow'
 import {
   getPreferredBounds,
   setPreferredBounds,
@@ -262,6 +262,7 @@ function moveToDisplay(win: BrowserWindow, windowKey: WindowKey, targetDisplayId
 
   const { generation, onComplete } = beginProgrammaticMove(windowKey)
   const cancel = animateTo(win, bounds, () => {
+    if (windowKey === 'overlay') recheckPetShapeScale(win)
     const wasCurrent = onComplete()
     if (wasCurrent) onSettled?.()
   }, { finalOpacity: targetOpacityFor(windowKey) })
@@ -609,6 +610,20 @@ export function noteOverlayCreatedCollapsed(collapsed: boolean): void {
   appliedPetCollapsed = collapsed
 }
 
+let petShapeScale: number | null = null
+
+export function notePetShapeApplied(win: BrowserWindow): void {
+  petShapeScale = currentShapeScale(win)
+}
+
+export function recheckPetShapeScale(win: BrowserWindow): void {
+  if (win.isDestroyed() || !appliedPetCollapsed) return
+  const current = currentShapeScale(win)
+  if (!petShapeScaleStale(petShapeScale, current)) return
+  win.setShape([{ x: 0, y: 0, width: COLLAPSED_SIZE, height: COLLAPSED_SIZE }])
+  petShapeScale = current
+}
+
 function syncPetCollapsedGeometry(win: BrowserWindow): void {
   const collapsed = currentConfig().petCollapsed
   if (collapsed === appliedPetCollapsed) return
@@ -627,6 +642,8 @@ function syncPetCollapsedGeometry(win: BrowserWindow): void {
   markProgrammaticQuiet('overlay', PROGRAMMATIC_MOVE_COOLDOWN_MS)
   win.setBounds(target)
   win.setShape(collapsed ? [{ x: 0, y: 0, width: COLLAPSED_SIZE, height: COLLAPSED_SIZE }] : [])
+  if (collapsed) notePetShapeApplied(win)
+  else petShapeScale = null
   notePlacement('overlay', display.id, target)
 }
 
@@ -667,6 +684,7 @@ function evaluatePetPresence(overlayWindow: BrowserWindow | null): void {
   if (!petSizeSettled) return
 
   if (!isWindowDragInProgress('overlay')) syncPetCollapsedGeometry(overlayWindow)
+  recheckPetShapeScale(overlayWindow)
 
   const displays = screen.getAllDisplays()
   const preferredDisplayId = getEffectiveHomeDisplay(displays, 'overlay').id

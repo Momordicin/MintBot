@@ -45,6 +45,8 @@ import {
   cancelProgrammaticMoveOnDragStart,
   getCurrentPetMode,
   noteOverlayCreatedCollapsed,
+  notePetShapeApplied,
+  recheckPetShapeScale,
   setPetHandleWindow
 } from './windowBehavior'
 import { createPetHandleWindow, syncPetHandleBounds } from './petHandleWindow'
@@ -616,6 +618,7 @@ function createOverlayWindow(): BrowserWindow {
 
   if (getCachedWindowBehaviorConfig().petCollapsed) {
     win.setShape([{ x: 0, y: 0, width: COLLAPSED_SIZE, height: COLLAPSED_SIZE }])
+    notePetShapeApplied(win)
   }
 
   win.on('closed', () => {
@@ -627,6 +630,7 @@ function createOverlayWindow(): BrowserWindow {
   })
 
   win.on('moved', () => {
+    recheckPetShapeScale(win)
     handleWindowMoved('overlay', win, mainWindow, overlayWindow)
   })
 
@@ -635,6 +639,7 @@ function createOverlayWindow(): BrowserWindow {
   })
 
   win.on('resize', () => {
+    recheckPetShapeScale(win)
     if (petHandleWindow && !petHandleWindow.isDestroyed() && petHandleWindow.isVisible()) syncPetHandleBounds(petHandleWindow, win)
   })
 

@@ -2484,6 +2484,124 @@ describe('pet interaction mode, collapsed handle geometry', () => {
   })
 })
 
+describe('collapsed pet shape follows the display scale', () => {
+  let fresh: typeof import('./windowBehavior')
+  let revision = 0
+  const PREFERRED = { x: 1500, y: 600, width: 132, height: 132 }
+  const HANDLE = [{ x: 0, y: 0, width: 24, height: 24 }]
+
+  beforeEach(async () => {
+    vi.resetModules()
+    fresh = await import('./windowBehavior')
+    await settleWindowBehaviorConfig(fresh)
+    revision = 0
+    testState.displays = [makeDisplay(1, 0)]
+    testState.homeDisplayId = 1
+    testState.matchDisplay = () => testState.displays[0]
+    testState.blockerMap = new Map()
+    getPreferredBoundsMock.mockReturnValue({ ...PREFERRED })
+  })
+
+  afterEach(() => {
+    getPreferredBoundsMock.mockReturnValue(null)
+  })
+
+  function makeWindow() {
+    const win = {
+      ...makeFakeOverlayWindow({ ...PREFERRED }),
+      setBounds: vi.fn(),
+      setShape: vi.fn(),
+      setIgnoreMouseEvents: vi.fn(),
+      getOpacity: () => 1,
+      setOpacity: vi.fn(),
+    }
+    win.setBounds.mockImplementation((next: typeof PREFERRED) => {
+      win.getBounds = () => next
+    })
+    return win
+  }
+
+  function asWindow(win: ReturnType<typeof makeWindow>): Electron.BrowserWindow {
+    return win as unknown as Electron.BrowserWindow
+  }
+
+  function setCollapsed(win: ReturnType<typeof makeWindow>, petCollapsed: boolean): void {
+    revision += 1
+    fresh.applyWindowBehaviorSnapshot(
+      {
+        generation: 'shape-test',
+        revision,
+        config: { chatPinMode: 'off', petAvoidanceEnabled: true, petClickThrough: false, petCollapsed, appRules: [] },
+      },
+      null,
+      asWindow(win)
+    )
+  }
+
+  it('does not set the shape again while the scale is unchanged', () => {
+    const win = makeWindow()
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+    setCollapsed(win, true)
+    expect(win.setShape).toHaveBeenCalledTimes(1)
+
+    fresh.recheckPetShapeScale(asWindow(win))
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+    expect(win.setShape).toHaveBeenCalledTimes(1)
+  })
+
+  it('sets the original rectangle once after the scale changes', () => {
+    const win = makeWindow()
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+    setCollapsed(win, true)
+    win.setShape.mockClear()
+
+    testState.displays[0].scaleFactor = 1.5
+    fresh.recheckPetShapeScale(asWindow(win))
+    expect(win.setShape).toHaveBeenCalledTimes(1)
+    expect(win.setShape).toHaveBeenLastCalledWith(HANDLE)
+
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+    fresh.recheckPetShapeScale(asWindow(win))
+    expect(win.setShape).toHaveBeenCalledTimes(1)
+  })
+
+  it('reapplies from the presence evaluation after a display change', () => {
+    const win = makeWindow()
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+    setCollapsed(win, true)
+    win.setShape.mockClear()
+
+    testState.displays[0].scaleFactor = 2
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+    expect(win.setShape).toHaveBeenCalledTimes(1)
+    expect(win.setShape).toHaveBeenLastCalledWith(HANDLE)
+  })
+
+  it('never sets the shape of an expanded pet when the scale changes', () => {
+    const win = makeWindow()
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+    setCollapsed(win, true)
+    setCollapsed(win, false)
+    win.setShape.mockClear()
+
+    testState.displays[0].scaleFactor = 1.5
+    fresh.recheckPetShapeScale(asWindow(win))
+    fresh.evaluateDesktopPresence(null, asWindow(win))
+    expect(win.setShape).not.toHaveBeenCalled()
+  })
+
+  it('records the scale when the window was created collapsed', () => {
+    const win = makeWindow()
+    fresh.noteOverlayCreatedCollapsed(true)
+    fresh.notePetShapeApplied(asWindow(win))
+
+    testState.displays[0].scaleFactor = 1.5
+    fresh.recheckPetShapeScale(asWindow(win))
+    expect(win.setShape).toHaveBeenCalledTimes(1)
+    expect(win.setShape).toHaveBeenLastCalledWith(HANDLE)
+  })
+})
+
 describe('startup gate on the first window-behavior config fetch', () => {
   let fresh: typeof import('./windowBehavior')
 

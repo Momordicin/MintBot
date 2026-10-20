@@ -5,6 +5,25 @@
 import { BrowserWindow, screen } from 'electron'
 import { COLLAPSED_SIZE, petHandleBounds } from './windowPositions'
 
+export function petShapeScaleStale(recorded: number | null, current: number): boolean {
+  return recorded !== null && recorded !== current
+}
+
+export function currentShapeScale(win: BrowserWindow): number {
+  return screen.getDisplayMatching(win.getBounds()).scaleFactor
+}
+
+const handleShapeScale = new WeakMap<BrowserWindow, number>()
+
+function reapplyHandleShapeIfScaleChanged(handle: BrowserWindow): void {
+  const recorded = handleShapeScale.get(handle) ?? null
+  if (recorded === null) return
+  const current = currentShapeScale(handle)
+  if (!petShapeScaleStale(recorded, current)) return
+  handle.setShape([{ x: 0, y: 0, width: COLLAPSED_SIZE, height: COLLAPSED_SIZE }])
+  handleShapeScale.set(handle, current)
+}
+
 export function createPetHandleWindow(overlay: BrowserWindow, preloadPath: string): BrowserWindow {
   const handle = new BrowserWindow({
     parent: overlay,
@@ -23,6 +42,7 @@ export function createPetHandleWindow(overlay: BrowserWindow, preloadPath: strin
     }
   })
   handle.setShape([{ x: 0, y: 0, width: COLLAPSED_SIZE, height: COLLAPSED_SIZE }])
+  handleShapeScale.set(handle, currentShapeScale(handle))
   return handle
 }
 
@@ -31,10 +51,14 @@ export function syncPetHandleBounds(handle: BrowserWindow, overlay: BrowserWindo
   const pet = overlay.getBounds()
   const workArea = screen.getDisplayMatching(pet).workArea
   handle.setBounds(petHandleBounds(pet, workArea))
+  reapplyHandleShapeIfScaleChanged(handle)
 }
 
 export function setPetHandleVisible(handle: BrowserWindow, visible: boolean): void {
   if (handle.isDestroyed()) return
-  if (visible && !handle.isVisible()) handle.showInactive()
+  if (visible && !handle.isVisible()) {
+    handle.showInactive()
+    reapplyHandleShapeIfScaleChanged(handle)
+  }
   else if (!visible && handle.isVisible()) handle.hide()
 }

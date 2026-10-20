@@ -12,13 +12,14 @@ vi.mock('electron', () => ({
   screen: { getDisplayMatching: mocks.matchDisplay },
   BrowserWindow: class {
     setShape = vi.fn()
+    getBounds = vi.fn(() => ({ x: 0, y: 0, width: 51, height: 51 }))
     constructor(public options: Record<string, unknown>) {
       mocks.constructed.push(this)
     }
   },
 }))
 
-import { createPetHandleWindow, syncPetHandleBounds, setPetHandleVisible } from './petHandleWindow'
+import { createPetHandleWindow, syncPetHandleBounds, setPetHandleVisible, petShapeScaleStale } from './petHandleWindow'
 import { COLLAPSED_SIZE, petHandleBounds } from './windowPositions'
 
 function asWindow(win: unknown): Electron.BrowserWindow {
@@ -32,6 +33,7 @@ beforeEach(() => {
 
 describe('createPetHandleWindow', () => {
   it('creates a non-focusable transparent child window of the overlay and clips it to the handle square', () => {
+    mocks.matchDisplay.mockReturnValue({ scaleFactor: 1 })
     const overlay = { id: 'overlay' }
     createPetHandleWindow(asWindow(overlay), '/preload/index.cjs')
 
@@ -48,6 +50,65 @@ describe('createPetHandleWindow', () => {
       webPreferences: { preload: '/preload/index.cjs' },
     })
     expect(created.setShape).toHaveBeenCalledWith([{ x: 0, y: 0, width: COLLAPSED_SIZE, height: COLLAPSED_SIZE }])
+  })
+})
+
+describe('petShapeScaleStale', () => {
+  it('is stale only when a recorded scale differs from the current one', () => {
+    expect(petShapeScaleStale(null, 1.5)).toBe(false)
+    expect(petShapeScaleStale(1.5, 1.5)).toBe(false)
+    expect(petShapeScaleStale(1, 1.5)).toBe(true)
+  })
+})
+
+describe('handle shape follows the display scale', () => {
+  const rect = [{ x: 0, y: 0, width: COLLAPSED_SIZE, height: COLLAPSED_SIZE }]
+  const workArea = { x: 0, y: 0, width: 1920, height: 1080 }
+  const overlay = { isDestroyed: () => false, getBounds: () => ({ x: 1500, y: 600, width: 132, height: 132 }) }
+
+  function makeHandle(scale: number) {
+    mocks.matchDisplay.mockReturnValue({ scaleFactor: scale, workArea })
+    createPetHandleWindow(asWindow({ id: 'overlay' }), '/preload/index.cjs')
+    const created = mocks.constructed[0] as unknown as {
+      setShape: ReturnType<typeof vi.fn>
+      setBounds: ReturnType<typeof vi.fn>
+      isDestroyed: () => boolean
+      isVisible: () => boolean
+      showInactive: ReturnType<typeof vi.fn>
+    }
+    created.setBounds = vi.fn()
+    created.isDestroyed = () => false
+    created.showInactive = vi.fn()
+    created.setShape.mockClear()
+    return created
+  }
+
+  it('does not set the shape again when the scale is unchanged', () => {
+    const handle = makeHandle(1)
+    handle.isVisible = () => false
+    syncPetHandleBounds(asWindow(handle), asWindow(overlay))
+    setPetHandleVisible(asWindow(handle), true)
+    expect(handle.setShape).not.toHaveBeenCalled()
+  })
+
+  it('sets the original DIP rectangle once after the scale changes, then stays quiet', () => {
+    const handle = makeHandle(1)
+    mocks.matchDisplay.mockReturnValue({ scaleFactor: 1.5, workArea })
+    syncPetHandleBounds(asWindow(handle), asWindow(overlay))
+    expect(handle.setShape).toHaveBeenCalledTimes(1)
+    expect(handle.setShape).toHaveBeenCalledWith(rect)
+    syncPetHandleBounds(asWindow(handle), asWindow(overlay))
+    expect(handle.setShape).toHaveBeenCalledTimes(1)
+  })
+
+  it('reapplies on show when the scale changed while the handle was hidden', () => {
+    const handle = makeHandle(1)
+    handle.isVisible = () => false
+    mocks.matchDisplay.mockReturnValue({ scaleFactor: 1.5, workArea })
+    setPetHandleVisible(asWindow(handle), true)
+    expect(handle.showInactive).toHaveBeenCalledTimes(1)
+    expect(handle.setShape).toHaveBeenCalledTimes(1)
+    expect(handle.setShape).toHaveBeenCalledWith(rect)
   })
 })
 
