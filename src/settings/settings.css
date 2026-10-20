@@ -108,6 +108,12 @@
   color: var(--label3);
 }
 
+/* 下拉展开的选项列表 */
+option {
+  background-color: rgb(var(--window-bg-rgb));
+  color: var(--label);
+}
+
 .settings-retry-btn {
   border-radius: 6px;
   padding: 6px 16px;
