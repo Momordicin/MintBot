@@ -26,7 +26,7 @@ vi.mock('openai', () => ({
   },
 }))
 
-const { createModelProviderForPreset, createSummaryModelProviderForPreset, createModelProvider, resolveApiKey } = await import('./ModelProvider.js')
+const { createModelProviderForPreset, createSummaryModelProviderForPreset, createModelProvider, resolveApiKey, stripThinkTags } = await import('./ModelProvider.js')
 const { wipeCredentialEnv } = await import('./envCredentials.js')
 
 function fakePreset(overrides: Partial<Preset> = {}): Preset {
@@ -450,7 +450,7 @@ describe('provider 专属请求体（response_format / max_completion_tokens / t
     expect(body.response_format).toBeUndefined()
   })
 
-  it('ollama 分支：不带 thinking，max_tokens 参数名不变，jsonMode 为 true 时带 response_format', async () => {
+  it('ollama 分支：不带 thinking / max_tokens / reasoning_effort，jsonMode 为 true 时带 response_format', async () => {
     const fetchSpy = vi.fn().mockResolvedValue(fakeStreamResponse())
     vi.stubGlobal('fetch', fetchSpy)
     const provider = createModelProvider({ type: 'ollama', ollamaModel: 'qwen3' })
@@ -461,24 +461,38 @@ describe('provider 专属请求体（response_format / max_completion_tokens / t
 
     const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
     expect(body.thinking).toBeUndefined()
-    expect(body.max_tokens).toBe(1000)
+    expect(body.max_tokens).toBeUndefined()
     expect(body.max_completion_tokens).toBeUndefined()
     expect(body.response_format).toEqual({ type: 'json_object' })
-    expect(body.reasoning_effort).toBe('none')
+    expect(body.reasoning_effort).toBeUndefined()
   })
 
-  it('ollama 分支：未传 jsonMode 时仍带 reasoning_effort: none，不带 response_format', async () => {
+  it('ollama 分支：显式传入 maxTokens 也不带 max_tokens，未传 jsonMode 时不带 response_format', async () => {
     const fetchSpy = vi.fn().mockResolvedValue(fakeStreamResponse())
     vi.stubGlobal('fetch', fetchSpy)
     const provider = createModelProvider({ type: 'ollama', ollamaModel: 'qwen3' })
 
-    for await (const _chunk of provider.complete(context)) {
+    for await (const _chunk of provider.complete(context, { maxTokens: 300 })) {
       // 只需要触发 fetch 调用
     }
 
     const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
-    expect(body.reasoning_effort).toBe('none')
+    expect(body.max_tokens).toBeUndefined()
+    expect(body.reasoning_effort).toBeUndefined()
     expect(body.response_format).toBeUndefined()
+  })
+
+  it('ollama completeSync：请求体不带 max_tokens / reasoning_effort，jsonMode 时带 response_format', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(fakeNonStreamResponse('ok'))
+    vi.stubGlobal('fetch', fetchSpy)
+    const provider = createModelProvider({ type: 'ollama', ollamaModel: 'qwen3', maxTokens: 400 })
+
+    await provider.completeSync(context, { maxTokens: 300, jsonMode: true })
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
+    expect(body.max_tokens).toBeUndefined()
+    expect(body.reasoning_effort).toBeUndefined()
+    expect(body.response_format).toEqual({ type: 'json_object' })
   })
 
   it('completeSync 路径同样生效：openai 用 max_completion_tokens 并带 response_format', async () => {
@@ -916,5 +930,208 @@ describe('createSummaryModelProviderForPreset', () => {
 
     expect(openaiCtorMock.mock.calls[0][0].apiKey).toBe('global-key')
     expect(openaiCreateMock.mock.calls[0][0].model).toBe('global-model')
+  })
+})
+
+function sseResponse(contents: string[]): Response {
+  const body = contents
+    .map(content => `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`)
+    .join('') + 'data: [DONE]\n\n'
+  return new Response(body, { status: 200 })
+}
+
+async function collectOllama(contents: string[]): Promise<string> {
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse(contents)))
+  const provider = createModelProvider({ type: 'ollama', ollamaModel: 'qwen3' })
+  let text = ''
+  for await (const chunk of provider.complete({ system: '', messages: [{ role: 'user', content: 'hi' }] })) {
+    text += chunk
+  }
+  return text
+}
+
+describe('Ollama 只保留最终答案（过滤 <think>）', () => {
+  const context: BuiltContext = { system: '', messages: [{ role: 'user', content: 'hi' }] }
+
+  it('流式：标签被拆到多个分片时仍能过滤', async () => {
+    expect(await collectOllama(['<th', 'ink>想', '一想</thi', 'nk>答', '案'])).toBe('答案')
+  })
+
+  it('流式：多段 think 都被去掉', async () => {
+    expect(await collectOllama(['<think>a</think>甲<think>b</think>乙'])).toBe('甲乙')
+  })
+
+  it('流式：未闭合的 think 之后的内容全部丢弃', async () => {
+    expect(await collectOllama(['答', '案<think>没想完', '还在想'])).toBe('答案')
+  })
+
+  it('流式：无标签原样输出，含看起来像标签开头的普通文字', async () => {
+    expect(await collectOllama(['a < b', ' and <t', 'hing> ok'])).toBe('a < b and <thing> ok')
+  })
+
+  it('流式：流结束时缓存的疑似标签前缀按普通文字输出', async () => {
+    expect(await collectOllama(['答案<thi'])).toBe('答案<thi')
+  })
+
+  it('非流式：对整段文字同样处理', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fakeNonStreamResponse('<think>想</think>答案<think>未完')))
+    const result = await createModelProvider({ type: 'ollama', ollamaModel: 'qwen3' }).completeSync(context)
+    expect(result).toBe('答案')
+  })
+
+  it('非流式：去掉后为空时返回空字符串', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fakeNonStreamResponse('<think>只有思考</think>')))
+    const result = await createModelProvider({ type: 'ollama', ollamaModel: 'qwen3' }).completeSync(context)
+    expect(result).toBe('')
+  })
+
+  it('非流式：无标签原样返回', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fakeNonStreamResponse('plain 1 < 2')))
+    const result = await createModelProvider({ type: 'ollama', ollamaModel: 'qwen3' }).completeSync(context)
+    expect(result).toBe('plain 1 < 2')
+  })
+
+  it('非流式：孤立的 </think> 在开头，丢掉它之前的内容', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fakeNonStreamResponse('</think>答案')))
+    const result = await createModelProvider({ type: 'ollama', ollamaModel: 'qwen3' }).completeSync(context)
+    expect(result).toBe('答案')
+  })
+
+  it('流式：孤立的 </think> 原样输出，由调用方统一过滤', async () => {
+    const raw = await collectOllama(['想', '一想</thi', 'nk>答案'])
+    expect(raw).toBe('想一想</think>答案')
+    expect(stripThinkTags(raw)).toBe('答案')
+  })
+})
+
+describe('stripThinkTags', () => {
+  it('孤立的 </think> 在开头：丢掉标签', () => {
+    expect(stripThinkTags('</think>答案')).toBe('答案')
+  })
+
+  it('孤立的 </think> 在中间：丢掉它之前的所有内容', () => {
+    expect(stripThinkTags('思考过程</think>答案')).toBe('答案')
+  })
+
+  it('多个孤立的 </think>：只保留最后一个之后的内容', () => {
+    expect(stripThinkTags('a</think>b</think>c')).toBe('c')
+  })
+
+  it('孤立标签与成对标签混合', () => {
+    expect(stripThinkTags('<think>x</think>甲</think>乙<think>y</think>丙')).toBe('乙丙')
+    expect(stripThinkTags('甲</think>乙<think>c</think>丁')).toBe('乙丁')
+  })
+
+  it('孤立标签之后出现未闭合的 <think>：其后全部丢弃', () => {
+    expect(stripThinkTags('想</think>答案<think>未完')).toBe('答案')
+  })
+
+  it('成对标签照旧去掉，无标签原样', () => {
+    expect(stripThinkTags('<think>a</think>甲<think>b</think>乙')).toBe('甲乙')
+    expect(stripThinkTags('plain 1 < 2')).toBe('plain 1 < 2')
+  })
+
+  it('过滤后去掉首尾空白', () => {
+    expect(stripThinkTags('想一想</think>\n\n答案')).toBe('答案')
+  })
+
+  it('无标签时只去首尾空白，中间不变', () => {
+    expect(stripThinkTags('  \n甲  乙\n丙 \n')).toBe('甲  乙\n丙')
+  })
+})
+
+describe('Ollama 单次调用 2 分钟超时', () => {
+  const context: BuiltContext = { system: '', messages: [{ role: 'user', content: 'hi' }] }
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  function stubTimeout(): AbortController {
+    const timeoutController = new AbortController()
+    vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutController.signal)
+    return timeoutController
+  }
+
+  function hangingFetch() {
+    return vi.fn().mockImplementation((_url: string, init: { signal: AbortSignal }) =>
+      new Promise((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => reject(init.signal.reason))
+      })
+    )
+  }
+
+  function hangingBodyFetch() {
+    return vi.fn().mockImplementation((_url: string, init: { signal: AbortSignal }) => {
+      const stream = new ReadableStream({
+        start(controller) {
+          init.signal.addEventListener('abort', () => controller.error(init.signal.reason))
+        },
+      })
+      return Promise.resolve(new Response(stream, { status: 200 }))
+    })
+  }
+
+  it('请求使用 120000ms 的超时信号', async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout')
+    const fetchSpy = vi.fn().mockResolvedValue(fakeNonStreamResponse('ok'))
+    vi.stubGlobal('fetch', fetchSpy)
+
+    await createModelProvider({ type: 'ollama', ollamaModel: 'qwen3' }).completeSync(context)
+
+    expect(timeoutSpy).toHaveBeenCalledWith(120000)
+    expect(fetchSpy.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('completeSync：超时后中止并以含 "Ollama call timed out after 120s" 的错误失败，调用方信号未被置为已取消', async () => {
+    const timeoutController = stubTimeout()
+    vi.stubGlobal('fetch', hangingFetch())
+    const caller = new AbortController()
+
+    const pending = createModelProvider({ type: 'ollama', ollamaModel: 'qwen3' }).completeSync(context, { signal: caller.signal })
+    timeoutController.abort(new DOMException('timed out', 'TimeoutError'))
+
+    await expect(pending).rejects.toThrow('Ollama call timed out after 120s')
+    expect(caller.signal.aborted).toBe(false)
+  })
+
+  it('complete：读取流途中超时同样以含 "Ollama call timed out after 120s" 的错误失败，调用方信号未被置为已取消', async () => {
+    const timeoutController = stubTimeout()
+    vi.stubGlobal('fetch', hangingBodyFetch())
+    const caller = new AbortController()
+    const provider = createModelProvider({ type: 'ollama', ollamaModel: 'qwen3' })
+
+    const pending = (async () => {
+      for await (const _chunk of provider.complete(context, { signal: caller.signal })) {
+      }
+    })()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    timeoutController.abort(new DOMException('timed out', 'TimeoutError'))
+
+    await expect(pending).rejects.toThrow('Ollama call timed out after 120s')
+    expect(caller.signal.aborted).toBe(false)
+  })
+
+  it('未传 signal 时只使用超时信号，超时照样失败', async () => {
+    const timeoutController = stubTimeout()
+    vi.stubGlobal('fetch', hangingFetch())
+
+    const pending = createModelProvider({ type: 'ollama', ollamaModel: 'qwen3' }).completeSync(context)
+    timeoutController.abort(new DOMException('timed out', 'TimeoutError'))
+
+    await expect(pending).rejects.toThrow('Ollama call timed out after 120s')
+  })
+
+  it('调用方主动取消：以 AbortError 中止，调用方信号为已取消，超时信号未触发', async () => {
+    const timeoutController = stubTimeout()
+    vi.stubGlobal('fetch', hangingFetch())
+    const caller = new AbortController()
+
+    const pending = createModelProvider({ type: 'ollama', ollamaModel: 'qwen3' }).completeSync(context, { signal: caller.signal })
+    caller.abort()
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    expect(caller.signal.aborted).toBe(true)
+    expect(timeoutController.signal.aborted).toBe(false)
   })
 })

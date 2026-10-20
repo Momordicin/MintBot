@@ -935,3 +935,115 @@ describe('runOrganizeModeTick — 角色摘要模型', () => {
     expect(calls.map(call => call.label)).toEqual(['global'])
   })
 })
+
+describe('runOrganizeModeTick — 后台模型为 Ollama 时减小批量', () => {
+  let calls: RecordedCall[]
+
+  function roleModel(label: string, providerType: string): EntityModelProvider {
+    return { ...recordingModel(label, calls), providerType }
+  }
+
+  function extractionCalls(): number[][] {
+    return calls
+      .filter(call => call.prompt.includes('[messageId='))
+      .map(call => [...call.prompt.matchAll(/\[messageId=(\d+)\]/g)].map(m => Number(m[1])))
+  }
+
+  beforeEach(() => {
+    calls = []
+    createForPresetMock.mockReset()
+  })
+
+  it('Ollama 角色的消息按原顺序切成每块最多 50 条依次抽取，摘要每次最多 50 条', async () => {
+    createForPresetMock.mockImplementation(() => roleModel('ollama-role', 'ollama'))
+    seedRole('pA', { modelType: 'ollama', modelName: 'qwen3' }, 'sA')
+    const ids: number[] = []
+    for (let i = 0; i < 120; i++) {
+      ids.push(addMessageFor('sA', `消息${i}`, NOW_IN_WINDOW - 200 * MIN + i))
+    }
+
+    const result = await runOrganizeModeTick(
+      { embedding: fakeEmbedding(), ner: emptyNer(), model: recordingModel('global', calls) },
+      200,
+      () => NOW_IN_WINDOW
+    )
+
+    const chunks = extractionCalls()
+    expect(chunks.map(chunk => chunk.length)).toEqual([50, 50, 20])
+    expect(chunks.flat()).toEqual(ids)
+    expect(result.totalProcessed).toBe(120)
+    expect(result.summariesGenerated).toBe(2)
+    expect(getPendingSummaryCount('sA')).toBe(20)
+  })
+
+  it('云端角色不切块，一次处理，摘要上限仍为 200', async () => {
+    createForPresetMock.mockImplementation(() => roleModel('cloud-role', 'openai'))
+    seedRole('pA', { modelType: 'openai', modelName: 'gpt-4o' }, 'sA')
+    for (let i = 0; i < 120; i++) {
+      addMessageFor('sA', `消息${i}`, NOW_IN_WINDOW - 200 * MIN + i)
+    }
+
+    const result = await runOrganizeModeTick(
+      { embedding: fakeEmbedding(), ner: emptyNer(), model: recordingModel('global', calls) },
+      200,
+      () => NOW_IN_WINDOW
+    )
+
+    expect(extractionCalls().map(chunk => chunk.length)).toEqual([120])
+    expect(result.summariesGenerated).toBe(1)
+    expect(getPendingSummaryCount('sA')).toBe(0)
+  })
+
+  it('跟随全局后台模型的角色按全局模型的类型判断：Ollama 则切块', async () => {
+    for (let i = 0; i < 60; i++) {
+      addMessage(`消息${i}`, NOW_IN_WINDOW - 200 * MIN + i)
+    }
+
+    await runOrganizeModeTick(
+      { embedding: fakeEmbedding(), ner: emptyNer(), model: roleModel('global', 'ollama') },
+      200,
+      () => NOW_IN_WINDOW
+    )
+
+    expect(extractionCalls().map(chunk => chunk.length)).toEqual([50, 10])
+  })
+})
+
+describe('runOrganizeModeTick — 整理不重叠', () => {
+  it('上一轮未结束时再次触发会被跳过，只有一轮真正执行', async () => {
+    for (let i = 0; i < 3; i++) {
+      addMessage(`消息${i}`, NOW_IN_WINDOW - 200 * MIN + i)
+    }
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const completeSync = vi.fn(async () => {
+      await gate
+      return '{"changes":[]}'
+    })
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const deps = { embedding: fakeEmbedding(), ner: emptyNer(), model: { completeSync } }
+
+    const first = runOrganizeModeTick(deps, 200, () => NOW_IN_WINDOW)
+    const second = await runOrganizeModeTick(deps, 200, () => NOW_IN_WINDOW)
+
+    expect(second).toEqual({ triggered: false, batches: 0, totalProcessed: 0, totalEntitiesInserted: 0, totalEntitiesClosed: 0, summariesGenerated: 0 })
+    expect(logSpy).toHaveBeenCalledTimes(1)
+
+    release()
+    const firstResult = await first
+
+    expect(firstResult.triggered).toBe(true)
+    expect(completeSync).toHaveBeenCalledTimes(1)
+    logSpy.mockRestore()
+  })
+
+  it('前一轮抛错后标记被清掉，下一轮可以正常执行', async () => {
+    addMessage('我喜欢猫', NOW_IN_WINDOW - 200 * MIN)
+    const deps = { embedding: fakeEmbedding(), ner: emptyNer(), model: emptyModel() }
+
+    await expect(runOrganizeModeTick(deps, 200, () => { throw new Error('clock boom') })).rejects.toThrow('clock boom')
+
+    const result = await runOrganizeModeTick(deps, 200, () => NOW_IN_WINDOW)
+    expect(result.triggered).toBe(true)
+  })
+})

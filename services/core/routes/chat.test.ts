@@ -1279,6 +1279,36 @@ describe('POST /chat — JSON 解析兜底（parseJsonSalvage，本地模型/Dee
   })
 })
 
+describe('POST /chat — 只对 Ollama 过滤思考内容', () => {
+  it('Ollama 回复含思考内容时照常被过滤', async () => {
+    loadSession('p1')
+    const { fastify } = await buildTestApp('想一想</think>答案')
+
+    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+    const messageDone = parseSSE(response.payload).find(e => e.event === 'message_done')
+
+    expect(messageDone?.data.text).toBe('答案')
+  })
+
+  it('云端回复含字面 </think> 时内容保持不变', async () => {
+    upsertPreset({
+      presetId: 'p-cloud',
+      name: '云端测试',
+      characterId: 'char-001',
+      modelType: 'anthropic',
+      modelName: 'claude',
+      systemPrompt: '你是角色',
+    })
+    loadSession('p-cloud')
+    const { fastify } = await buildTestApp('想一想</think>答案')
+
+    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+    const messageDone = parseSSE(response.payload).find(e => e.event === 'message_done')
+
+    expect(messageDone?.data.text).toBe('想一想</think>答案')
+  })
+})
+
 describe('POST /chat — 表情包挑选（emote 字段，TDD §3.9「表情包挑选机制」）', () => {
   it('tag 命中角色包词表，emotePool 中唯一匹配：message_done 带上对应 file', async () => {
     upsertPreset({

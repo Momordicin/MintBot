@@ -10,7 +10,7 @@ import { selectEmoteFile } from '../characters/emotePool.js'
 import { upsertEmotionState, sessionExists, appendExchange } from '../session/queries.js'
 import { recordAttention, markExplicitSleep, isExplicitSleep } from '../session/attention.js'
 import { broadcastEvent } from '../events/broadcast.js'
-import { createModelProviderForPreset } from '../providers/ModelProvider.js'
+import { createModelProviderForPreset, stripThinkTags } from '../providers/ModelProvider.js'
 import { getModelProviderConfig } from '../config/index.js'
 import { isEmptyReply } from '../reply/interceptor.js'
 import { detectSleepiness } from '../reply/sleepDetector.js'
@@ -152,10 +152,12 @@ export async function chatRoutes(fastify: FastifyInstance) {
           return
         }
 
-        let replyText = fullReply
+        const finalReply = modelType === 'ollama' ? stripThinkTags(fullReply) : fullReply
 
-        const parsed = parseJsonSalvage(fullReply) as any
-        replyText = parsed?.reply ?? fullReply
+        let replyText = finalReply
+
+        const parsed = parseJsonSalvage(finalReply) as any
+        replyText = parsed?.reply ?? finalReply
 
         if (isEmptyReply(replyText)) {
           console.error(
@@ -174,7 +176,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
           markExplicitSleep(sessionId)
         }
 
-        const emoteTag = parseEmoteTag(fullReply)
+        const emoteTag = parseEmoteTag(finalReply)
         const emoteFile = selectEmoteFile(emoteTag, state.manifest)
 
         send('message_done', {
@@ -184,7 +186,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
           ...(emoteFile ? { emote: emoteFile } : {}),
         })
 
-        const selfEmotion = parseSelfEmotion(fullReply)
+        const selfEmotion = parseSelfEmotion(finalReply)
         const isSleep = selfEmotion?.label === 'sleep'
         if (selfEmotion && !isSleep) {
           try {

@@ -326,5 +326,7 @@
   "MintBot 设置": "MintBot Settings",
   "Ollama 启动失败": "Failed to start Ollama",
   "Ollama 未运行，请先启动 Ollama": "Ollama is not running. Please start Ollama first.",
-  "PNG 文件中未找到角色卡数据（缺少 ccv3/chara 文本块）": "No character card data found in the PNG file (missing ccv3/chara text chunk)"
+  "PNG 文件中未找到角色卡数据（缺少 ccv3/chara 文本块）": "No character card data found in the PNG file (missing ccv3/chara text chunk)",
+  "内容较多或较复杂的整理建议使用线上模型": "For larger or more complex organizing tasks, an online model is recommended",
+  "Ollama 不受此限制": "Ollama is not subject to this limit"
 }

@@ -132,6 +132,37 @@ describe('generateSummary', () => {
     expect(db.prepare(`SELECT COUNT(*) as count FROM Summaries`).get() as any).toEqual({ count: 0 })
   })
 
+  it('第一次返回空内容时立即重试，第 2 次成功则正常落库', async () => {
+    const sessionId = 's1'
+    addMessage(sessionId, '我喜欢猫', 1000)
+    const replies = ['  ', '用户喜欢猫']
+    const completeSync = vi.fn(async () => replies.shift() ?? '')
+
+    const result = await generateSummary(sessionId, { model: { completeSync } })
+
+    expect(completeSync).toHaveBeenCalledTimes(2)
+    expect(result).not.toBeNull()
+    const summaryRow = db.prepare(`SELECT * FROM Summaries WHERE id = ?`).get(result!.summaryId) as any
+    expect(summaryRow.content).toBe('用户喜欢猫')
+  })
+
+  it('3 次都返回空内容：不写库、消息仍未摘要、告警并返回 null', async () => {
+    const sessionId = 's1'
+    const id1 = addMessage(sessionId, '我喜欢猫', 1000)
+    const completeSync = vi.fn(async () => ' \n')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const result = await generateSummary(sessionId, { model: { completeSync } })
+
+    expect(result).toBeNull()
+    expect(completeSync).toHaveBeenCalledTimes(3)
+    expect(db.prepare(`SELECT COUNT(*) as count FROM Summaries`).get() as any).toEqual({ count: 0 })
+    const messages = db.prepare(`SELECT * FROM Messages WHERE sessionId = ?`).all(sessionId) as any[]
+    expect(messages.every(m => m.summarized === 0)).toBe(true)
+    expect(warnSpy).toHaveBeenCalledWith(`[Summarizer] empty summary after 3 attempts (sessionId=${sessionId}, from=${id1}, to=${id1})`)
+    warnSpy.mockRestore()
+  })
+
   it('model 返回前有被摘要的消息已被删除：丢弃这次摘要，不写 Summaries，其余消息保持 summarized=0', async () => {
     const sessionId = 's1'
     const id1 = addMessage(sessionId, '我喜欢猫', 1000)

@@ -9,6 +9,7 @@ import { getEnvCredential, type KeyProvider } from './envCredentials.js'
 import type { PresetCredentials } from '../session/queries.js'
 
 const STREAM_TIMEOUT_MS = 30000
+const OLLAMA_TIMEOUT_MS = 120000
 
 type DeepSeekExtras = { thinking: { type: 'disabled' } }
 
@@ -73,11 +74,80 @@ interface OpenAICompatibleOverrides {
   extraBody?: Record<string, unknown>
 }
 
+function ollamaSignal(signal?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(OLLAMA_TIMEOUT_MS)
+  return signal ? AbortSignal.any([signal, timeout]) : timeout
+}
+
+class ThinkTagFilter {
+  private inThink = false
+  private pending = ''
+
+  push(text: string): string {
+    let data = this.pending + text
+    this.pending = ''
+    let out = ''
+    while (data) {
+      const tag = this.inThink ? '</think>' : '<think>'
+      const index = data.indexOf(tag)
+      if (index >= 0) {
+        if (!this.inThink) out += data.slice(0, index)
+        data = data.slice(index + tag.length)
+        this.inThink = !this.inThink
+        continue
+      }
+      let keep = Math.min(tag.length - 1, data.length)
+      while (keep > 0 && !data.endsWith(tag.slice(0, keep))) keep--
+      const safe = data.length - keep
+      if (!this.inThink) out += data.slice(0, safe)
+      this.pending = data.slice(safe)
+      break
+    }
+    return out
+  }
+
+  flush(): string {
+    const rest = this.inThink ? '' : this.pending
+    this.pending = ''
+    return rest
+  }
+}
+
+export function stripThinkTags(text: string): string {
+  let rest = text
+  let out = ''
+  while (true) {
+    const open = rest.indexOf('<think>')
+    const close = rest.indexOf('</think>')
+    if (close >= 0 && (open < 0 || close < open)) {
+      out = ''
+      rest = rest.slice(close + '</think>'.length)
+      continue
+    }
+    if (open < 0) return (out + rest).trim()
+    out += rest.slice(0, open)
+    const end = rest.indexOf('</think>', open + '<think>'.length)
+    if (end < 0) return out.trim()
+    rest = rest.slice(end + '</think>'.length)
+  }
+}
+
+function mapOllamaTimeout(err: unknown, callerSignal?: AbortSignal): unknown {
+  if (err instanceof Error && err.name === 'TimeoutError' && !callerSignal?.aborted) {
+    return new Error(`Ollama call timed out after ${OLLAMA_TIMEOUT_MS / 1000}s`, { cause: err })
+  }
+  return err
+}
+
 export class ModelProvider {
   private config: ModelConfig
 
   constructor(config: ModelConfig) {
     this.config = config
+  }
+
+  get providerType(): ModelConfig['type'] {
+    return this.config.type
   }
 
   private resolveMaxTokens(options: CompletionOptions): number {
@@ -269,14 +339,18 @@ export class ModelProvider {
     messages: ChatMessage[],
     options: CompletionOptions
   ): AsyncIterable<string> {
-    yield* ModelProvider.callOpenAICompatible(
-      (this.config.ollamaBaseUrl || 'http://localhost:11434') + '/v1',
-      'ollama',
-      this.config.ollamaModel ?? 'qwen3',
-      messages,
-      { ...options, maxTokens: this.resolveMaxTokens(options) },
-      ModelProvider.ollamaRequestOverrides(options)
-    )
+    try {
+      yield* ModelProvider.callOpenAICompatible(
+        (this.config.ollamaBaseUrl || 'http://localhost:11434') + '/v1',
+        'ollama',
+        this.config.ollamaModel ?? 'qwen3',
+        messages,
+        options,
+        ModelProvider.ollamaRequestOverrides(options)
+      )
+    } catch (err) {
+      throw mapOllamaTimeout(err, options.signal)
+    }
   }
 
   private async completeSyncOpenAI(
@@ -297,22 +371,23 @@ export class ModelProvider {
     messages: ChatMessage[],
     options: CompletionOptions
   ): Promise<string> {
-    return ModelProvider.callOpenAICompatibleSync(
-      (this.config.ollamaBaseUrl || 'http://localhost:11434') + '/v1',
-      'ollama',
-      this.config.ollamaModel ?? 'qwen3',
-      messages,
-      { ...options, maxTokens: this.resolveMaxTokens(options) },
-      ModelProvider.ollamaRequestOverrides(options)
-    )
+    try {
+      return await ModelProvider.callOpenAICompatibleSync(
+        (this.config.ollamaBaseUrl || 'http://localhost:11434') + '/v1',
+        'ollama',
+        this.config.ollamaModel ?? 'qwen3',
+        messages,
+        options,
+        ModelProvider.ollamaRequestOverrides(options)
+      )
+    } catch (err) {
+      throw mapOllamaTimeout(err, options.signal)
+    }
   }
 
   private static ollamaRequestOverrides(options: CompletionOptions): OpenAICompatibleOverrides {
     return {
-      extraBody: {
-        reasoning_effort: 'none',
-        ...(options.jsonMode ? { response_format: { type: 'json_object' } } : {}),
-      },
+      extraBody: options.jsonMode ? { response_format: { type: 'json_object' } } : {},
     }
   }
 
@@ -358,14 +433,13 @@ export class ModelProvider {
       body: JSON.stringify({
         ...overrides.extraBody,
         model,
-        max_tokens: options.maxTokens ?? 1000,
         stream: true,
         messages: messages.map(m => ({
           role: m.role,
           content: m.content,
         })),
       }),
-      signal: options.signal,
+      signal: ollamaSignal(options.signal),
     })
 
     if (!response.ok) { throw new Error(`OpenAI API error: ${await ModelProvider.describeErrorResponse(response)}`) }
@@ -373,11 +447,16 @@ export class ModelProvider {
 
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
+    const filter = new ThinkTagFilter()
     let buffer = ''
 
     while (true) {
       const { done, value } = await reader.read()
-      if (done) break
+      if (done) {
+        const rest = filter.flush()
+        if (rest) yield rest
+        break
+      }
 
       buffer += decoder.decode(value, { stream: true })
       const lines = buffer.split('\n')
@@ -386,14 +465,18 @@ export class ModelProvider {
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue
         const data = line.slice(6).trim()
-        if (data === '[DONE]') return
+        if (data === '[DONE]') {
+          const rest = filter.flush()
+          if (rest) yield rest
+          return
+        }
 
+        let text: string | undefined
         try {
-          const json = JSON.parse(data)
-          const chunk = json.choices?.[0]?.delta?.content
-          if (chunk) yield chunk
+          text = filter.push(JSON.parse(data).choices?.[0]?.delta?.content ?? '')
         } catch {
         }
+        if (text) yield text
       }
     }
   }
@@ -415,20 +498,19 @@ export class ModelProvider {
       body: JSON.stringify({
         ...overrides.extraBody,
         model,
-        max_tokens: options.maxTokens ?? 1000,
         stream: false,
         messages: messages.map(m => ({
           role: m.role,
           content: m.content,
         })),
       }),
-      signal: options.signal,
+      signal: ollamaSignal(options.signal),
     })
 
     if (!response.ok) { throw new Error(`OpenAI API error: ${await ModelProvider.describeErrorResponse(response)}`) }
 
     const json = await response.json()
-    return json.choices?.[0]?.message?.content ?? ''
+    return stripThinkTags(json.choices?.[0]?.message?.content ?? '')
   }
 }
 

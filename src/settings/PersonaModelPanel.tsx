@@ -37,7 +37,9 @@ function ModelRow({
   label, type, modelName, presetId, purpose, keyProvider, keySummary, envDetected, fromEnv, keyInput, keyEditing,
   keyStatus, envStatus, onTypeChange, onModelNameChange, onKeyInputChange, onKeyEditingChange, onFromEnvChange,
 }: ModelRowProps) {
+  const { t } = useTranslation()
   return (
+    <>
     <div className="model-config-panel__row">
       <span className="model-config-panel__row-label">{label}</span>
       <div className="model-config-panel__field model-config-panel__field--compact model-config-panel__field--provider">
@@ -75,6 +77,10 @@ function ModelRow({
         />
       )}
     </div>
+    {purpose === 'summary' && type === 'ollama' && (
+      <div className="character-panel__hint">{t('内容较多或较复杂的整理建议使用线上模型')}</div>
+    )}
+    </>
   )
 }
 

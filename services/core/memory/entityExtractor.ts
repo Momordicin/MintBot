@@ -50,6 +50,7 @@ interface Layer3Change {
 }
 
 export interface EntityModelProvider {
+  providerType?: string
   completeSync(context: BuiltContext, options?: CompletionOptions): Promise<string>
 }
 

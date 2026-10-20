@@ -6,6 +6,8 @@ import { getPendingSummaryMessages, insertSummaryAndMarkMessages, getMessageCrea
 import type { Message, BuiltContext, CompletionOptions } from '../../../shared/types/index.js'
 import { getMemoryConfig } from '../config/index.js'
 
+const SUMMARY_MAX_ATTEMPTS = 3
+
 export interface SummaryModelProvider {
   completeSync(context: BuiltContext, options?: CompletionOptions): Promise<string>
 }
@@ -49,7 +51,18 @@ export async function generateSummary(
   if (pending.length === 0) return null
 
   const context = buildSummaryContext(pending)
-  const content = await deps.model.completeSync(context)
+  let content = ''
+  for (let attempt = 1; attempt <= SUMMARY_MAX_ATTEMPTS; attempt++) {
+    content = await deps.model.completeSync(context)
+    if (content.trim() !== '') break
+  }
+
+  if (content.trim() === '') {
+    console.warn(
+      `[Summarizer] empty summary after ${SUMMARY_MAX_ATTEMPTS} attempts (sessionId=${sessionId}, from=${pending[0].id}, to=${pending[pending.length - 1].id})`
+    )
+    return null
+  }
 
   const pendingIds = pending.map(m => m.id)
   if (getMessageCreatedAtByIds(pendingIds).size !== pendingIds.length) return null

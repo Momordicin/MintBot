@@ -32,6 +32,8 @@ import { getMemoryConfig, getModelProviderConfig } from '../config/index.js'
 
 const ACTIVE_CONVERSATION_WINDOW_MS = 5 * 60 * 1000
 const IDLE_UNLOAD_THRESHOLD_MS = 5 * 60 * 1000
+const OLLAMA_BACKGROUND_BATCH = 50
+const CLOUD_SUMMARY_MAX_MESSAGES = 200
 
 let lastEmbeddingRun = 0
 
@@ -119,10 +121,37 @@ export interface OrganizeModeTickResult {
   summariesGenerated: number
 }
 
+function isOllamaModel(model: EntityModelProvider): boolean {
+  return model.providerType === 'ollama'
+}
+
+function summaryMaxMessages(model: EntityModelProvider): number {
+  return isOllamaModel(model) ? OLLAMA_BACKGROUND_BATCH : CLOUD_SUMMARY_MAX_MESSAGES
+}
+
+let organizeRunning = false
+
 export async function runOrganizeModeTick(
   deps: { embedding: EmbeddingProvider; ner: NERProvider; model: EntityModelProvider },
   batchSize = 200,
   getNow: () => number = Date.now
+): Promise<OrganizeModeTickResult> {
+  if (organizeRunning) {
+    console.log('[OrganizeMode] previous run still in progress, skipping this tick')
+    return { triggered: false, batches: 0, totalProcessed: 0, totalEntitiesInserted: 0, totalEntitiesClosed: 0, summariesGenerated: 0 }
+  }
+  organizeRunning = true
+  try {
+    return await runOrganizeModeTickBody(deps, batchSize, getNow)
+  } finally {
+    organizeRunning = false
+  }
+}
+
+async function runOrganizeModeTickBody(
+  deps: { embedding: EmbeddingProvider; ner: NERProvider; model: EntityModelProvider },
+  batchSize: number,
+  getNow: () => number
 ): Promise<OrganizeModeTickResult> {
   let batches = 0
   let totalProcessed = 0
@@ -145,9 +174,12 @@ export async function runOrganizeModeTick(
         model = { completeSync: () => Promise.reject(err) }
       }
       try {
-        const result = await extractEntities(messages, { ner: deps.ner, model })
-        inserted += result.inserted
-        closed += result.closed
+        const chunkSize = isOllamaModel(model) ? OLLAMA_BACKGROUND_BATCH : messages.length
+        for (let i = 0; i < messages.length; i += chunkSize) {
+          const result = await extractEntities(messages.slice(i, i + chunkSize), { ner: deps.ner, model })
+          inserted += result.inserted
+          closed += result.closed
+        }
       } catch (err) {
         console.error(`[OrganizeMode] entity extraction failed for preset ${presetId ?? '(unknown)'}:`, err)
       }
@@ -170,7 +202,7 @@ export async function runOrganizeModeTick(
       if (shouldSummarizeActive) {
         try {
           const model = resolveModelForPreset(getPresetIdBySession(activeSessionId), deps.model)
-          const result = await generateSummary(activeSessionId, { model })
+          const result = await generateSummary(activeSessionId, { model }, summaryMaxMessages(model))
           if (result !== null) summariesGenerated++
         } catch (err) {
           console.error(`[OrganizeMode] summary failed for session ${activeSessionId}:`, err)
@@ -194,7 +226,7 @@ export async function runOrganizeModeTick(
           if (!shouldSummarize) break
 
           model ??= resolveModelForPreset(getPresetIdBySession(sessionId), deps.model)
-          const result = await generateSummary(sessionId, { model })
+          const result = await generateSummary(sessionId, { model }, summaryMaxMessages(model))
           if (result === null) break
           summariesGenerated++
         }

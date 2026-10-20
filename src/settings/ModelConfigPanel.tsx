@@ -409,6 +409,7 @@ export function ModelConfigPanel() {
             onChange={e => setForm(prev => ({ ...prev, maxTokens: e.target.value }))}
           />
         </div>
+        <div className="character-panel__hint">{t('Ollama 不受此限制')}</div>
       </div>
 
       <div className="model-config-panel__section">
@@ -422,14 +423,19 @@ export function ModelConfigPanel() {
           {t('使用与对话模型相同')}
         </label>
         {!form.sameAsChat && (
-          <ModelSelectionFields
-            selection={form.summary}
-            providerOptions={providerOptionsFor(form.summary.type)}
-            reloadKey={modelsReloadKey}
-            typedKeys={form.keyInputs}
-            fromEnvs={form.fromEnv}
-            onChange={summary => setForm(prev => ({ ...prev, summary }))}
-          />
+          <>
+            <ModelSelectionFields
+              selection={form.summary}
+              providerOptions={providerOptionsFor(form.summary.type)}
+              reloadKey={modelsReloadKey}
+              typedKeys={form.keyInputs}
+              fromEnvs={form.fromEnv}
+              onChange={summary => setForm(prev => ({ ...prev, summary }))}
+            />
+            {form.summary.type === 'ollama' && (
+              <div className="character-panel__hint">{t('内容较多或较复杂的整理建议使用线上模型')}</div>
+            )}
+          </>
         )}
       </div>
 

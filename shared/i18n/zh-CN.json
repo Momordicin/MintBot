@@ -320,5 +320,7 @@
   "MintBot 设置": "MintBot 设置",
   "Ollama 启动失败": "Ollama 启动失败",
   "Ollama 未运行，请先启动 Ollama": "Ollama 未运行，请先启动 Ollama",
-  "PNG 文件中未找到角色卡数据（缺少 ccv3/chara 文本块）": "PNG 文件中未找到角色卡数据（缺少 ccv3/chara 文本块）"
+  "PNG 文件中未找到角色卡数据（缺少 ccv3/chara 文本块）": "PNG 文件中未找到角色卡数据（缺少 ccv3/chara 文本块）",
+  "内容较多或较复杂的整理建议使用线上模型": "内容较多或较复杂的整理建议使用线上模型",
+  "Ollama 不受此限制": "Ollama 不受此限制"
 }
