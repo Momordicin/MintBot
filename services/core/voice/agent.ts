@@ -3,7 +3,15 @@
 // 对应文件：services/core/voice/install.ts / services/core/voice/routes.ts / services/core/events/broadcast.ts / services/core/voice/agent.test.ts
 import fs from 'fs'
 import path from 'path'
-import { API_VERSION, VoiceAgentSupervisor, type AgentEvent, type SupervisorState } from '@mintbot/voice-agent-client'
+import {
+  API_VERSION,
+  VoiceAgentSupervisor,
+  type AgentEvent,
+  type DeviceEvent,
+  type FinalEvent,
+  type SpeakerStatus as AgentSpeakerStatus,
+  type SupervisorState,
+} from '@mintbot/voice-agent-client'
 import { ERROR_CODES, type ErrorCode } from '../../../shared/errorCodes.js'
 import { getVoiceListenEnabled, setVoiceListenEnabled } from '../config/index.js'
 import { broadcastEvent } from '../events/broadcast.js'
@@ -32,6 +40,8 @@ export interface TestResult {
   uncertain: boolean
   durationMs: number
   text?: string
+  sameDevice?: boolean
+  deviceName?: string
 }
 
 export interface SpeakerStatus {
@@ -42,6 +52,9 @@ export interface SpeakerStatus {
   enrollUtterances: number
   enrollSpeechMs: number
   enrollReady: boolean
+  currentDevice: string | null
+  enrolledDevice: string | null
+  uncertainFloor: number | null
 }
 
 export interface EnrollSentence {
@@ -106,6 +119,7 @@ let installedVersion: string | null = null
 let updateCheck: { at: number; version: string | null } | null = null
 let enrollInterrupted = false
 let enrollBaseline: { enrolled: boolean; utterances: number } | null = null
+let currentDeviceName: string | null = null
 
 export function takePending(): string[] {
   const texts = pending
@@ -169,7 +183,11 @@ function num(value: unknown): number {
   return typeof value === 'number' ? value : 0
 }
 
-function testResult(kind: TestResult['kind'], data: Record<string, unknown>, text?: string): TestResult {
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === 'string' && value !== '' ? value : null
+}
+
+function testResult(kind: TestResult['kind'], data: Partial<FinalEvent>, text?: string): TestResult {
   const result: TestResult = {
     kind,
     uncertain: data.speaker_uncertain === true,
@@ -178,6 +196,8 @@ function testResult(kind: TestResult['kind'], data: Record<string, unknown>, tex
   if (typeof data.speaker_score === 'number') result.score = data.speaker_score
   if (typeof data.speaker_threshold === 'number') result.threshold = data.speaker_threshold
   if (text !== undefined) result.text = text
+  if (typeof data.speaker_same_device === 'boolean') result.sameDevice = data.speaker_same_device
+  if (currentDeviceName !== null) result.deviceName = currentDeviceName
   return result
 }
 
@@ -221,6 +241,15 @@ async function verifyVoiceprintKept(
 }
 
 function handleEvent(ev: AgentEvent): void {
+  if (ev.type === 'device') {
+    const device: Partial<DeviceEvent> = ev.data ?? {}
+    const name = nonEmptyString(device.display_name) ?? nonEmptyString(device.name)
+    if (name !== null && name !== currentDeviceName) {
+      currentDeviceName = name
+      notifyStatusChanged()
+    }
+    return
+  }
   if (ev.type === 'enroll_progress' || ev.type === 'speaker') {
     notifyStatusChanged()
     return
@@ -310,9 +339,10 @@ function resetState(): void {
   updateCheck = null
   enrollInterrupted = false
   enrollBaseline = null
+  currentDeviceName = null
 }
 
-function readSpeaker(raw: Record<string, unknown>): SpeakerStatus {
+function readSpeaker(raw: Partial<AgentSpeakerStatus>): SpeakerStatus {
   return {
     enrolled: raw.enrolled === true,
     utterances: num(raw.utterances),
@@ -321,12 +351,17 @@ function readSpeaker(raw: Record<string, unknown>): SpeakerStatus {
     enrollUtterances: num(raw.enroll_utterances),
     enrollSpeechMs: num(raw.enroll_speech_ms),
     enrollReady: raw.enroll_ready === true,
+    currentDevice: nonEmptyString(raw.device),
+    enrolledDevice: nonEmptyString(raw.enrolled_device),
+    uncertainFloor: typeof raw.uncertain_floor === 'number' ? raw.uncertain_floor : null,
   }
 }
 
 async function fetchSpeaker(current: VoiceAgentSupervisor): Promise<SpeakerStatus | null> {
   try {
-    return readSpeaker(await current.call('GET', '/v1/speaker'))
+    const speaker = readSpeaker(await current.call<Partial<AgentSpeakerStatus>>('GET', '/v1/speaker'))
+    if (currentDeviceName === null && speaker.currentDevice !== null && supervisor === current) currentDeviceName = speaker.currentDevice
+    return speaker
   } catch {
     return null
   }

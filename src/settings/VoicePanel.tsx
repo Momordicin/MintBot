@@ -10,7 +10,7 @@ import { CORE_URL } from '../coreUrl.js'
 import { createWatchdogEventSource } from '../eventsWatchdog.js'
 import { isErrorBody } from '../../shared/errorCodes.js'
 import { errorText } from '../errorText.js'
-import { summarizeVoiceTest, testCutoff, type VoiceTestResultLike } from './voiceTestSummary.js'
+import { deviceLineBetween, summarizeVoiceTest, testCutoff, type VoiceTestResultLike } from './voiceTestSummary.js'
 
 type VoiceMode = 'normal' | 'enrolling' | 'testing'
 
@@ -19,6 +19,8 @@ interface VoiceTestResult extends VoiceTestResultLike {
   uncertain: boolean
   durationMs: number
   text?: string
+  sameDevice?: boolean
+  deviceName?: string
 }
 
 interface SpeakerStatus {
@@ -29,6 +31,9 @@ interface SpeakerStatus {
   enrollUtterances: number
   enrollSpeechMs: number
   enrollReady: boolean
+  currentDevice: string | null
+  enrolledDevice: string | null
+  uncertainFloor: number | null
 }
 
 interface EnrollSentence {
@@ -251,6 +256,12 @@ export function VoicePanel() {
     return result.uncertain ? `${base}?` : base
   }
 
+  const deviceLabel = (device: { name: string; sameDevice?: boolean }): string => {
+    if (device.sameDevice === true) return `${device.name}${t('（原生）')}`
+    if (device.sameDevice === false) return `${device.name}${t('（非录入时原生设备）')}`
+    return device.name
+  }
+
   const sentenceList = (label: string, sentences: EnrollSentence[]) => (
     <div className="forget-panel__result">
       <div>{label}</div>
@@ -294,6 +305,12 @@ export function VoicePanel() {
             </button>
           )}
         </div>
+        {status.installed && !installing && speaker?.currentDevice && (
+          <div>{t('当前麦克风：{{name}}', { name: speaker.currentDevice })}</div>
+        )}
+        {status.installed && !installing && speaker?.enrolledDevice && (
+          <div>{t('声纹录入于：{{name}}', { name: speaker.enrolledDevice })}</div>
+        )}
         {installing && (
           <div>
             {install.phase === 'starting' && t('正在启动语音组件')}
@@ -431,9 +448,20 @@ export function VoicePanel() {
           )}
           {results.length > 0 && (
             <div className="forget-panel__result">
-              {results.map((result, index) => (
-                <div key={index}>
-                  {result.threshold === undefined || result.score === undefined
+              {results.map((result, index) => {
+                const cutoff = testCutoff(result, speaker?.uncertainFloor)
+                const deviceLine = deviceLineBetween(index === 0 ? null : results[index - 1], result)
+                return (
+                <React.Fragment key={index}>
+                {deviceLine && (
+                  <div className="character-panel__hint">
+                    {deviceLine.from
+                      ? t('{{from}} → {{to}}', { from: deviceLabel(deviceLine.from), to: deviceLabel(deviceLine.to) })
+                      : deviceLabel(deviceLine.to)}
+                  </div>
+                )}
+                <div>
+                  {cutoff === null
                     ? t('{{verdict}}，得分 {{score}}，{{sec}} 秒，{{text}}', {
                         verdict: verdictText(result),
                         score: scoreText(result.score),
@@ -443,13 +471,15 @@ export function VoicePanel() {
                     : t('{{verdict}}，得分 {{score}}（{{op}}{{cutoff}}），{{sec}} 秒，{{text}}', {
                         verdict: verdictText(result),
                         score: scoreText(result.score),
-                        op: result.score >= testCutoff(result.threshold, result.uncertain) ? '≥' : '＜',
-                        cutoff: scoreText(testCutoff(result.threshold, result.uncertain)),
+                        op: (result.score ?? 0) >= cutoff ? '≥' : '＜',
+                        cutoff: scoreText(cutoff),
                         sec: seconds(result.durationMs, 1),
                         text: result.text ?? t('（未识别）'),
                       })}
                 </div>
-              ))}
+                </React.Fragment>
+                )
+              })}
             </div>
           )}
           {mode !== 'testing' && results.length > 0 && (

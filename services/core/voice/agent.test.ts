@@ -238,6 +238,9 @@ describe('voice settings page', () => {
         enrollUtterances: 0,
         enrollSpeechMs: 0,
         enrollReady: false,
+        currentDevice: null,
+        enrolledDevice: null,
+        uncertainFloor: null,
       },
       mode: 'normal',
       listenEnabled: true,
@@ -790,6 +793,96 @@ describe('voice settings page', () => {
     expect(results.map((r: { kind: string }) => r.kind)).toEqual(['owner', 'owner', 'unenrolled', 'owner'])
     expect(results[1]).toEqual({ kind: 'owner', score: 0.426, threshold: 0.5, uncertain: true, durationMs: 500, text: 'b' })
     expect(results[2]).toEqual({ kind: 'unenrolled', uncertain: false, durationMs: 1000, text: 'c' })
+  })
+
+  it('reads the device names and the short-utterance floor from the speaker status', async () => {
+    speaker = { ...speaker, device: 'USB Mic', enrolled_device: 'Headset Mic', uncertain_floor: 0.3 }
+    expect((await status()).speaker).toMatchObject({
+      currentDevice: 'USB Mic',
+      enrolledDevice: 'Headset Mic',
+      uncertainFloor: 0.3,
+    })
+    speaker = { ...speaker, device: '', enrolled_device: '' }
+    expect((await status()).speaker).toMatchObject({ currentDevice: null, enrolledDevice: null, uncertainFloor: 0.3 })
+  })
+
+  it('records sameDevice and the current mic name on every result', async () => {
+    mocks.supervisorOptions!.onEvent({ id: 1, type: 'device', data: { state: 'active', name: 'raw', display_name: 'USB Mic', device_id: 'a', container_id: 'b' } })
+    await post('/voice/test/start')
+    final({ text: 'a', start_ms: 0, end_ms: 1000, speaker_enrolled: true, speaker_score: 0.6, speaker_threshold: 0.5, speaker_same_device: true })
+    final({ text: 'b', start_ms: 0, end_ms: 1000, speaker_enrolled: true, speaker_score: 0.4, speaker_threshold: 0.35, speaker_same_device: false })
+    mocks.supervisorOptions!.onEvent({ id: 2, type: 'speech_other', data: { start_ms: 0, end_ms: 400, speaker_score: 0.1, speaker_threshold: 0.35, speaker_same_device: false } })
+    const results = (await status()).test.results
+    expect(results[0]).toEqual({ kind: 'owner', score: 0.6, threshold: 0.5, uncertain: false, durationMs: 1000, text: 'a', sameDevice: true, deviceName: 'USB Mic' })
+    expect(results[1]).toEqual({ kind: 'owner', score: 0.4, threshold: 0.35, uncertain: false, durationMs: 1000, text: 'b', sameDevice: false, deviceName: 'USB Mic' })
+    expect(results[2]).toEqual({ kind: 'other', score: 0.1, threshold: 0.35, uncertain: false, durationMs: 400, sameDevice: false, deviceName: 'USB Mic' })
+  })
+
+  it('tracks the current mic from device events, falling back to name and ignoring empty names', async () => {
+    await post('/voice/test/start')
+    const device = (data: Record<string, unknown>) => mocks.supervisorOptions!.onEvent({ id: 1, type: 'device', data })
+    const other = (text: string) =>
+      final({ text, start_ms: 0, end_ms: 1000, speaker_enrolled: true, speaker_same_device: false })
+    device({ state: 'active', name: 'Fallback Mic', display_name: '' })
+    other('a')
+    device({ state: 'active' })
+    other('b')
+    device({ state: 'active', name: 'x', display_name: 'Second Mic' })
+    other('c')
+    expect((await status()).test.results.map((r: { deviceName?: string }) => r.deviceName)).toEqual([
+      'Fallback Mic',
+      'Fallback Mic',
+      'Second Mic',
+    ])
+  })
+
+  it('broadcasts a status change only when a device event changes the mic name', async () => {
+    const device = (data: Record<string, unknown>) => mocks.supervisorOptions!.onEvent({ id: 1, type: 'device', data })
+    device({ state: 'active', display_name: 'Mic A' })
+    expect(mocks.broadcastEvent).toHaveBeenCalledWith('voice-status-changed', {})
+    mocks.broadcastEvent.mockClear()
+    device({ state: 'stalled', display_name: 'Mic A' })
+    expect(mocks.broadcastEvent).not.toHaveBeenCalled()
+    device({ state: 'active', display_name: 'Mic B' })
+    expect(mocks.broadcastEvent).toHaveBeenCalledWith('voice-status-changed', {})
+  })
+
+  it('a speaker status read that resolves after a device event does not overwrite the newer mic name', async () => {
+    let release: () => void = () => {}
+    const gate = { promise: new Promise<void>(resolve => { release = resolve }) }
+    mocks.call.mockImplementation(async (_method: string, url: string) => {
+      if (url !== '/v1/speaker') return {}
+      const snapshot = { ...speaker, device: 'Old Mic' }
+      await gate.promise
+      return snapshot
+    })
+    const pendingStatus = status()
+    await Promise.resolve()
+    mocks.supervisorOptions!.onEvent({ id: 1, type: 'device', data: { state: 'active', display_name: 'New Mic' } })
+    release()
+    await pendingStatus
+    await post('/voice/test/start')
+    final({ text: 'a', start_ms: 0, end_ms: 1000, speaker_enrolled: true, speaker_same_device: false })
+    expect((await status()).test.results[0].deviceName).toBe('New Mic')
+  })
+
+  it('takes the mic name from the latest speaker status when no device event arrived', async () => {
+    speaker = { ...speaker, device: 'Status Mic' }
+    await status()
+    await post('/voice/test/start')
+    final({ text: 'a', start_ms: 0, end_ms: 1000, speaker_enrolled: true, speaker_same_device: false })
+    expect((await status()).test.results[0].deviceName).toBe('Status Mic')
+  })
+
+  it('tolerates results and status without the device fields', async () => {
+    mocks.supervisorOptions!.onEvent({ id: 1, type: 'device', data: undefined })
+    await post('/voice/test/start')
+    final({ text: 'a', start_ms: 0, end_ms: 1000, speaker_enrolled: true, speaker_same_device: false })
+    final({ text: 'b', start_ms: 0, end_ms: 1000, speaker_enrolled: true, speaker_same_device: 'yes' })
+    const results = (await status()).test.results
+    expect(results[0]).toEqual({ kind: 'owner', uncertain: false, durationMs: 1000, text: 'a', sameDevice: false })
+    expect(results[1]).toEqual({ kind: 'owner', uncertain: false, durationMs: 1000, text: 'b' })
+    expect((await status()).speaker).toMatchObject({ currentDevice: null, enrolledDevice: null, uncertainFloor: null })
   })
 
   it('speech_other is listed only while testing', async () => {

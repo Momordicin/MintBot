@@ -1,15 +1,61 @@
 import { describe, expect, it } from 'vitest'
-import { summarizeVoiceTest, testCutoff } from './voiceTestSummary.js'
+import { deviceLineBetween, summarizeVoiceTest, testCutoff } from './voiceTestSummary.js'
 
 describe('testCutoff', () => {
-  it('uses the reported threshold for normal-length utterances', () => {
-    expect(testCutoff(0.5, false)).toBe(0.5)
-    expect(testCutoff(0.25, false)).toBe(0.25)
+  it('uses the status floor for a short utterance on the enrollment device', () => {
+    expect(testCutoff({ score: 0.4, threshold: 0.5, uncertain: true, sameDevice: true }, 0.3)).toBe(0.3)
   })
 
-  it('uses the short-utterance floor derived from the threshold', () => {
-    expect(testCutoff(0.5, true)).toBe(0.3)
-    expect(testCutoff(0.25, true)).toBeCloseTo(0.275, 10)
+  it('uses the reported threshold for a normal utterance on the enrollment device', () => {
+    expect(testCutoff({ score: 0.6, threshold: 0.5, uncertain: false, sameDevice: true }, 0.3)).toBe(0.5)
+  })
+
+  it('uses the reported threshold on another device, short or normal', () => {
+    expect(testCutoff({ score: 0.4, threshold: 0.35, uncertain: true, sameDevice: false }, 0.3)).toBe(0.35)
+    expect(testCutoff({ score: 0.4, threshold: 0.35, uncertain: false, sameDevice: false }, 0.3)).toBe(0.35)
+  })
+
+  it('returns null instead of guessing when a field is missing', () => {
+    expect(testCutoff({ threshold: 0.5, uncertain: false }, 0.3)).toBeNull()
+    expect(testCutoff({ score: 0.4, uncertain: false }, 0.3)).toBeNull()
+    expect(testCutoff({ score: 0.4, threshold: 0.5, uncertain: true }, 0.3)).toBeNull()
+    expect(testCutoff({ score: 0.4, threshold: 0.5, uncertain: true, sameDevice: true }, null)).toBeNull()
+    expect(testCutoff({ score: 0.4, uncertain: true, sameDevice: false }, 0.3)).toBeNull()
+  })
+})
+
+describe('deviceLineBetween', () => {
+  it('shows the mic line before the first result', () => {
+    expect(deviceLineBetween(null, { deviceName: 'A', sameDevice: true })).toEqual({ to: { name: 'A', sameDevice: true } })
+  })
+
+  it('shows nothing when the mic is unchanged', () => {
+    expect(deviceLineBetween({ deviceName: 'A', sameDevice: true }, { deviceName: 'A', sameDevice: true })).toBeNull()
+  })
+
+  it('shows a change line when the name changes', () => {
+    expect(deviceLineBetween({ deviceName: 'A', sameDevice: true }, { deviceName: 'B', sameDevice: false })).toEqual({
+      from: { name: 'A', sameDevice: true },
+      to: { name: 'B', sameDevice: false },
+    })
+  })
+
+  it('shows a change line when only sameDevice changes', () => {
+    expect(deviceLineBetween({ deviceName: 'A', sameDevice: true }, { deviceName: 'A', sameDevice: false })).toEqual({
+      from: { name: 'A', sameDevice: true },
+      to: { name: 'A', sameDevice: false },
+    })
+  })
+
+  it('handles missing names and sameDevice', () => {
+    expect(deviceLineBetween(null, {})).toBeNull()
+    expect(deviceLineBetween({ deviceName: 'A' }, {})).toBeNull()
+    expect(deviceLineBetween({}, { deviceName: 'B', sameDevice: true })).toEqual({ to: { name: 'B', sameDevice: true } })
+    expect(deviceLineBetween({ deviceName: 'A' }, { deviceName: 'A' })).toBeNull()
+    expect(deviceLineBetween({ deviceName: 'A', sameDevice: true }, { deviceName: 'A' })).toEqual({
+      from: { name: 'A', sameDevice: true },
+      to: { name: 'A', sameDevice: undefined },
+    })
   })
 })
 
