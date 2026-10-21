@@ -38,8 +38,22 @@ vi.mock('../providers/ModelProvider.js', () => ({ createSummaryModelProviderForP
 const { getCurrentStateMock } = vi.hoisted(() => ({ getCurrentStateMock: vi.fn(() => null as { session: { sessionId: string; presetId?: string }; preset?: any; credentials?: any } | null) }))
 vi.mock('../session/index.js', () => ({ getCurrentState: getCurrentStateMock }))
 
+const { isManagedMock, isIdleStoppedMock, stopForIdleMock } = vi.hoisted(() => ({
+  isManagedMock: vi.fn(() => false),
+  isIdleStoppedMock: vi.fn(() => false),
+  stopForIdleMock: vi.fn(async () => true),
+}))
+vi.mock('../providers/aiService.js', () => ({
+  isAiServiceManaged: isManagedMock,
+  isAiServiceIdleStopped: isIdleStoppedMock,
+  stopAiServiceForIdle: stopForIdleMock,
+}))
+
 initDb()
 beforeEach(() => {
+  isManagedMock.mockReset().mockReturnValue(false)
+  isIdleStoppedMock.mockReset().mockReturnValue(false)
+  stopForIdleMock.mockReset().mockResolvedValue(true)
   db.exec(`DELETE FROM Messages; DELETE FROM message_embeddings; DELETE FROM message_fts; DELETE FROM MessageEntities; DELETE FROM Summaries; DELETE FROM Sessions; DELETE FROM Presets; DELETE FROM PresetApiKeys;`)
   // lockState 是模块级内存状态，跨测试用例复用同一模块实例，每个用例开始前重置为未锁屏，
   // 避免前一个用例里 recordSystemEvent('lock-screen', ...) 的状态泄漏到后续用例
@@ -458,6 +472,50 @@ describe('runOrganizeModeTick — 空闲释放（embedding + NER unload）', () 
       () => Date.now()
     )
 
+    expect(embeddingUnload).not.toHaveBeenCalled()
+    expect(nerUnload).not.toHaveBeenCalled()
+  })
+
+  it('core 托管 AI 进程且已空闲：调用 stopAiServiceForIdle，不再调用 unload', async () => {
+    recordActivity()
+    isManagedMock.mockReturnValue(true)
+    const embeddingUnload = vi.fn(async () => true)
+    const nerUnload = vi.fn(async () => true)
+    const embedding: EmbeddingProvider = { ...fakeEmbedding(), unload: embeddingUnload }
+    const ner: NERProvider = { ...emptyNer(), unload: nerUnload }
+
+    await runOrganizeModeTick({ embedding, ner, model: emptyModel() }, 200, () => Date.now() + 6 * MIN)
+
+    expect(stopForIdleMock).toHaveBeenCalledTimes(1)
+    expect(embeddingUnload).not.toHaveBeenCalled()
+    expect(nerUnload).not.toHaveBeenCalled()
+  })
+
+  it('AI 进程非 core 托管且已空闲：只调用 unload，不停止进程', async () => {
+    recordActivity()
+    const embeddingUnload = vi.fn(async () => true)
+    const nerUnload = vi.fn(async () => true)
+    const embedding: EmbeddingProvider = { ...fakeEmbedding(), unload: embeddingUnload }
+    const ner: NERProvider = { ...emptyNer(), unload: nerUnload }
+
+    await runOrganizeModeTick({ embedding, ner, model: emptyModel() }, 200, () => Date.now() + 6 * MIN)
+
+    expect(stopForIdleMock).not.toHaveBeenCalled()
+    expect(embeddingUnload).toHaveBeenCalledTimes(1)
+    expect(nerUnload).toHaveBeenCalledTimes(1)
+  })
+
+  it('进程已因空闲停止后，后续 tick 既不再停止也不调用 unload', async () => {
+    recordActivity()
+    isIdleStoppedMock.mockReturnValue(true)
+    const embeddingUnload = vi.fn(async () => true)
+    const nerUnload = vi.fn(async () => true)
+    const embedding: EmbeddingProvider = { ...fakeEmbedding(), unload: embeddingUnload }
+    const ner: NERProvider = { ...emptyNer(), unload: nerUnload }
+
+    await runOrganizeModeTick({ embedding, ner, model: emptyModel() }, 200, () => Date.now() + 6 * MIN)
+
+    expect(stopForIdleMock).not.toHaveBeenCalled()
     expect(embeddingUnload).not.toHaveBeenCalled()
     expect(nerUnload).not.toHaveBeenCalled()
   })

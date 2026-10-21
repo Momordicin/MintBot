@@ -410,3 +410,258 @@ describe('stopAiServiceIfManaged', () => {
     expect(resolved).toBe(true)
   })
 })
+
+describe('idle stop and on-demand start', () => {
+  const baseUrl = 'http://localhost:18765'
+  let up: boolean
+  let holdUp: boolean
+  let embedCalls: number
+  let embedImpl: () => Promise<unknown>
+  let children: ReturnType<typeof makeFakeChild>[]
+  let requestMock: ReturnType<typeof vi.fn<() => Promise<string>>>
+
+  beforeEach(() => {
+    vi.resetModules()
+    spawnMock.mockReset()
+    existsSyncMock.mockReset()
+    existsSyncMock.mockReturnValue(true)
+    up = false
+    holdUp = false
+    embedCalls = 0
+    embedImpl = async () => ({ ok: true, json: async () => ({ embeddings: [[0]] }) })
+    children = []
+    requestMock = vi.fn(async () => 'done')
+    spawnMock.mockImplementation(() => {
+      up = !holdUp
+      const child = makeFakeChild()
+      child.kill = vi.fn(() => {
+        up = false
+        queueMicrotask(() => exitFakeChild(child, 0))
+      })
+      children.push(child)
+      return child
+    })
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (!up) throw new Error('ECONNREFUSED')
+      if (url.endsWith('/embed')) {
+        embedCalls++
+        return embedImpl()
+      }
+      return oursResponse()
+    }))
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+  })
+
+  async function loadManaged() {
+    const mod = await import('./aiService.js')
+    expect(await mod.ensureAiService(baseUrl)).toBe(true)
+    expect(spawnMock).toHaveBeenCalledTimes(1)
+    return mod
+  }
+
+  it('托管进程空闲时 stopAiServiceForIdle 停止进程并标记为空闲停止', async () => {
+    const mod = await loadManaged()
+
+    await expect(mod.stopAiServiceForIdle()).resolves.toBe(true)
+
+    expect(children[0].kill).toHaveBeenCalledTimes(1)
+    expect(mod.isAiServiceIdleStopped()).toBe(true)
+    expect(mod.isAiServiceManaged()).toBe(false)
+  })
+
+  it('非 core 托管（端口上已有我们的服务）时 stopAiServiceForIdle 不停止', async () => {
+    up = true
+    vi.useFakeTimers()
+    const mod = await import('./aiService.js')
+    const ensurePromise = mod.ensureAiService(baseUrl)
+    await vi.advanceTimersByTimeAsync(500)
+    await ensurePromise
+
+    await expect(mod.stopAiServiceForIdle()).resolves.toBe(false)
+
+    expect(spawnMock).not.toHaveBeenCalled()
+    expect(mod.isAiServiceIdleStopped()).toBe(false)
+  })
+
+  it('有请求在途时不停止，请求结束后下一次可以停止', async () => {
+    const mod = await loadManaged()
+    let finish!: () => void
+    const pending = mod.runAiRequest(baseUrl, undefined, () => new Promise<string>(resolve => { finish = () => resolve('ok') }))
+
+    await expect(mod.stopAiServiceForIdle()).resolves.toBe(false)
+    expect(children[0].kill).not.toHaveBeenCalled()
+
+    finish()
+    await pending
+    await expect(mod.stopAiServiceForIdle()).resolves.toBe(true)
+    expect(children[0].kill).toHaveBeenCalledTimes(1)
+  })
+
+  it('空闲停止后的下一次请求先启动进程一次，再发出请求', async () => {
+    const mod = await loadManaged()
+    await mod.stopAiServiceForIdle()
+
+    await expect(mod.runAiRequest(baseUrl, undefined, requestMock)).resolves.toBe('done')
+
+    expect(spawnMock).toHaveBeenCalledTimes(2)
+    expect(requestMock).toHaveBeenCalledTimes(1)
+    expect(mod.isAiServiceIdleStopped()).toBe(false)
+    expect(mod.isAiServiceManaged()).toBe(true)
+  })
+
+  it('未空闲停止时请求直接发出，不探测也不启动', async () => {
+    const mod = await loadManaged()
+    const fetchMock = vi.mocked(fetch)
+    fetchMock.mockClear()
+
+    await mod.runAiRequest(baseUrl, undefined, requestMock)
+
+    expect(requestMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(spawnMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('两个并发请求共享同一次启动', async () => {
+    const mod = await loadManaged()
+    await mod.stopAiServiceForIdle()
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await Promise.all([
+      mod.runAiRequest(baseUrl, undefined, requestMock),
+      mod.runAiRequest(baseUrl, undefined, requestMock),
+    ])
+
+    const starts = logSpy.mock.calls.filter(call => String(call[0]).includes('on demand'))
+    expect(starts).toHaveLength(1)
+    expect(spawnMock).toHaveBeenCalledTimes(2)
+    expect(embedCalls).toBe(1)
+    expect(requestMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('等待者在 embedding 预热完成之后才被放行', async () => {
+    const mod = await loadManaged()
+    await mod.stopAiServiceForIdle()
+    let finishWarmUp!: () => void
+    embedImpl = () => new Promise(resolve => {
+      finishWarmUp = () => resolve({ ok: true, json: async () => ({ embeddings: [[0]] }) })
+    })
+
+    const pending = mod.runAiRequest(baseUrl, undefined, requestMock)
+    await vi.waitFor(() => expect(embedCalls).toBe(1))
+    expect(requestMock).not.toHaveBeenCalled()
+
+    finishWarmUp()
+    await pending
+    expect(requestMock).toHaveBeenCalledTimes(1)
+    expect(mod.isAiServiceIdleStopped()).toBe(false)
+  })
+
+  it('embedding 预热失败不阻断流程：请求照常发出，进程保持运行', async () => {
+    const mod = await loadManaged()
+    await mod.stopAiServiceForIdle()
+    embedImpl = async () => { throw new Error('warm-up boom') }
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await expect(mod.runAiRequest(baseUrl, undefined, requestMock)).resolves.toBe('done')
+
+    expect(requestMock).toHaveBeenCalledTimes(1)
+    expect(mod.isAiServiceIdleStopped()).toBe(false)
+    expect(mod.isAiServiceManaged()).toBe(true)
+  })
+
+  it('启动超时：停掉刚 spawn 的进程，请求照常失败，下一次请求重新启动且不残留进程', async () => {
+    const mod = await loadManaged()
+    await mod.stopAiServiceForIdle()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.useFakeTimers()
+    holdUp = true
+
+    const first = mod.runAiRequest(baseUrl, undefined, requestMock)
+    await vi.advanceTimersByTimeAsync(91000)
+    await first
+
+    expect(children).toHaveLength(2)
+    expect(children[1].kill).toHaveBeenCalledTimes(1)
+    expect(mod.isAiServiceManaged()).toBe(false)
+    expect(mod.isAiServiceIdleStopped()).toBe(true)
+    expect(mod.isAiServiceStartableOnDemand()).toBe(false)
+
+    holdUp = false
+    await mod.runAiRequest(baseUrl, undefined, requestMock)
+
+    expect(children).toHaveLength(3)
+    expect(children[2].kill).not.toHaveBeenCalled()
+    expect(mod.isAiServiceManaged()).toBe(true)
+    expect(mod.isAiServiceStartableOnDemand()).toBe(false)
+    expect(mod.isAiServiceIdleStopped()).toBe(false)
+  })
+
+  it('空闲停止后、启动失败之前视为可按需启动', async () => {
+    const mod = await loadManaged()
+    expect(mod.isAiServiceStartableOnDemand()).toBe(false)
+
+    await mod.stopAiServiceForIdle()
+
+    expect(mod.isAiServiceStartableOnDemand()).toBe(true)
+  })
+
+  it('shutdownAiService 之后空闲停止状态下的请求不会再 spawn 进程', async () => {
+    const mod = await loadManaged()
+    await mod.stopAiServiceForIdle()
+    await mod.shutdownAiService()
+
+    await expect(mod.runAiRequest(baseUrl, undefined, requestMock)).resolves.toBe('done')
+    await expect(mod.ensureAiService(baseUrl)).resolves.toBe(false)
+
+    expect(spawnMock).toHaveBeenCalledTimes(1)
+    expect(mod.isAiServiceManaged()).toBe(false)
+  })
+
+  it('shutdownAiService 停止托管进程；空闲停止路径本身不会置位关闭标记', async () => {
+    const mod = await loadManaged()
+    await mod.stopAiServiceForIdle()
+    await mod.runAiRequest(baseUrl, undefined, requestMock)
+    expect(spawnMock).toHaveBeenCalledTimes(2)
+
+    await mod.shutdownAiService()
+
+    expect(children[1].kill).toHaveBeenCalledTimes(1)
+    expect(mod.isAiServiceManaged()).toBe(false)
+  })
+
+  it('等待启动期间调用方 abort：立即以 abort 原因失败，不发出请求', async () => {
+    const mod = await loadManaged()
+    await mod.stopAiServiceForIdle()
+    vi.useFakeTimers()
+    holdUp = true
+    const controller = new AbortController()
+
+    const pending = mod.runAiRequest(baseUrl, controller.signal, requestMock)
+    const assertion = expect(pending).rejects.toThrow('user aborted')
+    await vi.advanceTimersByTimeAsync(10)
+    controller.abort(new Error('user aborted'))
+    await assertion
+
+    expect(requestMock).not.toHaveBeenCalled()
+  })
+
+  it('启动失败时请求照常发出并按原有方式失败，且保持空闲停止状态以便下次重试', async () => {
+    const mod = await loadManaged()
+    await mod.stopAiServiceForIdle()
+    existsSyncMock.mockReturnValue(false)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const failingRequest = vi.fn(async () => { throw new Error('fetch failed') })
+
+    await expect(mod.runAiRequest(baseUrl, undefined, failingRequest)).rejects.toThrow('fetch failed')
+
+    expect(spawnMock).toHaveBeenCalledTimes(1)
+    expect(failingRequest).toHaveBeenCalledTimes(1)
+    expect(mod.isAiServiceIdleStopped()).toBe(true)
+  })
+})

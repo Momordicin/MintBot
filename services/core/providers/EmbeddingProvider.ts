@@ -3,7 +3,7 @@
 // 对应文件：services/ai/main.py / services/core/providers/aiActivity.ts / services/core/providers/aiService.ts / services/core/config/ports.ts / services/core/providers/EmbeddingProvider.test.ts
 import { recordActivity } from './aiActivity.js'
 import { AI_URL } from '../config/ports.js'
-import { AI_SERVICE_IDENTITY } from './aiService.js'
+import { AI_SERVICE_IDENTITY, isAiServiceStartableOnDemand, runAiRequest } from './aiService.js'
 
 export interface EmbeddingProvider {
   embed(text: string, signal?: AbortSignal, timeoutMs?: number): Promise<number[]>
@@ -26,20 +26,22 @@ export class BGEProvider implements EmbeddingProvider {
 
   async embedBatch(texts: string[], signal?: AbortSignal, timeoutMs = 5000): Promise<number[][]> {
     recordActivity()
-    const combinedSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs)
-    const response = await fetch(`${this.baseUrl}/embed`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ texts }),
-      signal: combinedSignal,
+    return runAiRequest(this.baseUrl, signal, async () => {
+      const combinedSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs)
+      const response = await fetch(`${this.baseUrl}/embed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ texts }),
+        signal: combinedSignal,
+      })
+
+      if (!response.ok) {
+        throw new Error(`[Embedding] HTTP ${response.status}`)
+      }
+
+      const { embeddings } = await response.json() as { embeddings: number[][] }
+      return embeddings
     })
-
-    if (!response.ok) {
-      throw new Error(`[Embedding] HTTP ${response.status}`)
-    }
-
-    const { embeddings } = await response.json() as { embeddings: number[][] }
-    return embeddings
   }
 
   async unload(): Promise<boolean> {
@@ -59,6 +61,7 @@ export function getAiBaseUrl(): string {
 }
 
 export async function isAiServiceAvailable(baseUrl: string): Promise<boolean> {
+  if (isAiServiceStartableOnDemand()) return true
   try {
     const response = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(3000) })
     if (!response.ok) return false

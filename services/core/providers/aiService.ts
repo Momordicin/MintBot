@@ -1,7 +1,7 @@
 // services/core/providers/aiService.ts — 探测并托管 Python AI 服务（services/ai，提供 embedding/NER）：已在运行则直接用，否则用 .venv 里的 python 启动 uvicorn 并等待 /health 就绪
-// 用法：index.ts 的 start() 调 ensureAiService(baseUrl)，SIGINT/SIGTERM 时调 stopAiServiceIfManaged()；AI_SERVICE_IDENTITY 供 EmbeddingProvider 校验 /health 身份
+// 用法：index.ts 的 start() 调 ensureAiService(baseUrl)，SIGINT/SIGTERM 时调 shutdownAiService()；orchestrator 空闲时调 stopAiServiceForIdle()；EmbeddingProvider / NERProvider 调 runAiRequest；AI_SERVICE_IDENTITY 供 EmbeddingProvider 校验 /health 身份
 // 形状：ensureAiService(baseUrl) -> Promise<boolean>（服务是否可用）
-// 对应文件：services/ai/main.py / services/core/providers/EmbeddingProvider.ts / services/core/config/ports.ts / scripts/dev-ai.ts / services/core/providers/aiService.test.ts
+// 对应文件：services/ai/main.py / services/core/providers/EmbeddingProvider.ts / services/core/providers/NERProvider.ts / services/core/memory/orchestrator.ts / services/core/config/ports.ts / scripts/dev-ai.ts / services/core/providers/aiService.test.ts
 import { spawn, ChildProcess } from 'child_process'
 import type { Readable } from 'stream'
 import fs from 'fs'
@@ -120,6 +120,8 @@ export async function ensureAiService(baseUrl: string): Promise<boolean> {
     }
   }
 
+  if (shuttingDown) return false
+
   const pythonPath = path.resolve(process.cwd(), '.venv', 'Scripts', 'python.exe')
   if (!fs.existsSync(pythonPath)) {
     console.error(`[AiService] ${pythonPath} not found — run "pnpm setup:ai" first. AI 相关功能（embedding/NER）将不可用，走既有降级路径`)
@@ -203,4 +205,94 @@ export async function stopAiServiceIfManaged(): Promise<void> {
   })
 
   console.log('[AiService] Stopped')
+}
+
+const EMBED_WARMUP_TIMEOUT_MS = 30000
+
+let shuttingDown = false
+let idleStopped = false
+let startFailed = false
+let idleStop: Promise<void> | null = null
+let onDemandStart: Promise<void> | null = null
+let inFlightRequests = 0
+
+export function isAiServiceManaged(): boolean {
+  return aiManagedByUs && aiProcess !== null
+}
+
+export function isAiServiceIdleStopped(): boolean {
+  return idleStopped
+}
+
+export function isAiServiceStartableOnDemand(): boolean {
+  return idleStopped && !startFailed
+}
+
+export async function shutdownAiService(): Promise<void> {
+  shuttingDown = true
+  await stopAiServiceIfManaged()
+}
+
+async function warmUpEmbedding(baseUrl: string): Promise<void> {
+  try {
+    const response = await fetch(`${baseUrl}/embed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ texts: ['ping'] }),
+      signal: AbortSignal.timeout(EMBED_WARMUP_TIMEOUT_MS),
+    })
+    if (!response.ok) console.error(`[AiService] Embedding warm-up failed: HTTP ${response.status}`)
+  } catch (err) {
+    console.error('[AiService] Embedding warm-up failed:', err instanceof Error ? err.message : err)
+  }
+}
+
+export async function stopAiServiceForIdle(): Promise<boolean> {
+  if (!isAiServiceManaged() || inFlightRequests > 0) return false
+  idleStopped = true
+  console.log('[AiService] Idle, stopping managed AI service process to release memory')
+  idleStop = stopAiServiceIfManaged()
+  await idleStop
+  idleStop = null
+  return true
+}
+
+function startOnDemand(baseUrl: string): Promise<void> {
+  onDemandStart ??= (async () => {
+    await idleStop
+    if (shuttingDown) return
+    startFailed = false
+    console.log('[AiService] Starting managed AI service process on demand')
+    if (await ensureAiService(baseUrl)) {
+      await warmUpEmbedding(baseUrl)
+      idleStopped = false
+      return
+    }
+    startFailed = true
+    await stopAiServiceIfManaged()
+  })().finally(() => { onDemandStart = null })
+  return onDemandStart
+}
+
+export async function runAiRequest<T>(baseUrl: string, signal: AbortSignal | undefined, request: () => Promise<T>): Promise<T> {
+  inFlightRequests++
+  try {
+    if (idleStopped) {
+      const started = startOnDemand(baseUrl)
+      if (!signal) {
+        await started
+      } else {
+        await Promise.race([
+          started,
+          new Promise<never>((_, reject) => {
+            if (signal.aborted) reject(signal.reason)
+            else signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+          }),
+        ])
+      }
+    }
+    return await request()
+  } finally {
+    inFlightRequests--
+  }
 }
