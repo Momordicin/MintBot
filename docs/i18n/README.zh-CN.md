@@ -17,53 +17,29 @@
 
 ---
 
-## 功能特性
+## 为什么选择MintBot
 
-**对话**
-- 与自定义 AI 角色实时对话，"对方输入中"动效 + 完整消息一次性显示，类即时通讯体验
-- 角色回复期间可以继续发送，消息按顺序依次回复
-- 消息历史完整留存，支持向上滑动分页加载更早的对话
-- 每个角色可设置壁纸和主题（日间 / 夜间 / 跟随系统，可选强调色）
+- **桌面上的角色**：聊天窗口和角色悬浮窗独立展示，立绘随角色情绪和用户互动而变化，会无聊、睡着、醒来。
+- **无聊时找你互动但不影响你的工作游戏**：遇到全屏游戏、视频、演示或你指定的程序，设置智能避让模式的角色和聊天会自动避让到副屏。
+- **记得你**：每个角色有长期记忆，关系和发生过的事会延续到之后的对话里。
+- **开口就能说**：本地语音输入，只回应你的声音，解决了跨设备识别困难的问题。
+- **模型随你选**：Anthropic、OpenAI、DeepSeek、本地 Ollama，或 Claude Code / Codex 订阅。
+- **数据在本地**：对话、记忆和设置都只留在你的电脑上。
 
-**桌宠**
-- 独立的透明背景桌宠窗口，与聊天窗口并存（二者的显示和避让各自独立，点击桌宠打开聊天窗口）；角色立绘根据情绪标签实时切换（支持 GIF 动图和静态图片）
-- 像素与立绘两种形态，可按角色切换，大小可调；有无聊、睡着状态和脚本化转场（被唤醒、被戳）
-- 右键菜单：窗口穿透、窗口大小、智能避让、形态切换，以及把桌宠收起为一个手柄
-- 避开全屏程序（游戏、全屏视频、演示）和你设了规则的程序（允许 / 让位 / 完全避开）：移到空闲的显示器、贴到屏幕边缘，或隐藏
-- 聊天窗口置顶模式：始终 / 智能（按同样的规则避让）/ 关闭
-- 在每块显示器上分别记住位置
-- 系统托盘后台常驻，双击图标呼出聊天窗口
+## 核心能力一览
 
-**语音**（Phase 4，尚未提供）
-- 语音输入（faster-whisper ASR）
-- 语音回复（GPT-SoVITS v2，流式合成，首句即播）
-- 多段回复：模型输出按句子边界切分推送，模拟真实对话节奏，与流式 TTS 管线配合实现
-- 情绪标签指导语音语调
-
-**记忆系统**
-- 双轨记忆：近期对话直接注入 context，历史对话 RAG 召回
-- bge-m3 向量 embedding，sqlite-vec 本地索引，另有中文关键词检索（SQLite FTS5）
-- 自动摘要压缩，实体聚合；整理在后台进行，不阻塞对话
-- 可按时间范围删除对话，连同从中提取的事实一起删除；删除的内容会从数据库文件中擦除
-- 情绪状态引擎（Phase 2 基础版）：当前仅实现角色自身（self）情绪的解析与持久化；感知用户情绪（perceived_user）为占位设计，完整的双向情绪模型（self 与 perceived_user 互相影响）为后续规划
-
-**设置窗口**
-- 角色：新建、切换，或从 SillyTavern 角色卡导入；编辑名字、人设、壁纸和主题；删除角色时连同它的全部聊天记录和记忆一起删除
-- 模型提供方：Anthropic、OpenAI、DeepSeek 和 Ollama，模型名从各家实时的模型列表里选
-- API Key 在 MintBot 里填写（保存后只显示末尾 4 位），也可以勾选使用环境变量 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY`
-- 对话模型和后台整理模型可分开设置；每个角色可以用全局设置，也可以单独指定模型、API Key 和摘要模型
-- 登录你自己的 Claude Code 和 Codex 订阅（全局模型服务 → 订阅登录），由官方命令行打开你的默认浏览器完成登录；MintBot 的登录状态和你平时用的 Claude Code / Codex 分开。
-- 记忆管理：浏览角色的消息、提取出的事实和摘要，查看整理进度，按时间范围删除
-- 窗口行为：聊天窗口置顶模式、桌宠智能避让和按程序设置的规则
-
-**人机交互**（Phase 5 / 6，规划中，尚未实现）
-- 本地系统操作：启动应用、调整音量、截图等
-- MCP 扩展接口（预留）
-- 主动对话调度器：定时、事件、情绪阈值触发
-
-**手机端**（Phase 7，规划中，尚未实现）
-- 通过 Cloudflare Tunnel 访问本地服务
-- 与桌面端共享会话，实时同步
+| 模块 | 说明 |
+|---|---|
+| 聊天 | 即时通讯式聊天；角色回复时可以继续发送；完整历史，可向上翻看；每个角色独立的壁纸和主题；常驻系统托盘 |
+| 桌宠 | 像素和立绘两种形态，大小可调；情绪立绘（GIF 或静态图）、无聊 / 睡着状态和脚本化转场；可穿透；可收起为一个手柄；在每块屏幕上记住位置 |
+| 避让 | 遇到全屏程序或按程序设置的规则，桌宠移到空闲屏幕、贴边或隐藏；聊天窗口置顶可选始终、智能或关闭 |
+| 角色 | 新建、切换，或角色卡导入；编辑名字、人设、壁纸和主题；删除角色时连同聊天和记忆一起删除 |
+| 记忆 | 近期对话直接进入上下文，更早的对话按需召回；后台生成摘要、提取事实；可浏览记忆，按时间范围删除 |
+| 模型 | Anthropic / OpenAI / DeepSeek / Ollama，从实时模型列表中选；对话和后台整理可用不同模型；每个角色可单独设置模型和 Key；可登录 Claude Code / Codex 订阅 |
+| 语音输入 | 语音组件一键安装和更新；主人声纹，换麦克风也能识别；识别出的文字进入输入框，不会自动发送；自由测试逐句显示得分和所需的分数 |
+| 语音回复 | 规划中（Phase 4）：流式语音合成，按情绪调整语气 |
+| 工具与主动对话 | 规划中（Phase 5 / 6）：本地系统操作、MCP、按日程、事件或情绪发起对话 |
+| 手机端 | 规划中（Phase 7）：在手机上使用本机服务，与桌面端共享会话 |
 
 ---
 
@@ -75,7 +51,7 @@
 | 核心服务 | Node.js + Fastify（独立进程） |
 | 模型调用 | Anthropic SDK / OpenAI SDK（OpenAI、DeepSeek）/ Ollama |
 | 本地模型 | Ollama（可选，Qwen3 / ChatGLM 等） |
-| ASR | faster-whisper（Python HTTP 服务，规划中） |
+| 语音输入 | [mintbot-voice-agent](https://github.com/Momordicin/mintbot-voice-agent)（本地原生进程：SenseVoiceSmall 语音识别、FSMN-VAD、CAM++ 主人声纹） |
 | TTS | GPT-SoVITS v2（Python HTTP 服务，规划中） |
 | Embedding / NER | bge-m3 / bert4ner（Python HTTP 服务） |
 | 数据库 | SQLite + sqlite-vec |
@@ -92,7 +68,7 @@
 - [x] Phase 1：核心对话链路
 - [x] Phase 2：记忆系统
 - [x] Phase 3：悬浮窗 + 窗口管理
-- [ ] Phase 4：语音
+- [ ] Phase 4：语音（ASR已完成，TTS调研中）
 - [ ] Phase 5：人机交互工具 + MCP
 - [ ] Phase 6：主动对话调度器
 - [ ] Phase 7：手机端 + 收尾
@@ -119,43 +95,26 @@ cd MintBot
 # 安装依赖
 pnpm install
 
-# 下载并还原 SQLite 中文全文检索分词扩展（libsimple，wangfenjin/simple 的预编译动态库 +
-# jieba 词典，约 16MB，不提交进仓库）。首次 clone 后运行一次即可，且必须在下面的 pnpm seed /
-# 核心服务首次启动之前完成，否则中文全文检索索引初始化会失败
+# setup
 pnpm setup:vendor
 
 # 复制配置文件
 cp .env.example .env
 cp config.example.json config.json
-# 示例配置默认使用本地 Ollama。模型提供方、API Key 和模型之后都可以在设置窗口
-# （全局模型服务）里修改，不需要手动编辑 config.json。端口默认是 18300（核心服务）、
-# 18765（AI 服务）、18173（开发时的渲染进程），可在 .env 中修改
 
 # 初始化数据库（幂等写入两个示例角色，首次运行必须执行）
 pnpm seed
 
 # 初始化 Python AI 服务的虚拟环境（services/ai，ASR/TTS/Embedding 等本地模型服务）
-# 假设本机 PATH 上已有 python 命令（Python 3.10+）；首次 clone 后需要跑一次，
-# 之后 requirements.txt 有更新时重新跑一次即可同步依赖。这一步除了装 Python 依赖，
-# 还会预先下载 bge-m3 + bert4ner 模型权重（bge-m3 完整仓库约 4.59GB），首次运行视网络
-# 情况可能要等一段时间，权重会缓存在本地（~/.cache/huggingface/），之后重跑这一步会很快
 pnpm setup:ai
 
-# 开发阶段：启动核心服务（tsx），待其就绪后再启动桌面应用（Electron + Vite 开发服务器）
+# 开发阶段
 pnpm dev:all
 
-# 日常使用：先一次性构建桌面应用和核心服务（修改代码或拉取新代码后需要重新运行），
-# 再运行构建后的版本。pnpm start 会启动构建后的 Electron 应用（窗口从 app://mintbot/ 加载）；
-# 如果核心服务还没在运行，应用会自己启动构建后的核心服务，并在退出应用（托盘“退出”）时停止它。
-# 因为没有开发服务器和开发工具，占用的内存比开发模式更少。可在 设置 → 通用 中开启开机自启，
-# 开机自启运行的是最近一次 pnpm build:all 的构建产物
+# 日常使用
 pnpm build:all
 pnpm start
 ```
-
-核心服务只接受与自身模式一致的窗口发来的请求：生产模式的核心服务（`pnpm start`）只接受构建后的应用，开发模式的核心服务（`pnpm dev:all`）只接受开发服务器的窗口，所以不要混用两种模式。
-
-Python AI 服务（services/ai，ASR / TTS / Embedding 等本地模型服务）由核心服务自动启停：`pnpm start` / `pnpm dev:all` 启动核心服务时，如果检测到 AI 服务还没在运行会自动拉起对应的 `.venv` 中的进程，退出核心服务时一并停掉本次由它自己启动的实例，不需要再手动跑 `pnpm dev:ai`。`pnpm dev:ai` 仍然保留，供需要热重载调试 Python 代码时手动启动使用——核心服务检测到它已经在跑就不会重复启动，但也不会在退出时帮你停掉这个手动启动的实例（需要自己 Ctrl+C）。这个"检测到已在运行"的判断依赖两边用同一个端口；`pnpm dev:ai` 和核心服务一样从 `.env` 读取 `AI_PORT`，所以两边会保持一致。
 
 ---
 
@@ -202,6 +161,7 @@ assets/characters/my-character/
 - API Key 留在本机：全局 Key 存在 `config.json`，角色单独的 Key 存在本地数据库；从环境变量读取的 Key 只在启动时读入，不会保存
 - Claude Code / Codex 订阅的登录完全由官方命令行和你的浏览器完成，MintBot 不接触账号和凭据；凭据由命令行保存在 MintBot 自己的本地数据目录里
 - 删除的对话会从数据库文件中擦除，无法再从中恢复
+- 语音输入在本机处理，不保存音频；识别出的文字和你的声纹保存在本地文件中。语音组件本身在安装或更新时从 GitHub 发布页下载
 - 使用外部 API（Anthropic / OpenAI / DeepSeek）时，对话内容会发送至对应服务商；隐私优先用户建议配置本地 Ollama
 
 ---
@@ -210,12 +170,12 @@ assets/characters/my-character/
 
 **开源项目**
 
-本项目的设计与实现参考了以下开源项目：
+本项目作者参与开发, 或参考设计与实现的开源项目：
+- [ameath](https://gitee.com/lzy-buaa-jdi/ameath)
 - [新世界（Shinsekai）](https://github.com/RachelForster/Shinsekai)
 - [Graphiti](https://github.com/getzep/graphiti)
 - [Mem0](https://github.com/mem0ai/mem0)
 - [AstrBot](https://github.com/AstrBotDevs/AstrBot)
-- [ameath](https://gitee.com/lzy-buaa-jdi/ameath)
 - [wangfenjin/simple](https://github.com/wangfenjin/simple)（libsimple）—— 本项目 vendor 进来的 SQLite FTS5 中文分词扩展
 
 **表情包与素材**

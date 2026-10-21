@@ -17,53 +17,29 @@ A locally-run AI character companion desktop app. Supports custom character pers
 
 ---
 
-## Features
+## Why MintBot
 
-**Chat**
-- Real-time conversation with a custom AI character — "typing" animation followed by the full message shown at once, an instant-messaging-style experience
-- Keep sending while the character is still replying; messages are answered in order
-- Full message history retention, with infinite-scroll-up pagination for older conversations
-- Per-character wallpaper and theme (light / dark / follow system, with an accent color)
+- **A character on your desktop**: the chat window and the character's floating window are shown separately; the portrait changes with the character's mood and your interactions — it gets bored, falls asleep and wakes up.
+- **Comes to you when bored, never gets in the way of your work or games**: for fullscreen games, videos, presentations or apps you choose, a character and chat set to smart avoidance move out of the way to a secondary display.
+- **Remembers you**: each character keeps long-term memory, so relationships and past events carry over into later conversations.
+- **Just speak**: local voice input that responds only to your voice, and solves the difficulty of recognizing it across devices.
+- **Your choice of model**: Anthropic, OpenAI, DeepSeek, local Ollama, or a Claude Code / Codex subscription.
+- **Data stays local**: conversations, memories and settings stay only on your computer.
 
-**Desktop pet**
-- An independent, transparent-background pet window that lives alongside the chat window (each has its own visibility and avoidance; clicking the pet opens the chat); the portrait switches in real time based on emotion tags (supports both animated GIF and static images)
-- Pixel and illustration forms, switchable per character, with an adjustable size; bored / asleep states and scripted transitions (waking up, being poked)
-- Right-click menu: click-through mode, window size, smart avoidance, form switch, and collapsing the pet into a single handle
-- Avoids fullscreen programs (games, fullscreen video, presentations) and apps you set rules for (allow / make way / avoid completely): moves to a free display, docks to the screen edge, or hides
-- Chat window pin-on-top modes: always / smart (follows the same avoidance) / off
-- Remembers its position on each display
-- Persists in the system tray in the background; double-click the tray icon to bring up the chat window
+## Core capabilities
 
-**Voice** (Phase 4, not yet available)
-- Voice input (faster-whisper ASR)
-- Voice replies (GPT-SoVITS v2, streaming synthesis — playback starts on the first sentence)
-- Multi-part replies: model output is split at sentence boundaries and pushed incrementally to mimic natural conversation pacing, paired with the streaming TTS pipeline
-- Emotion tags guide vocal tone
-
-**Memory system**
-- Dual-track memory: recent conversation is injected directly into context, older conversation is retrieved via RAG
-- bge-m3 vector embeddings, local sqlite-vec indexing, plus Chinese keyword search (SQLite FTS5)
-- Automatic summary compression, entity aggregation; organizing runs in the background without blocking chat
-- Delete a time range of conversation, together with the facts extracted from it; deleted content is erased from the database file
-- Emotion state engine (Phase 2 baseline): currently only the character's own (self) emotion is parsed and persisted; perceived user emotion (perceived_user) is a placeholder design — a full bidirectional emotion model (self and perceived_user influencing each other) is planned for later
-
-**Settings window**
-- Characters: create, switch, or import from a SillyTavern character card; edit name, persona, wallpaper and theme; delete a character together with all its chats and memories
-- Model providers: Anthropic, OpenAI, DeepSeek and Ollama, with model names picked from each provider's live model list
-- API keys are entered in MintBot (only the last 4 characters are shown once saved), or taken from the `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` environment variables if you tick that option
-- Separate models for chat and for background organizing; each character can use the global settings or its own model, API key and summary model
-- Sign in to your own Claude Code and Codex subscriptions. The official command-line tool opens your default browser to sign in. MintBot keeps this login separate from your usual Claude Code / Codex setup.
-- Memory management: browse a character's messages, extracted facts and summaries, see organizing progress, delete by time range
-- Window behavior: chat pin-on-top mode, pet smart avoidance and per-app rules
-
-**Human-computer interaction** (Phase 5 / 6, planned — not yet implemented)
-- Local system actions: launching apps, adjusting volume, taking screenshots, etc.
-- MCP extension interface (reserved)
-- Proactive conversation scheduler: triggered by schedule, events, or emotion thresholds
-
-**Mobile** (Phase 7, planned — not yet implemented)
-- Access the local service via Cloudflare Tunnel
-- Shares sessions with the desktop client, synced in real time
+| Module | What it does |
+|---|---|
+| Chat | Instant-messaging-style chat; keep sending while the character replies; full history with scroll-back; per-character wallpaper and theme; lives in the system tray |
+| Desktop pet | Pixel and illustration forms with adjustable size; emotion portraits (GIF or static), bored / asleep states and scripted transitions; click-through mode; collapse to a single handle; remembers its spot on each display |
+| Avoidance | For fullscreen programs and per-app rules, the pet moves to a free display, docks to the screen edge or hides; the chat window can stay on top always, smartly, or never |
+| Characters | Create, switch, or import from a character card; edit name, persona, wallpaper and theme; deleting a character removes its chats and memories |
+| Memory | Recent conversation in context, older conversation recalled on demand; background summaries and fact extraction; browse memories and delete a time range |
+| Models | Anthropic / OpenAI / DeepSeek / Ollama, picked from live model lists; separate chat and background models; per-character model and key; Claude Code / Codex subscription sign-in |
+| Voice input | One-click install and update of the voice component; owner voiceprint that works across microphones; recognized text goes into the input box and is never sent automatically; a free test shows each sentence's score against the score needed |
+| Voice replies | Planned (Phase 4): streaming speech synthesis with emotion-guided tone |
+| Tools and proactive chat | Planned (Phase 5 / 6): local system actions, MCP, conversations started by schedule, events or mood |
+| Mobile | Planned (Phase 7): use the local service from your phone, sharing sessions with the desktop |
 
 ---
 
@@ -75,7 +51,7 @@ A locally-run AI character companion desktop app. Supports custom character pers
 | Core service | Node.js + Fastify (its own process) |
 | Model calls | Anthropic SDK / OpenAI SDK (OpenAI, DeepSeek) / Ollama |
 | Local model | Ollama (optional, Qwen3 / ChatGLM etc.) |
-| ASR | faster-whisper (Python HTTP service, planned) |
+| Voice input | [mintbot-voice-agent](https://github.com/Momordicin/mintbot-voice-agent) (native process: SenseVoiceSmall ASR, FSMN-VAD, CAM++ owner voiceprint) |
 | TTS | GPT-SoVITS v2 (Python HTTP service, planned) |
 | Embedding / NER | bge-m3 / bert4ner (Python HTTP service) |
 | Database | SQLite + sqlite-vec |
@@ -92,7 +68,7 @@ Model calls support both external APIs (Anthropic / OpenAI / DeepSeek) and local
 - [x] Phase 1: Core chat pipeline
 - [x] Phase 2: Memory system
 - [x] Phase 3: Overlay window + window management
-- [ ] Phase 4: Voice
+- [ ] Phase 4: Voice (ASR done, TTS under research)
 - [ ] Phase 5: Human-computer interaction tools + MCP
 - [ ] Phase 6: Proactive conversation scheduler
 - [ ] Phase 7: Mobile client + wrap-up
@@ -119,49 +95,26 @@ cd MintBot
 # Install dependencies
 pnpm install
 
-# Download and restore the SQLite FTS Chinese tokenizer extension (libsimple — a prebuilt
-# binary + jieba dictionary from wangfenjin/simple, ~16MB, not committed to the repo). Run
-# this once after cloning; it must complete before `pnpm seed` / the core service's first run,
-# or Chinese full-text-search index initialization will fail.
+# Setup
 pnpm setup:vendor
 
 # Copy config files
 cp .env.example .env
 cp config.example.json config.json
-# The example config uses local Ollama. Model providers, API keys and models can be changed
-# later in the settings window (Global model service), so you don't need to edit config.json
-# by hand. Ports default to 18300 (core service), 18765 (AI service) and 18173 (dev renderer);
-# change them in .env.
 
 # Initialize the database (idempotent — writes two example characters; required on first run)
 pnpm seed
 
-# Set up the Python AI service's virtual environment (services/ai — local ASR/TTS/Embedding
-# model services). Assumes a `python` command (Python 3.10+) is already on PATH. Run this once
-# after first cloning, and again whenever requirements.txt changes to sync dependencies. Besides
-# installing Python dependencies, this step also pre-downloads the bge-m3 + bert4ner model
-# weights (the full bge-m3 repo is about 4.59GB) — the first run may take a while depending on
-# your network, but the weights are cached locally (~/.cache/huggingface/) so subsequent runs
-# are fast.
+# Set up the Python AI service's virtual environment (services/ai — local ASR/TTS/Embedding model services)
 pnpm setup:ai
 
-# Development: start the core service (tsx) and, once it is up, the desktop app (Electron + the
-# Vite dev server)
+# Development
 pnpm dev:all
 
-# Everyday use: build the desktop app and the core service once (run it again after changing
-# code or pulling new code), then run the built version. `pnpm start` starts the built
-# Electron app (loaded from app://mintbot/); if the core service is not already running, the
-# app starts the built core service itself and stops it when you quit (tray Quit). It uses
-# less memory than dev mode because there is no dev server or dev tooling. Autostart at
-# login can be enabled in Settings → General; it runs the output of the last `pnpm build:all`.
+# Everyday use
 pnpm build:all
 pnpm start
 ```
-
-The core service only accepts requests from the windows of the matching mode: a production core (`pnpm start`) only accepts the built app, and a dev core (`pnpm dev:all`) only accepts the dev-server windows, so don't mix the two modes.
-
-The Python AI service (services/ai — local ASR / TTS / Embedding model services) is started and stopped automatically by the core service: when `pnpm start` / `pnpm dev:all` starts the core service, if it detects the AI service isn't already running, it automatically spins up the corresponding process from `.venv`, and stops that instance when the core service exits — you don't need to run `pnpm dev:ai` manually. `pnpm dev:ai` still exists for cases where you want to manually start it for hot-reload debugging of the Python code — the core service will detect it's already running and won't start a duplicate, but it also won't stop that manually-started instance for you on exit (you'll need to Ctrl+C it yourself). This "already running" detection relies on both sides using the same port; `pnpm dev:ai` reads `AI_PORT` from `.env` the same way the core service does, so they stay aligned.
 
 ---
 
@@ -208,6 +161,7 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
 - API keys stay on your machine: global keys in `config.json`, per-character keys in the local database. Keys taken from environment variables are read at startup and never saved
 - Claude Code / Codex subscription logins are handled entirely by the official command-line tools and your browser. MintBot never sees the account or its credentials; the tools store them in MintBot's own local data folder
 - Deleted conversations are erased from the database file and can't be recovered from it
+- Voice input is processed on your machine and no audio is saved; recognized text and your voiceprint are kept in local files. The voice component itself is downloaded from GitHub releases when you install or update it
 - When using an external API (Anthropic / OpenAI / DeepSeek), conversation content is sent to that provider; for privacy-first use, we recommend configuring local Ollama instead
 
 ---
@@ -216,12 +170,12 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
 
 **Open-source projects**
 
-The design and implementation of this project drew on the following open-source projects:
+Projects the author of this project contributed to, or appreciated:
+- [ameath](https://gitee.com/lzy-buaa-jdi/ameath)
 - [Shinsekai](https://github.com/RachelForster/Shinsekai)
 - [Graphiti](https://github.com/getzep/graphiti)
 - [Mem0](https://github.com/mem0ai/mem0)
 - [AstrBot](https://github.com/AstrBotDevs/AstrBot)
-- [ameath](https://gitee.com/lzy-buaa-jdi/ameath)
 - [wangfenjin/simple](https://github.com/wangfenjin/simple) (libsimple) — the SQLite FTS5 Chinese tokenizer this project vendors
 
 **Sticker packs and assets**
