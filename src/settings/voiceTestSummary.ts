@@ -1,9 +1,18 @@
-// src/settings/voiceTestSummary.ts — 语音自由测试结束后的统计：判为主人 / 其他人的句数与得分的最低、中位、最高
-// 用法：VoicePanel 调 summarizeVoiceTest(results)
+// src/settings/voiceTestSummary.ts — 语音自由测试结束后的统计：判为主人 / 其他人的句数与得分的最低、中位、最高，以及单句判定所用的有效门槛
+// 用法：VoicePanel 调 summarizeVoiceTest(results)、testCutoff(threshold, uncertain)
 // 对应文件：src/settings/VoicePanel.tsx / src/settings/voiceTestSummary.test.ts
 export interface VoiceTestResultLike {
   kind: 'owner' | 'other' | 'unenrolled'
   score?: number
+}
+
+const SPEAKER_UNCERTAIN_FLOOR = 0.3
+const SPEAKER_DEFAULT_THRESHOLD = 0.5
+
+export function testCutoff(threshold: number, uncertain: boolean): number {
+  if (!uncertain) return threshold
+  if (threshold === SPEAKER_DEFAULT_THRESHOLD) return SPEAKER_UNCERTAIN_FLOOR
+  return (SPEAKER_UNCERTAIN_FLOOR + threshold) / 2
 }
 
 export interface VoiceTestSummary {

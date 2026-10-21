@@ -1,5 +1,5 @@
-// services/core/voice/routes.ts — 语音识别文字的取走路由
-// 用法：core/index.ts 里 fastify.register(voiceRoutes)；POST /voice/take → { texts }，由 src/chat/ChatWindow.tsx 调用
+// services/core/voice/routes.ts — 语音识别文字的取走路由、语音设置页的状态与操作路由
+// 用法：core/index.ts 里 fastify.register(voiceRoutes)；POST /voice/take → { texts }，由 src/chat/ChatWindow.tsx 调用；GET /voice/update-check 由 src/settings/VoicePanel.tsx 调用
 // 对应文件：services/core/voice/agent.ts / src/chat/ChatWindow.tsx / services/core/voice/agent.test.ts
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { ERROR_CODES, errorBody, invalidRequest } from '../../../shared/errorCodes.js'
@@ -8,6 +8,8 @@ import {
   VoiceOperationError,
   cancelEnroll,
   cancelInstall,
+  checkVoiceUpdate,
+  clearEnrollInterrupted,
   clearTest,
   commitEnroll,
   deleteSpeaker,
@@ -39,6 +41,11 @@ export async function voiceRoutes(fastify: FastifyInstance) {
 
   fastify.get('/voice/status', async (_request, reply) => {
     return reply.status(200).send(await getVoiceStatus())
+  })
+
+  fastify.get('/voice/update-check', async (_request, reply) => {
+    await checkVoiceUpdate()
+    return reply.status(200).send({ ok: true })
   })
 
   fastify.post<{ Body: { enabled?: unknown } }>('/voice/listen', async (request, reply) => {
@@ -75,6 +82,9 @@ export async function voiceRoutes(fastify: FastifyInstance) {
   fastify.post('/voice/enroll/start', (_request, reply) => runOperation(reply, startEnroll))
   fastify.post('/voice/enroll/commit', (_request, reply) => runOperation(reply, commitEnroll))
   fastify.post('/voice/enroll/cancel', (_request, reply) => runOperation(reply, cancelEnroll))
+  fastify.post('/voice/enroll/dismiss-interrupted', (_request, reply) =>
+    runOperation(reply, async () => clearEnrollInterrupted())
+  )
   fastify.post('/voice/test/start', (_request, reply) => runOperation(reply, startTest))
   fastify.post('/voice/test/stop', (_request, reply) => runOperation(reply, stopTest))
   fastify.post('/voice/test/clear', (_request, reply) => runOperation(reply, async () => clearTest()))

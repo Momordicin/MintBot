@@ -3,11 +3,17 @@
 // 对应文件：services/core/voice/install.ts / services/core/voice/routes.ts / services/core/events/broadcast.ts / services/core/voice/agent.test.ts
 import fs from 'fs'
 import path from 'path'
-import { VoiceAgentSupervisor, type AgentEvent, type SupervisorState } from '@mintbot/voice-agent-client'
+import { API_VERSION, VoiceAgentSupervisor, type AgentEvent, type SupervisorState } from '@mintbot/voice-agent-client'
 import { ERROR_CODES, type ErrorCode } from '../../../shared/errorCodes.js'
 import { getVoiceListenEnabled, setVoiceListenEnabled } from '../config/index.js'
 import { broadcastEvent } from '../events/broadcast.js'
-import { installVoice, readVoiceInstallation, resolveManifestUrl } from './install.js'
+import {
+  fetchRemoteManifestInfo,
+  installVoice,
+  readVoiceInstallation,
+  removeStaleVoiceVersions,
+  resolveManifestUrl,
+} from './install.js'
 
 export const VOICE_DATA_DIR = path.resolve(process.cwd(), 'data', 'voice')
 
@@ -15,12 +21,14 @@ const MODE_TIMEOUT_MS = 10 * 60 * 1000
 const MIN_COMMIT_UTTERANCES = 5
 const MODE_HISTORY_LIMIT = 8
 const INSTALL_NOTIFY_INTERVAL_MS = 500
+const UPDATE_CHECK_CACHE_MS = 10 * 60 * 1000
 
 export type VoiceMode = 'normal' | 'enrolling' | 'testing'
 
 export interface TestResult {
   kind: 'owner' | 'other' | 'unenrolled'
   score?: number
+  threshold?: number
   uncertain: boolean
   durationMs: number
   text?: string
@@ -53,6 +61,9 @@ export interface InstallStatus {
 
 export interface VoiceStatus {
   installed: boolean
+  version: string | null
+  updateVersion: string | null
+  enrollInterrupted: boolean
   phase: string | null
   listening: boolean
   errorCode: string | null
@@ -91,6 +102,10 @@ let install: InstallStatus = { state: 'idle' }
 let installAbort: AbortController | null = null
 let installTask: Promise<void> | null = null
 let skipInstallRecovery = false
+let installedVersion: string | null = null
+let updateCheck: { at: number; version: string | null } | null = null
+let enrollInterrupted = false
+let enrollBaseline: { enrolled: boolean; utterances: number } | null = null
 
 export function takePending(): string[] {
   const texts = pending
@@ -134,6 +149,7 @@ function endMode(): void {
   mode = 'normal'
   enrollCurrent = []
   enrollSeq = null
+  enrollBaseline = null
   modeSeq++
   recordMode('normal')
   applyListening()
@@ -160,13 +176,62 @@ function testResult(kind: TestResult['kind'], data: Record<string, unknown>, tex
     durationMs: num(data.end_ms) - num(data.start_ms),
   }
   if (typeof data.speaker_score === 'number') result.score = data.speaker_score
+  if (typeof data.speaker_threshold === 'number') result.threshold = data.speaker_threshold
   if (text !== undefined) result.text = text
   return result
+}
+
+function parseVersion(version: string): number[] | null {
+  return /^\d+(\.\d+)*$/.test(version) ? version.split('.').map(Number) : null
+}
+
+function isNewerVersion(remote: string, local: string): boolean {
+  const a = parseVersion(remote)
+  const b = parseVersion(local)
+  if (!a || !b) return false
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const diff = (a[i] ?? 0) - (b[i] ?? 0)
+    if (diff !== 0) return diff > 0
+  }
+  return false
+}
+
+export async function checkVoiceUpdate(): Promise<void> {
+  if (installedVersion === null) return
+  if (updateCheck && Date.now() - updateCheck.at < UPDATE_CHECK_CACHE_MS) return
+  const manifest = resolveManifestUrl()
+  if (manifest === null) return
+  try {
+    const remote = await fetchRemoteManifestInfo(manifest)
+    updateCheck = { at: Date.now(), version: remote.apiVersion === API_VERSION ? remote.version : null }
+  } catch (err) {
+    console.error('[Voice] Update check failed:', err)
+  }
+}
+
+async function verifyVoiceprintKept(
+  current: VoiceAgentSupervisor,
+  baseline: { enrolled: boolean; utterances: number }
+): Promise<void> {
+  const speaker = await fetchSpeaker(current)
+  if (!speaker) return
+  if (speaker.enrolled !== baseline.enrolled || speaker.utterances !== baseline.utterances) {
+    console.error('[Voice] Voiceprint changed after the enrollment was interrupted by a device change:', baseline, speaker)
+  }
 }
 
 function handleEvent(ev: AgentEvent): void {
   if (ev.type === 'enroll_progress' || ev.type === 'speaker') {
     notifyStatusChanged()
+    return
+  }
+  if (ev.type === 'enroll_failed') {
+    if (ev.data?.code === 'device_changed' && mode === 'enrolling') {
+      const baseline = enrollBaseline
+      enrollInterrupted = true
+      endMode()
+      if (supervisor && baseline) verifyVoiceprintKept(supervisor, baseline).catch(() => {})
+    }
     return
   }
   if (ev.type === 'speech_other') {
@@ -215,7 +280,7 @@ function handleEvent(ev: AgentEvent): void {
 
   if (owner === 'testing') {
     if (ownerSeq !== testSeq) return
-    const kind = data.speaker_enrolled !== true ? 'unenrolled' : data.is_owner === true ? 'owner' : 'other'
+    const kind = data.speaker_enrolled !== true ? 'unenrolled' : 'owner'
     testResults.push(testResult(kind, data, text))
     notifyStatusChanged()
     return
@@ -241,6 +306,10 @@ function resetState(): void {
   enrollCurrent = []
   enrollSeq = null
   committedSeq = null
+  installedVersion = null
+  updateCheck = null
+  enrollInterrupted = false
+  enrollBaseline = null
 }
 
 function readSpeaker(raw: Record<string, unknown>): SpeakerStatus {
@@ -268,6 +337,12 @@ export async function getVoiceStatus(): Promise<VoiceStatus> {
   const running = current !== null && latestState?.phase === 'running'
   return {
     installed: current !== null,
+    version: installedVersion,
+    updateVersion:
+      installedVersion !== null && updateCheck?.version && isNewerVersion(updateCheck.version, installedVersion)
+        ? updateCheck.version
+        : null,
+    enrollInterrupted,
     phase: latestState?.phase ?? null,
     listening: latestState?.listening ?? false,
     errorCode: latestState?.error?.code ?? null,
@@ -304,6 +379,8 @@ export async function startEnroll(): Promise<void> {
   const current = requireRunning()
   if (mode !== 'normal') throw new VoiceOperationError(409, ERROR_CODES.VOICE_BUSY)
   mode = 'enrolling'
+  enrollInterrupted = false
+  enrollBaseline = null
   enrollCurrent = []
   const seq = ++modeSeq
   enrollSeq = seq
@@ -318,6 +395,7 @@ export async function startEnroll(): Promise<void> {
     endMode()
     throw new VoiceOperationError(503, ERROR_CODES.VOICE_UNAVAILABLE)
   }
+  enrollBaseline = { enrolled: speaker.enrolled, utterances: speaker.utterances }
   try {
     await callAgent(current, '/v1/speaker/enroll/start', ERROR_CODES.VOICE_BUSY)
   } catch (err) {
@@ -340,6 +418,7 @@ export async function commitEnroll(): Promise<void> {
   if (seq === modeSeq) {
     enrollCompleted = enrollCurrent
     committedSeq = enrollSeq
+    enrollInterrupted = false
     endMode()
   }
 }
@@ -355,6 +434,13 @@ export async function deleteSpeaker(): Promise<void> {
   enrollCompleted = []
   enrollCurrent = []
   committedSeq = null
+  enrollInterrupted = false
+  notifyStatusChanged()
+}
+
+export function clearEnrollInterrupted(): void {
+  if (!enrollInterrupted) return
+  enrollInterrupted = false
   notifyStatusChanged()
 }
 
@@ -416,6 +502,7 @@ export async function startVoice(dataDir: string = VOICE_DATA_DIR): Promise<void
     return
   }
 
+  installedVersion = installation.version
   listenEnabled = getVoiceListenEnabled()
   supervisor = new VoiceAgentSupervisor({
     installation,
@@ -437,6 +524,7 @@ export async function startVoice(dataDir: string = VOICE_DATA_DIR): Promise<void
 async function runInstall(manifest: string, signal: AbortSignal): Promise<void> {
   let lastNotifyAt = 0
   let outcome: InstallStatus = { state: 'idle' }
+  let installed = false
   try {
     await stopVoice()
     await installVoice(manifest, msg => console.log('[Voice] install:', msg), {
@@ -451,6 +539,7 @@ async function runInstall(manifest: string, signal: AbortSignal): Promise<void> 
         }
       },
     })
+    installed = true
   } catch (err) {
     const failure = err as { name?: string; code?: string; details?: Record<string, unknown> }
     if (failure.name !== 'AbortError') {
@@ -464,6 +553,9 @@ async function runInstall(manifest: string, signal: AbortSignal): Promise<void> 
     install = { state: 'installing', phase: 'starting' }
     notifyStatusChanged()
     await startVoice(voiceDataDir).catch(err => console.error('[Voice] Startup after install failed:', err))
+    if (installed && supervisor !== null && latestState?.phase === 'running') {
+      await removeStaleVoiceVersions().catch(err => console.error('[Voice] Failed to remove old voice versions:', err))
+    }
   }
   install = outcome
   notifyStatusChanged()

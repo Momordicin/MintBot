@@ -1,5 +1,5 @@
 // src/settings/VoicePanel.tsx — 设置窗口的"语音"面板：语音组件与麦克风状态、主人声纹录入、自由测试
-// 用法：SettingsApp 里渲染 <VoicePanel />；GET /voice/status、POST /voice/enroll/*、POST /voice/test/*、GET /events 的 voice-status-changed；electronAPI.openMicSettings
+// 用法：SettingsApp 里渲染 <VoicePanel />；GET /voice/status、GET /voice/update-check、POST /voice/enroll/*、POST /voice/test/*、GET /events 的 voice-status-changed；electronAPI.openMicSettings
 // 对应文件：src/settings/SettingsApp.tsx / src/settings/voiceTestSummary.ts / services/core/voice/routes.ts / services/core/voice/agent.ts
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -10,11 +10,12 @@ import { CORE_URL } from '../coreUrl.js'
 import { createWatchdogEventSource } from '../eventsWatchdog.js'
 import { isErrorBody } from '../../shared/errorCodes.js'
 import { errorText } from '../errorText.js'
-import { summarizeVoiceTest, type VoiceTestResultLike } from './voiceTestSummary.js'
+import { summarizeVoiceTest, testCutoff, type VoiceTestResultLike } from './voiceTestSummary.js'
 
 type VoiceMode = 'normal' | 'enrolling' | 'testing'
 
 interface VoiceTestResult extends VoiceTestResultLike {
+  threshold?: number
   uncertain: boolean
   durationMs: number
   text?: string
@@ -47,6 +48,9 @@ interface InstallStatus {
 
 interface VoiceStatus {
   installed: boolean
+  version: string | null
+  updateVersion: string | null
+  enrollInterrupted: boolean
   phase: string | null
   listening: boolean
   errorCode: string | null
@@ -113,6 +117,9 @@ export function VoicePanel() {
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const modeRef = useRef<VoiceMode>('normal')
   const loadSeqRef = useRef(0)
+  const interruptedRef = useRef(false)
+  const installStateRef = useRef<InstallStatus['state']>('idle')
+  const installState = status?.install.state
 
   const load = useCallback(async (): Promise<boolean> => {
     const seq = ++loadSeqRef.current
@@ -122,6 +129,8 @@ export function VoicePanel() {
       const next: VoiceStatus = await response.json()
       if (seq !== loadSeqRef.current) return true
       modeRef.current = next.mode
+      if (next.enrollInterrupted && !interruptedRef.current) setActionError(null)
+      interruptedRef.current = next.enrollInterrupted
       if (next.mode !== 'normal' || !next.speaker?.enrolled) setConfirmingDelete(false)
       setStatus(next)
       setLoadFailed(false)
@@ -134,6 +143,9 @@ export function VoicePanel() {
 
   useEffect(() => {
     load()
+    fetch(`${CORE_URL}/voice/update-check`)
+      .then(() => load())
+      .catch(() => {})
     const watchdog = createWatchdogEventSource({
       url: `${CORE_URL}/events`,
       listeners: {
@@ -151,6 +163,22 @@ export function VoicePanel() {
   }, [load])
 
   useEffect(() => {
+    if (installState === undefined) return
+    const previous = installStateRef.current
+    installStateRef.current = installState
+    if (previous === 'installing' && installState === 'idle') {
+      fetch(`${CORE_URL}/voice/update-check`)
+        .then(() => load())
+        .catch(() => {})
+    }
+  }, [installState, load])
+
+  useEffect(() => {
+    const dismissInterrupted = (keepalive: boolean) => {
+      if (interruptedRef.current) {
+        fetch(`${CORE_URL}/voice/enroll/dismiss-interrupted`, { method: 'POST', keepalive }).catch(() => {})
+      }
+    }
     const endPath = (): string | null => {
       if (modeRef.current === 'enrolling') return '/voice/enroll/cancel'
       if (modeRef.current === 'testing') return '/voice/test/stop'
@@ -159,12 +187,14 @@ export function VoicePanel() {
     const onPageHide = () => {
       const target = endPath()
       if (target) fetch(`${CORE_URL}${target}`, { method: 'POST', keepalive: true }).catch(() => {})
+      dismissInterrupted(true)
     }
     window.addEventListener('pagehide', onPageHide)
     return () => {
       window.removeEventListener('pagehide', onPageHide)
       const target = endPath()
       if (target) fetch(`${CORE_URL}${target}`, { method: 'POST' }).catch(() => {})
+      dismissInterrupted(false)
     }
   }, [])
 
@@ -180,7 +210,9 @@ export function VoicePanel() {
         throw new Error(isErrorBody(payload) ? errorText(payload, t) : `HTTP ${response.status}`)
       }
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : t('操作失败，请稍后重试'))
+      if (!(target === '/voice/enroll/commit' && interruptedRef.current)) {
+        setActionError(err instanceof Error ? err.message : t('操作失败，请稍后重试'))
+      }
     } finally {
       if (!(await load())) setActionError(t('加载语音状态失败，请稍后重试'))
       setBusy(false)
@@ -214,6 +246,7 @@ export function VoicePanel() {
   else statusLabel = t('启动中')
 
   const verdictText = (result: VoiceTestResult): string => {
+    if (result.kind === 'owner' && result.uncertain) return t('主人（短句）')
     const base = result.kind === 'owner' ? t('主人') : result.kind === 'other' ? t('其他人') : t('未录入')
     return result.uncertain ? `${base}?` : base
   }
@@ -245,6 +278,15 @@ export function VoicePanel() {
             <button className="memory-btn" disabled={locked} onClick={() => post('/voice/install')}>
               {t('下载并安装语音组件')}
             </button>
+          )}
+          {status.installed && !installing && install.state === 'idle' && status.updateVersion !== null && (
+            <>
+              {' '}
+              {t('当前 {{current}}，可更新到 {{next}}', { current: status.version ?? '', next: status.updateVersion })}
+              <button className="memory-btn" disabled={locked || mode !== 'normal'} onClick={() => post('/voice/install')}>
+                {t('更新')}
+              </button>
+            </>
           )}
           {status.installed && !installing && install.state === 'idle' && status.phase === 'failed' && (
             <button className="memory-btn" disabled={locked} onClick={() => post('/voice/install')}>
@@ -284,6 +326,11 @@ export function VoicePanel() {
       {status.installed && (mode === 'enrolling' || speaker !== null) && (
         <div className="window-behavior-panel__section">
           <div className="window-behavior-panel__section-label">{t('主人声纹')}</div>
+          {status.enrollInterrupted && (
+            <div className="character-panel__error">
+              {t('录入时请勿切换输入设备，否则会显著降低对主人的识别准确率；本次录入已终止，原声纹继续使用。')}
+            </div>
+          )}
           {mode === 'enrolling' ? (
             <>
               <div>{t('请在安静的环境里用正常语速说完整的句子，每句 5 到 10 秒，总共 35 到 45 秒更好；至少 5 句且累计超过 10 秒才能完成')}</div>
@@ -386,12 +433,21 @@ export function VoicePanel() {
             <div className="forget-panel__result">
               {results.map((result, index) => (
                 <div key={index}>
-                  {t('{{verdict}}，得分 {{score}}，{{sec}} 秒，{{text}}', {
-                    verdict: verdictText(result),
-                    score: scoreText(result.score),
-                    sec: seconds(result.durationMs, 1),
-                    text: result.text ?? t('（未识别）'),
-                  })}
+                  {result.threshold === undefined || result.score === undefined
+                    ? t('{{verdict}}，得分 {{score}}，{{sec}} 秒，{{text}}', {
+                        verdict: verdictText(result),
+                        score: scoreText(result.score),
+                        sec: seconds(result.durationMs, 1),
+                        text: result.text ?? t('（未识别）'),
+                      })
+                    : t('{{verdict}}，得分 {{score}}（{{op}}{{cutoff}}），{{sec}} 秒，{{text}}', {
+                        verdict: verdictText(result),
+                        score: scoreText(result.score),
+                        op: result.score >= testCutoff(result.threshold, result.uncertain) ? '≥' : '＜',
+                        cutoff: scoreText(testCutoff(result.threshold, result.uncertain)),
+                        sec: seconds(result.durationMs, 1),
+                        text: result.text ?? t('（未识别）'),
+                      })}
                 </div>
               ))}
             </div>

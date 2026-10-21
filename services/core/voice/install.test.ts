@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   readVoiceInstallation: vi.fn(),
   installVoice: vi.fn(),
   resolveManifestUrl: vi.fn(),
+  fetchRemoteManifestInfo: vi.fn(),
+  removeStaleVoiceVersions: vi.fn(async () => {}),
   broadcastEvent: vi.fn(),
   supervisorOptions: null as { onState: (s: unknown) => void; voiceprintPath: string } | null,
   start: vi.fn(async () => {}),
@@ -24,6 +26,8 @@ vi.mock('./install.js', () => ({
   readVoiceInstallation: mocks.readVoiceInstallation,
   installVoice: mocks.installVoice,
   resolveManifestUrl: mocks.resolveManifestUrl,
+  fetchRemoteManifestInfo: mocks.fetchRemoteManifestInfo,
+  removeStaleVoiceVersions: mocks.removeStaleVoiceVersions,
 }))
 vi.mock('../events/broadcast.js', () => ({ broadcastEvent: mocks.broadcastEvent }))
 vi.mock('../config/index.js', () => ({
@@ -31,6 +35,7 @@ vi.mock('../config/index.js', () => ({
   setVoiceListenEnabled: mocks.setVoiceListenEnabled,
 }))
 vi.mock('@mintbot/voice-agent-client', () => ({
+  API_VERSION: 1,
   VoiceAgentSupervisor: class {
     constructor(options: { onState: (s: unknown) => void; voiceprintPath: string }) {
       mocks.supervisorOptions = options
@@ -86,6 +91,8 @@ describe('voice component install', () => {
     mocks.broadcastEvent.mockReset()
     mocks.installVoice.mockReset()
     mocks.resolveManifestUrl.mockReset()
+    mocks.removeStaleVoiceVersions.mockReset()
+    mocks.removeStaleVoiceVersions.mockResolvedValue(undefined)
     mocks.call.mockReset()
     mocks.call.mockResolvedValue({})
     mocks.start.mockClear()
@@ -253,7 +260,7 @@ describe('voice component install', () => {
       if (saved === undefined) delete process.env.MINTBOT_VOICE_MANIFEST
       else process.env.MINTBOT_VOICE_MANIFEST = saved
     }
-    expect(actual.PINNED_MANIFEST_URL).toContain('/releases/download/v0.1.1/manifest.json')
+    expect(actual.PINNED_MANIFEST_URL).toContain('/releases/latest/download/manifest.json')
   })
 
   it('restores voice with the data directory given to startVoice', async () => {
@@ -303,6 +310,74 @@ describe('voice component install', () => {
     releaseStart()
     await settle()
     expect((await status()).install).toEqual({ state: 'failed', errorCode: 'NETWORK_ERROR', errorDetails: {} })
+    errorSpy.mockRestore()
+  })
+
+  function startRunning() {
+    mocks.start.mockImplementationOnce(async () => {
+      mocks.supervisorOptions!.onState({ phase: 'running', listening: true, restarts: 0 })
+    })
+  }
+
+  it('removes old version directories after a successful install once the agent is running', async () => {
+    mocks.readVoiceInstallation.mockResolvedValue({ version: '0.2.0' })
+    startRunning()
+    await post('/voice/install')
+    await settle()
+    expect(mocks.removeStaleVoiceVersions).not.toHaveBeenCalled()
+    finishInstall()
+    await settle()
+    expect(mocks.start).toHaveBeenCalledTimes(1)
+    expect(mocks.removeStaleVoiceVersions).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps old version directories when the new agent did not come up or nothing is installed', async () => {
+    mocks.readVoiceInstallation.mockResolvedValue({ version: '0.2.0' })
+    mocks.start.mockImplementationOnce(async () => {
+      mocks.supervisorOptions!.onState({ phase: 'restarting', listening: false, restarts: 1 })
+    })
+    await post('/voice/install')
+    await settle()
+    finishInstall()
+    await settle()
+    expect(mocks.start).toHaveBeenCalledTimes(1)
+    expect(mocks.removeStaleVoiceVersions).not.toHaveBeenCalled()
+
+    mocks.readVoiceInstallation.mockResolvedValue(null)
+    await post('/voice/install')
+    await settle()
+    finishInstall()
+    await settle()
+    expect(mocks.installVoice).toHaveBeenCalledTimes(2)
+    expect(mocks.removeStaleVoiceVersions).not.toHaveBeenCalled()
+  })
+
+  it('keeps old version directories when the install fails or is cancelled', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    mocks.readVoiceInstallation.mockResolvedValue({ version: '0.2.0' })
+    await post('/voice/install')
+    await settle()
+    failInstall(installError('NETWORK_ERROR'))
+    await settle()
+    await post('/voice/install')
+    await settle()
+    await post('/voice/install/cancel')
+    await settle()
+    expect(mocks.removeStaleVoiceVersions).not.toHaveBeenCalled()
+    errorSpy.mockRestore()
+  })
+
+  it('only logs when removing old version directories fails', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    mocks.readVoiceInstallation.mockResolvedValue({ version: '0.2.0' })
+    mocks.removeStaleVoiceVersions.mockRejectedValue(new Error('locked'))
+    startRunning()
+    await post('/voice/install')
+    await settle()
+    finishInstall()
+    await settle()
+    expect((await status()).install).toEqual({ state: 'idle' })
+    expect(errorSpy).toHaveBeenCalledTimes(1)
     errorSpy.mockRestore()
   })
 

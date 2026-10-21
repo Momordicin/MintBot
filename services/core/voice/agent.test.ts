@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   readVoiceInstallation: vi.fn(),
   installVoice: vi.fn(),
   resolveManifestUrl: vi.fn(),
+  fetchRemoteManifestInfo: vi.fn(),
+  removeStaleVoiceVersions: vi.fn(async () => {}),
   broadcastEvent: vi.fn(),
   supervisorOptions: null as { onEvent: (ev: unknown) => void; onState: (s: unknown) => void; listen?: boolean } | null,
   start: vi.fn(async () => {}),
@@ -22,6 +24,8 @@ vi.mock('./install.js', () => ({
   readVoiceInstallation: mocks.readVoiceInstallation,
   installVoice: mocks.installVoice,
   resolveManifestUrl: mocks.resolveManifestUrl,
+  fetchRemoteManifestInfo: mocks.fetchRemoteManifestInfo,
+  removeStaleVoiceVersions: mocks.removeStaleVoiceVersions,
 }))
 vi.mock('../events/broadcast.js', () => ({ broadcastEvent: mocks.broadcastEvent }))
 vi.mock('../config/index.js', () => ({
@@ -29,6 +33,7 @@ vi.mock('../config/index.js', () => ({
   setVoiceListenEnabled: mocks.setVoiceListenEnabled,
 }))
 vi.mock('@mintbot/voice-agent-client', () => ({
+  API_VERSION: 1,
   VoiceAgentSupervisor: class {
     constructor(options: { onEvent: (ev: unknown) => void; onState: (s: unknown) => void; listen?: boolean }) {
       mocks.supervisorOptions = options
@@ -218,6 +223,9 @@ describe('voice settings page', () => {
     speaker = { ...speaker, enrolled: true, utterances: 6, speech_ms: 12000 }
     expect(await status()).toEqual({
       installed: true,
+      version: '0.1.0',
+      updateVersion: null,
+      enrollInterrupted: false,
       phase: 'running',
       listening: true,
       errorCode: 'mic_access_denied',
@@ -238,6 +246,88 @@ describe('voice settings page', () => {
     })
   })
 
+  describe('update check', () => {
+    async function check() {
+      const res = await app.inject({ method: 'GET', url: '/voice/update-check' })
+      expect(res.statusCode).toBe(200)
+      return status()
+    }
+
+    async function restartInstalled(version: string) {
+      await stopVoice()
+      mocks.readVoiceInstallation.mockResolvedValue({ version })
+      await startVoice(dataDir)
+      setState(running)
+    }
+
+    beforeEach(() => {
+      mocks.resolveManifestUrl.mockReset()
+      mocks.resolveManifestUrl.mockReturnValue('https://example.invalid/manifest.json')
+      mocks.fetchRemoteManifestInfo.mockReset()
+      mocks.installVoice.mockReset()
+    })
+
+    it.each([
+      ['0.1.0', '0.2.0', 1, '0.2.0'],
+      ['0.2.0', '0.10.0', 1, '0.10.0'],
+      ['0.2.0', '0.2.0', 1, null],
+      ['0.2.0', '0.1.9', 1, null],
+      ['0.1.0', '0.2.0', 2, null],
+    ])('installed %s, remote %s with api %s gives update %s', async (installed, remote, apiVersion, expected) => {
+      await restartInstalled(installed)
+      mocks.fetchRemoteManifestInfo.mockResolvedValue({ version: remote, apiVersion })
+      const body = await check()
+      expect(mocks.fetchRemoteManifestInfo).toHaveBeenCalledWith('https://example.invalid/manifest.json')
+      expect(body.version).toBe(installed)
+      expect(body.updateVersion).toBe(expected)
+    })
+
+    it('reports no update and logs one line when the remote manifest cannot be read, then retries on the next check', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      mocks.fetchRemoteManifestInfo.mockRejectedValueOnce(new Error('offline'))
+      expect((await check()).updateVersion).toBeNull()
+      expect(errorSpy).toHaveBeenCalledTimes(1)
+      mocks.fetchRemoteManifestInfo.mockResolvedValue({ version: '0.2.0', apiVersion: 1 })
+      expect((await check()).updateVersion).toBe('0.2.0')
+      errorSpy.mockRestore()
+    })
+
+    it('caches a successful result for 10 minutes', async () => {
+      vi.useFakeTimers()
+      mocks.fetchRemoteManifestInfo.mockResolvedValue({ version: '0.2.0', apiVersion: 1 })
+      await check()
+      await check()
+      expect(mocks.fetchRemoteManifestInfo).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000)
+      await check()
+      expect(mocks.fetchRemoteManifestInfo).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not fetch when the component is not installed or no manifest address is configured', async () => {
+      mocks.resolveManifestUrl.mockReturnValue(null)
+      expect((await check()).updateVersion).toBeNull()
+      await stopVoice()
+      mocks.readVoiceInstallation.mockResolvedValue(null)
+      await startVoice(dataDir)
+      mocks.resolveManifestUrl.mockReturnValue('https://example.invalid/manifest.json')
+      expect((await check()).updateVersion).toBeNull()
+      expect(mocks.fetchRemoteManifestInfo).not.toHaveBeenCalled()
+    })
+
+    it('an update is rejected with VOICE_BUSY while enrolling or testing', async () => {
+      mocks.fetchRemoteManifestInfo.mockResolvedValue({ version: '0.2.0', apiVersion: 1 })
+      await check()
+      await post('/voice/enroll/start')
+      const whileEnrolling = await post('/voice/install')
+      expect(whileEnrolling.statusCode).toBe(409)
+      expect(whileEnrolling.json()).toEqual({ code: 'VOICE_BUSY' })
+      await post('/voice/enroll/cancel')
+      await post('/voice/test/start')
+      expect((await post('/voice/install')).statusCode).toBe(409)
+      expect(mocks.installVoice).not.toHaveBeenCalled()
+    })
+  })
+
   it('reports speaker null when the agent is not running or the read fails', async () => {
     mocks.call.mockRejectedValue(new Error('down'))
     expect((await status()).speaker).toBeNull()
@@ -255,6 +345,9 @@ describe('voice settings page', () => {
     await startVoice(dataDir)
     expect(await status()).toEqual({
       installed: false,
+      version: null,
+      updateVersion: null,
+      enrollInterrupted: false,
       phase: null,
       listening: false,
       errorCode: null,
@@ -687,14 +780,15 @@ describe('voice settings page', () => {
     ])
   })
 
-  it('classifies final results as owner, other or unenrolled', async () => {
+  it('classifies a transcribed final as owner when enrolled, unenrolled otherwise', async () => {
     await post('/voice/test/start')
     final({ text: 'a', start_ms: 0, end_ms: 1000, speaker_enrolled: true, is_owner: true, speaker_score: 0.9 })
-    final({ text: 'b', start_ms: 0, end_ms: 1000, speaker_enrolled: true, is_owner: false, speaker_score: 0.2 })
+    final({ text: 'b', start_ms: 0, end_ms: 500, speaker_enrolled: true, is_owner: false, speaker_uncertain: true, speaker_score: 0.426, speaker_threshold: 0.5 })
     final({ text: 'c', start_ms: 0, end_ms: 1000, speaker_enrolled: false })
     final({ text: 'd', start_ms: 0, end_ms: 1000, speaker_enrolled: true })
     const results = (await status()).test.results
-    expect(results.map((r: { kind: string }) => r.kind)).toEqual(['owner', 'other', 'unenrolled', 'other'])
+    expect(results.map((r: { kind: string }) => r.kind)).toEqual(['owner', 'owner', 'unenrolled', 'owner'])
+    expect(results[1]).toEqual({ kind: 'owner', score: 0.426, threshold: 0.5, uncertain: true, durationMs: 500, text: 'b' })
     expect(results[2]).toEqual({ kind: 'unenrolled', uncertain: false, durationMs: 1000, text: 'c' })
   })
 
@@ -702,9 +796,9 @@ describe('voice settings page', () => {
     mocks.supervisorOptions!.onEvent({ id: 1, type: 'speech_other', data: { start_ms: 0, end_ms: 400, speaker_score: 0.1 } })
     expect((await status()).test.results).toEqual([])
     await post('/voice/test/start')
-    mocks.supervisorOptions!.onEvent({ id: 2, type: 'speech_other', data: { start_ms: 100, end_ms: 900, speaker_score: 0.12, speaker_uncertain: true } })
+    mocks.supervisorOptions!.onEvent({ id: 2, type: 'speech_other', data: { start_ms: 100, end_ms: 900, speaker_score: 0.12, speaker_threshold: 0.5, speaker_uncertain: true } })
     expect((await status()).test.results).toEqual([
-      { kind: 'other', score: 0.12, uncertain: true, durationMs: 800 },
+      { kind: 'other', score: 0.12, threshold: 0.5, uncertain: true, durationMs: 800 },
     ])
   })
 
@@ -1126,5 +1220,95 @@ describe('voice input toggle', () => {
       throw Object.assign(new Error('conflict'), { status: 409 })
     })
     expect((await post('/voice/enroll/cancel')).statusCode).toBe(200)
+  })
+
+  describe('enrollment interrupted by a device change', () => {
+    function deviceChanged(code = 'device_changed') {
+      mocks.supervisorOptions!.onEvent({ id: 9, type: 'enroll_failed', data: { code, message: 'm', display_name: 'Mic' } })
+    }
+
+    function speakerReads(): number {
+      return mocks.call.mock.calls.filter(c => c[1] === '/v1/speaker').length
+    }
+
+    async function enrollThenInterrupt() {
+      await post('/voice/enroll/start')
+      const readsBefore = speakerReads()
+      deviceChanged()
+      await vi.waitFor(() => expect(speakerReads()).toBeGreaterThan(readsBefore))
+    }
+
+    it('ends enrollment, restores listening, sets the flag and keeps an unchanged voiceprint silently', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      await begin(false)
+      speaker = { ...speaker, enrolled: true, utterances: 6 }
+      await post('/voice/enroll/start')
+      expect(lastListening()).toBe(true)
+      const readsBefore = speakerReads()
+      mocks.broadcastEvent.mockClear()
+      deviceChanged()
+      await vi.waitFor(() => expect(speakerReads()).toBeGreaterThan(readsBefore))
+      const body = await status()
+      expect(body.mode).toBe('normal')
+      expect(body.enrollInterrupted).toBe(true)
+      expect(body.enroll.current).toEqual([])
+      expect(lastListening()).toBe(false)
+      expect(mocks.broadcastEvent).toHaveBeenCalledWith('voice-status-changed', {})
+      expect(errorSpy).not.toHaveBeenCalled()
+      errorSpy.mockRestore()
+    })
+
+    it('logs an error when the voiceprint is gone or changed afterwards', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      await begin(false)
+      speaker = { ...speaker, enrolled: true, utterances: 6 }
+      await post('/voice/enroll/start')
+      speaker = { ...speaker, enrolled: false, utterances: 0 }
+      deviceChanged()
+      await vi.waitFor(() => expect(errorSpy).toHaveBeenCalledTimes(1))
+      errorSpy.mockRestore()
+    })
+
+    it('ignores other failure codes and device_changed outside enrollment', async () => {
+      await begin(false)
+      deviceChanged()
+      expect((await status()).enrollInterrupted).toBe(false)
+      await post('/voice/enroll/start')
+      deviceChanged('other')
+      const body = await status()
+      expect(body.mode).toBe('enrolling')
+      expect(body.enrollInterrupted).toBe(false)
+    })
+
+    it('is cleared by the next enrollment start and by deleting the speaker', async () => {
+      await begin(false)
+      await enrollThenInterrupt()
+      expect((await status()).enrollInterrupted).toBe(true)
+      await post('/voice/enroll/start')
+      expect((await status()).enrollInterrupted).toBe(false)
+      await enrollThenInterrupt()
+      expect((await status()).enrollInterrupted).toBe(true)
+      expect((await app.inject({ method: 'DELETE', url: '/voice/speaker' })).statusCode).toBe(200)
+      expect((await status()).enrollInterrupted).toBe(false)
+    })
+
+    it('dismiss-interrupted clears the flag, notifies, and is a quiet no-op when it is not set', async () => {
+      await begin(false)
+      await enrollThenInterrupt()
+      mocks.broadcastEvent.mockClear()
+      expect((await post('/voice/enroll/dismiss-interrupted')).statusCode).toBe(200)
+      expect((await status()).enrollInterrupted).toBe(false)
+      expect(mocks.broadcastEvent).toHaveBeenCalledWith('voice-status-changed', {})
+      mocks.broadcastEvent.mockClear()
+      expect((await post('/voice/enroll/dismiss-interrupted')).statusCode).toBe(200)
+      expect(mocks.broadcastEvent).not.toHaveBeenCalled()
+    })
+
+    it('a commit after the interruption fails and the flag stays set', async () => {
+      await begin(false)
+      await enrollThenInterrupt()
+      expect((await post('/voice/enroll/commit')).statusCode).toBe(409)
+      expect((await status()).enrollInterrupted).toBe(true)
+    })
   })
 })
