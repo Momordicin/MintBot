@@ -30,48 +30,26 @@ A locally-run AI character companion desktop app. Supports custom character pers
 
 | Module | What it does |
 |---|---|
-| Chat | Instant-messaging-style chat; keep sending while the character replies; full history with scroll-back; per-character wallpaper and theme; lives in the system tray |
-| Desktop pet | Pixel and illustration forms with adjustable size; emotion portraits (GIF or static), bored / asleep states and scripted transitions; click-through mode; collapse to a single handle; remembers its spot on each display |
-| Avoidance | For fullscreen programs and per-app rules, the pet moves to a free display, docks to the screen edge or hides; the chat window can stay on top always, smartly, or never |
+| Chat | Per-character configuration; compatible with SillyTavern character cards, with further extensions |
+| Desktop pet | Pixel and illustration forms; emotion portraits that can be clicked through, dragged and hidden; smart avoidance of work and entertainment screens, remembering its position |
 | Characters | Create, switch, or import from a character card; edit name, persona, wallpaper and theme; deleting a character removes its chats and memories |
 | Memory | Recent conversation in context, older conversation recalled on demand; background summaries and fact extraction; browse memories and delete a time range |
-| Models | Anthropic / OpenAI / DeepSeek / Ollama, picked from live model lists; separate chat and background models; per-character model and key; Claude Code / Codex subscription sign-in |
-| Voice input | One-click install and update of the voice component; owner voiceprint that works across microphones; recognized text goes into the input box and is never sent automatically; a free test shows each sentence's score against the score needed |
-| Voice replies | Planned (Phase 4): streaming speech synthesis with emotion-guided tone |
-| Tools and proactive chat | Planned (Phase 5 / 6): local system actions, MCP, conversations started by schedule, events or mood |
-| Mobile | Planned (Phase 7): use the local service from your phone, sharing sessions with the desktop |
-
----
-
-## Tech stack
-
-| Layer | Technology |
-|---|---|
-| Desktop framework | Electron + React |
-| Core service | Node.js + Fastify (its own process) |
-| Model calls | Anthropic SDK / OpenAI SDK (OpenAI, DeepSeek) / Ollama |
-| Local model | Ollama (optional, Qwen3 / ChatGLM etc.) |
-| Voice input | [mintbot-voice-agent](https://github.com/Momordicin/mintbot-voice-agent) (native process: SenseVoiceSmall ASR, FSMN-VAD, CAM++ owner voiceprint) |
-| TTS | GPT-SoVITS v2 (Python HTTP service, planned) |
-| Embedding / NER | bge-m3 / bert4ner (Python HTTP service) |
-| Database | SQLite + sqlite-vec |
-| Chinese FTS tokenizer | libsimple ([wangfenjin/simple](https://github.com/wangfenjin/simple), prebuilt binary + jieba dictionary) |
-| Win32 FFI | koffi |
-| Config hot-reload | chokidar |
-
-Model calls support both external APIs (Anthropic / OpenAI / DeepSeek) and local Ollama, chosen in the settings window. All data stays on your machine — no dependency on any cloud storage.
+| Models | Anthropic / OpenAI / DeepSeek / Ollama; power users can use different models for chat and for background organizing, as each character card needs; each character can have its own model and key |
+| Voice input | One-click install and update; owner recognition across devices |
+| Voice replies | Streaming speech synthesis with emotion-guided tone |
+| Tools and proactive chat | Local actions, MCP, conversations started by schedule, events or mood |
+| Mobile | Use the local service from your phone, sharing sessions with the desktop |
 
 ---
 
 ## Development stages
 
-- [x] Phase 1: Core chat pipeline
-- [x] Phase 2: Memory system
+- [x] Phase 1: Core chat pipeline + proactive conversation
+- [x] Phase 2: Memory system (being researched and optimized)
 - [x] Phase 3: Overlay window + window management
 - [ ] Phase 4: Voice (ASR done, TTS under research)
 - [ ] Phase 5: Human-computer interaction tools + MCP
-- [ ] Phase 6: Proactive conversation scheduler
-- [ ] Phase 7: Mobile client + wrap-up
+- [ ] Phase 6: Mobile client
 
 ---
 
@@ -95,7 +73,7 @@ cd MintBot
 # Install dependencies
 pnpm install
 
-# Setup
+# Download the Chinese full-text-search tokenizer extension
 pnpm setup:vendor
 
 # Copy config files

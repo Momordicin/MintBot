@@ -30,48 +30,26 @@
 
 | 模块 | 说明 |
 |---|---|
-| 聊天 | 即时通讯式聊天；角色回复时可以继续发送；完整历史，可向上翻看；每个角色独立的壁纸和主题；常驻系统托盘 |
-| 桌宠 | 像素和立绘两种形态，大小可调；情绪立绘（GIF 或静态图）、无聊 / 睡着状态和脚本化转场；可穿透；可收起为一个手柄；在每块屏幕上记住位置 |
-| 避让 | 遇到全屏程序或按程序设置的规则，桌宠移到空闲屏幕、贴边或隐藏；聊天窗口置顶可选始终、智能或关闭 |
+| 聊天 | 按角色个性化配置, 兼容酒馆角色卡并做更多拓展 |
+| 桌宠 | 分像素和立绘两种形态；情绪立绘可穿透、拖动、隐藏；智能避让工作娱乐屏幕并记住位置 |
 | 角色 | 新建、切换，或角色卡导入；编辑名字、人设、壁纸和主题；删除角色时连同聊天和记忆一起删除 |
 | 记忆 | 近期对话直接进入上下文，更早的对话按需召回；后台生成摘要、提取事实；可浏览记忆，按时间范围删除 |
-| 模型 | Anthropic / OpenAI / DeepSeek / Ollama，从实时模型列表中选；对话和后台整理可用不同模型；每个角色可单独设置模型和 Key；可登录 Claude Code / Codex 订阅 |
-| 语音输入 | 语音组件一键安装和更新；主人声纹，换麦克风也能识别；识别出的文字进入输入框，不会自动发送；自由测试逐句显示得分和所需的分数 |
-| 语音回复 | 规划中（Phase 4）：流式语音合成，按情绪调整语气 |
-| 工具与主动对话 | 规划中（Phase 5 / 6）：本地系统操作、MCP、按日程、事件或情绪发起对话 |
-| 手机端 | 规划中（Phase 7）：在手机上使用本机服务，与桌面端共享会话 |
-
----
-
-## 技术栈
-
-| 层级 | 技术选型 |
-|---|---|
-| 桌面框架 | Electron + React |
-| 核心服务 | Node.js + Fastify（独立进程） |
-| 模型调用 | Anthropic SDK / OpenAI SDK（OpenAI、DeepSeek）/ Ollama |
-| 本地模型 | Ollama（可选，Qwen3 / ChatGLM 等） |
-| 语音输入 | [mintbot-voice-agent](https://github.com/Momordicin/mintbot-voice-agent)（本地原生进程：SenseVoiceSmall 语音识别、FSMN-VAD、CAM++ 主人声纹） |
-| TTS | GPT-SoVITS v2（Python HTTP 服务，规划中） |
-| Embedding / NER | bge-m3 / bert4ner（Python HTTP 服务） |
-| 数据库 | SQLite + sqlite-vec |
-| 中文全文检索分词 | libsimple（[wangfenjin/simple](https://github.com/wangfenjin/simple)，预编译动态库 + jieba 词典） |
-| Win32 FFI | koffi |
-| 配置热生效 | chokidar |
-
-模型调用支持外部 API（Anthropic / OpenAI / DeepSeek）和本地 Ollama，在设置窗口中选择。数据完全留在本机，不依赖任何云端存储。
+| 模型 | Anthropic / OpenAI / DeepSeek / Ollama；支持深度用户根据角色卡需要使用不同模型用于对话和后台整理；每个角色可单独设置模型和 Key |
+| 语音输入 | 一键安装和更新；主人跨设备识别 |
+| 语音回复 | 流式语音合成，按情绪调整语气 |
+| 工具与主动对话 | 本地操作、MCP、按日程、事件或情绪发起对话 |
+| 手机端 | 在手机上使用本机服务，与桌面端共享会话 |
 
 ---
 
 ## 开发阶段
 
-- [x] Phase 1：核心对话链路
-- [x] Phase 2：记忆系统
+- [x] Phase 1：核心对话链路 + 主动对话
+- [x] Phase 2：记忆系统（调研优化中）
 - [x] Phase 3：悬浮窗 + 窗口管理
 - [ ] Phase 4：语音（ASR已完成，TTS调研中）
 - [ ] Phase 5：人机交互工具 + MCP
-- [ ] Phase 6：主动对话调度器
-- [ ] Phase 7：手机端 + 收尾
+- [ ] Phase 6：手机端
 
 ---
 
@@ -95,7 +73,7 @@ cd MintBot
 # 安装依赖
 pnpm install
 
-# setup
+# 下载中文全文检索分词扩展
 pnpm setup:vendor
 
 # 复制配置文件
