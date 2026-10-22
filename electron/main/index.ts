@@ -22,7 +22,7 @@ import { windowNameFromUrl } from './logWindowName'
 import { APP_ORIGIN } from './appOrigin'
 import { resolveAppAssetPath } from './appAssetPath'
 import { ensureCoreRunning, stopSpawnedCore } from './coreProcess'
-import { hasAutostartFlag, loginItemOptions } from './autostart'
+import { hasAutostartFlag, legacyLoginItemOptions, loginItemOptions, shouldMigrateAutostart } from './autostart'
 import { CHAT_READY_TIMEOUT_MS, shouldShowChatOnFirstReady } from './chatFirstShow'
 import { notifyChatPainted, revealChat } from './chatReveal'
 import type { ChatPinMode, WindowBehaviorConfig, WindowBehaviorSnapshot } from '../../shared/windowBehavior.js'
@@ -285,6 +285,13 @@ function readAutostart(): { available: boolean; enabled: boolean } {
   if (isDevMode) return { available: false, enabled: false }
   const { path, args } = loginItemOptions(process.execPath, app.getAppPath())
   return { available: true, enabled: app.getLoginItemSettings({ path, args }).openAtLogin }
+}
+
+function migrateLegacyAutostart(): void {
+  const legacy = app.getLoginItemSettings(legacyLoginItemOptions(process.execPath, app.getAppPath()))
+  if (!shouldMigrateAutostart(isDevMode, legacy.openAtLogin)) return
+  console.log('[Autostart] migrating legacy login item to unquoted app path argument')
+  app.setLoginItemSettings({ openAtLogin: true, enabled: legacy.executableWillLaunchAtLogin, ...loginItemOptions(process.execPath, app.getAppPath()) })
 }
 
 ipcMain.handle('autostart:get', () => readAutostart())
@@ -838,6 +845,8 @@ app.whenReady().then(async () => {
       appendLogLine({ level: details.level === 'error' ? 'error' : 'warn', source, text: details.message })
     })
   })
+
+  migrateLegacyAutostart()
 
   if (!isDevMode) await ensureCoreRunning(CORE_URL, app.getAppPath())
 
