@@ -9,6 +9,7 @@ import './settings.css'
 import { CORE_URL } from '../coreUrl.js'
 import { createWatchdogEventSource } from '../eventsWatchdog.js'
 import { isErrorBody } from '../../shared/errorCodes.js'
+import type { VoiceInputMode } from '../../shared/voiceInputMode.js'
 import { errorText } from '../errorText.js'
 import { deviceLineBetween, summarizeVoiceTest, testCutoff, type VoiceTestResultLike } from './voiceTestSummary.js'
 
@@ -61,7 +62,7 @@ interface VoiceStatus {
   errorCode: string | null
   speaker: SpeakerStatus | null
   mode: VoiceMode
-  listenEnabled: boolean
+  inputMode: VoiceInputMode
   enroll: { completed: EnrollSentence[]; current: EnrollSentence[] }
   test: { results: VoiceTestResult[]; hasRun: boolean }
   install: InstallStatus
@@ -246,7 +247,7 @@ export function VoicePanel() {
   if (!status.installed) statusLabel = t('未安装')
   else if (micDenied) statusLabel = t('麦克风被系统禁用')
   else if (status.phase === 'failed') statusLabel = t('已停止重试')
-  else if (running && !status.listenEnabled && mode === 'normal') statusLabel = t('语音输入已关闭')
+  else if (running && status.inputMode === 'off' && mode === 'normal') statusLabel = t('语音输入已关闭')
   else if (running && status.listening) statusLabel = t('正在收听')
   else statusLabel = t('启动中')
 

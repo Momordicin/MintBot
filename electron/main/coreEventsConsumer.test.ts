@@ -8,11 +8,15 @@ function createHandlers(): CoreEventsConsumerHandlers {
     onPresetSwitched: vi.fn(),
     onWindowBehaviorChanged: vi.fn(),
     onUiLanguageChanged: vi.fn(),
+    onVoiceStatusChanged: vi.fn(),
+    onVoiceType: vi.fn(),
     log: {
       generationChanged: vi.fn(),
       helloHeartbeatParseError: vi.fn(),
       windowBehaviorParseError: vi.fn(),
       uiLanguageParseError: vi.fn(),
+      voiceTypeParseError: vi.fn(),
+      voiceTypeError: vi.fn(),
     },
   }
 }
@@ -81,6 +85,45 @@ describe('createCoreEventsConsumer', () => {
 
     expect(handlers.onWindowBehaviorChanged).toHaveBeenCalledTimes(1)
     expect(handlers.onWindowBehaviorChanged).toHaveBeenCalledWith(snapshot)
+  })
+
+  it('voice-type 帧把文字派发到 onVoiceType，voice-status-changed 帧派发到 onVoiceStatusChanged', () => {
+    const handlers = createHandlers()
+    const consumer = createCoreEventsConsumer(handlers)
+
+    consumer.onChunk(frame('voice-type', { text: '你好 world' }))
+    consumer.onChunk(frame('voice-status-changed', {}))
+
+    expect(handlers.onVoiceType).toHaveBeenCalledTimes(1)
+    expect(handlers.onVoiceType).toHaveBeenCalledWith('你好 world')
+    expect(handlers.onVoiceStatusChanged).toHaveBeenCalledTimes(1)
+  })
+
+  it('voice-type 的载荷损坏或 text 不是字符串时不触发输入', () => {
+    const handlers = createHandlers()
+    const consumer = createCoreEventsConsumer(handlers)
+
+    consumer.onChunk('event: voice-type\ndata: not-json\n\n')
+    consumer.onChunk(frame('voice-type', { text: 5 }))
+
+    expect(handlers.log.voiceTypeParseError).toHaveBeenCalledTimes(1)
+    expect(handlers.onVoiceType).not.toHaveBeenCalled()
+  })
+
+  it('onVoiceType 抛错时记为输入错误而不是解析错误，且不影响后续帧', () => {
+    const handlers = createHandlers()
+    const failure = new Error('clipboard busy')
+    vi.mocked(handlers.onVoiceType).mockImplementation(() => {
+      throw failure
+    })
+    const consumer = createCoreEventsConsumer(handlers)
+
+    expect(() => consumer.onChunk(frame('voice-type', { text: 'x' }))).not.toThrow()
+
+    expect(handlers.log.voiceTypeError).toHaveBeenCalledWith(failure)
+    expect(handlers.log.voiceTypeParseError).not.toHaveBeenCalled()
+    consumer.onChunk(frame('preset-switched', { sessionId: 's1', presetId: 'p1' }))
+    expect(handlers.onPresetSwitched).toHaveBeenCalledTimes(1)
   })
 
   it('一帧跨两次 onChunk 调用拆开，仍然只派发一次', () => {

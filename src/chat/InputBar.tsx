@@ -6,6 +6,7 @@ import React, { useImperativeHandle, useLayoutEffect, useRef, useState } from 'r
 import { useTranslation } from 'react-i18next'
 import sendPlane from '../assets/paperplane.png'
 import { appendVoiceText } from './appendVoiceText'
+import type { VoiceInputMode } from '../../shared/voiceInputMode.js'
 
 export interface InputBarHandle {
   appendVoice: (texts: string[]) => void
@@ -13,7 +14,7 @@ export interface InputBarHandle {
 
 export interface VoiceInputState {
   installed: boolean
-  listenEnabled: boolean
+  inputMode: VoiceInputMode
   mode: 'normal' | 'enrolling' | 'testing'
   installing: boolean
 }
@@ -59,13 +60,15 @@ export function InputBar({ onSend, disabled, voice, voiceBusy, onToggleVoice, re
     }
   }
 
-  const voiceActive = voice !== null && !voice.installing && voice.installed && voice.listenEnabled && voice.mode === 'normal'
+  const voiceMode: VoiceInputMode = voice !== null && !voice.installing && voice.installed && voice.mode === 'normal' ? voice.inputMode : 'off'
+  const voiceActive = voiceMode !== 'off'
   const voiceDisabled = voice === null || voice.installing || !voice.installed || voice.mode !== 'normal' || voiceBusy === true
-  let voiceTitle = t('开启语音输入')
+  let voiceTitle = t('语音输入已关闭（点击开启聆听）')
   if (voice !== null && voice.installing) voiceTitle = t('正在安装语音组件')
   else if (voice !== null && !voice.installed) voiceTitle = t('语音组件未安装')
   else if (voice !== null && voice.mode !== 'normal') voiceTitle = t('录入或测试中，语音输入暂停')
-  else if (voiceActive) voiceTitle = t('关闭语音输入')
+  else if (voiceMode === 'listen') voiceTitle = t('聆听：语音聊天（点击切换为转写）')
+  else if (voiceMode === 'transcribe') voiceTitle = t('转写：语音转文字输出（点击关闭）')
 
   function handleSend() {
     const text = value.trim()
@@ -119,6 +122,7 @@ export function InputBar({ onSend, disabled, voice, voiceBusy, onToggleVoice, re
           className={`tool-btn${voiceActive ? ' tool-btn--active' : ''}`}
           disabled={voiceDisabled}
           title={voiceTitle}
+          aria-label={voiceTitle}
           onClick={onToggleVoice}
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -126,6 +130,14 @@ export function InputBar({ onSend, disabled, voice, voiceBusy, onToggleVoice, re
             <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
             <line x1="12" y1="19" x2="12" y2="23" />
             <line x1="8" y1="23" x2="16" y2="23" />
+            {voiceMode === 'transcribe' && (
+              <g transform="translate(17.5 17.5) scale(0.25)" strokeWidth="5">
+                <polyline points="17 1 21 5 17 9" />
+                <path d="M3 11V9a4 4 0 0 1 4-4h14" />
+                <polyline points="7 23 3 19 7 15" />
+                <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+              </g>
+            )}
           </svg>
         </button>
         <button className="tool-btn" disabled title={t('拍照（即将推出）')}>

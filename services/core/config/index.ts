@@ -10,6 +10,8 @@ import type { ModelConfig } from '../../../shared/types/index.js'
 import type { AppRule, AppRuleEffect, ChatPinMode, WindowBehaviorConfig } from '../../../shared/windowBehavior.js'
 import { VALID_UI_LANGUAGES } from '../../../shared/uiLocale.js'
 import type { UiLanguage } from '../../../shared/uiLocale.js'
+import { isVoiceInputMode } from '../../../shared/voiceInputMode.js'
+import type { VoiceInputMode } from '../../../shared/voiceInputMode.js'
 
 export interface SummaryTriggerConfig {
   pendingCountThreshold: number
@@ -366,7 +368,7 @@ type ConfigSectionValue = {
   backgroundModelProvider: BackgroundModelConfig
   windowBehavior: WindowBehaviorConfig
   ui: { language: UiLanguage }
-  voice: { listenEnabled: boolean }
+  voice: { inputMode: VoiceInputMode }
   defaultPresetId: string
 }
 
@@ -439,17 +441,20 @@ export function updateUiLanguage(language: UiLanguage): void {
   writeConfigSection('ui', { ...readRawSection('ui'), language })
 }
 
-export function getVoiceListenEnabled(): boolean {
+export function getVoiceInputMode(): VoiceInputMode {
   try {
-    return readRawSection('voice').listenEnabled === true
+    const { inputMode, listenEnabled } = readRawSection('voice')
+    if (isVoiceInputMode(inputMode)) return inputMode
+    return inputMode === undefined && listenEnabled === true ? 'listen' : 'off'
   } catch (err) {
     if (!(err instanceof ConfigFileUnreadableError)) throw err
-    return false
+    return 'off'
   }
 }
 
-export function setVoiceListenEnabled(enabled: boolean): void {
-  writeConfigSection('voice', { ...readRawSection('voice'), listenEnabled: enabled })
+export function setVoiceInputMode(inputMode: VoiceInputMode): void {
+  const { listenEnabled: _legacy, ...rest } = readRawSection('voice')
+  writeConfigSection('voice', { ...rest, inputMode })
 }
 
 export function setDefaultPresetId(presetId: string): void {

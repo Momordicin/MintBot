@@ -1,5 +1,5 @@
 // electron/main/activeWindowMonitor.ts — Windows 前台窗口探测：经 koffi 调 user32/dwmapi/kernel32 读取前台窗口（标题、类名、exe、所在显示器、是否全屏），并探测已记录阻挡窗口是否仍存活
-// 用法：foregroundWorldModel.ts 调 getActiveWindowInfo() 取 ForegroundObservation（external / self / unavailable）、observationFingerprint 取观测指纹；probeBlockerWindow(hwnd, pid) 返回 BlockerProbe；非 win32 平台为空操作或 unavailable
+// 用法：foregroundWorldModel.ts 调 getActiveWindowInfo() 取 ForegroundObservation（external / self / unavailable）、observationFingerprint 取观测指纹；probeBlockerWindow(hwnd, pid) 返回 BlockerProbe；getForegroundExeName() 返回前台窗口的 exe 名（textOutput 用）；非 win32 平台为空操作或 unavailable
 // 对应文件：electron/main/foregroundWorldModel.ts / electron/main/displayStateMap.ts（BlockerProbe、ExternalWindowInfo 的使用方）/ electron/main/activeWindowMonitor.test.ts
 import koffi from 'koffi'
 import path from 'path'
@@ -195,6 +195,18 @@ export function getActiveWindowInfo(): ForegroundObservation {
     }
   } catch {
     return { kind: 'unavailable' }
+  }
+}
+
+export function getForegroundExeName(): string | null {
+  if (!GetForegroundWindow) return null
+  try {
+    const hwnd = GetForegroundWindow()
+    if (!hwnd) return null
+    const pid = resolvePid(hwnd)
+    return pid !== null ? resolveExeName(pid) : null
+  } catch {
+    return null
   }
 }
 

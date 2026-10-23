@@ -15,9 +15,9 @@ const mocks = vi.hoisted(() => ({
   stop: vi.fn(async () => {}),
   call: vi.fn(),
   setListening: vi.fn(),
-  store: { listenEnabled: true },
-  getVoiceListenEnabled: vi.fn(),
-  setVoiceListenEnabled: vi.fn(),
+  store: { inputMode: 'listen' as 'off' | 'listen' | 'transcribe' },
+  getVoiceInputMode: vi.fn(),
+  setVoiceInputMode: vi.fn(),
 }))
 
 vi.mock('./install.js', () => ({
@@ -29,8 +29,8 @@ vi.mock('./install.js', () => ({
 }))
 vi.mock('../events/broadcast.js', () => ({ broadcastEvent: mocks.broadcastEvent }))
 vi.mock('../config/index.js', () => ({
-  getVoiceListenEnabled: mocks.getVoiceListenEnabled,
-  setVoiceListenEnabled: mocks.setVoiceListenEnabled,
+  getVoiceInputMode: mocks.getVoiceInputMode,
+  setVoiceInputMode: mocks.setVoiceInputMode,
 }))
 vi.mock('@mintbot/voice-agent-client', () => ({
   API_VERSION: 1,
@@ -52,14 +52,14 @@ import Fastify from 'fastify'
 
 let dataDir: string
 
-function resetListenMocks(stored: boolean) {
-  mocks.store.listenEnabled = stored
+function resetListenMocks(stored: 'off' | 'listen' | 'transcribe') {
+  mocks.store.inputMode = stored
   mocks.setListening.mockClear()
-  mocks.getVoiceListenEnabled.mockReset()
-  mocks.getVoiceListenEnabled.mockImplementation(() => mocks.store.listenEnabled)
-  mocks.setVoiceListenEnabled.mockReset()
-  mocks.setVoiceListenEnabled.mockImplementation((enabled: boolean) => {
-    mocks.store.listenEnabled = enabled
+  mocks.getVoiceInputMode.mockReset()
+  mocks.getVoiceInputMode.mockImplementation(() => mocks.store.inputMode)
+  mocks.setVoiceInputMode.mockReset()
+  mocks.setVoiceInputMode.mockImplementation((mode: 'off' | 'listen' | 'transcribe') => {
+    mocks.store.inputMode = mode
   })
 }
 
@@ -79,7 +79,7 @@ describe('voice agent', () => {
     mocks.start.mockClear()
     mocks.stop.mockClear()
     mocks.supervisorOptions = null
-    resetListenMocks(true)
+    resetListenMocks('listen')
     mocks.readVoiceInstallation.mockResolvedValue({ version: '0.1.0' })
     await startVoice(dataDir)
     takePending()
@@ -122,8 +122,8 @@ describe('voice agent', () => {
     final({ text: 'hi', end_unix_ms: 43, language: 'en', emotion: 'neutral' })
     const lines = fs.readFileSync(path.join(dataDir, 'transcripts.jsonl'), 'utf-8').trim().split('\n').map(l => JSON.parse(l))
     expect(lines).toEqual([
-      { at: 42, text: '你好', language: 'zh', emotion: 'happy', mode: 'normal', speaker_score: 0.9, is_owner: true },
-      { at: 43, text: 'hi', language: 'en', emotion: 'neutral', mode: 'normal' },
+      { at: 42, text: '你好', language: 'zh', emotion: 'happy', mode: 'normal', inputMode: 'listen', speaker_score: 0.9, is_owner: true },
+      { at: 43, text: 'hi', language: 'en', emotion: 'neutral', mode: 'normal', inputMode: 'listen' },
     ])
     expect(mocks.broadcastEvent).toHaveBeenCalledTimes(2)
     expect(mocks.broadcastEvent).toHaveBeenCalledWith('voice-pending', {})
@@ -186,7 +186,7 @@ describe('voice settings page', () => {
     mocks.broadcastEvent.mockReset()
     mocks.call.mockReset()
     mocks.supervisorOptions = null
-    resetListenMocks(true)
+    resetListenMocks('listen')
     mocks.readVoiceInstallation.mockResolvedValue({ version: '0.1.0' })
     speaker = {
       enrolled: false,
@@ -243,7 +243,7 @@ describe('voice settings page', () => {
         uncertainFloor: null,
       },
       mode: 'normal',
-      listenEnabled: true,
+      inputMode: 'listen',
       enroll: { completed: [], current: [] },
       test: { results: [], hasRun: false },
     })
@@ -357,7 +357,7 @@ describe('voice settings page', () => {
       install: { state: 'idle' },
       speaker: null,
       mode: 'normal',
-      listenEnabled: false,
+      inputMode: 'off',
       enroll: { completed: [], current: [] },
       test: { results: [], hasRun: false },
     })
@@ -955,8 +955,8 @@ describe('voice input toggle', () => {
     return { promise, release }
   }
 
-  async function begin(stored: boolean) {
-    mocks.store.listenEnabled = stored
+  async function begin(stored: 'off' | 'listen' | 'transcribe') {
+    mocks.store.inputMode = stored
     await startVoice(dataDir)
     setState(running)
     mocks.setListening.mockClear()
@@ -969,7 +969,7 @@ describe('voice input toggle', () => {
     mocks.broadcastEvent.mockReset()
     mocks.call.mockReset()
     mocks.supervisorOptions = null
-    resetListenMocks(false)
+    resetListenMocks('off')
     mocks.readVoiceInstallation.mockResolvedValue({ version: '0.1.0' })
     speaker = {
       enrolled: false,
@@ -1006,76 +1006,137 @@ describe('voice input toggle', () => {
     fs.rmSync(dataDir, { recursive: true, force: true })
   })
 
-  it('defaults to off, passes the stored value to the supervisor and reports it in status', async () => {
-    await begin(false)
+  it('defaults to off, passes the stored mode to the supervisor and reports it in status', async () => {
+    await begin('off')
     expect(mocks.supervisorOptions!.listen).toBe(false)
-    expect((await status()).listenEnabled).toBe(false)
+    expect((await status()).inputMode).toBe('off')
     await stopVoice()
-    await begin(true)
+    await begin('listen')
     expect(mocks.supervisorOptions!.listen).toBe(true)
-    expect((await status()).listenEnabled).toBe(true)
+    expect((await status()).inputMode).toBe('listen')
+    await stopVoice()
+    await begin('transcribe')
+    expect(mocks.supervisorOptions!.listen).toBe(true)
+    expect((await status()).inputMode).toBe('transcribe')
   })
 
-  it('POST /voice/listen persists the value, updates the supervisor and returns the status', async () => {
-    await begin(false)
-    const res = await post('/voice/listen', { enabled: true })
+  it('POST /voice/input-mode persists the mode, updates the supervisor and returns the status', async () => {
+    await begin('off')
+    const res = await post('/voice/input-mode', { mode: 'listen' })
     expect(res.statusCode).toBe(200)
-    expect(res.json().listenEnabled).toBe(true)
-    expect(mocks.setVoiceListenEnabled).toHaveBeenCalledWith(true)
+    expect(res.json().inputMode).toBe('listen')
+    expect(mocks.setVoiceInputMode).toHaveBeenCalledWith('listen')
     expect(lastListening()).toBe(true)
     expect(mocks.broadcastEvent).toHaveBeenCalledWith('voice-status-changed', {})
-    await post('/voice/listen', { enabled: false })
-    expect(mocks.setVoiceListenEnabled).toHaveBeenLastCalledWith(false)
+    await post('/voice/input-mode', { mode: 'transcribe' })
+    expect(mocks.setVoiceInputMode).toHaveBeenLastCalledWith('transcribe')
+    expect(lastListening()).toBe(true)
+    expect((await status()).inputMode).toBe('transcribe')
+    await post('/voice/input-mode', { mode: 'off' })
+    expect(mocks.setVoiceInputMode).toHaveBeenLastCalledWith('off')
     expect(lastListening()).toBe(false)
-    expect((await status()).listenEnabled).toBe(false)
+    expect((await status()).inputMode).toBe('off')
   })
 
-  it('POST /voice/listen rejects a bad body, a missing component and a busy mode', async () => {
-    await begin(false)
-    for (const payload of [undefined, {}, { enabled: 'yes' }, { enabled: 1 }]) {
-      const res = await post('/voice/listen', payload)
+  it('POST /voice/input-mode rejects a bad body, a missing component and a busy mode', async () => {
+    await begin('off')
+    for (const payload of [undefined, {}, { mode: 'normal' }, { mode: true }, { enabled: true }]) {
+      const res = await post('/voice/input-mode', payload)
       expect(res.statusCode).toBe(400)
       expect(res.json().code).toBe('INVALID_REQUEST')
     }
-    expect(mocks.setVoiceListenEnabled).not.toHaveBeenCalled()
+    expect(mocks.setVoiceInputMode).not.toHaveBeenCalled()
 
     await post('/voice/enroll/start')
-    const whileEnrolling = await post('/voice/listen', { enabled: true })
+    const whileEnrolling = await post('/voice/input-mode', { mode: 'listen' })
     expect(whileEnrolling.statusCode).toBe(409)
     expect(whileEnrolling.json()).toEqual({ code: 'VOICE_BUSY' })
     await post('/voice/enroll/cancel')
     await post('/voice/test/start')
-    expect((await post('/voice/listen', { enabled: true })).statusCode).toBe(409)
-    expect(mocks.setVoiceListenEnabled).not.toHaveBeenCalled()
+    expect((await post('/voice/input-mode', { mode: 'transcribe' })).statusCode).toBe(409)
+    expect(mocks.setVoiceInputMode).not.toHaveBeenCalled()
 
     await stopVoice()
     mocks.readVoiceInstallation.mockResolvedValue(null)
     await startVoice(dataDir)
-    const missing = await post('/voice/listen', { enabled: true })
+    const missing = await post('/voice/input-mode', { mode: 'listen' })
     expect(missing.statusCode).toBe(503)
     expect(missing.json()).toEqual({ code: 'VOICE_UNAVAILABLE' })
   })
 
-  it('POST /voice/listen is accepted while the agent is restarting and reports an unreadable config as 500', async () => {
-    await begin(false)
+  it('POST /voice/input-mode is accepted while the agent is restarting and reports an unreadable config as 500', async () => {
+    await begin('off')
     setState({ phase: 'restarting', listening: false, restarts: 1 })
-    expect((await post('/voice/listen', { enabled: true })).statusCode).toBe(200)
+    expect((await post('/voice/input-mode', { mode: 'listen' })).statusCode).toBe(200)
     expect(lastListening()).toBe(true)
 
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    mocks.setVoiceListenEnabled.mockImplementation(() => {
+    mocks.setVoiceInputMode.mockImplementation(() => {
       throw new ConfigFileUnreadableError('bad')
     })
-    const res = await post('/voice/listen', { enabled: false })
+    const res = await post('/voice/input-mode', { mode: 'off' })
     expect(res.statusCode).toBe(500)
     expect(res.json()).toEqual({ code: 'CONFIG_FILE_UNREADABLE' })
-    expect((await status()).listenEnabled).toBe(true)
+    expect((await status()).inputMode).toBe('listen')
     errorSpy.mockRestore()
+  })
+
+  it('the old POST /voice/listen route no longer exists', async () => {
+    await begin('off')
+    expect((await post('/voice/listen', { enabled: true })).statusCode).toBe(404)
+  })
+
+  it('appends one input-mode marker line per actual mode change and none for a repeated mode', async () => {
+    await begin('off')
+    const file = path.join(dataDir, 'transcripts.jsonl')
+    await post('/voice/input-mode', { mode: 'off' })
+    expect(fs.existsSync(file)).toBe(false)
+    await post('/voice/input-mode', { mode: 'listen' })
+    await post('/voice/input-mode', { mode: 'listen' })
+    await post('/voice/input-mode', { mode: 'transcribe' })
+    const lines = fs.readFileSync(file, 'utf-8').trim().split('\n').map(l => JSON.parse(l))
+    expect(lines.map(({ event, mode }) => ({ event, mode }))).toEqual([
+      { event: 'input-mode', mode: 'listen' },
+      { event: 'input-mode', mode: 'transcribe' },
+    ])
+    expect(typeof lines[0].at).toBe('number')
+  })
+
+  it('a final in transcribe mode broadcasts voice-type, is recorded with the mode and is not queued', async () => {
+    await begin('transcribe')
+    final({ text: '你好', end_unix_ms: 5, language: 'zh', emotion: 'neutral' })
+    expect(takePending()).toEqual([])
+    expect(mocks.broadcastEvent).toHaveBeenCalledWith('voice-type', { text: '你好' })
+    expect(mocks.broadcastEvent).not.toHaveBeenCalledWith('voice-pending', {})
+    const lines = fs.readFileSync(path.join(dataDir, 'transcripts.jsonl'), 'utf-8').trim().split('\n').map(l => JSON.parse(l))
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toMatchObject({ text: '你好', mode: 'normal', inputMode: 'transcribe' })
+  })
+
+  it('a final in listen mode queues and never broadcasts voice-type', async () => {
+    await begin('listen')
+    final({ text: 'hi', end_unix_ms: 5, language: 'en', emotion: 'neutral' })
+    expect(takePending()).toEqual(['hi'])
+    expect(mocks.broadcastEvent).toHaveBeenCalledWith('voice-pending', {})
+    expect(mocks.broadcastEvent).not.toHaveBeenCalledWith('voice-type', expect.anything())
+  })
+
+  it('testing and enrolling finals are never typed even in transcribe mode', async () => {
+    await begin('transcribe')
+    await post('/voice/test/start')
+    final({ text: '测试', start_ms: 0, end_ms: 100, end_unix_ms: Date.now() + 1000, language: 'zh', emotion: 'neutral', speaker_enrolled: false })
+    await post('/voice/test/stop')
+    await post('/voice/enroll/start')
+    final({ text: '录入', enrolling: true, end_unix_ms: Date.now() })
+    final({ text: '录入中的普通句', end_unix_ms: Date.now() + 1000, start_ms: 0, end_ms: 100 })
+    await post('/voice/enroll/cancel')
+    expect(takePending()).toEqual([])
+    expect(mocks.broadcastEvent).not.toHaveBeenCalledWith('voice-type', expect.anything())
   })
 
   it('enrolling and testing force listening on and restore the switch value when they end', async () => {
     vi.useFakeTimers()
-    await begin(false)
+    await begin('off')
 
     await post('/voice/enroll/start')
     expect(lastListening()).toBe(true)
@@ -1106,26 +1167,26 @@ describe('voice input toggle', () => {
   })
 
   it('restores listening to true after a mode ends when the switch is on', async () => {
-    await begin(true)
+    await begin('listen')
     await post('/voice/test/start')
     await post('/voice/test/stop')
     expect(lastListening()).toBe(true)
   })
 
-  it('a final in normal mode is recorded but not queued while the switch is off', async () => {
-    await begin(false)
+  it('a final in normal mode is recorded but neither queued nor typed while the mode is off', async () => {
+    await begin('off')
     final({ text: '你好', end_unix_ms: 5, language: 'zh', emotion: 'neutral' })
     expect(takePending()).toEqual([])
     expect(mocks.broadcastEvent).not.toHaveBeenCalledWith('voice-pending', {})
     const lines = fs.readFileSync(path.join(dataDir, 'transcripts.jsonl'), 'utf-8').trim().split('\n')
     expect(lines).toHaveLength(1)
-    await post('/voice/listen', { enabled: true })
+    await post('/voice/input-mode', { mode: 'listen' })
     final({ text: 'hi', end_unix_ms: 6, language: 'en', emotion: 'neutral' })
     expect(takePending()).toEqual(['hi'])
   })
 
   it('a non-enrolling final during enrollment is neither recorded nor queued', async () => {
-    await begin(true)
+    await begin('listen')
     await post('/voice/enroll/start')
     final({ text: '你好', end_unix_ms: 5, language: 'zh', emotion: 'neutral' })
     expect(takePending()).toEqual([])
@@ -1152,7 +1213,7 @@ describe('voice input toggle', () => {
     beforeEach(async () => {
       vi.useFakeTimers()
       at(0)
-      await begin(true)
+      await begin('listen')
     })
 
     it('a final spoken during a test but arriving after it is listed as testing and never queued', async () => {
@@ -1222,7 +1283,7 @@ describe('voice input toggle', () => {
 
   it('enroll start occupies enrolling before the speaker read finishes', async () => {
     vi.useFakeTimers()
-    await begin(false)
+    await begin('off')
     const gate = deferred()
     hold.speaker = gate.promise
     const reading = new Promise<void>(resolve => {
@@ -1241,7 +1302,7 @@ describe('voice input toggle', () => {
 
   it('cancelling while the speaker is being read ends in normal without starting the agent enrollment', async () => {
     vi.useFakeTimers()
-    await begin(false)
+    await begin('off')
     const gate = deferred()
     hold.speaker = gate.promise
     const reading = new Promise<void>(resolve => {
@@ -1260,7 +1321,7 @@ describe('voice input toggle', () => {
 
   it('cancelling while the agent enrollment starts sends a second agent cancel and leaves no timer', async () => {
     vi.useFakeTimers()
-    await begin(false)
+    await begin('off')
     const gate = deferred()
     hold.start = gate.promise
     const starting = new Promise<void>(resolve => {
@@ -1280,7 +1341,7 @@ describe('voice input toggle', () => {
 
   it('a failed speaker read releases the occupied mode', async () => {
     vi.useFakeTimers()
-    await begin(false)
+    await begin('off')
     mocks.call.mockImplementationOnce(async () => {
       throw new Error('down')
     })
@@ -1294,7 +1355,7 @@ describe('voice input toggle', () => {
 
   it('a failed agent enrollment start releases the occupied mode', async () => {
     vi.useFakeTimers()
-    await begin(false)
+    await begin('off')
     mocks.call.mockImplementation(async (_method: string, url: string) => {
       if (url === '/v1/speaker') return speaker
       throw Object.assign(new Error('conflict'), { status: 409 })
@@ -1308,7 +1369,7 @@ describe('voice input toggle', () => {
   })
 
   it('cancel tolerates the agent answering 409 when no enrollment is active', async () => {
-    await begin(false)
+    await begin('off')
     mocks.call.mockImplementation(async () => {
       throw Object.assign(new Error('conflict'), { status: 409 })
     })
@@ -1333,7 +1394,7 @@ describe('voice input toggle', () => {
 
     it('ends enrollment, restores listening, sets the flag and keeps an unchanged voiceprint silently', async () => {
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-      await begin(false)
+      await begin('off')
       speaker = { ...speaker, enrolled: true, utterances: 6 }
       await post('/voice/enroll/start')
       expect(lastListening()).toBe(true)
@@ -1353,7 +1414,7 @@ describe('voice input toggle', () => {
 
     it('logs an error when the voiceprint is gone or changed afterwards', async () => {
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-      await begin(false)
+      await begin('off')
       speaker = { ...speaker, enrolled: true, utterances: 6 }
       await post('/voice/enroll/start')
       speaker = { ...speaker, enrolled: false, utterances: 0 }
@@ -1363,7 +1424,7 @@ describe('voice input toggle', () => {
     })
 
     it('ignores other failure codes and device_changed outside enrollment', async () => {
-      await begin(false)
+      await begin('off')
       deviceChanged()
       expect((await status()).enrollInterrupted).toBe(false)
       await post('/voice/enroll/start')
@@ -1374,7 +1435,7 @@ describe('voice input toggle', () => {
     })
 
     it('is cleared by the next enrollment start and by deleting the speaker', async () => {
-      await begin(false)
+      await begin('off')
       await enrollThenInterrupt()
       expect((await status()).enrollInterrupted).toBe(true)
       await post('/voice/enroll/start')
@@ -1386,7 +1447,7 @@ describe('voice input toggle', () => {
     })
 
     it('dismiss-interrupted clears the flag, notifies, and is a quiet no-op when it is not set', async () => {
-      await begin(false)
+      await begin('off')
       await enrollThenInterrupt()
       mocks.broadcastEvent.mockClear()
       expect((await post('/voice/enroll/dismiss-interrupted')).statusCode).toBe(200)
@@ -1398,7 +1459,7 @@ describe('voice input toggle', () => {
     })
 
     it('a commit after the interruption fails and the flag stays set', async () => {
-      await begin(false)
+      await begin('off')
       await enrollThenInterrupt()
       expect((await post('/voice/enroll/commit')).statusCode).toBe(409)
       expect((await status()).enrollInterrupted).toBe(true)

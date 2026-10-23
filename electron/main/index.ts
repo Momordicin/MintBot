@@ -1,8 +1,8 @@
 // electron/main/index.ts — Electron 主进程入口：app ready 后创建聊天窗口、桌宠 overlay 与托盘，注册 IPC，启动前台窗口监控与 core /events 订阅，will-quit 时收尾
-// 用法：electron.vite.config.ts 的主进程 entry；注册 autostart:get / autostart:set；监听 second-instance；注册 app 协议 protocol.handle('app')；第一条 import 为 logBootstrap；注册 chat:ready（聊天窗口首次显示）/ chat:painted（聊天窗口唤起后淡入）；注册 ui:get-locale，向窗口发 ui:locale-changed；设置窗口按 open-settings-window IPC 按需创建；显示器拓扑变化时 handleDisplayTopologyChange 先调 clearStableDisplayKeyCache()
-// 对应文件：electron/preload/index.ts（暴露的 IPC 通道）/ electron/main/windowBehavior.ts / electron/main/petContextMenu.ts / electron/main/coreEventsConsumer.ts / electron/main/i18n.ts / electron/main/foregroundWorldModel.ts / electron/main/windowDragMonitor.ts / electron/main/nativeWindowDrag.ts / electron/main/petTopmostGuard.ts / electron/main/startupGate.ts / electron/main/displayIdentity.ts / electron/main/appOrigin.ts / electron/main/appAssetPath.ts / electron/main/coreProcess.ts / electron/main/autostart.ts / electron/main/chatFirstShow.ts / electron/main/chatReveal.ts / shared/windowBehavior.ts / shared/portraitForm.ts
+// 用法：electron.vite.config.ts 的主进程 entry；注册 autostart:get / autostart:set；监听 second-instance；注册 app 协议 protocol.handle('app')；第一条 import 为 logBootstrap；注册 chat:ready（聊天窗口首次显示）/ chat:painted（聊天窗口唤起后淡入）；注册 ui:get-locale，向窗口发 ui:locale-changed；设置窗口按 open-settings-window IPC 按需创建；订阅 voice-type（textOutput）与 voice-status-changed（托盘「语音输入」）；显示器拓扑变化时 handleDisplayTopologyChange 先调 clearStableDisplayKeyCache()
+// 对应文件：electron/preload/index.ts（暴露的 IPC 通道）/ electron/main/windowBehavior.ts / electron/main/petContextMenu.ts / electron/main/coreEventsConsumer.ts / electron/main/i18n.ts / electron/main/foregroundWorldModel.ts / electron/main/windowDragMonitor.ts / electron/main/nativeWindowDrag.ts / electron/main/petTopmostGuard.ts / electron/main/startupGate.ts / electron/main/displayIdentity.ts / electron/main/appOrigin.ts / electron/main/appAssetPath.ts / electron/main/coreProcess.ts / electron/main/autostart.ts / electron/main/chatFirstShow.ts / electron/main/chatReveal.ts / electron/main/textOutput.ts / electron/main/sendInput.ts / electron/main/voiceTray.ts / shared/voiceInputMode.ts / shared/windowBehavior.ts / shared/portraitForm.ts
 import './logBootstrap'
-import { app, BrowserWindow, Menu, Tray, powerMonitor, ipcMain, dialog, screen, nativeImage, protocol, net, shell } from 'electron'
+import { app, BrowserWindow, Menu, Tray, clipboard, powerMonitor, ipcMain, dialog, screen, nativeImage, protocol, net, shell } from 'electron'
 import type { IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron'
 import { join, basename } from 'path'
 import { pathToFileURL } from 'url'
@@ -75,6 +75,12 @@ import {
 import type { Bounds } from './windowPositions'
 import { clearStableDisplayKeyCache } from './displayIdentity'
 import { PET_SCALE_OPTIONS } from '../../shared/portraitForm.js'
+import type { VoiceInputMode } from '../../shared/voiceInputMode.js'
+import { getForegroundExeName } from './activeWindowMonitor'
+import { sendKeyInputs } from './sendInput'
+import { createTextOutput } from './textOutput'
+import { buildVoiceInputMenu, createVoiceTrayRefresher, VOICE_TRAY_UNAVAILABLE } from './voiceTray'
+import type { VoiceTrayState } from './voiceTray'
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }
@@ -159,6 +165,38 @@ async function applyIconFromCurrentPreset(): Promise<void> {
   }
 }
 
+const textOutput = createTextOutput({ sendInput: sendKeyInputs, getForegroundExeName, clipboard })
+
+let voiceTrayState: VoiceTrayState = VOICE_TRAY_UNAVAILABLE
+
+const VOICE_STATUS_FETCH_TIMEOUT_MS = 3000
+
+const refreshVoiceTray = createVoiceTrayRefresher({
+  fetchStatus: async () => {
+    const response = await fetch(`${CORE_URL}/voice/status`, { signal: AbortSignal.timeout(VOICE_STATUS_FETCH_TIMEOUT_MS) })
+    if (!response.ok) throw new Error(`voice status responded ${response.status}`)
+    return response.json()
+  },
+  apply: state => {
+    voiceTrayState = state
+    rebuildTrayMenu()
+  },
+})
+
+async function handleVoiceInputModeClick(mode: VoiceInputMode): Promise<void> {
+  try {
+    const response = await fetch(`${CORE_URL}/voice/input-mode`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode }),
+    })
+    if (!response.ok) console.error('[Voice] Core rejected voice input mode change:', response.status)
+  } catch (err) {
+    console.error('[Voice] Failed to change voice input mode:', err)
+  }
+  await refreshVoiceTray()
+}
+
 const coreEventsConsumer = createCoreEventsConsumer({
   converge,
   onPresetSwitched: applyIconFromCurrentPreset,
@@ -167,12 +205,18 @@ const coreEventsConsumer = createCoreEventsConsumer({
     rebuildTrayMenu()
   },
   onUiLanguageChanged: applyUiLanguage,
+  onVoiceStatusChanged: () => {
+    void refreshVoiceTray()
+  },
+  onVoiceType: text => textOutput.typeText(text),
   log: {
     generationChanged: () =>
       console.log('[Events] Core service generation changed — the core process restarted, this is not the same server process we were talking to before (diagnostic only, does not itself trigger a resync)'),
     helloHeartbeatParseError: err => console.error('[Events] Failed to parse hello/heartbeat event:', err),
     windowBehaviorParseError: err => console.error('[WindowBehavior] Failed to parse window-behavior-changed event:', err),
     uiLanguageParseError: err => console.error('[I18n] Failed to parse ui-language-changed event:', err),
+    voiceTypeParseError: err => console.error('[Voice] Failed to parse voice-type event:', err),
+    voiceTypeError: err => console.error('[Voice] Failed to type recognized text:', err),
   },
 })
 
@@ -213,6 +257,7 @@ async function connectToCoreEvents(): Promise<boolean> {
 
 function converge(): void {
   initWindowBehaviorConfig(mainWindow, overlayWindow).then(rebuildTrayMenu)
+  void refreshVoiceTray()
   applyIconFromCurrentPreset()
 }
 
@@ -372,6 +417,7 @@ function rebuildTrayMenu(): void {
       checked: petAvoidanceEnabled,
       click: () => handlePetAvoidanceClick(!petAvoidanceEnabled),
     },
+    buildVoiceInputMenu(voiceTrayState, mode => void handleVoiceInputModeClick(mode)),
     {
       label: i18n.t('打开聊天窗口'),
       click: () => requestShowChat(),

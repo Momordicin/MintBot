@@ -1,5 +1,5 @@
 // services/core/voice/agent.ts — 托管语音输入进程：转写结果追加到本地记录，并累积为待放入聊天输入框的文字
-// 用法：index.ts 的 start() 调 startVoice()，SIGINT/SIGTERM 时调 stopVoice()；voice/routes.ts 调 takePending()；有新文字时 broadcastEvent('voice-pending')
+// 用法：index.ts 的 start() 调 startVoice()，SIGINT/SIGTERM 时调 stopVoice()；voice/routes.ts 调 takePending() / setInputMode()；聆听模式有新文字时 broadcastEvent('voice-pending')，转写模式 broadcastEvent('voice-type', { text })
 // 对应文件：services/core/voice/install.ts / services/core/voice/routes.ts / services/core/events/broadcast.ts / services/core/voice/agent.test.ts
 import fs from 'fs'
 import path from 'path'
@@ -13,7 +13,8 @@ import {
   type SupervisorState,
 } from '@mintbot/voice-agent-client'
 import { ERROR_CODES, type ErrorCode } from '../../../shared/errorCodes.js'
-import { getVoiceListenEnabled, setVoiceListenEnabled } from '../config/index.js'
+import type { VoiceInputMode } from '../../../shared/voiceInputMode.js'
+import { getVoiceInputMode, setVoiceInputMode } from '../config/index.js'
 import { broadcastEvent } from '../events/broadcast.js'
 import {
   fetchRemoteManifestInfo,
@@ -82,7 +83,7 @@ export interface VoiceStatus {
   errorCode: string | null
   speaker: SpeakerStatus | null
   mode: VoiceMode
-  listenEnabled: boolean
+  inputMode: VoiceInputMode
   enroll: { completed: EnrollSentence[]; current: EnrollSentence[] }
   test: { results: TestResult[]; hasRun: boolean }
   install: InstallStatus
@@ -102,7 +103,7 @@ let latestState: SupervisorState | null = null
 let mode: VoiceMode = 'normal'
 let modeSeq = 0
 let modeHistory: Array<{ mode: VoiceMode; since: number; seq: number }> = [{ mode: 'normal', since: Date.now(), seq: 0 }]
-let listenEnabled = false
+let inputMode: VoiceInputMode = 'off'
 let testResults: TestResult[] = []
 let testSeq: number | null = null
 let testHasRun = false
@@ -139,7 +140,15 @@ function clearModeTimer(): void {
 }
 
 function applyListening(): void {
-  supervisor?.setListening(listenEnabled || mode !== 'normal')
+  supervisor?.setListening(inputMode !== 'off' || mode !== 'normal')
+}
+
+function appendTranscriptLine(record: Record<string, unknown>): void {
+  try {
+    fs.appendFileSync(transcriptsPath, JSON.stringify(record) + '\n')
+  } catch (err) {
+    console.error('[Voice] Failed to append transcript:', err, record)
+  }
 }
 
 function recordMode(next: VoiceMode): void {
@@ -298,14 +307,11 @@ function handleEvent(ev: AgentEvent): void {
     language: data.language,
     emotion: data.emotion,
     mode: owner,
+    inputMode,
   }
   if (data.speaker_score !== undefined) record.speaker_score = data.speaker_score
   if (data.is_owner !== undefined) record.is_owner = data.is_owner
-  try {
-    fs.appendFileSync(transcriptsPath, JSON.stringify(record) + '\n')
-  } catch (err) {
-    console.error('[Voice] Failed to append transcript:', err, record)
-  }
+  appendTranscriptLine(record)
 
   if (owner === 'testing') {
     if (ownerSeq !== testSeq) return
@@ -315,9 +321,12 @@ function handleEvent(ev: AgentEvent): void {
     return
   }
 
-  if (owner === 'normal' && listenEnabled) {
+  if (owner !== 'normal') return
+  if (inputMode === 'listen') {
     pending.push(text)
     broadcastEvent('voice-pending', {})
+  } else if (inputMode === 'transcribe') {
+    broadcastEvent('voice-type', { text })
   }
 }
 
@@ -327,7 +336,7 @@ function resetState(): void {
   mode = 'normal'
   modeSeq++
   modeHistory = [{ mode: 'normal', since: Date.now(), seq: modeSeq }]
-  listenEnabled = false
+  inputMode = 'off'
   testResults = []
   testSeq = null
   testHasRun = false
@@ -383,7 +392,7 @@ export async function getVoiceStatus(): Promise<VoiceStatus> {
     errorCode: latestState?.error?.code ?? null,
     speaker: running ? await fetchSpeaker(current) : null,
     mode,
-    listenEnabled,
+    inputMode,
     enroll: { completed: enrollCompleted, current: enrollCurrent },
     test: { results: testResults, hasRun: testHasRun },
     install: { ...install },
@@ -516,11 +525,13 @@ export async function stopTest(): Promise<void> {
   requireRunning()
 }
 
-export function setListenEnabled(enabled: boolean): void {
+export function setInputMode(next: VoiceInputMode): void {
   if (!supervisor) throw new VoiceOperationError(503, ERROR_CODES.VOICE_UNAVAILABLE)
   if (mode !== 'normal') throw new VoiceOperationError(409, ERROR_CODES.VOICE_BUSY)
-  setVoiceListenEnabled(enabled)
-  listenEnabled = enabled
+  setVoiceInputMode(next)
+  const changed = next !== inputMode
+  inputMode = next
+  if (changed) appendTranscriptLine({ at: Date.now(), event: 'input-mode', mode: next })
   applyListening()
   notifyStatusChanged()
 }
@@ -538,10 +549,10 @@ export async function startVoice(dataDir: string = VOICE_DATA_DIR): Promise<void
   }
 
   installedVersion = installation.version
-  listenEnabled = getVoiceListenEnabled()
+  inputMode = getVoiceInputMode()
   supervisor = new VoiceAgentSupervisor({
     installation,
-    listen: listenEnabled,
+    listen: inputMode !== 'off',
     voiceprintPath: path.join(dataDir, 'owner.voiceprint.json'),
     onEvent: handleEvent,
     onState: state => {

@@ -1,6 +1,6 @@
-// electron/main/coreEventsConsumer.ts — 解析 core GET /events 的 SSE 文本流：按空行切帧，分发 hello/heartbeat（记录 generation）、preset-switched、window-behavior-changed、ui-language-changed
+// electron/main/coreEventsConsumer.ts — 解析 core GET /events 的 SSE 文本流：按空行切帧，分发 hello/heartbeat（记录 generation）、preset-switched、window-behavior-changed、ui-language-changed、voice-status-changed、voice-type
 // 用法：index.ts 里 createCoreEventsConsumer(handlers) 一次；每次连上 /events 调 onConnected()（清缓冲并触发 converge），读到的每个文本块调 onChunk(text)
-// 形状：输入为 SSE 文本块；输出为 handlers 的回调（converge / onPresetSwitched / onWindowBehaviorChanged(snapshot) / onUiLanguageChanged(language) / log.*）
+// 形状：输入为 SSE 文本块；输出为 handlers 的回调（converge / onPresetSwitched / onWindowBehaviorChanged(snapshot) / onUiLanguageChanged(language) / onVoiceStatusChanged() / onVoiceType(text) / log.*）
 // 对应文件：electron/main/index.ts（connectToCoreEvents）/ electron/main/eventsGeneration.ts / shared/windowBehavior.ts（WindowBehaviorSnapshot）/ shared/uiLocale.ts（UiLanguage）/ electron/main/coreEventsConsumer.test.ts
 
 import { hasServerRestarted } from './eventsGeneration'
@@ -12,11 +12,15 @@ export interface CoreEventsConsumerHandlers {
   onPresetSwitched: () => void
   onWindowBehaviorChanged: (snapshot: WindowBehaviorSnapshot) => void
   onUiLanguageChanged: (language: UiLanguage) => void
+  onVoiceStatusChanged: () => void
+  onVoiceType: (text: string) => void
   log: {
     generationChanged: () => void
     helloHeartbeatParseError: (err: unknown) => void
     windowBehaviorParseError: (err: unknown) => void
     uiLanguageParseError: (err: unknown) => void
+    voiceTypeParseError: (err: unknown) => void
+    voiceTypeError: (err: unknown) => void
   }
 }
 
@@ -65,6 +69,27 @@ export function createCoreEventsConsumer(handlers: CoreEventsConsumerHandlers): 
           handlers.onUiLanguageChanged((JSON.parse(dataLine.slice('data: '.length)) as { language: UiLanguage }).language)
         } catch (err) {
           handlers.log.uiLanguageParseError(err)
+        }
+      }
+    }
+    if (lines.some(line => line === 'event: voice-status-changed')) {
+      handlers.onVoiceStatusChanged()
+    }
+    if (lines.some(line => line === 'event: voice-type')) {
+      const dataLine = lines.find(line => line.startsWith('data: '))
+      if (dataLine) {
+        let text: unknown
+        try {
+          text = (JSON.parse(dataLine.slice('data: '.length)) as { text: unknown }).text
+        } catch (err) {
+          handlers.log.voiceTypeParseError(err)
+        }
+        if (typeof text === 'string') {
+          try {
+            handlers.onVoiceType(text)
+          } catch (err) {
+            handlers.log.voiceTypeError(err)
+          }
         }
       }
     }

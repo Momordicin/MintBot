@@ -1127,39 +1127,56 @@ describe('config/index — setDefaultPresetId', () => {
   })
 })
 
-describe('config/index — voice.listenEnabled', () => {
-  it('默认 false：没有 voice 段、文件不存在或文件不可读时都按 false', async () => {
-    const { getVoiceListenEnabled } = await import('./index.js')
+describe('config/index — voice.inputMode', () => {
+  it('默认 off：没有 voice 段、取值非法、文件不存在或文件不可读时都按 off', async () => {
+    const { getVoiceInputMode } = await import('./index.js')
 
     readFileSyncMock.mockReturnValue(JSON.stringify({ memory: {} }))
-    expect(getVoiceListenEnabled()).toBe(false)
+    expect(getVoiceInputMode()).toBe('off')
 
-    readFileSyncMock.mockReturnValue(JSON.stringify({ voice: { listenEnabled: 'yes' } }))
-    expect(getVoiceListenEnabled()).toBe(false)
+    readFileSyncMock.mockReturnValue(JSON.stringify({ voice: { inputMode: 'shout' } }))
+    expect(getVoiceInputMode()).toBe('off')
+
+    readFileSyncMock.mockReturnValue(JSON.stringify({ voice: { inputMode: 'off', listenEnabled: true } }))
+    expect(getVoiceInputMode()).toBe('off')
 
     readFileSyncMock.mockImplementation(() => {
       throw Object.assign(new Error('missing'), { code: 'ENOENT' })
     })
-    expect(getVoiceListenEnabled()).toBe(false)
+    expect(getVoiceInputMode()).toBe('off')
 
     readFileSyncMock.mockImplementation(() => '{ not json')
-    expect(getVoiceListenEnabled()).toBe(false)
+    expect(getVoiceInputMode()).toBe('off')
   })
 
-  it('读到 voice.listenEnabled 为 true 时返回 true', async () => {
+  it('读到合法的 voice.inputMode 时原样返回', async () => {
+    const { getVoiceInputMode } = await import('./index.js')
+    for (const inputMode of ['off', 'listen', 'transcribe']) {
+      readFileSyncMock.mockReturnValue(JSON.stringify({ voice: { inputMode } }))
+      expect(getVoiceInputMode()).toBe(inputMode)
+    }
+  })
+
+  it('没有 inputMode 时只有旧字段 listenEnabled 为 true 才读成 listen，其余都是 off', async () => {
+    const { getVoiceInputMode } = await import('./index.js')
+
     readFileSyncMock.mockReturnValue(JSON.stringify({ voice: { listenEnabled: true } }))
-    const { getVoiceListenEnabled } = await import('./index.js')
-    expect(getVoiceListenEnabled()).toBe(true)
+    expect(getVoiceInputMode()).toBe('listen')
+
+    for (const listenEnabled of [false, 'yes', 1, null]) {
+      readFileSyncMock.mockReturnValue(JSON.stringify({ voice: { listenEnabled } }))
+      expect(getVoiceInputMode()).toBe('off')
+    }
   })
 
-  it('setVoiceListenEnabled 原子写回 voice 段且保留其它顶层字段与 voice 段内其它字段', async () => {
+  it('setVoiceInputMode 原子写回 voice 段，只写 inputMode，丢弃旧字段 listenEnabled，保留其它字段', async () => {
     readFileSyncMock.mockReturnValue(JSON.stringify({
       defaultPresetId: 'preset-001',
-      voice: { other: 1 },
+      voice: { other: 1, listenEnabled: true },
     }))
-    const { setVoiceListenEnabled, CONFIG_PATH } = await import('./index.js')
+    const { setVoiceInputMode, CONFIG_PATH } = await import('./index.js')
 
-    setVoiceListenEnabled(true)
+    setVoiceInputMode('transcribe')
 
     expect(writeFileSyncMock).toHaveBeenCalledTimes(1)
     const [tempPath, written] = writeFileSyncMock.mock.calls[0]
@@ -1167,16 +1184,16 @@ describe('config/index — voice.listenEnabled', () => {
     expect(renameSyncMock).toHaveBeenCalledWith(tempPath, CONFIG_PATH)
     expect(JSON.parse(written as string)).toEqual({
       defaultPresetId: 'preset-001',
-      voice: { other: 1, listenEnabled: true },
+      voice: { other: 1, inputMode: 'transcribe' },
     })
   })
 
-  it('config.json 不可读时 setVoiceListenEnabled 抛 ConfigFileUnreadableError 且不写入', async () => {
+  it('config.json 不可读时 setVoiceInputMode 抛 ConfigFileUnreadableError 且不写入', async () => {
     readFileSyncMock.mockImplementation(() => '{ not json')
-    const { setVoiceListenEnabled } = await import('./index.js')
+    const { setVoiceInputMode } = await import('./index.js')
     const { ConfigFileUnreadableError } = await import('./configFileError.js')
 
-    expect(() => setVoiceListenEnabled(true)).toThrow(ConfigFileUnreadableError)
+    expect(() => setVoiceInputMode('listen')).toThrow(ConfigFileUnreadableError)
     expect(writeFileSyncMock).not.toHaveBeenCalled()
   })
 })

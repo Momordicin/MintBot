@@ -1,8 +1,9 @@
 // services/core/voice/routes.ts — 语音识别文字的取走路由、语音设置页的状态与操作路由
-// 用法：core/index.ts 里 fastify.register(voiceRoutes)；POST /voice/take → { texts }，由 src/chat/ChatWindow.tsx 调用；GET /voice/update-check 由 src/settings/VoicePanel.tsx 调用
+// 用法：core/index.ts 里 fastify.register(voiceRoutes)；POST /voice/take → { texts }，由 src/chat/ChatWindow.tsx 调用；POST /voice/input-mode { mode } 由 src/chat/ChatWindow.tsx 与 electron/main/index.ts 托盘调用；GET /voice/update-check 由 src/settings/VoicePanel.tsx 调用
 // 对应文件：services/core/voice/agent.ts / src/chat/ChatWindow.tsx / services/core/voice/agent.test.ts
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { ERROR_CODES, errorBody, invalidRequest } from '../../../shared/errorCodes.js'
+import { isVoiceInputMode } from '../../../shared/voiceInputMode.js'
 import { ConfigFileUnreadableError } from '../config/configFileError.js'
 import {
   VoiceOperationError,
@@ -14,7 +15,7 @@ import {
   commitEnroll,
   deleteSpeaker,
   getVoiceStatus,
-  setListenEnabled,
+  setInputMode,
   startEnroll,
   startInstall,
   startTest,
@@ -48,11 +49,11 @@ export async function voiceRoutes(fastify: FastifyInstance) {
     return reply.status(200).send({ ok: true })
   })
 
-  fastify.post<{ Body: { enabled?: unknown } }>('/voice/listen', async (request, reply) => {
-    const enabled = request.body?.enabled
-    if (typeof enabled !== 'boolean') return reply.status(400).send(invalidRequest('enabled 必须是布尔值'))
+  fastify.post<{ Body: { mode?: unknown } }>('/voice/input-mode', async (request, reply) => {
+    const mode = request.body?.mode
+    if (!isVoiceInputMode(mode)) return reply.status(400).send(invalidRequest('mode 必须是 off、listen 或 transcribe'))
     try {
-      setListenEnabled(enabled)
+      setInputMode(mode)
     } catch (err) {
       if (err instanceof VoiceOperationError) return reply.status(err.status).send(errorBody(err.errorCode))
       if (err instanceof ConfigFileUnreadableError) {

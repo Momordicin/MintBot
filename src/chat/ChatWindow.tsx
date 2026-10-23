@@ -4,6 +4,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { MessageList } from './MessageList'
+import { nextVoiceInputMode } from '../../shared/voiceInputMode.js'
 import { InputBar, type InputBarHandle, type VoiceInputState } from './InputBar'
 import { TitleBar } from './TitleBar'
 import { MessageData } from './MessageBubble'
@@ -191,9 +192,9 @@ export function ChatWindow() {
     try {
       const response = await fetch(`${CORE_URL}/voice/status`)
       if (!response.ok) return
-      const { installed, listenEnabled, mode, install } = await response.json() as Omit<VoiceInputState, 'installing'> & { install: { state: string } }
+      const { installed, inputMode, mode, install } = await response.json() as Omit<VoiceInputState, 'installing'> & { install: { state: string } }
       if (seq !== voiceLoadSeqRef.current) return
-      setVoice({ installed, listenEnabled, mode, installing: install.state === 'installing' })
+      setVoice({ installed, inputMode, mode, installing: install.state === 'installing' })
     } catch {
     }
   }, [])
@@ -202,10 +203,10 @@ export function ChatWindow() {
     if (!voice) return
     setVoiceBusy(true)
     try {
-      await fetch(`${CORE_URL}/voice/listen`, {
+      await fetch(`${CORE_URL}/voice/input-mode`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: !voice.listenEnabled }),
+        body: JSON.stringify({ mode: nextVoiceInputMode(voice.inputMode) }),
       })
     } catch {
     }

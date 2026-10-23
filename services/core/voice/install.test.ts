@@ -18,8 +18,8 @@ const mocks = vi.hoisted(() => ({
   stop: vi.fn(async () => {}),
   call: vi.fn(),
   setListening: vi.fn(),
-  getVoiceListenEnabled: vi.fn(() => false),
-  setVoiceListenEnabled: vi.fn(),
+  getVoiceInputMode: vi.fn(() => 'off'),
+  setVoiceInputMode: vi.fn(),
 }))
 
 vi.mock('./install.js', () => ({
@@ -31,8 +31,8 @@ vi.mock('./install.js', () => ({
 }))
 vi.mock('../events/broadcast.js', () => ({ broadcastEvent: mocks.broadcastEvent }))
 vi.mock('../config/index.js', () => ({
-  getVoiceListenEnabled: mocks.getVoiceListenEnabled,
-  setVoiceListenEnabled: mocks.setVoiceListenEnabled,
+  getVoiceInputMode: mocks.getVoiceInputMode,
+  setVoiceInputMode: mocks.setVoiceInputMode,
 }))
 vi.mock('@mintbot/voice-agent-client', () => ({
   API_VERSION: 1,
@@ -133,13 +133,13 @@ describe('voice component install', () => {
     await startVoice(dataDir)
     mocks.start.mockClear()
     mocks.stop.mockClear()
-    mocks.getVoiceListenEnabled.mockClear()
+    mocks.getVoiceInputMode.mockClear()
     const res = await post('/voice/install')
     expect(res.statusCode).toBe(202)
     await settle()
     expect(mocks.stop).toHaveBeenCalledTimes(1)
     expect(installCall.manifest).toBe('https://example.invalid/manifest.json')
-    expect(mocks.setVoiceListenEnabled).not.toHaveBeenCalled()
+    expect(mocks.setVoiceInputMode).not.toHaveBeenCalled()
     expect(mocks.start).not.toHaveBeenCalled()
     expect((await status()).install).toEqual({ state: 'installing' })
     mocks.readVoiceInstallation.mockResolvedValue({ version: '0.3.0' })
