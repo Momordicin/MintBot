@@ -35,6 +35,7 @@ import { cancelInstallForShutdown, startVoice, stopVoice } from './voice/agent.j
 import { voiceRoutes } from './voice/routes.js'
 import { startOrganizeModeScheduler } from './memory/orchestrator.js'
 import { buildStatePayload } from './state.js'
+import { logServerErrors } from './errorLogging.js'
 import { CHARACTERS_ROOT } from './characters/manifest.js'
 import { LOOPBACK_HOST, CORE_PORT, RENDERER_ORIGINS } from './config/ports.js'
 import fastifyStatic from '@fastify/static'
@@ -66,6 +67,7 @@ function readStreamingEnabled(): boolean {
 }
 
 const fastify = Fastify({ logger: true, disableRequestLogging: true })
+logServerErrors(fastify)
 
 fastify.get('/health', async () => ({ status: 'ok', uptime: process.uptime() }))
 
