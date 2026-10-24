@@ -40,10 +40,10 @@ function ModelRow({
   const { t } = useTranslation()
   return (
     <>
-    <div className="model-config-panel__row">
+    <div className="model-config-panel__row" role="group" aria-label={label}>
       <span className="model-config-panel__row-label">{label}</span>
       <div className="model-config-panel__field model-config-panel__field--compact model-config-panel__field--provider">
-        <select value={type} onChange={e => onTypeChange(e.target.value as ModelConfig['type'])}>
+        <select aria-label={t('类型')} value={type} onChange={e => onTypeChange(e.target.value as ModelConfig['type'])}>
           <option value="anthropic">Anthropic</option>
           <option value="openai">OpenAI</option>
           <option value="deepseek">DeepSeek</option>
@@ -116,6 +116,7 @@ export function PersonaModelPanel({ panel }: PersonaModelPanelProps) {
           {systemPromptStep === 'editing' && (
             <>
               <textarea
+                aria-label={t('人设')}
                 className="character-panel__persona-textarea"
                 value={systemPromptValue}
                 onChange={e => setSystemPromptValue(e.target.value)}

@@ -36,7 +36,6 @@ export function AppearancePanel({ panel }: AppearancePanelProps) {
               className="wallpaper-btn"
               onClick={handleWallpaperPick}
               disabled={isUploadingWallpaper || deleteTarget !== null || isDeleting}
-              title={t('更换壁纸')}
             >
               {isUploadingWallpaper ? t('更换中…') : t('更换壁纸')}
             </button>

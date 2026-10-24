@@ -107,7 +107,7 @@ export function EntityList({ sessionId }: EntityListProps) {
   return (
     <div className="memory-list">
       <div className="memory-toolbar">
-        <select value={type} onChange={e => setType(e.target.value as EntityType | '')}>
+        <select aria-label={t('实体类型')} value={type} onChange={e => setType(e.target.value as EntityType | '')}>
           <option value="">{t('全部')}</option>
           {Object.entries(typeLabels).map(([value, label]) => (
             <option key={value} value={value}>{label}</option>

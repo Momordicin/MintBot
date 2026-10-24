@@ -1,7 +1,7 @@
 // src/settings/ModelConfigPanel.tsx — 设置窗口的"模型配置"面板：API Key / Ollama 地址 / 对话模型 / 摘要模型
 // 用法：SettingsApp 里渲染 <ModelConfigPanel />（无 props）；GET/PATCH /config/model
 // 对应文件：src/settings/SettingsApp.tsx / src/settings/SubscriptionLogin.tsx / src/settings/ApiKeyField.tsx / src/settings/ModelNameField.tsx / src/errorText.ts / services/core/routes/config.ts / shared/types/index.ts
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ModelConfig } from '../../shared/types/index.js'
 import { isErrorBody } from '../../shared/errorCodes.js'
@@ -154,6 +154,7 @@ interface KeyGroupProps {
 
 function KeyGroup({ provider, summary, keyInput, editing, fromEnv, onKeyInputChange, onEditingChange, onFromEnvChange, baseUrl, onBaseUrlChange }: KeyGroupProps) {
   const { t } = useTranslation()
+  const baseUrlId = useId()
   return (
     <div className="model-config-panel__group">
       <div className="model-config-panel__section-label">{PROVIDER_LABEL[provider]}</div>
@@ -170,8 +171,8 @@ function KeyGroup({ provider, summary, keyInput, editing, fromEnv, onKeyInputCha
       />
       {onBaseUrlChange && (
         <div className="model-config-panel__field">
-          <label>{t('Base URL（可选）')}</label>
-          <input value={baseUrl ?? ''} onChange={e => onBaseUrlChange(e.target.value)} />
+          <label htmlFor={baseUrlId}>{t('Base URL（可选）')}</label>
+          <input id={baseUrlId} value={baseUrl ?? ''} onChange={e => onBaseUrlChange(e.target.value)} />
         </div>
       )}
     </div>
@@ -189,14 +190,16 @@ interface ModelSelectionFieldsProps {
 
 function ModelSelectionFields({ selection, providerOptions, reloadKey, typedKeys, fromEnvs, onChange }: ModelSelectionFieldsProps) {
   const { t } = useTranslation()
+  const typeId = useId()
   const current = selection.type === 'ollama' ? selection.ollamaModel : selection.modelName
   const typedKey = selection.type === 'ollama' ? '' : typedKeys[selection.type].trim()
 
   return (
     <>
       <div className="model-config-panel__field">
-        <label>{t('类型')}</label>
+        <label htmlFor={typeId}>{t('类型')}</label>
         <select
+          id={typeId}
           value={selection.type}
           onChange={e => onChange({ ...selection, type: e.target.value as ProviderType, modelName: '' })}
         >
@@ -223,6 +226,8 @@ function ModelSelectionFields({ selection, providerOptions, reloadKey, typedKeys
 
 export function ModelConfigPanel() {
   const { t, i18n } = useTranslation()
+  const ollamaBaseUrlId = useId()
+  const maxTokensId = useId()
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [keys, setKeys] = useState<Record<KeyProvider, KeySummary>>(BLANK_KEYS)
@@ -377,8 +382,9 @@ export function ModelConfigPanel() {
       <div className="model-config-panel__section">
         <div className="model-config-panel__section-label">Ollama</div>
         <div className="model-config-panel__field">
-          <label>Ollama Base URL</label>
+          <label htmlFor={ollamaBaseUrlId}>Ollama Base URL</label>
           <input
+            id={ollamaBaseUrlId}
             value={form.ollamaBaseUrl}
             onChange={e => setForm(prev => ({ ...prev, ollamaBaseUrl: e.target.value }))}
           />
@@ -398,8 +404,9 @@ export function ModelConfigPanel() {
           onChange={chat => setForm(prev => ({ ...prev, chat }))}
         />
         <div className="model-config-panel__field model-config-panel__field--short">
-          <label>{t('最大回复 token 数（max_tokens）')}</label>
+          <label htmlFor={maxTokensId}>{t('最大回复 token 数（max_tokens）')}</label>
           <input
+            id={maxTokensId}
             type="number"
             min={MIN_MAX_TOKENS}
             max={MAX_MAX_TOKENS}

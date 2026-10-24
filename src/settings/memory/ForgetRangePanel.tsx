@@ -2,7 +2,7 @@
 // 用法：MemoryPanel 渲染 <ForgetRangePanel sessionId />；POST /forget/check，POST /forget
 // 形状：props { sessionId: string }；删除结果含各类记录的删除条数
 // 对应文件：src/settings/memory/MemoryPanel.tsx / services/core/routes/forget.ts
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { CORE_URL } from '../../coreUrl.js'
@@ -43,6 +43,8 @@ function datetimeLocalToEpoch(value: string): number | null {
 
 export function ForgetRangePanel({ sessionId }: ForgetRangePanelProps) {
   const { t } = useTranslation()
+  const fromId = useId()
+  const toId = useId()
   const [fromValue, setFromValue] = useState('')
   const [toValue, setToValue] = useState('')
   const [validationError, setValidationError] = useState<string | null>(null)
@@ -142,8 +144,9 @@ export function ForgetRangePanel({ sessionId }: ForgetRangePanelProps) {
   return (
     <div className="forget-panel">
       <div className="forget-panel__field">
-        <label>{t('起始时间')}</label>
+        <label htmlFor={fromId}>{t('起始时间')}</label>
         <input
+          id={fromId}
           type="datetime-local"
           value={fromValue}
           onChange={e => setFromValue(e.target.value)}
@@ -151,8 +154,9 @@ export function ForgetRangePanel({ sessionId }: ForgetRangePanelProps) {
         />
       </div>
       <div className="forget-panel__field">
-        <label>{t('结束时间')}</label>
+        <label htmlFor={toId}>{t('结束时间')}</label>
         <input
+          id={toId}
           type="datetime-local"
           value={toValue}
           onChange={e => setToValue(e.target.value)}

@@ -30,6 +30,7 @@ export function CharacterPanel({ panel }: CharacterPanelProps) {
           {isRenaming ? (
             <input
               ref={renameInputRef}
+              aria-label={t('名称')}
               className="character-panel__rename-input"
               style={renameInputWidth ? { width: renameInputWidth } : undefined}
               value={renameValue}
@@ -68,7 +69,7 @@ export function CharacterPanel({ panel }: CharacterPanelProps) {
       )}
       <div className="character-panel__row">
         {!isCreating && (
-          <button className="rename-btn" onClick={handleCreateStart} disabled={isImportingCard || deleteTarget !== null || isDeleting} title={t('创建新角色')}>
+          <button className="rename-btn" onClick={handleCreateStart} disabled={isImportingCard || deleteTarget !== null || isDeleting}>
             {t('创建角色')}
           </button>
         )}
@@ -90,9 +91,11 @@ export function CharacterPanel({ panel }: CharacterPanelProps) {
             value={createName}
             onChange={e => setCreateName(e.target.value)}
             placeholder={t('角色名称')}
+            aria-label={t('角色名称')}
             disabled={isSavingCreate || isImportingCard}
           />
           <select
+            aria-label={t('角色素材包')}
             value={createCharacterId}
             onChange={e => setCreateCharacterId(e.target.value)}
             disabled={isSavingCreate || isImportingCard}
@@ -106,6 +109,7 @@ export function CharacterPanel({ panel }: CharacterPanelProps) {
             value={createSystemPrompt}
             onChange={e => setCreateSystemPrompt(e.target.value)}
             placeholder={t('人设正文')}
+            aria-label={t('人设正文')}
             disabled={isSavingCreate || isImportingCard}
           />
           {importedCardFields && (
@@ -140,7 +144,6 @@ export function CharacterPanel({ panel }: CharacterPanelProps) {
                 isUploadingWallpaper || isSwitchingPortrait || isImportingCard || isGeneratingSystemPrompt ||
                 systemPromptStep === 'saving' || modelOverrideStep === 'saving' || isSwitchingPreset
               }
-              title={t('删除当前角色')}
             >
               {t('删除角色')}
             </button>

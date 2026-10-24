@@ -1,7 +1,7 @@
 // src/settings/ModelNameField.tsx — 设置窗口共用的「模型名称」下拉框
 // 用法：ModelConfigPanel 的对话 / 摘要模型选择渲染 <ModelNameField />，PersonaModelPanel 的模型行渲染 <ModelNameField compact />；GET /models?type=[&presetId=][&purpose=]、POST /models
 // 对应文件：src/settings/ModelConfigPanel.tsx / src/settings/PersonaModelPanel.tsx / src/errorText.ts / services/core/routes/models.ts / src/settings/settings.css
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ModelConfig } from '../../shared/types/index.js'
 import { CORE_URL } from '../coreUrl.js'
@@ -24,6 +24,7 @@ interface ModelNameFieldProps {
 
 export function ModelNameField({ type, current, apiKey, presetId, fromEnv, reloadKey = 0, purpose, compact = false, onChange }: ModelNameFieldProps) {
   const { t, i18n } = useTranslation()
+  const selectId = useId()
   const [options, setOptions] = useState<string[]>([])
   const [isLoadingOptions, setIsLoadingOptions] = useState(true)
   const [optionsError, setOptionsError] = useState<string | null>(null)
@@ -88,8 +89,10 @@ export function ModelNameField({ type, current, apiKey, presetId, fromEnv, reloa
 
   return (
     <div className={compact ? 'model-config-panel__field model-config-panel__field--compact' : 'model-config-panel__field'}>
-      {!compact && <label>{t('模型名称')}</label>}
+      {!compact && <label htmlFor={selectId}>{t('模型名称')}</label>}
       <select
+        id={selectId}
+        aria-label={compact ? t('模型名称') : undefined}
         value={current}
         title={compact && showStatusHint ? statusText : undefined}
         onMouseDown={retryLoad}
@@ -108,9 +111,9 @@ export function ModelNameField({ type, current, apiKey, presetId, fromEnv, reloa
         )}
       </select>
       {compact && !isLoadingOptions && optionsError !== null && (
-        <span className="model-config-panel__error-mark" title={optionsError}>!</span>
+        <span className="model-config-panel__error-mark" role="img" aria-label={optionsError} title={optionsError}>!</span>
       )}
-      {!compact && showStatusHint && <span className="model-config-panel__hint">{statusText}</span>}
+      {!compact && showStatusHint && <span className="model-config-panel__hint" role="status">{statusText}</span>}
     </div>
   )
 }

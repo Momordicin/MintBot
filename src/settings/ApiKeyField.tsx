@@ -1,7 +1,7 @@
 // src/settings/ApiKeyField.tsx — 设置窗口共用的 API Key 字段
 // 用法：ModelConfigPanel 的三个 Key 分组渲染 <ApiKeyField />，PersonaModelPanel 的模型行渲染 <ApiKeyField compact />；导出 KeyProvider / ENV_VAR
 // 对应文件：src/settings/ModelConfigPanel.tsx / src/settings/PersonaModelPanel.tsx / src/settings/settings.css
-import React from 'react'
+import React, { useId } from 'react'
 import { useTranslation } from 'react-i18next'
 
 export type KeyProvider = 'anthropic' | 'openai' | 'deepseek'
@@ -54,6 +54,9 @@ interface ApiKeyFieldProps {
 
 export function ApiKeyField({ summary, envDetected, envVar, fromEnv, keyInput, editing, onKeyInputChange, onEditingChange, onFromEnvChange, keyStatus = 'ready', envStatus = 'ready', compact = false }: ApiKeyFieldProps) {
   const { t } = useTranslation()
+  const inputId = useId()
+  const envHintId = useId()
+  const inputLabel = compact ? t('API Key') : undefined
   const maskedValue = summary.hasKey ? `••••••••${summary.last4 ?? ''}` : t('未填写')
   const keyReady = keyStatus === 'ready'
   const pending = !keyReady || envStatus !== 'ready'
@@ -62,14 +65,16 @@ export function ApiKeyField({ summary, envDetected, envVar, fromEnv, keyInput, e
   return (
     <>
       <div className={compact ? 'model-config-panel__field model-config-panel__field--compact' : 'model-config-panel__field'}>
-        {!compact && <label>{t('API Key')}</label>}
+        {!compact && <label htmlFor={inputId}>{t('API Key')}</label>}
         <div className="model-config-panel__secret">
           {!keyReady ? (
-            <input key="view" type="text" readOnly value={keyStatus === 'loading' ? t('加载中…') : t('读取失败')} />
+            <input id={inputId} aria-label={inputLabel} key="view" type="text" readOnly value={keyStatus === 'loading' ? t('加载中…') : t('读取失败')} />
           ) : fromEnv ? (
-            <input key="view" type="text" readOnly value={compact ? t('环境变量') : t('使用环境变量 {{envVar}}', { envVar })} title={compact ? t('使用环境变量 {{envVar}}', { envVar }) : undefined} />
+            <input id={inputId} aria-label={inputLabel} key="view" type="text" readOnly value={compact ? t('环境变量') : t('使用环境变量 {{envVar}}', { envVar })} title={compact ? t('使用环境变量 {{envVar}}', { envVar }) : undefined} />
           ) : editing ? (
             <input
+              id={inputId}
+              aria-label={inputLabel}
               key="edit"
               type="password"
               autoFocus
@@ -80,7 +85,7 @@ export function ApiKeyField({ summary, envDetected, envVar, fromEnv, keyInput, e
               onChange={e => onKeyInputChange(e.target.value)}
             />
           ) : (
-            <input key="view" type="text" readOnly value={maskedValue} />
+            <input id={inputId} aria-label={inputLabel} key="view" type="text" readOnly value={maskedValue} />
           )}
           {keyReady && !fromEnv && (
             <button
@@ -104,10 +109,12 @@ export function ApiKeyField({ summary, envDetected, envVar, fromEnv, keyInput, e
         <input
           type="checkbox"
           checked={fromEnv}
+          aria-describedby={compact ? envHintId : undefined}
           disabled={pending || (!envDetected && !fromEnv)}
           onChange={e => onFromEnvChange(e.target.checked)}
         />
         {compact ? t('环境变量') : envLabel}
+        {compact && <span id={envHintId} hidden>{envHint}</span>}
       </label>
       {!compact && envStatus === 'loading' && (
         <div className="model-config-panel__checkbox">{t('正在检测环境变量 {{envVar}}…', { envVar })}</div>
