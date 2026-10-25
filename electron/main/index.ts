@@ -206,7 +206,7 @@ async function handleVoiceInputModeClick(mode: VoiceInputMode): Promise<boolean>
 const voiceHotkeys = createVoiceHotkeys({
   globalShortcut,
   notify: (title, body) => {
-    if (Notification.isSupported()) new Notification({ title, body }).show()
+    // if (Notification.isSupported()) new Notification({ title, body }).show()
   },
   io: createVoiceHotkeysFileIo(join(app.getPath('userData'), 'voice-hotkeys.json')),
   fetchStatus: fetchVoiceStatus,
