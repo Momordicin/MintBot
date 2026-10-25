@@ -265,7 +265,7 @@ async function connectToCoreEvents(): Promise<boolean> {
     }
     return true
   } catch (err) {
-    console.error('[Events] core event subscription failed:', err)
+    if (!isShuttingDownCoreEventsLoop) console.error('[Events] core event subscription failed:', err)
     return didConnect
   } finally {
     if (watchdogTimer) clearTimeout(watchdogTimer)
@@ -1020,13 +1020,13 @@ app.whenReady().then(async () => {
 
 app.on('will-quit', () => {
   voiceHotkeys.stop()
+  isShuttingDownCoreEventsLoop = true
   stopSpawnedCore()
   stopActiveWindowMonitoring()
   stopPetTopmostGuard()
   screen.removeListener('display-added', handleDisplayTopologyChange)
   screen.removeListener('display-removed', handleDisplayTopologyChange)
   screen.removeListener('display-metrics-changed', handleDisplayTopologyChange)
-  isShuttingDownCoreEventsLoop = true
   if (coreEventsReconnectTimer) {
     clearTimeout(coreEventsReconnectTimer)
     coreEventsReconnectTimer = null

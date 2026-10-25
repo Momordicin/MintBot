@@ -1,10 +1,10 @@
-// electron/main/coreProcess.test.ts — pollUntilReady 的就绪 / 超时 / 中止与 buildTaskkillArgs 的参数测试
+// electron/main/coreProcess.test.ts — pollUntilReady 的就绪 / 超时 / 中止、buildTaskkillArgs 的参数与 reportCoreExit 的退出日志测试
 //
 // 用法：pnpm test
 // 配套文件：electron/main/coreProcess.ts
 
-import { describe, it, expect } from 'vitest'
-import { buildTaskkillArgs, pollUntilReady } from './coreProcess'
+import { describe, it, expect, vi } from 'vitest'
+import { buildTaskkillArgs, pollUntilReady, reportCoreExit } from './coreProcess'
 
 function fakeClock() {
   let time = 0
@@ -19,6 +19,22 @@ function fakeClock() {
 describe('buildTaskkillArgs', () => {
   it('带 /T /F 以连同子进程强制结束', () => {
     expect(buildTaskkillArgs(1234)).toEqual(['/pid', '1234', '/T', '/F'])
+  })
+})
+
+describe('reportCoreExit', () => {
+  it('主动停止（pid 已被清除）只记普通日志，不记 error', () => {
+    const logger = { log: vi.fn(), error: vi.fn() }
+    reportCoreExit(1234, null, 1, logger)
+    expect(logger.error).not.toHaveBeenCalled()
+    expect(logger.log).toHaveBeenCalledWith('[Core] core service stopped')
+  })
+
+  it('意外退出（pid 仍在）记 error 并带退出码', () => {
+    const logger = { log: vi.fn(), error: vi.fn() }
+    reportCoreExit(1234, 1234, 1, logger)
+    expect(logger.error).toHaveBeenCalledWith('[Core] spawned core service exited (code 1)')
+    expect(logger.log).not.toHaveBeenCalled()
   })
 })
 

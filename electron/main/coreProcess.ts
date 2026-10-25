@@ -1,5 +1,5 @@
 // electron/main/coreProcess.ts — 正式版本下拉起与停止 core 服务
-// 用法：index.ts 在 app ready 后 await ensureCoreRunning(coreUrl, appPath)，在 will-quit / quit 调 stopSpawnedCore()；导出 pollUntilReady、buildTaskkillArgs 供测试
+// 用法：index.ts 在 app ready 后 await ensureCoreRunning(coreUrl, appPath)，在 will-quit / quit 调 stopSpawnedCore()；导出 pollUntilReady、buildTaskkillArgs、reportCoreExit 供测试
 // 对应文件：electron/main/index.ts / electron/main/coreProcess.test.ts / scripts/run-core-prod.mjs
 import { spawn, spawnSync } from 'child_process'
 
@@ -12,6 +12,19 @@ let spawnedCorePid: number | null = null
 
 export function buildTaskkillArgs(pid: number): string[] {
   return ['/pid', String(pid), '/T', '/F']
+}
+
+export function reportCoreExit(
+  childPid: number | undefined,
+  currentPid: number | null,
+  code: number | null,
+  logger: Pick<Console, 'log' | 'error'> = console
+): void {
+  if (currentPid !== childPid) {
+    logger.log('[Core] core service stopped')
+    return
+  }
+  logger.error(`[Core] spawned core service exited (code ${code})`)
 }
 
 export async function pollUntilReady(
@@ -62,8 +75,8 @@ export async function ensureCoreRunning(coreUrl: string, appPath: string): Promi
     })
     child.once('exit', code => {
       gone = true
+      reportCoreExit(child.pid, spawnedCorePid, code)
       spawnedCorePid = null
-      console.error(`[Core] spawned core service exited (code ${code})`)
     })
     if (child.pid === undefined) return
     spawnedCorePid = child.pid
