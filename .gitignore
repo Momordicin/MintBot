@@ -41,6 +41,7 @@ craft.ts
 /assets/system/models
 /docs/*
 !/docs/i18n/
+/local_test
 # 插件目录 / Plugins directory
 /plugins/*
 !/plugins/__init__.py
