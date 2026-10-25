@@ -1,8 +1,8 @@
 // electron/main/index.ts — Electron 主进程入口：app ready 后创建聊天窗口、桌宠 overlay 与托盘，注册 IPC，启动前台窗口监控与 core /events 订阅，will-quit 时收尾
-// 用法：electron.vite.config.ts 的主进程 entry；注册 autostart:get / autostart:set；监听 second-instance；注册 app 协议 protocol.handle('app')；第一条 import 为 logBootstrap；注册 chat:ready（聊天窗口首次显示）/ chat:painted（聊天窗口唤起后淡入）；注册 ui:get-locale，向窗口发 ui:locale-changed；设置窗口按 open-settings-window IPC 按需创建；订阅 voice-type（textOutput）与 voice-status-changed（托盘「语音输入」）；显示器拓扑变化时 handleDisplayTopologyChange 先调 clearStableDisplayKeyCache()
-// 对应文件：electron/preload/index.ts（暴露的 IPC 通道）/ electron/main/windowBehavior.ts / electron/main/petContextMenu.ts / electron/main/coreEventsConsumer.ts / electron/main/i18n.ts / electron/main/foregroundWorldModel.ts / electron/main/windowDragMonitor.ts / electron/main/nativeWindowDrag.ts / electron/main/petTopmostGuard.ts / electron/main/startupGate.ts / electron/main/displayIdentity.ts / electron/main/appOrigin.ts / electron/main/appAssetPath.ts / electron/main/coreProcess.ts / electron/main/autostart.ts / electron/main/chatFirstShow.ts / electron/main/chatReveal.ts / electron/main/textOutput.ts / electron/main/sendInput.ts / electron/main/voiceTray.ts / shared/voiceInputMode.ts / shared/windowBehavior.ts / shared/portraitForm.ts
+// 用法：electron.vite.config.ts 的主进程 entry；注册 autostart:get / autostart:set；监听 second-instance；注册 app 协议 protocol.handle('app')；第一条 import 为 logBootstrap；注册 chat:ready（聊天窗口首次显示）/ chat:painted（聊天窗口唤起后淡入）；注册 ui:get-locale，向窗口发 ui:locale-changed；设置窗口按 open-settings-window IPC 按需创建；订阅 voice-type（textOutput）与 voice-status-changed（托盘「语音输入」）；注册 voice-hotkeys:get / voice-hotkeys:set / voice-hotkeys:capture，app ready 后 voiceHotkeys.start()，will-quit 时 stop()；显示器拓扑变化时 handleDisplayTopologyChange 先调 clearStableDisplayKeyCache()
+// 对应文件：electron/preload/index.ts（暴露的 IPC 通道）/ electron/main/windowBehavior.ts / electron/main/petContextMenu.ts / electron/main/coreEventsConsumer.ts / electron/main/i18n.ts / electron/main/foregroundWorldModel.ts / electron/main/windowDragMonitor.ts / electron/main/nativeWindowDrag.ts / electron/main/petTopmostGuard.ts / electron/main/startupGate.ts / electron/main/displayIdentity.ts / electron/main/appOrigin.ts / electron/main/appAssetPath.ts / electron/main/coreProcess.ts / electron/main/autostart.ts / electron/main/chatFirstShow.ts / electron/main/chatReveal.ts / electron/main/textOutput.ts / electron/main/sendInput.ts / electron/main/voiceTray.ts / electron/main/voiceHotkeys.ts / shared/voiceHotkeys.ts / shared/voiceInputMode.ts / shared/windowBehavior.ts / shared/portraitForm.ts
 import './logBootstrap'
-import { app, BrowserWindow, Menu, Tray, clipboard, powerMonitor, ipcMain, dialog, screen, nativeImage, protocol, net, shell } from 'electron'
+import { app, BrowserWindow, Menu, Notification, Tray, clipboard, globalShortcut, powerMonitor, ipcMain, dialog, screen, nativeImage, protocol, net, shell } from 'electron'
 import type { IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron'
 import { join, basename } from 'path'
 import { pathToFileURL } from 'url'
@@ -80,6 +80,7 @@ import { getForegroundExeName } from './activeWindowMonitor'
 import { sendKeyInputs } from './sendInput'
 import { createTextOutput } from './textOutput'
 import { buildVoiceInputMenu, createVoiceTrayRefresher, VOICE_TRAY_UNAVAILABLE } from './voiceTray'
+import { createVoiceHotkeys, createVoiceHotkeysFileIo } from './voiceHotkeys'
 import type { VoiceTrayState } from './voiceTray'
 
 protocol.registerSchemesAsPrivileged([
@@ -171,31 +172,47 @@ let voiceTrayState: VoiceTrayState = VOICE_TRAY_UNAVAILABLE
 
 const VOICE_STATUS_FETCH_TIMEOUT_MS = 3000
 
+async function fetchVoiceStatus(): Promise<unknown> {
+  const response = await fetch(`${CORE_URL}/voice/status`, { signal: AbortSignal.timeout(VOICE_STATUS_FETCH_TIMEOUT_MS) })
+  if (!response.ok) throw new Error(`voice status responded ${response.status}`)
+  return response.json()
+}
+
 const refreshVoiceTray = createVoiceTrayRefresher({
-  fetchStatus: async () => {
-    const response = await fetch(`${CORE_URL}/voice/status`, { signal: AbortSignal.timeout(VOICE_STATUS_FETCH_TIMEOUT_MS) })
-    if (!response.ok) throw new Error(`voice status responded ${response.status}`)
-    return response.json()
-  },
+  fetchStatus: fetchVoiceStatus,
   apply: state => {
     voiceTrayState = state
     rebuildTrayMenu()
   },
 })
 
-async function handleVoiceInputModeClick(mode: VoiceInputMode): Promise<void> {
+async function handleVoiceInputModeClick(mode: VoiceInputMode): Promise<boolean> {
+  let changed = false
   try {
     const response = await fetch(`${CORE_URL}/voice/input-mode`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mode }),
     })
+    changed = response.ok
     if (!response.ok) console.error('[Voice] Core rejected voice input mode change:', response.status)
   } catch (err) {
     console.error('[Voice] Failed to change voice input mode:', err)
   }
   await refreshVoiceTray()
+  return changed
 }
+
+const voiceHotkeys = createVoiceHotkeys({
+  globalShortcut,
+  notify: (title, body) => {
+    if (Notification.isSupported()) new Notification({ title, body }).show()
+  },
+  io: createVoiceHotkeysFileIo(join(app.getPath('userData'), 'voice-hotkeys.json')),
+  fetchStatus: fetchVoiceStatus,
+  now: () => performance.now(),
+  switchMode: handleVoiceInputModeClick,
+})
 
 const coreEventsConsumer = createCoreEventsConsumer({
   converge,
@@ -342,6 +359,22 @@ function migrateLegacyAutostart(): void {
 ipcMain.handle('autostart:get', () => readAutostart())
 
 ipcMain.handle('voice:open-mic-settings', () => shell.openExternal('ms-settings:privacy-microphone'))
+
+ipcMain.handle('voice-hotkeys:get', event => {
+  if (!isSettingsSender(event)) throw new Error('invalid-sender')
+  return voiceHotkeys.get()
+})
+
+ipcMain.handle('voice-hotkeys:set', (event, input: unknown) => {
+  if (!isSettingsSender(event)) throw new Error('invalid-sender')
+  return voiceHotkeys.set(input)
+})
+
+ipcMain.handle('voice-hotkeys:capture', (event, active: unknown) => {
+  if (!isSettingsSender(event)) throw new Error('invalid-sender')
+  if (typeof active !== 'boolean') throw new Error('invalid-capture-value')
+  return voiceHotkeys.setCapture(active)
+})
 
 ipcMain.handle('autostart:set', (_event, enabled: unknown) => {
   if (isDevMode) throw new Error('autostart-unavailable')
@@ -519,6 +552,10 @@ function positionOnChatDisplay(win: BrowserWindow): void {
 
 let settingsWindow: BrowserWindow | null = null
 
+function isSettingsSender(event: IpcMainInvokeEvent): boolean {
+  return settingsWindow !== null && !settingsWindow.isDestroyed() && event.sender === settingsWindow.webContents
+}
+
 function createSettingsWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 760,
@@ -536,8 +573,13 @@ function createSettingsWindow(): BrowserWindow {
     win.show()
   })
 
+  win.on('blur', () => {
+    voiceHotkeys.setCapture(false)
+  })
+
   win.on('closed', () => {
     settingsWindow = null
+    voiceHotkeys.setCapture(false)
   })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
@@ -933,6 +975,7 @@ app.whenReady().then(async () => {
   )
   applyUiLanguage('system')
   createTray()
+  voiceHotkeys.start()
 
   applyIconFromCurrentPreset()
   initWindowBehaviorConfig(mainWindow, overlayWindow)
@@ -976,6 +1019,7 @@ app.whenReady().then(async () => {
 })
 
 app.on('will-quit', () => {
+  voiceHotkeys.stop()
   stopSpawnedCore()
   stopActiveWindowMonitoring()
   stopPetTopmostGuard()

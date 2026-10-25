@@ -927,3 +927,44 @@ option {
   align-items: center;
   gap: 6px;
 }
+
+/* 语音快捷键：标题行、对齐网格、恢复默认图标按钮 */
+
+.voice-hotkeys__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.voice-hotkeys__icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: none;
+  background: transparent;
+  color: var(--label2);
+  cursor: pointer;
+}
+
+.voice-hotkeys__icon-btn:hover {
+  color: var(--label);
+}
+
+.voice-hotkeys__icon-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.voice-hotkeys__grid {
+  display: grid;
+  grid-template-columns: max-content 180px 1fr;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.voice-hotkeys__field {
+  align-self: center;
+  width: 100%;
+  text-align: center;
+}

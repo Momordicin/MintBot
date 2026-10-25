@@ -1,6 +1,8 @@
 // src/electron-api.d.ts — 渲染进程里 window.electronAPI 的类型声明（preload 暴露的接口与桌宠状态载荷）
-// 用法：渲染代码通过 window.electronAPI.* 调用：InputBar、ChatWindow、OverlayApp、CharacterPanel、WindowBehaviorPanel、GeneralPanel、handle/main.ts、i18n.ts
+// 用法：渲染代码通过 window.electronAPI.* 调用：InputBar、ChatWindow、OverlayApp、CharacterPanel、WindowBehaviorPanel、GeneralPanel、VoicePanel、handle/main.ts、i18n.ts
 // 对应文件：electron/preload/index.ts（contextBridge 实现）/ electron/main/index.ts（ipcMain 处理）
+import type { VoiceHotkeySetResult, VoiceHotkeysState } from '../shared/voiceHotkeys.js'
+
 export interface DesktopPresencePayload {
   presence: 'ACTIVE' | 'AMBIENT' | 'EDGE' | 'HIDDEN'
   edgeSide: 'left' | 'right' | null
@@ -43,6 +45,9 @@ export interface ElectronAPI {
   getAutostart: () => Promise<{ available: boolean; enabled: boolean }>
   setAutostart: (enabled: boolean) => Promise<{ available: boolean; enabled: boolean }>
   openMicSettings: () => Promise<void>
+  getVoiceHotkeys: () => Promise<VoiceHotkeysState>
+  setVoiceHotkeys: (input: { listen?: string; transcribe?: string }) => Promise<VoiceHotkeySetResult>
+  setVoiceHotkeyCapture: (active: boolean) => Promise<VoiceHotkeysState>
   notifyChatReady: () => Promise<void>
   onChatShown: (callback: () => void) => () => void
   notifyChatPainted: () => void
