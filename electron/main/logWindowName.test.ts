@@ -12,15 +12,15 @@ describe('windowNameFromUrl', () => {
   })
 
   it('打包：file URL', () => {
-    expect(windowNameFromUrl('file:///C:/Program%20Files/MintBot/resources/app/out/renderer/overlay/index.html')).toBe('overlay')
-    expect(windowNameFromUrl('file:///C:/Program%20Files/MintBot/resources/app/out/renderer/settings/index.html')).toBe('settings')
-    expect(windowNameFromUrl('file:///C:/Program%20Files/MintBot/resources/app/out/renderer/index.html')).toBe('chat')
+    expect(windowNameFromUrl('file:///C:/Program%20Files/SampleApp/resources/app/out/renderer/overlay/index.html')).toBe('overlay')
+    expect(windowNameFromUrl('file:///C:/Program%20Files/SampleApp/resources/app/out/renderer/settings/index.html')).toBe('settings')
+    expect(windowNameFromUrl('file:///C:/Program%20Files/SampleApp/resources/app/out/renderer/index.html')).toBe('chat')
   })
 
   it('安装路径里有名为 settings / overlay 的目录：不影响分类', () => {
-    expect(windowNameFromUrl('file:///C:/settings/MintBot/out/renderer/index.html')).toBe('chat')
-    expect(windowNameFromUrl('file:///C:/overlay/MintBot/out/renderer/settings/index.html')).toBe('settings')
-    expect(windowNameFromUrl('file:///C:/settings/MintBot/out/renderer/overlay/index.html')).toBe('overlay')
+    expect(windowNameFromUrl('file:///C:/settings/SampleApp/out/renderer/index.html')).toBe('chat')
+    expect(windowNameFromUrl('file:///C:/overlay/SampleApp/out/renderer/settings/index.html')).toBe('settings')
+    expect(windowNameFromUrl('file:///C:/settings/SampleApp/out/renderer/overlay/index.html')).toBe('overlay')
   })
 
   it('查询串与 hash 不影响；空串或无法解析的 URL 归为 chat', () => {

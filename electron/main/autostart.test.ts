@@ -8,24 +8,24 @@ import { AUTOSTART_FLAG, hasAutostartFlag, legacyLoginItemOptions, loginItemOpti
 
 describe('loginItemOptions', () => {
   it('path 为可执行文件，args 依次为原样应用目录与 --autostart', () => {
-    expect(loginItemOptions('C:\\app\\electron.exe', 'E:\\LLM\\MintBot')).toEqual({
+    expect(loginItemOptions('C:\\app\\electron.exe', 'D:\\apps\\SampleApp')).toEqual({
       path: 'C:\\app\\electron.exe',
-      args: ['E:\\LLM\\MintBot', '--autostart'],
+      args: ['D:\\apps\\SampleApp', '--autostart'],
     })
   })
 
   it('应用目录含空格和中文时不手动加引号（引号由 Electron 添加）', () => {
-    const { args } = loginItemOptions('C:\\app\\electron.exe', 'C:\\测试 目录\\Mint Bot')
-    expect(args).toEqual(['C:\\测试 目录\\Mint Bot', '--autostart'])
+    const { args } = loginItemOptions('C:\\app\\electron.exe', 'C:\\测试 目录\\Sample App')
+    expect(args).toEqual(['C:\\测试 目录\\Sample App', '--autostart'])
     expect(args[0]).toContain('\\')
   })
 })
 
 describe('legacyLoginItemOptions', () => {
   it('args 为加引号的应用目录与 --autostart，用于识别旧版登录项', () => {
-    expect(legacyLoginItemOptions('C:\\app\\electron.exe', 'C:\\测试 目录\\Mint Bot')).toEqual({
+    expect(legacyLoginItemOptions('C:\\app\\electron.exe', 'C:\\测试 目录\\Sample App')).toEqual({
       path: 'C:\\app\\electron.exe',
-      args: ['"C:\\测试 目录\\Mint Bot"', '--autostart'],
+      args: ['"C:\\测试 目录\\Sample App"', '--autostart'],
     })
   })
 })
@@ -46,11 +46,11 @@ describe('shouldMigrateAutostart', () => {
 
 describe('hasAutostartFlag', () => {
   it('argv 含 --autostart 时为真', () => {
-    expect(hasAutostartFlag(['electron.exe', 'E:\\LLM\\MintBot', AUTOSTART_FLAG])).toBe(true)
+    expect(hasAutostartFlag(['electron.exe', 'D:\\apps\\SampleApp', AUTOSTART_FLAG])).toBe(true)
   })
 
   it('应用目录含空格时，按登录项参数组成的 argv 仍识别 --autostart', () => {
-    const { path, args } = loginItemOptions('C:\\app\\electron.exe', 'C:\\Program Files\\Mint Bot')
+    const { path, args } = loginItemOptions('C:\\app\\electron.exe', 'C:\\Program Files\\Sample App')
     expect(hasAutostartFlag([path, ...args])).toBe(true)
   })
 
