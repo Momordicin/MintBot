@@ -1040,10 +1040,12 @@ describe('stripThinkTags', () => {
   })
 })
 
-describe('Ollama 单次调用 2 分钟超时', () => {
+describe('Ollama 超时', () => {
   const context: BuiltContext = { system: '', messages: [{ role: 'user', content: 'hi' }] }
+  const encoder = new TextEncoder()
 
   afterEach(() => {
+    vi.useRealTimers()
     vi.restoreAllMocks()
   })
 
@@ -1061,73 +1063,161 @@ describe('Ollama 单次调用 2 分钟超时', () => {
     )
   }
 
-  function hangingBodyFetch() {
-    return vi.fn().mockImplementation((_url: string, init: { signal: AbortSignal }) => {
-      const stream = new ReadableStream({
+  function controlledStreamFetch() {
+    const handle: { controller?: ReadableStreamDefaultController<Uint8Array> } = {}
+    const fetchMock = vi.fn().mockImplementation((_url: string, init: { signal: AbortSignal }) => {
+      const stream = new ReadableStream<Uint8Array>({
         start(controller) {
+          handle.controller = controller
           init.signal.addEventListener('abort', () => controller.error(init.signal.reason))
         },
       })
       return Promise.resolve(new Response(stream, { status: 200 }))
     })
+    const push = (text: string) => handle.controller!.enqueue(encoder.encode(text))
+    const sse = (content: string) => push(`data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`)
+    return { fetchMock, push, sse }
   }
 
-  it('请求使用 120000ms 的超时信号', async () => {
+  function collect(provider: ReturnType<typeof createModelProvider>, signal?: AbortSignal): Promise<string> {
+    return (async () => {
+      let out = ''
+      for await (const chunk of provider.complete(context, { signal })) out += chunk
+      return out
+    })()
+  }
+
+  const ollama = () => createModelProvider({ type: 'ollama', ollamaModel: 'qwen3' })
+
+  it('流式：120 秒内没有任何输出，以 "Ollama produced no output within 120s" 失败，调用方信号未被取消', async () => {
+    vi.useFakeTimers()
+    const { fetchMock } = controlledStreamFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    const caller = new AbortController()
+
+    const assertion = expect(collect(ollama(), caller.signal)).rejects.toThrow('Ollama produced no output within 120s')
+    await vi.advanceTimersByTimeAsync(119999)
+    expect(caller.signal.aborted).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+
+    await assertion
+    expect(caller.signal.aborted).toBe(false)
+  })
+
+  it('流式：请求发出后一直没有响应时同样按 120 秒无输出判定失败', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('fetch', hangingFetch())
+
+    const assertion = expect(collect(ollama())).rejects.toThrow('Ollama produced no output within 120s')
+    await vi.advanceTimersByTimeAsync(120000)
+
+    await assertion
+  })
+
+  it('流式：数据持续到达时总时长超过 120 秒也不超时，完整返回内容', async () => {
+    vi.useFakeTimers()
+    const { fetchMock, push, sse } = controlledStreamFetch()
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = collect(ollama())
+    await vi.advanceTimersByTimeAsync(0)
+    for (let i = 0; i < 10; i++) {
+      sse(String(i))
+      await vi.advanceTimersByTimeAsync(30000)
+    }
+    push('data: [DONE]\n\n')
+
+    await expect(result).resolves.toBe('0123456789')
+  })
+
+  it('流式：收到数据后思考内容或无法解析的数据同样刷新计时', async () => {
+    vi.useFakeTimers()
+    const { fetchMock, push, sse } = controlledStreamFetch()
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = collect(ollama())
+    await vi.advanceTimersByTimeAsync(0)
+    sse('<think>')
+    await vi.advanceTimersByTimeAsync(59000)
+    push('data: not-json\n\n')
+    await vi.advanceTimersByTimeAsync(59000)
+    sse('</think>答')
+    await vi.advanceTimersByTimeAsync(59000)
+    push('data: [DONE]\n\n')
+
+    await expect(result).resolves.toBe('答')
+  })
+
+  it('流式：收到数据后停顿 60 秒，以 "Ollama stream stalled for 60s" 失败，调用方信号未被取消', async () => {
+    vi.useFakeTimers()
+    const { fetchMock, sse } = controlledStreamFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    const caller = new AbortController()
+
+    const assertion = expect(collect(ollama(), caller.signal)).rejects.toThrow('Ollama stream stalled for 60s')
+    await vi.advanceTimersByTimeAsync(0)
+    sse('hi')
+    await vi.advanceTimersByTimeAsync(59999)
+    expect(caller.signal.aborted).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+
+    await assertion
+    expect(caller.signal.aborted).toBe(false)
+  })
+
+  it('流式：调用方主动取消不会被转换成超时错误，之后也不再触发超时', async () => {
+    vi.useFakeTimers()
+    const { fetchMock } = controlledStreamFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    const caller = new AbortController()
+
+    const assertion = expect(collect(ollama(), caller.signal)).rejects.toMatchObject({ name: 'AbortError' })
+    await vi.advanceTimersByTimeAsync(1000)
+    caller.abort()
+
+    await assertion
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('completeSync：请求使用 300000ms 的超时信号', async () => {
     const timeoutSpy = vi.spyOn(AbortSignal, 'timeout')
     const fetchSpy = vi.fn().mockResolvedValue(fakeNonStreamResponse('ok'))
     vi.stubGlobal('fetch', fetchSpy)
 
-    await createModelProvider({ type: 'ollama', ollamaModel: 'qwen3' }).completeSync(context)
+    await ollama().completeSync(context)
 
-    expect(timeoutSpy).toHaveBeenCalledWith(120000)
+    expect(timeoutSpy).toHaveBeenCalledWith(300000)
     expect(fetchSpy.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal)
   })
 
-  it('completeSync：超时后中止并以含 "Ollama call timed out after 120s" 的错误失败，调用方信号未被置为已取消', async () => {
+  it('completeSync：超时后以含 "Ollama call timed out after 300s" 的错误失败，调用方信号未被置为已取消', async () => {
     const timeoutController = stubTimeout()
     vi.stubGlobal('fetch', hangingFetch())
     const caller = new AbortController()
 
-    const pending = createModelProvider({ type: 'ollama', ollamaModel: 'qwen3' }).completeSync(context, { signal: caller.signal })
+    const pending = ollama().completeSync(context, { signal: caller.signal })
     timeoutController.abort(new DOMException('timed out', 'TimeoutError'))
 
-    await expect(pending).rejects.toThrow('Ollama call timed out after 120s')
+    await expect(pending).rejects.toThrow('Ollama call timed out after 300s')
     expect(caller.signal.aborted).toBe(false)
   })
 
-  it('complete：读取流途中超时同样以含 "Ollama call timed out after 120s" 的错误失败，调用方信号未被置为已取消', async () => {
-    const timeoutController = stubTimeout()
-    vi.stubGlobal('fetch', hangingBodyFetch())
-    const caller = new AbortController()
-    const provider = createModelProvider({ type: 'ollama', ollamaModel: 'qwen3' })
-
-    const pending = (async () => {
-      for await (const _chunk of provider.complete(context, { signal: caller.signal })) {
-      }
-    })()
-    await new Promise(resolve => setTimeout(resolve, 0))
-    timeoutController.abort(new DOMException('timed out', 'TimeoutError'))
-
-    await expect(pending).rejects.toThrow('Ollama call timed out after 120s')
-    expect(caller.signal.aborted).toBe(false)
-  })
-
-  it('未传 signal 时只使用超时信号，超时照样失败', async () => {
+  it('completeSync：未传 signal 时只使用超时信号，超时照样失败', async () => {
     const timeoutController = stubTimeout()
     vi.stubGlobal('fetch', hangingFetch())
 
-    const pending = createModelProvider({ type: 'ollama', ollamaModel: 'qwen3' }).completeSync(context)
+    const pending = ollama().completeSync(context)
     timeoutController.abort(new DOMException('timed out', 'TimeoutError'))
 
-    await expect(pending).rejects.toThrow('Ollama call timed out after 120s')
+    await expect(pending).rejects.toThrow('Ollama call timed out after 300s')
   })
 
-  it('调用方主动取消：以 AbortError 中止，调用方信号为已取消，超时信号未触发', async () => {
+  it('completeSync：调用方主动取消以 AbortError 中止，调用方信号为已取消，超时信号未触发', async () => {
     const timeoutController = stubTimeout()
     vi.stubGlobal('fetch', hangingFetch())
     const caller = new AbortController()
 
-    const pending = createModelProvider({ type: 'ollama', ollamaModel: 'qwen3' }).completeSync(context, { signal: caller.signal })
+    const pending = ollama().completeSync(context, { signal: caller.signal })
     caller.abort()
 
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' })

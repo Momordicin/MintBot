@@ -9,7 +9,9 @@ import { getEnvCredential, type KeyProvider } from './envCredentials.js'
 import type { PresetCredentials } from '../session/queries.js'
 
 const STREAM_TIMEOUT_MS = 30000
-const OLLAMA_TIMEOUT_MS = 120000
+const OLLAMA_FIRST_OUTPUT_TIMEOUT_MS = 120000
+const OLLAMA_STALL_TIMEOUT_MS = 60000
+const OLLAMA_SYNC_TIMEOUT_MS = 300000
 
 type DeepSeekExtras = { thinking: { type: 'disabled' } }
 
@@ -75,7 +77,7 @@ interface OpenAICompatibleOverrides {
 }
 
 function ollamaSignal(signal?: AbortSignal): AbortSignal {
-  const timeout = AbortSignal.timeout(OLLAMA_TIMEOUT_MS)
+  const timeout = AbortSignal.timeout(OLLAMA_SYNC_TIMEOUT_MS)
   return signal ? AbortSignal.any([signal, timeout]) : timeout
 }
 
@@ -134,7 +136,7 @@ export function stripThinkTags(text: string): string {
 
 function mapOllamaTimeout(err: unknown, callerSignal?: AbortSignal): unknown {
   if (err instanceof Error && err.name === 'TimeoutError' && !callerSignal?.aborted) {
-    return new Error(`Ollama call timed out after ${OLLAMA_TIMEOUT_MS / 1000}s`, { cause: err })
+    return new Error(`Ollama call timed out after ${OLLAMA_SYNC_TIMEOUT_MS / 1000}s`, { cause: err })
   }
   return err
 }
@@ -424,60 +426,84 @@ export class ModelProvider {
     options: CompletionOptions,
     overrides: OpenAICompatibleOverrides = {}
   ): AsyncIterable<string> {
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        ...overrides.extraBody,
-        model,
-        stream: true,
-        messages: messages.map(m => ({
-          role: m.role,
-          content: m.content,
-        })),
-      }),
-      signal: ollamaSignal(options.signal),
-    })
+    const controller = new AbortController()
+    const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal
+    let timeoutError: Error | undefined
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const arm = (ms: number, message: string) => {
+      clearTimeout(timer)
+      timer = setTimeout(() => {
+        timeoutError = new Error(message)
+        controller.abort()
+      }, ms)
+    }
+    arm(OLLAMA_FIRST_OUTPUT_TIMEOUT_MS, `Ollama produced no output within ${OLLAMA_FIRST_OUTPUT_TIMEOUT_MS / 1000}s`)
 
-    if (!response.ok) { throw new Error(`OpenAI API error: ${await ModelProvider.describeErrorResponse(response)}`) }
-    if (!response.body) { throw new Error('[ModelProvider] Response body is null') }
+    try {
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          ...overrides.extraBody,
+          model,
+          stream: true,
+          messages: messages.map(m => ({
+            role: m.role,
+            content: m.content,
+          })),
+        }),
+        signal,
+      })
 
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder()
-    const filter = new ThinkTagFilter()
-    let buffer = ''
+      if (!response.ok) { throw new Error(`OpenAI API error: ${await ModelProvider.describeErrorResponse(response)}`) }
+      if (!response.body) { throw new Error('[ModelProvider] Response body is null') }
 
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) {
-        const rest = filter.flush()
-        if (rest) yield rest
-        break
-      }
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      const filter = new ThinkTagFilter()
+      let buffer = ''
+      let received = false
 
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() ?? ''
-
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue
-        const data = line.slice(6).trim()
-        if (data === '[DONE]') {
+      while (true) {
+        if (received) arm(OLLAMA_STALL_TIMEOUT_MS, `Ollama stream stalled for ${OLLAMA_STALL_TIMEOUT_MS / 1000}s`)
+        const { done, value } = await reader.read()
+        clearTimeout(timer)
+        received = true
+        if (done) {
           const rest = filter.flush()
           if (rest) yield rest
-          return
+          break
         }
 
-        let text: string | undefined
-        try {
-          text = filter.push(JSON.parse(data).choices?.[0]?.delta?.content ?? '')
-        } catch {
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const data = line.slice(6).trim()
+          if (data === '[DONE]') {
+            const rest = filter.flush()
+            if (rest) yield rest
+            return
+          }
+
+          let text: string | undefined
+          try {
+            text = filter.push(JSON.parse(data).choices?.[0]?.delta?.content ?? '')
+          } catch {
+          }
+          if (text) yield text
         }
-        if (text) yield text
       }
+    } catch (err) {
+      if (timeoutError && !options.signal?.aborted) throw timeoutError
+      throw err
+    } finally {
+      clearTimeout(timer)
     }
   }
 
