@@ -86,6 +86,60 @@ describe('userProfile 所在地', () => {
     expect(fs.existsSync(`${USER_PROFILE_PATH}.tmp`)).toBe(false)
   })
 
+  it('新格式：全部字段写入并读回，精确地址只在提供时出现，其他段落保留', () => {
+    fs.writeFileSync(USER_PROFILE_PATH, '# 用户资料\n\n## 称呼\n- 昵称：小明\n\n## 所在地\n- 当前：旧\n- 用户原话：旧\n- 记下时间：2026-01-01T00:00:00+08:00\n\n## 备注\n手写\n', 'utf8')
+
+    setLocation({
+      value: 'San Jose, California, United States',
+      userInput: '圣何塞',
+      nameZh: '聖荷西, 加州, 美国',
+      latitude: 37.33939,
+      longitude: -121.89496,
+      timezone: 'America/Los_Angeles',
+      countryCode: 'US',
+      exactAddress: '1 Market St',
+    })
+
+    const text = fs.readFileSync(USER_PROFILE_PATH, 'utf8')
+    expect(text).toContain('## 所在地\n- 当前：San Jose, California, United States\n- 中文名：聖荷西, 加州, 美国\n- 坐标：37.33939, -121.89496\n- 时区：America/Los_Angeles\n- 国家代码：US\n- 精确地址：1 Market St\n- 用户原话：圣何塞\n- 记下时间：')
+    expect(text).toContain('## 称呼\n- 昵称：小明\n')
+    expect(text).toContain('\n\n## 备注\n手写\n')
+    expect(getLocation()).toMatchObject({
+      value: 'San Jose, California, United States',
+      nameZh: '聖荷西, 加州, 美国',
+      latitude: 37.33939,
+      longitude: -121.89496,
+      timezone: 'America/Los_Angeles',
+      countryCode: 'US',
+      exactAddress: '1 Market St',
+    })
+
+    setLocation({ value: 'Shenzhen, Guangdong, China', userInput: '深圳', exactAddress: null })
+    expect(fs.readFileSync(USER_PROFILE_PATH, 'utf8')).not.toContain('精确地址')
+  })
+
+  it('旧格式文件读出时新增字段为 null，不抛错', () => {
+    fs.writeFileSync(USER_PROFILE_PATH, '# 用户资料\n\n## 所在地\n- 当前：中国上海市\n- 用户原话：上海\n- 记下时间：2026-01-01T00:00:00+08:00\n', 'utf8')
+
+    expect(getLocation()).toEqual({
+      value: '中国上海市',
+      userInput: '上海',
+      recordedAt: '2026-01-01T00:00:00+08:00',
+      nameZh: null,
+      latitude: null,
+      longitude: null,
+      timezone: null,
+      countryCode: null,
+      exactAddress: null,
+    })
+  })
+
+  it('坐标行格式错误时坐标为 null，其他字段照常读出', () => {
+    fs.writeFileSync(USER_PROFILE_PATH, '# 用户资料\n\n## 所在地\n- 当前：X\n- 坐标：abc, 1\n- 用户原话：x\n- 记下时间：2026-01-01T00:00:00+08:00\n', 'utf8')
+
+    expect(getLocation()).toMatchObject({ value: 'X', latitude: null, longitude: null })
+  })
+
   it('VITEST 下 USER_PROFILE_PATH 不在系统临时目录内时模块加载直接抛错', async () => {
     vi.resetModules()
     vi.stubEnv('USER_PROFILE_PATH', './data/user-profile.md')

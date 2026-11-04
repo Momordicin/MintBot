@@ -31,4 +31,35 @@ describe('GET /user-profile', () => {
     expect(body.location.userInput).toBe('徐汇')
     expect(typeof body.location.recordedAt).toBe('string')
   })
+
+  it('新格式记录返回全部字段，旧格式缺失的字段为 null', async () => {
+    setLocation({
+      value: 'San Jose, California, United States',
+      userInput: '圣何塞',
+      nameZh: '聖荷西, 加州, 美国',
+      latitude: 37.33939,
+      longitude: -121.89496,
+      timezone: 'America/Los_Angeles',
+      countryCode: 'US',
+      exactAddress: '1 Market St',
+    })
+    const fastify = Fastify()
+    await fastify.register(userProfileRoutes)
+
+    const full = (await fastify.inject({ method: 'GET', url: '/user-profile' })).json().location
+    expect(full).toMatchObject({
+      value: 'San Jose, California, United States',
+      userInput: '圣何塞',
+      nameZh: '聖荷西, 加州, 美国',
+      latitude: 37.33939,
+      longitude: -121.89496,
+      timezone: 'America/Los_Angeles',
+      countryCode: 'US',
+      exactAddress: '1 Market St',
+    })
+
+    setLocation({ value: '中国上海市', userInput: '上海' })
+    const minimal = (await fastify.inject({ method: 'GET', url: '/user-profile' })).json().location
+    expect(minimal).toMatchObject({ nameZh: null, latitude: null, longitude: null, timezone: null, countryCode: null, exactAddress: null })
+  })
 })

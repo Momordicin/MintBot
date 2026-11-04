@@ -577,6 +577,26 @@ describe('buildContext 用户资料所在地', () => {
     expect(ctx.system.indexOf('以下是用户资料')).toBeLessThan(ctx.system.indexOf(JSON_CONTRACT_MARKER))
   })
 
+  it('只注入英文县市名，不注入精确地址、坐标和中文名', async () => {
+    setLocation({
+      value: 'San Jose, California, United States',
+      userInput: '圣何塞',
+      nameZh: '聖荷西, 加州, 美国',
+      latitude: 37.33939,
+      longitude: -121.89496,
+      timezone: 'America/Los_Angeles',
+      countryCode: 'US',
+      exactAddress: '1 Market St',
+    })
+
+    const ctx = await buildContext('你好', { embedding: fakeEmbeddingProvider() })
+
+    expect(ctx.system).toContain('以下是用户资料：\n- 所在地：San Jose, California, United States')
+    expect(ctx.system).not.toContain('1 Market St')
+    expect(ctx.system).not.toContain('聖荷西')
+    expect(ctx.system).not.toContain('37.33939')
+  })
+
   it('没有实体时仍显示用户资料块，实体块不出现', async () => {
     setLocation({ value: '中国上海市徐汇区', userInput: '徐汇' })
 

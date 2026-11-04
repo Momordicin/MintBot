@@ -1,6 +1,6 @@
 // services/core/tools/subscriptionSearch.ts — 经已登录的 Claude Code 订阅（否则 Codex 订阅）做一次限时联网查询，附带当前本地日期时间
-// 用法：tools/webLookup.ts 与 tools/rememberLocation.ts 调 runSubscriptionSearch(prompt, chatSignal) 与 withLocalTime(query)；用到 agents/claudeCode.ts 的 getClaudeLoginStatus / claudeWebSearch 与 agents/codex.ts 的 getCodexLoginStatus / codexWebSearch
-// 对应文件：services/core/tools/webLookup.ts / services/core/tools/rememberLocation.ts / services/core/agents/claudeCode.ts / services/core/agents/codex.ts
+// 用法：tools/webLookup.ts 调 runSubscriptionSearch(prompt, chatSignal) 与 withLocalTime(query)；用到 agents/claudeCode.ts 的 getClaudeLoginStatus / claudeWebSearch 与 agents/codex.ts 的 getCodexLoginStatus / codexWebSearch
+// 对应文件：services/core/tools/webLookup.ts / services/core/agents/claudeCode.ts / services/core/agents/codex.ts
 import { getClaudeLoginStatus, claudeWebSearch } from '../agents/claudeCode.js'
 import { getCodexLoginStatus, codexWebSearch } from '../agents/codex.js'
 

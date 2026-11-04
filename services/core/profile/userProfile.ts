@@ -18,6 +18,23 @@ export interface UserLocation {
   value: string
   userInput: string
   recordedAt: string
+  nameZh: string | null
+  latitude: number | null
+  longitude: number | null
+  timezone: string | null
+  countryCode: string | null
+  exactAddress: string | null
+}
+
+export interface LocationInput {
+  value: string
+  userInput: string
+  nameZh?: string | null
+  latitude?: number | null
+  longitude?: number | null
+  timezone?: string | null
+  countryCode?: string | null
+  exactAddress?: string | null
 }
 
 const FILE_HEADER = '# 用户资料'
@@ -44,6 +61,15 @@ function readField(sectionLines: string[], label: string): string | null {
   return value ? value : null
 }
 
+function readCoordinates(value: string | null): { latitude: number; longitude: number } | null {
+  if (value === null) return null
+  const parts = value.split(',')
+  if (parts.length !== 2 || parts.some(part => part.trim() === '')) return null
+  const latitude = Number(parts[0])
+  const longitude = Number(parts[1])
+  return Number.isFinite(latitude) && Number.isFinite(longitude) ? { latitude, longitude } : null
+}
+
 function readProfileText(): string | null {
   try {
     return fs.readFileSync(USER_PROFILE_PATH, 'utf8')
@@ -68,7 +94,18 @@ export function getLocation(): UserLocation | null {
     console.warn('[UserProfile] location section is malformed, ignoring it')
     return null
   }
-  return { value, userInput, recordedAt }
+  const coordinates = readCoordinates(readField(body, '坐标'))
+  return {
+    value,
+    userInput,
+    recordedAt,
+    nameZh: readField(body, '中文名'),
+    latitude: coordinates?.latitude ?? null,
+    longitude: coordinates?.longitude ?? null,
+    timezone: readField(body, '时区'),
+    countryCode: readField(body, '国家代码'),
+    exactAddress: readField(body, '精确地址'),
+  }
 }
 
 function singleLine(text: string): string {
@@ -83,13 +120,16 @@ function localIsoWithOffset(date: Date): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`
 }
 
-export function setLocation(input: { value: string; userInput: string }): void {
-  const sectionLines = [
-    LOCATION_HEADING,
-    `- 当前：${singleLine(input.value)}`,
-    `- 用户原话：${singleLine(input.userInput)}`,
-    `- 记下时间：${localIsoWithOffset(new Date())}`,
-  ]
+export function setLocation(input: LocationInput): void {
+  const sectionLines = [LOCATION_HEADING, `- 当前：${singleLine(input.value)}`]
+  if (input.nameZh) sectionLines.push(`- 中文名：${singleLine(input.nameZh)}`)
+  if (typeof input.latitude === 'number' && typeof input.longitude === 'number') {
+    sectionLines.push(`- 坐标：${input.latitude}, ${input.longitude}`)
+  }
+  if (input.timezone) sectionLines.push(`- 时区：${singleLine(input.timezone)}`)
+  if (input.countryCode) sectionLines.push(`- 国家代码：${singleLine(input.countryCode)}`)
+  if (input.exactAddress) sectionLines.push(`- 精确地址：${singleLine(input.exactAddress)}`)
+  sectionLines.push(`- 用户原话：${singleLine(input.userInput)}`, `- 记下时间：${localIsoWithOffset(new Date())}`)
 
   const existing = readProfileText()
   let next: string
