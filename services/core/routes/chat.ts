@@ -1,6 +1,6 @@
 // services/core/routes/chat.ts — 一轮聊天：建上下文、调模型，经 SSE 把回复交给发起请求的窗口
-// 用法：core/index.ts 注册 chatRoutes；POST /chat { message }
-// 对应文件：src/chat/ChatWindow.tsx / services/core/context/buildContext.ts / services/core/routes/chat.test.ts / shared/errorCodes.ts
+// 用法：core/index.ts 注册 chatRoutes；POST /chat { message }；每次模型调用走 ModelProvider.chatTurn 并带 tools/index.ts 的工具，模型返回工具调用时经 executeToolCall 执行后再次调用
+// 对应文件：src/chat/ChatWindow.tsx / services/core/context/buildContext.ts / services/core/tools/index.ts / services/core/routes/chat.test.ts / shared/errorCodes.ts
 import type { FastifyInstance } from 'fastify'
 import type { OutgoingHttpHeaders } from 'node:http'
 import { requireCurrentState } from '../session/index.js'
@@ -15,7 +15,11 @@ import { getModelProviderConfig } from '../config/index.js'
 import { isEmptyReply } from '../reply/interceptor.js'
 import { detectSleepiness } from '../reply/sleepDetector.js'
 import { parseJsonSalvage } from '../util/jsonSalvage.js'
+import { executeToolCall, TOOL_SCHEMAS } from '../tools/index.js'
+import type { TurnContext } from '../../../shared/types/index.js'
 import { ERROR_CODES, errorBody, invalidRequest } from '../../../shared/errorCodes.js'
+
+const MAX_MODEL_CALLS = 4
 
 let queueTail: Promise<void> = Promise.resolve()
 
@@ -134,17 +138,35 @@ export async function chatRoutes(fastify: FastifyInstance) {
         const modelType = state.preset.modelType ?? modelProviderConfig.type
 
         let fullReply = ''
+        const turnContext: TurnContext = { system: context.system, messages: [...context.messages] }
 
-        if (streaming) {
-          for await (const chunk of modelProvider.complete(context, { maxTokens: modelProviderConfig.maxTokens, signal: abortController.signal, jsonMode: true })) {
-            fullReply += chunk
+        for (let modelCall = 1; ; modelCall++) {
+          const isLastCall = modelCall === MAX_MODEL_CALLS
+          const turn = await modelProvider.chatTurn(turnContext, {
+            maxTokens: modelProviderConfig.maxTokens,
+            signal: abortController.signal,
+            jsonMode: true,
+            stream: streaming,
+            ...(isLastCall ? {} : { tools: TOOL_SCHEMAS }),
+          })
+
+          if (abortController.signal.aborted) {
+            return
           }
-        } else {
-          fullReply = await modelProvider.completeSync(context, { maxTokens: modelProviderConfig.maxTokens, signal: abortController.signal, jsonMode: true })
-        }
 
-        if (abortController.signal.aborted) {
-          return
+          if (isLastCall || turn.toolCalls.length === 0) {
+            fullReply = turn.text
+            break
+          }
+
+          turnContext.messages.push({ role: 'assistant', content: turn.text, toolCalls: turn.toolCalls })
+          for (const toolCall of turn.toolCalls) {
+            const result = await executeToolCall(toolCall, abortController.signal)
+            if (abortController.signal.aborted) {
+              return
+            }
+            turnContext.messages.push({ role: 'tool', toolCallId: toolCall.id, name: toolCall.name, content: result })
+          }
         }
 
         if (!sessionExists(sessionId)) {

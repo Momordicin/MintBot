@@ -1225,3 +1225,370 @@ describe('Ollama 超时', () => {
     expect(timeoutController.signal.aborted).toBe(false)
   })
 })
+
+describe('chatTurn 工具调用', () => {
+  const tools = [{ name: 'web_lookup', description: '联网查询', parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } }]
+  const toolHistory: BuiltContext['messages'] = [{ role: 'user', content: '上海天气' }]
+  const contextWithToolRound = {
+    system: 'sys',
+    messages: [
+      { role: 'user' as const, content: '上海天气' },
+      { role: 'assistant' as const, content: '', toolCalls: [
+        { id: 'c1', name: 'web_lookup', arguments: { query: '上海天气' } },
+        { id: 'c2', name: 'web_lookup', arguments: { query: '上海空气' } },
+      ] },
+      { role: 'tool' as const, toolCallId: 'c1', name: 'web_lookup', content: '晴' },
+      { role: 'tool' as const, toolCallId: 'c2', name: 'web_lookup', content: '良' },
+    ],
+  }
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  describe('OpenAI / DeepSeek', () => {
+    const openai = () => createModelProvider({ type: 'openai', openaiApiKey: 'k', modelName: 'gpt-4o' })
+    const deepseek = () => createModelProvider({ type: 'deepseek', deepseekApiKey: 'k', modelName: 'deepseek-v4-flash' })
+
+    it('非流式：请求体带 tools，jsonMode 规则不变，解析 tool_calls', async () => {
+      openaiCreateMock.mockResolvedValue({ choices: [{ message: { content: null, tool_calls: [
+        { id: 'call_1', type: 'function', function: { name: 'web_lookup', arguments: '{"query":"上海天气"}' } },
+      ] } }] })
+
+      const result = await openai().chatTurn({ system: 'sys', messages: toolHistory }, { stream: false, jsonMode: true, tools })
+
+      const body = openaiCreateMock.mock.calls[0][0]
+      expect(body.stream).toBe(false)
+      expect(body.response_format).toEqual({ type: 'json_object' })
+      expect(body.tools).toEqual([{ type: 'function', function: { name: 'web_lookup', description: '联网查询', parameters: tools[0].parameters } }])
+      expect(result).toEqual({ text: '', toolCalls: [{ id: 'call_1', name: 'web_lookup', arguments: { query: '上海天气' } }] })
+    })
+
+    it('没有 tools 时请求体不含 tools 字段', async () => {
+      openaiCreateMock.mockResolvedValue(openaiCompletion('{"reply":"嗯"}'))
+
+      const result = await openai().chatTurn({ system: '', messages: toolHistory }, { stream: false })
+
+      expect('tools' in openaiCreateMock.mock.calls[0][0]).toBe(false)
+      expect(result).toEqual({ text: '{"reply":"嗯"}', toolCalls: [] })
+    })
+
+    it('工具结果映射：assistant 带 tool_calls，随后每个结果一条 role=tool 消息', async () => {
+      openaiCreateMock.mockResolvedValue(openaiCompletion('好'))
+
+      await openai().chatTurn(contextWithToolRound, { stream: false })
+
+      const messages = openaiCreateMock.mock.calls[0][0].messages
+      expect(messages[0]).toEqual({ role: 'system', content: 'sys' })
+      expect(messages[2]).toEqual({ role: 'assistant', content: null, tool_calls: [
+        { id: 'c1', type: 'function', function: { name: 'web_lookup', arguments: '{"query":"上海天气"}' } },
+        { id: 'c2', type: 'function', function: { name: 'web_lookup', arguments: '{"query":"上海空气"}' } },
+      ] })
+      expect(messages[3]).toEqual({ role: 'tool', tool_call_id: 'c1', content: '晴' })
+      expect(messages[4]).toEqual({ role: 'tool', tool_call_id: 'c2', content: '良' })
+    })
+
+    it('流式：累积分片的 tool_calls，沿用 30 秒流式超时', async () => {
+      async function* chunks() {
+        yield { choices: [{ delta: { content: '先查' } }] }
+        yield { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', function: { name: 'web_lookup', arguments: '{"que' } }] } }] }
+        yield { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: 'ry":"上海天气"}' } }] } }] }
+        yield { choices: [{ delta: { tool_calls: [{ index: 1, id: 'call_2', function: { name: 'web_lookup', arguments: '{"query":"空气"}' } }] } }] }
+      }
+      openaiCreateMock.mockResolvedValue(chunks())
+
+      const result = await openai().chatTurn({ system: '', messages: toolHistory }, { stream: true, tools })
+
+      expect(openaiCreateMock.mock.calls[0][0].stream).toBe(true)
+      expect(openaiCreateMock.mock.calls[0][1]).toMatchObject({ timeout: 30000 })
+      expect(result).toEqual({ text: '先查', toolCalls: [
+        { id: 'call_1', name: 'web_lookup', arguments: { query: '上海天气' } },
+        { id: 'call_2', name: 'web_lookup', arguments: { query: '空气' } },
+      ] })
+    })
+
+    it('DeepSeek：thinking 仍为 disabled，不带 response_format，带 tools', async () => {
+      openaiCreateMock.mockResolvedValue(openaiCompletion('好'))
+
+      await deepseek().chatTurn({ system: '', messages: toolHistory }, { stream: false, jsonMode: true, tools })
+
+      const body = openaiCreateMock.mock.calls[0][0]
+      expect(body.thinking).toEqual({ type: 'disabled' })
+      expect('response_format' in body).toBe(false)
+      expect(body.tools).toHaveLength(1)
+    })
+
+    it('参数不是合法 JSON 时按空参数处理', async () => {
+      openaiCreateMock.mockResolvedValue({ choices: [{ message: { content: '', tool_calls: [
+        { id: 'call_1', type: 'function', function: { name: 'web_lookup', arguments: '{bad' } },
+      ] } }] })
+
+      const result = await openai().chatTurn({ system: '', messages: toolHistory }, { stream: false, tools })
+
+      expect(result.toolCalls).toEqual([{ id: 'call_1', name: 'web_lookup', arguments: {} }])
+    })
+
+    it('缺少 API Key 时与既有调用一样在发请求前失败', async () => {
+      const provider = createModelProvider({ type: 'openai', modelName: 'gpt-4o' })
+
+      await expect(provider.chatTurn({ system: '', messages: toolHistory }, { stream: false })).rejects.toThrow('[ModelProvider] OpenAI API key is not configured')
+      expect(openaiCreateMock).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('Anthropic', () => {
+    const anthropic = () => createModelProvider({ type: 'anthropic', anthropicApiKey: 'k', modelName: 'claude-x' })
+
+    it('非流式：tools 转为 input_schema，解析 tool_use 块', async () => {
+      anthropicCreateMock.mockResolvedValue({ content: [
+        { type: 'text', text: '先查一下' },
+        { type: 'tool_use', id: 'tu_1', name: 'web_lookup', input: { query: '上海天气' } },
+      ] })
+
+      const result = await anthropic().chatTurn({ system: 'sys', messages: toolHistory }, { stream: false, tools })
+
+      const body = anthropicCreateMock.mock.calls[0][0]
+      expect(body.system).toBe('sys')
+      expect(body.tools).toEqual([{ name: 'web_lookup', description: '联网查询', input_schema: tools[0].parameters }])
+      expect(result).toEqual({ text: '先查一下', toolCalls: [{ id: 'tu_1', name: 'web_lookup', arguments: { query: '上海天气' } }] })
+    })
+
+    it('工具结果映射：assistant 的 tool_use 块，多个 tool_result 合并进同一条 user 消息', async () => {
+      anthropicCreateMock.mockResolvedValue({ content: [{ type: 'text', text: '好' }] })
+
+      await anthropic().chatTurn(contextWithToolRound, { stream: false, tools })
+
+      expect(anthropicCreateMock.mock.calls[0][0].messages).toEqual([
+        { role: 'user', content: '上海天气' },
+        { role: 'assistant', content: [
+          { type: 'tool_use', id: 'c1', name: 'web_lookup', input: { query: '上海天气' } },
+          { type: 'tool_use', id: 'c2', name: 'web_lookup', input: { query: '上海空气' } },
+        ] },
+        { role: 'user', content: [
+          { type: 'tool_result', tool_use_id: 'c1', content: '晴' },
+          { type: 'tool_result', tool_use_id: 'c2', content: '良' },
+        ] },
+      ])
+    })
+
+    it('不传 tools 但历史里有工具块时，补最小工具定义并禁止再调用', async () => {
+      anthropicCreateMock.mockResolvedValue({ content: [{ type: 'text', text: '好' }] })
+
+      await anthropic().chatTurn(contextWithToolRound, { stream: false })
+
+      const body = anthropicCreateMock.mock.calls[0][0]
+      expect(body.tools).toEqual([{ name: 'web_lookup', input_schema: { type: 'object' } }])
+      expect(body.tool_choice).toEqual({ type: 'none' })
+    })
+
+    it('没有工具块也不传 tools 时，请求体不含 tools 与 tool_choice', async () => {
+      anthropicCreateMock.mockResolvedValue({ content: [{ type: 'text', text: '好' }] })
+
+      await anthropic().chatTurn({ system: '', messages: toolHistory }, { stream: false })
+
+      const body = anthropicCreateMock.mock.calls[0][0]
+      expect('tools' in body).toBe(false)
+      expect('tool_choice' in body).toBe(false)
+    })
+
+    it('流式：累积 text_delta 与 input_json_delta，沿用 30 秒流式超时', async () => {
+      async function* events() {
+        yield { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }
+        yield { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '先查' } }
+        yield { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'tu_1', name: 'web_lookup', input: {} } }
+        yield { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"query":' } }
+        yield { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '"上海天气"}' } }
+      }
+      anthropicStreamMock.mockReturnValue(events())
+
+      const result = await anthropic().chatTurn({ system: '', messages: toolHistory }, { stream: true, tools })
+
+      expect(anthropicStreamMock.mock.calls[0][1]).toMatchObject({ timeout: 30000 })
+      expect(result).toEqual({ text: '先查', toolCalls: [{ id: 'tu_1', name: 'web_lookup', arguments: { query: '上海天气' } }] })
+    })
+  })
+
+  describe('Ollama', () => {
+    const encoder = new TextEncoder()
+    let modelCounter = 0
+    const ollama = () => createModelProvider({ type: 'ollama', ollamaModel: `tool-model-${++modelCounter}` })
+
+    function sseResponse(...payloads: unknown[]): Response {
+      const body = payloads.map(p => `data: ${JSON.stringify(p)}\n\n`).join('') + 'data: [DONE]\n\n'
+      return new Response(body, { status: 200 })
+    }
+
+    function jsonResponse(message: unknown): Response {
+      return new Response(JSON.stringify({ choices: [{ message }] }), { status: 200 })
+    }
+
+    const unsupported = () => new Response(JSON.stringify({ error: { message: 'registry.ollama.ai/library/x does not support tools' } }), { status: 400, statusText: 'Bad Request' })
+
+    it('非流式：请求体带 tools 与工具结果消息，解析 tool_calls（arguments 为字符串或对象）', async () => {
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ content: '', tool_calls: [
+        { id: 'call_a', type: 'function', function: { name: 'web_lookup', arguments: '{"query":"上海天气"}' } },
+        { id: 'call_b', type: 'function', function: { name: 'web_lookup', arguments: { query: '空气' } } },
+      ] }))
+      vi.stubGlobal('fetch', fetchMock)
+
+      const result = await ollama().chatTurn(contextWithToolRound, { stream: false, jsonMode: true, tools })
+
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+      expect(body.stream).toBe(false)
+      expect(body.response_format).toEqual({ type: 'json_object' })
+      expect(body.tools).toHaveLength(1)
+      expect(body.messages[2].tool_calls[0]).toEqual({ id: 'c1', type: 'function', function: { name: 'web_lookup', arguments: '{"query":"上海天气"}' } })
+      expect(body.messages[3]).toEqual({ role: 'tool', tool_call_id: 'c1', content: '晴' })
+      expect(result.toolCalls).toEqual([
+        { id: 'call_a', name: 'web_lookup', arguments: { query: '上海天气' } },
+        { id: 'call_b', name: 'web_lookup', arguments: { query: '空气' } },
+      ])
+    })
+
+    it('流式：解析 tool_calls，缺 id 时补 id，<think> 内容不进入文本', async () => {
+      const fetchMock = vi.fn().mockResolvedValue(sseResponse(
+        { choices: [{ delta: { content: '<think>想</think>' } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 0, function: { name: 'web_lookup', arguments: '{"query":"上海天气"}' } }] } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 1, function: { name: 'web_lookup', arguments: '{"query":"空气"}' } }] } }] },
+      ))
+      vi.stubGlobal('fetch', fetchMock)
+
+      const result = await ollama().chatTurn({ system: '', messages: toolHistory }, { stream: true, tools })
+
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body).stream).toBe(true)
+      expect(result.text).toBe('')
+      expect(result.toolCalls).toEqual([
+        { id: 'call_0', name: 'web_lookup', arguments: { query: '上海天气' } },
+        { id: 'call_1', name: 'web_lookup', arguments: { query: '空气' } },
+      ])
+    })
+
+    it('流式：同一 index 出现不同 id 时视为两个独立调用', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse(
+        { choices: [{ delta: { tool_calls: [{ index: 0, id: 'a', function: { name: 'web_lookup', arguments: '{"query":"一"}' } }] } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 0, id: 'b', function: { name: 'web_lookup', arguments: '{"query":"二"}' } }] } }] },
+      )))
+
+      const result = await ollama().chatTurn({ system: '', messages: toolHistory }, { stream: true, tools })
+
+      expect(result.toolCalls.map(c => c.id)).toEqual(['a', 'b'])
+    })
+
+    it('400 "does not support tools"：不带 tools、消息不变地重发一次，之后该模型不再带 tools', async () => {
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(unsupported())
+        .mockImplementation(() => Promise.resolve(jsonResponse({ content: '直接回答' })))
+      vi.stubGlobal('fetch', fetchMock)
+      const provider = ollama()
+
+      const first = await provider.chatTurn(contextWithToolRound, { stream: false, tools })
+      const second = await provider.chatTurn(contextWithToolRound, { stream: false, tools })
+
+      expect(first.text).toBe('直接回答')
+      expect(second.text).toBe('直接回答')
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+      const bodies = fetchMock.mock.calls.map(call => JSON.parse(call[1].body))
+      expect(bodies[0].tools).toHaveLength(1)
+      expect('tools' in bodies[1]).toBe(false)
+      expect(bodies[1].messages).toEqual(bodies[0].messages)
+      expect('tools' in bodies[2]).toBe(false)
+    })
+
+    it('流式同样适用 400 回退与记忆', async () => {
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(unsupported())
+        .mockImplementation(() => Promise.resolve(sseResponse({ choices: [{ delta: { content: '好' } }] })))
+      vi.stubGlobal('fetch', fetchMock)
+      const provider = ollama()
+
+      expect((await provider.chatTurn({ system: '', messages: toolHistory }, { stream: true, tools })).text).toBe('好')
+      expect((await provider.chatTurn({ system: '', messages: toolHistory }, { stream: true, tools })).text).toBe('好')
+
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+      expect('tools' in JSON.parse(fetchMock.mock.calls[2][1].body)).toBe(false)
+    })
+
+    it('记忆只针对该模型，其他 Ollama 模型仍带 tools', async () => {
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(unsupported())
+        .mockImplementation(() => Promise.resolve(jsonResponse({ content: '好' })))
+      vi.stubGlobal('fetch', fetchMock)
+
+      await ollama().chatTurn({ system: '', messages: toolHistory }, { stream: false, tools })
+      await ollama().chatTurn({ system: '', messages: toolHistory }, { stream: false, tools })
+
+      expect(JSON.parse(fetchMock.mock.calls[2][1].body).tools).toHaveLength(1)
+    })
+
+    it('其他 400 不重发，错误格式不变', async () => {
+      const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response('{"error":{"message":"bad request"}}', { status: 400, statusText: 'Bad Request' })))
+      vi.stubGlobal('fetch', fetchMock)
+
+      await expect(ollama().chatTurn({ system: '', messages: toolHistory }, { stream: false, tools })).rejects.toThrow('OpenAI API error: 400 Bad Request - bad request')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('没有 tools 时遇到同样的 400 不重发', async () => {
+      const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(unsupported()))
+      vi.stubGlobal('fetch', fetchMock)
+
+      await expect(ollama().chatTurn({ system: '', messages: toolHistory }, { stream: false })).rejects.toThrow('does not support tools')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('流式工具轮：120 秒无输出仍按 "Ollama produced no output within 120s" 失败', async () => {
+      vi.useFakeTimers()
+      vi.stubGlobal('fetch', vi.fn().mockImplementation((_url: string, init: { signal: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => reject(init.signal.reason))
+        })
+      ))
+
+      const assertion = expect(ollama().chatTurn({ system: '', messages: toolHistory }, { stream: true, tools })).rejects.toThrow('Ollama produced no output within 120s')
+      await vi.advanceTimersByTimeAsync(120000)
+
+      await assertion
+    })
+
+    it('流式工具轮：收到数据后停顿 60 秒仍按 "Ollama stream stalled for 60s" 失败', async () => {
+      vi.useFakeTimers()
+      vi.stubGlobal('fetch', vi.fn().mockImplementation((_url: string, init: { signal: AbortSignal }) => {
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c', function: { name: 'web_lookup', arguments: '{' } }] } }] })}\n\n`))
+            init.signal.addEventListener('abort', () => controller.error(init.signal.reason))
+          },
+        })
+        return Promise.resolve(new Response(stream, { status: 200 }))
+      }))
+
+      const assertion = expect(ollama().chatTurn({ system: '', messages: toolHistory }, { stream: true, tools })).rejects.toThrow('Ollama stream stalled for 60s')
+      await vi.advanceTimersByTimeAsync(60000)
+
+      await assertion
+    })
+
+    it('非流式工具轮：使用 300000ms 超时信号，超时错误格式不变', async () => {
+      const timeoutController = new AbortController()
+      const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutController.signal)
+      vi.stubGlobal('fetch', vi.fn().mockImplementation((_url: string, init: { signal: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => reject(init.signal.reason))
+        })
+      ))
+
+      const pending = ollama().chatTurn({ system: '', messages: toolHistory }, { stream: false, tools })
+      timeoutController.abort(new DOMException('timed out', 'TimeoutError'))
+
+      await expect(pending).rejects.toThrow('Ollama call timed out after 300s')
+      expect(timeoutSpy).toHaveBeenCalledWith(300000)
+    })
+  })
+
+  it('未知 provider 类型抛出与既有调用相同的错误', async () => {
+    const provider = createModelProvider({ type: 'nope' as never })
+
+    await expect(provider.chatTurn({ system: '', messages: toolHistory }, { stream: false })).rejects.toThrow('Unknown model provider type: nope')
+  })
+})

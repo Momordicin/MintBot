@@ -1,6 +1,6 @@
-// src/settings/SettingsApp.tsx — 设置窗口根组件：加载当前预设并按其显示配置应用主题色，左栏角色下拉框与导航切换"角色 / 外观 / 人设与模型 / 记忆 / 模型服务 / 窗口行为 / 通用"七个页面
+// src/settings/SettingsApp.tsx — 设置窗口根组件：加载当前预设并按其显示配置应用主题色，左栏角色下拉框与导航切换"角色 / 外观 / 人设与模型 / 记忆 / 用户资料 / 模型服务 / 窗口行为 / 语音 / 通用"九个页面
 // 用法：settings/main.tsx 渲染 <SettingsApp />；GET /state；useCharacterPanel 通过 onSwitched 回传新的 AppState，记忆页把 sessionId 传给 MemoryPanel
-// 对应文件：src/settings/main.tsx / src/settings/useCharacterPanel.ts / src/settings/CharacterPanel.tsx / src/settings/AppearancePanel.tsx / src/settings/PersonaModelPanel.tsx / src/settings/ModelConfigPanel.tsx / src/settings/WindowBehaviorPanel.tsx / src/settings/GeneralPanel.tsx / src/settings/memory/MemoryPanel.tsx / src/settings/settings.css / src/chat/theme.ts / src/chat/themeVars.ts / services/core/index.ts / electron/main/index.ts（open-settings-window）
+// 对应文件：src/settings/main.tsx / src/settings/useCharacterPanel.ts / src/settings/CharacterPanel.tsx / src/settings/AppearancePanel.tsx / src/settings/PersonaModelPanel.tsx / src/settings/ModelConfigPanel.tsx / src/settings/WindowBehaviorPanel.tsx / src/settings/GeneralPanel.tsx / src/settings/memory/MemoryPanel.tsx / src/settings/UserProfilePanel.tsx / src/settings/VoicePanel.tsx / src/settings/settings.css / src/chat/theme.ts / src/chat/themeVars.ts / services/core/index.ts / electron/main/index.ts（open-settings-window）
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { AppState } from '../../shared/types/index.js'
 import { deriveTheme } from '../chat/theme.js'
@@ -12,6 +12,7 @@ import { MemoryPanel } from './memory/MemoryPanel'
 import { ModelConfigPanel } from './ModelConfigPanel'
 import { PersonaModelPanel } from './PersonaModelPanel'
 import { useCharacterPanel } from './useCharacterPanel'
+import { UserProfilePanel } from './UserProfilePanel'
 import { WindowBehaviorPanel } from './WindowBehaviorPanel'
 import { GeneralPanel } from './GeneralPanel'
 import { VoicePanel } from './VoicePanel'
@@ -20,9 +21,9 @@ import './settings.css'
 
 import { CORE_URL } from '../coreUrl.js'
 
-type Page = 'character' | 'appearance' | 'persona' | 'memory' | 'modelService' | 'window' | 'voice' | 'general'
+type Page = 'character' | 'appearance' | 'persona' | 'memory' | 'userProfile' | 'modelService' | 'window' | 'voice' | 'general'
 
-const PRIMARY_NAV: Page[] = ['character', 'appearance', 'persona', 'memory']
+const PRIMARY_NAV: Page[] = ['character', 'appearance', 'persona', 'memory', 'userProfile']
 
 const SECONDARY_NAV: Page[] = ['modelService', 'window', 'voice']
 
@@ -52,6 +53,7 @@ function SettingsBody({ appState, onSwitched }: SettingsBodyProps) {
       case 'appearance': return t('外观')
       case 'persona': return t('人设与模型')
       case 'memory': return t('记忆')
+      case 'userProfile': return t('用户资料')
       case 'modelService': return t('全局模型服务')
       case 'window': return t('窗口行为')
       case 'voice': return t('语音')
@@ -104,6 +106,7 @@ function SettingsBody({ appState, onSwitched }: SettingsBodyProps) {
           <PersonaModelPanel panel={panel} />
         </div>
         {activePage === 'memory' && <MemoryPanel sessionId={appState?.sessionId ?? null} />}
+        {activePage === 'userProfile' && <UserProfilePanel />}
         {activePage === 'modelService' && <ModelConfigPanel />}
         {activePage === 'window' && <WindowBehaviorPanel />}
         {activePage === 'voice' && <VoicePanel />}
