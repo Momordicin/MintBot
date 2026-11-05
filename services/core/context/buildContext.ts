@@ -1,13 +1,12 @@
-// services/core/context/buildContext.ts — 为一次聊天请求组装发给模型的 BuiltContext：system（角色设定 + 情绪 + 已知实体 + 用户资料所在地 + 历史摘要 + 检索到的旧对话 + 词表/称呼/JSON 回复格式）与按条数、时间、字符预算裁剪的最近消息
-// 用法：routes/chat.ts 的 POST /chat 每次请求 await buildContext(message, { embedding, signal })；读取当前会话状态（requireCurrentState）与 session/queries.ts，所在地读自 profile/userProfile.ts，检索走 memory/retrieval.ts，预算取自 getMemoryConfig()
-// 对应文件：services/core/routes/chat.ts / services/core/memory/retrieval.ts / services/core/session/index.ts / services/core/session/queries.ts / services/core/config/index.ts / services/core/profile/userProfile.ts / services/core/context/buildContext.test.ts
+// services/core/context/buildContext.ts — 为一次聊天请求组装发给模型的 BuiltContext：system（角色设定 + 情绪 + 已知实体 + 历史摘要 + 检索到的旧对话 + 词表/称呼/JSON 回复格式）与按条数、时间、字符预算裁剪的最近消息
+// 用法：routes/chat.ts 的 POST /chat 每次请求 await buildContext(message, { embedding, signal })；读取当前会话状态（requireCurrentState）与 session/queries.ts，检索走 memory/retrieval.ts，预算取自 getMemoryConfig()
+// 对应文件：services/core/routes/chat.ts / services/core/memory/retrieval.ts / services/core/session/index.ts / services/core/session/queries.ts / services/core/config/index.ts / services/core/context/buildContext.test.ts
 import type { BuiltContext, ChatMessage, MessageEntity } from '../../../shared/types/index.js'
 import { requireCurrentState, getHistory } from '../session/index.js'
 import { shouldTriggerRetrieval, retrieveMemories } from '../memory/retrieval.js'
 import { getEmotionState, getSummaries, getCurrentEntities, getSupersededMessageIds } from '../session/queries.js'
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
 import { getMemoryConfig } from '../config/index.js'
-import { getLocation } from '../profile/userProfile.js'
 
 function truncateToCharBudget<T>(
   items: T[],
@@ -72,11 +71,6 @@ export async function buildContext(
       .filter(type => grouped.has(type))
       .map(type => `- ${ENTITY_TYPE_LABELS[type]}：${grouped.get(type)!.join('、')}`)
     system = `${system}\n\n以下是已知的用户信息：\n${lines.join('\n')}`
-  }
-
-  const location = getLocation()
-  if (location) {
-    system = `${system}\n\n以下是用户资料：\n- 所在地：${location.value}`
   }
 
   const summaries = truncateToCharBudget(getSummaries(session.sessionId), memoryConfig.contextBudget.summary, s => s.content, 'oldest')

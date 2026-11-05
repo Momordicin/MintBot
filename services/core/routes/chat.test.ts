@@ -12,7 +12,6 @@ import * as ModelProviderModule from '../providers/ModelProvider.js'
 import * as BuildContextModule from '../context/buildContext.js'
 import * as BroadcastModule from '../events/broadcast.js'
 import * as ConfigModule from '../config/index.js'
-import * as ToolsModule from '../tools/index.js'
 import type { ModelProvider } from '../providers/ModelProvider.js'
 import type { EmbeddingProvider } from '../providers/EmbeddingProvider.js'
 import { RENDERER_ORIGINS } from '../config/ports.js'
@@ -113,11 +112,6 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-// chat.ts 每次模型调用走 chatTurn；既有用例只关心最终文本，用它把"返回字符串的假模型"适配成 chatTurn 的返回形状
-function turn(fn: (context: any, options: any) => Promise<string> | string) {
-  return async (context: unknown, options: unknown) => ({ text: await fn(context, options), toolCalls: [] })
-}
-
 // 确定性假向量，本测试不依赖 RAG 召回结果，只需满足 EmbeddingProvider 接口类型
 function fakeEmbeddingProvider(): EmbeddingProvider {
   return {
@@ -139,7 +133,7 @@ function fakeEmbeddingProvider(): EmbeddingProvider {
 async function buildTestApp(fakeReply: string) {
   const fastify = Fastify()
   const fakeModelProvider = {
-    chatTurn: turn(async () => fakeReply),
+    completeSync: async () => fakeReply,
   }
   const createSpy = vi.spyOn(ModelProviderModule, 'createModelProviderForPreset')
     .mockReturnValue(fakeModelProvider as unknown as ModelProvider)
@@ -213,7 +207,7 @@ describe('POST /chat', () => {
     const { session } = loadSession('p1')
     const fastify = Fastify()
     const throwingModelProvider = {
-      chatTurn: turn(async () => { throw new Error('model boom') }),
+      completeSync: async () => { throw new Error('model boom') },
     }
     const createSpy = vi.spyOn(ModelProviderModule, 'createModelProviderForPreset')
       .mockReturnValue(throwingModelProvider as unknown as ModelProvider)
@@ -407,7 +401,7 @@ describe('POST /chat', () => {
 
     const fastify = Fastify()
     const throwingModelProvider = {
-      chatTurn: turn(async () => { throw new Error('model boom') }),
+      completeSync: async () => { throw new Error('model boom') },
     }
     const createSpy = vi.spyOn(ModelProviderModule, 'createModelProviderForPreset')
       .mockReturnValue(throwingModelProvider as unknown as ModelProvider)
@@ -448,7 +442,7 @@ describe('POST /chat', () => {
   async function buildThrowingApp(error: unknown) {
     const fastify = Fastify()
     vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
-      chatTurn: turn(async () => { throw error }),
+      completeSync: async () => { throw error },
     } as unknown as ModelProvider)
     fastify.decorate('streamingEnabled', false)
     fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
@@ -489,14 +483,14 @@ describe('POST /chat', () => {
       done()
     })
     vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
-      chatTurn: turn((_context: unknown, options: { signal?: AbortSignal }) => {
+      completeSync: (_context: unknown, options: { signal?: AbortSignal }) => {
         completeSyncCalled()
         return new Promise((_resolve, reject) => {
           options.signal?.addEventListener('abort', () => {
             reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
           })
         })
-      }),
+      },
     } as unknown as ModelProvider)
     await fastify.register(chatRoutes)
 
@@ -535,10 +529,10 @@ describe('POST /chat', () => {
       done()
     })
     vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
-      chatTurn: turn(() => {
+      completeSync: () => {
         completeSyncCalled()
         return releasePromise
-      }),
+      },
     } as unknown as ModelProvider)
     await fastify.register(chatRoutes)
 
@@ -566,10 +560,10 @@ describe('POST /chat', () => {
     try {
       const fastify = Fastify()
       vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
-        chatTurn: turn(async () => {
+        completeSync: async () => {
           vi.setSystemTime(repliedAt)
           return JSON.stringify({ reply: '你好呀' })
-        }),
+        },
       } as unknown as ModelProvider)
       fastify.decorate('streamingEnabled', false)
       fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
@@ -760,7 +754,7 @@ describe('POST /chat', () => {
     let completeSyncCalled: () => void
     const completeSyncCalledPromise = new Promise<void>(resolve => { completeSyncCalled = resolve })
     vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
-      chatTurn: turn((_context: unknown, options: { signal?: AbortSignal }) => {
+      completeSync: (_context: unknown, options: { signal?: AbortSignal }) => {
         receivedOptions = options
         completeSyncCalled()
         return new Promise((_resolve, reject) => {
@@ -768,7 +762,7 @@ describe('POST /chat', () => {
             reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
           })
         })
-      }),
+      },
     } as unknown as ModelProvider)
 
     await fastify.register(chatRoutes)
@@ -830,7 +824,7 @@ describe('POST /chat', () => {
     // 这个守卫就会形同虚设，completeSync 反而会被调用到
     const completeSyncMock = vi.fn(async () => JSON.stringify({ reply: '嗯嗯' }))
     vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
-      chatTurn: turn(completeSyncMock),
+      completeSync: completeSyncMock,
     } as unknown as ModelProvider)
 
     await fastify.register(chatRoutes)
@@ -903,7 +897,7 @@ describe('POST /chat', () => {
     })
 
     vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
-      chatTurn: turn(async () => JSON.stringify({ reply: '嗯嗯' })),
+      completeSync: async () => JSON.stringify({ reply: '嗯嗯' }),
     } as unknown as ModelProvider)
 
     await fastify.register(chatRoutes)
@@ -1020,9 +1014,9 @@ describe('POST /chat', () => {
       callCount += 1
       if (callCount === 1) {
         signalFirstCalled()
-        return { chatTurn: turn(async () => firstCompletePromise) } as unknown as ModelProvider
+        return { completeSync: async () => firstCompletePromise } as unknown as ModelProvider
       }
-      return { chatTurn: turn(async () => JSON.stringify({ reply: '第二条回复' })) } as unknown as ModelProvider
+      return { completeSync: async () => JSON.stringify({ reply: '第二条回复' }) } as unknown as ModelProvider
     })
 
     const fastify = Fastify()
@@ -1074,7 +1068,7 @@ describe('POST /chat', () => {
     const firstCompletePromise = new Promise<string>(resolve => { resolveFirstComplete = resolve })
     const completeSyncMock = vi.fn(async () => firstCompletePromise)
     vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
-      chatTurn: turn(completeSyncMock),
+      completeSync: completeSyncMock,
     } as unknown as ModelProvider)
 
     await fastify.register(chatRoutes)
@@ -1124,10 +1118,10 @@ describe('POST /chat', () => {
     fastify.decorate('streamingEnabled', false)
     fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
     vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
-      chatTurn: turn(async () => {
+      completeSync: async () => {
         deleteSessionRows(session.sessionId)
         return JSON.stringify({ reply: '你好呀', emotion: { self: { label: 'happy', intensity: 0.8 } } })
-      }),
+      },
     } as unknown as ModelProvider)
     await fastify.register(chatRoutes)
 
@@ -1154,7 +1148,7 @@ describe('POST /chat', () => {
       return firstCompletePromise
     })
     vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
-      chatTurn: turn(completeSyncMock),
+      completeSync: completeSyncMock,
     } as unknown as ModelProvider)
 
     const fastify = Fastify()
@@ -1206,7 +1200,7 @@ describe('POST /chat — max_tokens 配置入口（Fix 2）', () => {
     loadSession('p1')
     const completeSyncMock = vi.fn(async () => JSON.stringify({ reply: '嗯嗯' }))
     const createSpy = vi.spyOn(ModelProviderModule, 'createModelProviderForPreset')
-      .mockReturnValue({ chatTurn: turn(completeSyncMock) } as unknown as ModelProvider)
+      .mockReturnValue({ completeSync: completeSyncMock } as unknown as ModelProvider)
     vi.mocked(ConfigModule.getModelProviderConfig).mockReturnValueOnce({
       type: 'ollama', ollamaModel: 'qwen3', maxTokens: 2000,
     })
@@ -1232,7 +1226,7 @@ describe('POST /chat — max_tokens 配置入口（Fix 2）', () => {
     loadSession('p1')
     const completeSyncMock = vi.fn(async () => JSON.stringify({ reply: '嗯嗯' }))
     const createSpy = vi.spyOn(ModelProviderModule, 'createModelProviderForPreset')
-      .mockReturnValue({ chatTurn: turn(completeSyncMock) } as unknown as ModelProvider)
+      .mockReturnValue({ completeSync: completeSyncMock } as unknown as ModelProvider)
 
     try {
       const fastify = Fastify()
@@ -1506,195 +1500,5 @@ describe('POST /chat — 角色单独配置的 API Key', () => {
     await chatOnce()
 
     expect(openaiCtorMock.mock.calls[0][0].apiKey).toBe('role-key')
-  })
-})
-
-describe('POST /chat — 工具循环', () => {
-  const finalJson = (reply: string) => JSON.stringify({ reply, emotion: { self: { label: 'happy', intensity: 0.5 }, perceived_user: null } })
-  const lookupCall = (id: string, query = '上海天气') => ({ id, name: 'web_lookup', arguments: { query } })
-
-  type Turn = { text: string; toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }> }
-
-  async function buildToolApp(script: Turn[], opts: { streaming?: boolean } = {}) {
-    const calls: Array<{ messages: unknown[]; options: Record<string, any> }> = []
-    const chatTurn = vi.fn(async (context: { messages: unknown[] }, options: Record<string, any>) => {
-      calls.push({ messages: [...context.messages], options })
-      const next = script[calls.length - 1]
-      if (!next) throw new Error('script exhausted')
-      return next
-    })
-    vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({ chatTurn } as unknown as ModelProvider)
-    const executeSpy = vi.spyOn(ToolsModule, 'executeToolCall').mockImplementation(async call => `结果:${call.name}`)
-    const fastify = Fastify()
-    fastify.decorate('streamingEnabled', opts.streaming ?? false)
-    fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
-    await fastify.register(chatRoutes)
-    return { fastify, calls, chatTurn, executeSpy }
-  }
-
-  const storedMessages = () => db.prepare('SELECT role, content FROM Messages ORDER BY id').all() as Array<{ role: string; content: string }>
-
-  it('每次模型调用都带两个工具，流式开关与 jsonMode 照旧；不调用工具时只调用一次', async () => {
-    loadSession('p1')
-    const { fastify, calls, executeSpy } = await buildToolApp([{ text: finalJson('你好呀'), toolCalls: [] }], { streaming: true })
-
-    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
-
-    expect(calls).toHaveLength(1)
-    expect(calls[0].options.tools.map((t: { name: string }) => t.name)).toEqual(['web_lookup', 'remember_location'])
-    expect(calls[0].options.stream).toBe(true)
-    expect(calls[0].options.jsonMode).toBe(true)
-    expect(executeSpy).not.toHaveBeenCalled()
-    expect(parseSSE(response.payload).find(e => e.event === 'message_done')?.data.text).toBe('你好呀')
-  })
-
-  it('一次 web_lookup：工具调用轮文本为空也不算空回复，结果以 tool 消息带入下一次模型调用，只保存用户消息与最终回复', async () => {
-    loadSession('p1')
-    const { fastify, calls, executeSpy } = await buildToolApp([
-      { text: '', toolCalls: [lookupCall('c1')] },
-      { text: finalJson('上海今天晴'), toolCalls: [] },
-    ])
-
-    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '上海天气怎么样' } })
-    const events = parseSSE(response.payload)
-
-    expect(calls).toHaveLength(2)
-    expect(executeSpy).toHaveBeenCalledTimes(1)
-    expect(executeSpy.mock.calls[0][0]).toEqual(lookupCall('c1'))
-    expect(executeSpy.mock.calls[0][1]).toBeInstanceOf(AbortSignal)
-    expect(calls[1].messages.slice(-2)).toEqual([
-      { role: 'assistant', content: '', toolCalls: [lookupCall('c1')] },
-      { role: 'tool', toolCallId: 'c1', name: 'web_lookup', content: '结果:web_lookup' },
-    ])
-    expect(events.filter(e => e.event === 'message_done')).toHaveLength(1)
-    expect(events.find(e => e.event === 'message_done')?.data.text).toBe('上海今天晴')
-    expect(events.find(e => e.event === 'system')).toBeUndefined()
-    expect(storedMessages()).toEqual([
-      { role: 'user', content: '上海天气怎么样' },
-      { role: 'assistant', content: '上海今天晴' },
-    ])
-  })
-
-  it('同一轮多个工具调用按顺序执行，结果按同样顺序带回', async () => {
-    loadSession('p1')
-    const { fastify, calls, executeSpy } = await buildToolApp([
-      { text: '', toolCalls: [lookupCall('c1', '甲'), lookupCall('c2', '乙')] },
-      { text: finalJson('好'), toolCalls: [] },
-    ])
-
-    await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '查两个' } })
-
-    expect(executeSpy.mock.calls.map(c => (c[0].arguments as { query: string }).query)).toEqual(['甲', '乙'])
-    expect((calls[1].messages.slice(-2) as Array<{ toolCallId: string }>).map(m => m.toolCallId)).toEqual(['c1', 'c2'])
-  })
-
-  it('没有所在地时先追问，用户答复后 remember_location 再 web_lookup，三次模型调用后只保存两轮的最终内容', async () => {
-    loadSession('p1')
-    const first = await buildToolApp([{ text: finalJson('你在哪个城市呀？'), toolCalls: [] }])
-    await first.fastify.inject({ method: 'POST', url: '/chat', payload: { message: '今天天气怎么样' } })
-    expect(first.calls[0].options.tools).toBeDefined()
-    vi.restoreAllMocks()
-
-    const second = await buildToolApp([
-      { text: '', toolCalls: [{ id: 'r1', name: 'remember_location', arguments: { place: '徐汇' } }] },
-      { text: '', toolCalls: [lookupCall('w1', '中国上海市徐汇区今天天气')] },
-      { text: finalJson('徐汇今天晴'), toolCalls: [] },
-    ])
-    const response = await second.fastify.inject({ method: 'POST', url: '/chat', payload: { message: '徐汇' } })
-
-    expect(second.calls).toHaveLength(3)
-    expect(second.executeSpy.mock.calls.map(c => c[0].name)).toEqual(['remember_location', 'web_lookup'])
-    expect(parseSSE(response.payload).find(e => e.event === 'message_done')?.data.text).toBe('徐汇今天晴')
-    expect(storedMessages()).toEqual([
-      { role: 'user', content: '今天天气怎么样' },
-      { role: 'assistant', content: '你在哪个城市呀？' },
-      { role: 'user', content: '徐汇' },
-      { role: 'assistant', content: '徐汇今天晴' },
-    ])
-  })
-
-  it('最多 4 次模型调用：第 4 次不带 tools，其返回的工具调用被忽略、文本作为最终回复', async () => {
-    loadSession('p1')
-    const { fastify, calls, executeSpy } = await buildToolApp([
-      { text: '', toolCalls: [lookupCall('c1')] },
-      { text: '', toolCalls: [lookupCall('c2')] },
-      { text: '', toolCalls: [lookupCall('c3')] },
-      { text: finalJson('只能这样了'), toolCalls: [lookupCall('c4')] },
-    ])
-
-    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '一直查' } })
-
-    expect(calls).toHaveLength(4)
-    expect(calls.slice(0, 3).every(c => Array.isArray(c.options.tools))).toBe(true)
-    expect('tools' in calls[3].options).toBe(false)
-    expect(executeSpy).toHaveBeenCalledTimes(3)
-    expect(parseSSE(response.payload).find(e => e.event === 'message_done')?.data.text).toBe('只能这样了')
-    expect(storedMessages()).toHaveLength(2)
-  })
-
-  it('最终回复为空时仍走既有的空回复错误，不保存任何内容', async () => {
-    loadSession('p1')
-    vi.spyOn(console, 'error').mockImplementation(() => {})
-    const { fastify } = await buildToolApp([
-      { text: '', toolCalls: [lookupCall('c1')] },
-      { text: '', toolCalls: [] },
-    ])
-
-    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
-    const events = parseSSE(response.payload)
-
-    expect(events.find(e => e.event === 'message_done')).toBeUndefined()
-    expect(events.find(e => e.event === 'system')?.data.payload.code).toBe('MODEL_CALL_FAILED')
-    expect(storedMessages()).toEqual([])
-  })
-
-  it('工具轮中模型调用失败走既有错误处理，不保存任何内容', async () => {
-    loadSession('p1')
-    vi.spyOn(console, 'error').mockImplementation(() => {})
-    const { fastify } = await buildToolApp([{ text: '', toolCalls: [lookupCall('c1')] }])
-
-    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
-
-    expect(parseSSE(response.payload).find(e => e.event === 'system')?.data.payload.code).toBe('MODEL_CALL_FAILED')
-    expect(storedMessages()).toEqual([])
-  })
-
-  it('工具执行期间客户端断开：取消信号传到工具，不再调用模型，不保存，不写任何事件', async () => {
-    loadSession('p1')
-    let capturedReply: { raw: import('http').ServerResponse } | undefined
-    let toolSignal: AbortSignal | undefined
-    const chatTurn = vi.fn(async () => ({ text: '', toolCalls: [lookupCall('c1')] }))
-    vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({ chatTurn } as unknown as ModelProvider)
-    let toolStarted: () => void
-    const toolStartedPromise = new Promise<void>(resolve => { toolStarted = resolve })
-    vi.spyOn(ToolsModule, 'executeToolCall').mockImplementation((_call, signal) => {
-      toolSignal = signal
-      toolStarted()
-      return new Promise<string>(resolve => {
-        signal.addEventListener('abort', () => resolve('查询未能完成'))
-      })
-    })
-    const fastify = Fastify()
-    fastify.decorate('streamingEnabled', false)
-    fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
-    fastify.addHook('onRequest', (_request, reply, done) => {
-      capturedReply = reply
-      done()
-    })
-    await fastify.register(chatRoutes)
-
-    const injectPromise = fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
-    injectPromise.catch(() => {})
-    await toolStartedPromise
-
-    const writeSpy = vi.spyOn(capturedReply!.raw, 'write')
-    Object.defineProperty(capturedReply!.raw, 'destroyed', { value: true, configurable: true })
-    capturedReply!.raw.emit('close')
-    await new Promise(resolve => setImmediate(resolve))
-
-    expect(toolSignal?.aborted).toBe(true)
-    expect(chatTurn).toHaveBeenCalledTimes(1)
-    expect(writeSpy).not.toHaveBeenCalled()
-    expect(storedMessages()).toEqual([])
   })
 })

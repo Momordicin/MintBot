@@ -56,42 +56,6 @@ export interface ChatMessage{
   content: string
 }
 
-export interface ToolCall {
-  id: string
-  name: string
-  arguments: Record<string, unknown>
-}
-
-export interface AssistantToolCallMessage {
-  role: 'assistant'
-  content: string
-  toolCalls: ToolCall[]
-}
-
-export interface ToolResultMessage {
-  role: 'tool'
-  toolCallId: string
-  name: string
-  content: string
-}
-
-export type TurnMessage = ChatMessage | AssistantToolCallMessage | ToolResultMessage
-
-export interface TurnContext {
-  system: string
-  messages: TurnMessage[]
-}
-
-export interface ChatTurnOptions extends CompletionOptions {
-  tools?: ToolSchema[]
-  stream: boolean
-}
-
-export interface ChatTurnResult {
-  text: string
-  toolCalls: ToolCall[]
-}
-
 export interface Message{
   id: number
   sessionId: string

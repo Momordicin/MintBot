@@ -1,10 +1,10 @@
 // services/core/providers/ModelProvider.ts — 大语言模型调用封装：按配置类型（anthropic / openai / deepseek / ollama）发起流式 complete 或非流式 completeSync
-// 用法：routes/models.ts 调 createAnthropicClient / createOpenAIClient 构建 SDK 客户端；routes/chat.ts 每次聊天用 createModelProviderForPreset(preset, 全局配置, 角色凭据)（预设无模型覆盖则用全局配置）调 chatTurn（带工具的一次模型调用，返回文本与工具调用）；memory/orchestrator.ts 的按角色后台整理用 createSummaryModelProviderForPreset 调 completeSync；index.ts 与 routes/config.ts 用 createModelProvider 构建 fastify.modelProvider / backgroundModelProvider，后者的 completeSync 供 orchestrator 驱动 entityExtractor 与 summarizer
+// 用法：routes/models.ts 调 createAnthropicClient / createOpenAIClient 构建 SDK 客户端；routes/chat.ts 每次聊天用 createModelProviderForPreset(preset, 全局配置, 角色凭据)（预设无模型覆盖则用全局配置）调 complete / completeSync；memory/orchestrator.ts 的按角色后台整理用 createSummaryModelProviderForPreset 调 completeSync；index.ts 与 routes/config.ts 用 createModelProvider 构建 fastify.modelProvider / backgroundModelProvider，后者的 completeSync 供 orchestrator 驱动 entityExtractor 与 summarizer
 // 对应文件：services/core/routes/chat.ts / services/core/routes/config.ts / services/core/routes/models.ts / services/core/index.ts / services/core/memory/orchestrator.ts / shared/types/index.ts / services/core/providers/envCredentials.ts / services/core/session/queries.ts / services/core/providers/ModelProvider.test.ts
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
 import type { ChatCompletionCreateParamsBase } from 'openai/resources/chat/completions'
-import type { ChatMessage, ModelConfig, CompletionOptions, BuiltContext, Preset, ToolCall, ToolSchema, TurnMessage, TurnContext, ChatTurnOptions, ChatTurnResult } from '../../../shared/types/index.js'
+import type { ChatMessage, ModelConfig, CompletionOptions, BuiltContext, Preset } from '../../../shared/types/index.js'
 import { getEnvCredential, type KeyProvider } from './envCredentials.js'
 import type { PresetCredentials } from '../session/queries.js'
 
@@ -74,136 +74,6 @@ export function createOpenAIClient(config: ModelConfig, kind: 'openai' | 'deepse
 
 interface OpenAICompatibleOverrides {
   extraBody?: Record<string, unknown>
-  tools?: ToolSchema[]
-  toolCalls?: ToolCallAccumulator
-}
-
-interface ToolCallDelta {
-  index?: number
-  id?: string | null
-  function?: { name?: string | null; arguments?: string | Record<string, unknown> | null }
-}
-
-function parseToolArguments(raw: unknown): Record<string, unknown> {
-  let value = raw
-  if (typeof value === 'string') {
-    try {
-      value = JSON.parse(value)
-    } catch {
-      return {}
-    }
-  }
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
-}
-
-class ToolCallAccumulator {
-  private entries: { id: string; name: string; args: string | Record<string, unknown> }[] = []
-  private byIndex = new Map<number, number>()
-
-  push(deltas: ToolCallDelta[] | null | undefined): void {
-    for (const [position, delta] of (deltas ?? []).entries()) {
-      const index = delta.index ?? position
-      let slot = this.byIndex.get(index)
-      if (slot !== undefined && delta.id && this.entries[slot].id && this.entries[slot].id !== delta.id) slot = undefined
-      if (slot === undefined) {
-        slot = this.entries.length
-        this.entries.push({ id: '', name: '', args: '' })
-        this.byIndex.set(index, slot)
-      }
-      const entry = this.entries[slot]
-      if (delta.id) entry.id = delta.id
-      if (delta.function?.name) entry.name += delta.function.name
-      const args = delta.function?.arguments
-      if (typeof args === 'string') {
-        entry.args = (typeof entry.args === 'string' ? entry.args : '') + args
-      } else if (args && typeof args === 'object') {
-        entry.args = args
-      }
-    }
-  }
-
-  result(): ToolCall[] {
-    return this.entries
-      .filter(entry => entry.name)
-      .map((entry, i) => ({ id: entry.id || `call_${i}`, name: entry.name, arguments: parseToolArguments(entry.args) }))
-  }
-}
-
-function toOpenAIMessages(messages: TurnMessage[]) {
-  return messages.map(m => {
-    if (m.role === 'tool') {
-      return { role: 'tool' as const, tool_call_id: m.toolCallId, content: m.content }
-    }
-    if ('toolCalls' in m) {
-      return {
-        role: 'assistant' as const,
-        content: m.content || null,
-        tool_calls: m.toolCalls.map(call => ({
-          id: call.id,
-          type: 'function' as const,
-          function: { name: call.name, arguments: JSON.stringify(call.arguments) },
-        })),
-      }
-    }
-    return { role: m.role, content: m.content }
-  })
-}
-
-function toOpenAITools(tools: ToolSchema[] | undefined) {
-  if (!tools || tools.length === 0) return {}
-  return {
-    tools: tools.map(tool => ({
-      type: 'function' as const,
-      function: { name: tool.name, description: tool.description, parameters: tool.parameters },
-    })),
-  }
-}
-
-function toAnthropicMessages(messages: TurnMessage[]): Anthropic.MessageParam[] {
-  const out: Anthropic.MessageParam[] = []
-  for (const m of messages) {
-    if (m.role === 'system') continue
-    if (m.role === 'tool') {
-      const block: Anthropic.ToolResultBlockParam = { type: 'tool_result', tool_use_id: m.toolCallId, content: m.content }
-      const last = out[out.length - 1]
-      if (last && last.role === 'user' && Array.isArray(last.content) && last.content.every(b => b.type === 'tool_result')) {
-        last.content.push(block)
-      } else {
-        out.push({ role: 'user', content: [block] })
-      }
-      continue
-    }
-    if ('toolCalls' in m) {
-      const blocks: Anthropic.ContentBlockParam[] = []
-      if (m.content) blocks.push({ type: 'text', text: m.content })
-      for (const call of m.toolCalls) blocks.push({ type: 'tool_use', id: call.id, name: call.name, input: call.arguments })
-      out.push({ role: 'assistant', content: blocks })
-      continue
-    }
-    out.push({ role: m.role, content: m.content })
-  }
-  return out
-}
-
-function anthropicToolParams(messages: TurnMessage[], tools: ToolSchema[] | undefined): { tools?: Anthropic.Tool[]; tool_choice?: Anthropic.ToolChoiceNone } {
-  if (tools && tools.length > 0) {
-    return { tools: tools.map(tool => ({ name: tool.name, description: tool.description, input_schema: { type: 'object' as const, ...tool.parameters } })) }
-  }
-  const used = new Set<string>()
-  for (const m of messages) {
-    if (m.role === 'tool') used.add(m.name)
-  }
-  if (used.size === 0) return {}
-  return {
-    tools: [...used].map(name => ({ name, input_schema: { type: 'object' as const } })),
-    tool_choice: { type: 'none' },
-  }
-}
-
-const ollamaNoToolsModels = new Set<string>()
-
-function isOllamaToolsUnsupported(err: unknown): boolean {
-  return err instanceof Error && /^OpenAI API error: 400 /.test(err.message) && err.message.includes('does not support tools')
 }
 
 function ollamaSignal(signal?: AbortSignal): AbortSignal {
@@ -296,11 +166,10 @@ export class ModelProvider {
 
   private buildOpenAIBody(
     kind: 'openai' | 'deepseek',
-    messages: TurnMessage[],
-    options: CompletionOptions,
-    tools?: ToolSchema[]
+    messages: ChatMessage[],
+    options: CompletionOptions
   ): ChatCompletionCreateParamsBase | (ChatCompletionCreateParamsBase & DeepSeekExtras) {
-    const mapped = toOpenAIMessages(messages)
+    const mapped = messages.map(m => ({ role: m.role, content: m.content }))
     const maxTokens = this.resolveMaxTokens(options)
     const responseFormat = options.jsonMode ? { response_format: { type: 'json_object' as const } } : {}
     if (kind === 'openai') {
@@ -309,7 +178,6 @@ export class ModelProvider {
         max_completion_tokens: maxTokens,
         messages: mapped,
         ...responseFormat,
-        ...toOpenAITools(tools),
       }
     }
     return {
@@ -317,38 +185,7 @@ export class ModelProvider {
       max_tokens: maxTokens,
       messages: mapped,
       thinking: { type: 'disabled' as const },
-      ...toOpenAITools(tools),
     }
-  }
-
-  private async chatTurnOpenAI(
-    kind: 'openai' | 'deepseek',
-    messages: TurnMessage[],
-    options: ChatTurnOptions
-  ): Promise<ChatTurnResult> {
-    const client = this.createOpenAIClient(kind)
-    const body = this.buildOpenAIBody(kind, messages, options, options.tools)
-    const toolCalls = new ToolCallAccumulator()
-    if (!options.stream) {
-      const completion = await client.chat.completions.create(
-        { ...body, stream: false },
-        { signal: options.signal }
-      )
-      const message = completion.choices[0]?.message
-      toolCalls.push(message?.tool_calls as ToolCallDelta[] | undefined)
-      return { text: message?.content ?? '', toolCalls: toolCalls.result() }
-    }
-    const stream = await client.chat.completions.create(
-      { ...body, stream: true },
-      { signal: options.signal, timeout: STREAM_TIMEOUT_MS }
-    )
-    let text = ''
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta
-      if (delta?.content) text += delta.content
-      toolCalls.push(delta?.tool_calls as ToolCallDelta[] | undefined)
-    }
-    return { text, toolCalls: toolCalls.result() }
   }
 
   private async *streamOpenAI(
@@ -425,112 +262,6 @@ export class ModelProvider {
         return this.completeSyncOllama(messagesWithSystem, options)
       default:
         throw new Error(`Unknown model provider type: ${this.config.type}`)
-    }
-  }
-
-  async chatTurn(
-    context: TurnContext,
-    options: ChatTurnOptions
-  ): Promise<ChatTurnResult> {
-    switch (this.config.type) {
-      case 'anthropic':
-        return this.chatTurnAnthropic(context, options)
-      case 'openai':
-        return this.chatTurnOpenAI('openai', this.withSystem(context), options)
-      case 'deepseek':
-        return this.chatTurnOpenAI('deepseek', this.withSystem(context), options)
-      case 'ollama':
-        return this.chatTurnOllama(this.withSystem(context), options)
-      default:
-        throw new Error(`Unknown model provider type: ${this.config.type}`)
-    }
-  }
-
-  private withSystem(context: TurnContext): TurnMessage[] {
-    return context.system
-      ? [{ role: 'system' as const, content: context.system }, ...context.messages]
-      : context.messages
-  }
-
-  private async chatTurnAnthropic(
-    context: TurnContext,
-    options: ChatTurnOptions
-  ): Promise<ChatTurnResult> {
-    const client = this.createAnthropicClient()
-    const params = {
-      model: this.config.modelName ?? (() => {
-        throw new Error('[ModelProvider] modelName is required in config')
-      })(),
-      max_tokens: this.resolveMaxTokens(options),
-      system: context.system || undefined,
-      messages: toAnthropicMessages(context.messages),
-      ...anthropicToolParams(context.messages, options.tools),
-    }
-
-    if (!options.stream) {
-      const message = await client.messages.create(params, { signal: options.signal })
-      const text = message.content
-        .filter((block): block is Anthropic.TextBlock => block.type === 'text')
-        .map(block => block.text)
-        .join('')
-      const toolCalls = message.content
-        .filter((block): block is Anthropic.ToolUseBlock => block.type === 'tool_use')
-        .map(block => ({ id: block.id, name: block.name, arguments: parseToolArguments(block.input) }))
-      return { text, toolCalls }
-    }
-
-    const stream = await client.messages.stream(params, { signal: options.signal, timeout: STREAM_TIMEOUT_MS })
-    let text = ''
-    const blocks = new Map<number, { id: string; name: string; json: string }>()
-    for await (const event of stream) {
-      if (event.type === 'content_block_start' && event.content_block.type === 'tool_use') {
-        blocks.set(event.index, { id: event.content_block.id, name: event.content_block.name, json: '' })
-      } else if (event.type === 'content_block_delta') {
-        if (event.delta.type === 'text_delta') {
-          text += event.delta.text
-        } else if (event.delta.type === 'input_json_delta') {
-          const block = blocks.get(event.index)
-          if (block) block.json += event.delta.partial_json
-        }
-      }
-    }
-    const toolCalls = [...blocks.values()].map(block => ({ id: block.id, name: block.name, arguments: parseToolArguments(block.json) }))
-    return { text, toolCalls }
-  }
-
-  private async chatTurnOllama(
-    messages: TurnMessage[],
-    options: ChatTurnOptions
-  ): Promise<ChatTurnResult> {
-    const baseUrl = (this.config.ollamaBaseUrl || 'http://localhost:11434') + '/v1'
-    const model = this.config.ollamaModel ?? 'qwen3'
-    const memoKey = `${baseUrl}|${model}`
-
-    const run = async (tools: ToolSchema[] | undefined): Promise<ChatTurnResult> => {
-      const toolCalls = new ToolCallAccumulator()
-      const overrides: OpenAICompatibleOverrides = { ...ModelProvider.ollamaRequestOverrides(options), tools, toolCalls }
-      let text = ''
-      if (options.stream) {
-        for await (const chunk of ModelProvider.callOpenAICompatible(baseUrl, 'ollama', model, messages, options, overrides)) {
-          text += chunk
-        }
-      } else {
-        text = await ModelProvider.callOpenAICompatibleSync(baseUrl, 'ollama', model, messages, options, overrides)
-      }
-      return { text, toolCalls: toolCalls.result() }
-    }
-
-    const tools = options.tools && options.tools.length > 0 && !ollamaNoToolsModels.has(memoKey) ? options.tools : undefined
-    try {
-      try {
-        return await run(tools)
-      } catch (err) {
-        if (!tools || !isOllamaToolsUnsupported(err)) throw err
-        ollamaNoToolsModels.add(memoKey)
-        return await run(undefined)
-      }
-    } catch (err) {
-      throw mapOllamaTimeout(err, options.signal)
     }
   }
 
@@ -691,7 +422,7 @@ export class ModelProvider {
     baseUrl: string,
     apiKey: string,
     model: string,
-    messages: TurnMessage[],
+    messages: ChatMessage[],
     options: CompletionOptions,
     overrides: OpenAICompatibleOverrides = {}
   ): AsyncIterable<string> {
@@ -719,8 +450,10 @@ export class ModelProvider {
           ...overrides.extraBody,
           model,
           stream: true,
-          messages: toOpenAIMessages(messages),
-          ...toOpenAITools(overrides.tools),
+          messages: messages.map(m => ({
+            role: m.role,
+            content: m.content,
+          })),
         }),
         signal,
       })
@@ -760,9 +493,7 @@ export class ModelProvider {
 
           let text: string | undefined
           try {
-            const delta = JSON.parse(data).choices?.[0]?.delta
-            overrides.toolCalls?.push(delta?.tool_calls)
-            text = filter.push(delta?.content ?? '')
+            text = filter.push(JSON.parse(data).choices?.[0]?.delta?.content ?? '')
           } catch {
           }
           if (text) yield text
@@ -780,7 +511,7 @@ export class ModelProvider {
     baseUrl: string,
     apiKey: string,
     model: string,
-    messages: TurnMessage[],
+    messages: ChatMessage[],
     options: CompletionOptions,
     overrides: OpenAICompatibleOverrides = {}
   ): Promise<string> {
@@ -794,8 +525,10 @@ export class ModelProvider {
         ...overrides.extraBody,
         model,
         stream: false,
-        messages: toOpenAIMessages(messages),
-        ...toOpenAITools(overrides.tools),
+        messages: messages.map(m => ({
+          role: m.role,
+          content: m.content,
+        })),
       }),
       signal: ollamaSignal(options.signal),
     })
@@ -803,7 +536,6 @@ export class ModelProvider {
     if (!response.ok) { throw new Error(`OpenAI API error: ${await ModelProvider.describeErrorResponse(response)}`) }
 
     const json = await response.json()
-    overrides.toolCalls?.push(json.choices?.[0]?.message?.tool_calls)
     return stripThinkTags(json.choices?.[0]?.message?.content ?? '')
   }
 }
