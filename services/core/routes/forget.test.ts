@@ -1,12 +1,21 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import Fastify from 'fastify'
 import { initDb, db } from '../db/index.js'
 import { appendMessage, insertSummary, upsertMessageEmbedding, indexMessageFts, insertEntity } from '../session/queries.js'
 import { forgetRoutes } from './forget.js'
+import { broadcastEvent } from '../events/broadcast.js'
+import { forgetTimeRange } from '../memory/forget.js'
+
+vi.mock('../events/broadcast.js', () => ({ broadcastEvent: vi.fn() }))
+vi.mock('../memory/forget.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../memory/forget.js')>()
+  return { ...actual, forgetTimeRange: vi.fn(actual.forgetTimeRange) }
+})
 
 initDb()
 
 beforeEach(() => {
+  vi.mocked(broadcastEvent).mockClear()
   db.exec(`
     DELETE FROM Messages; DELETE FROM Sessions; DELETE FROM Presets; DELETE FROM Summaries;
     DELETE FROM message_embeddings; DELETE FROM message_fts; DELETE FROM MessageEntities;
@@ -175,5 +184,58 @@ describe('POST /forget', () => {
 
     expect(db.prepare(`SELECT * FROM Messages WHERE id = ?`).get(id1)).toBeUndefined()
     expect(db.prepare(`SELECT * FROM Summaries WHERE id = ?`).get(summaryId)).toBeUndefined()
+  })
+
+  it('删除成功后广播一次 messages-forgotten，带 sessionId', async () => {
+    addMessage('s1', 'a', 1000)
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'POST', url: '/forget',
+      payload: { sessionId: 's1', fromTime: 1000, toTime: 1000, alsoDeleteAffectedSummaries: false },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(broadcastEvent).toHaveBeenCalledTimes(1)
+    expect(broadcastEvent).toHaveBeenCalledWith('messages-forgotten', { sessionId: 's1' })
+  })
+
+  it('400 时不广播', async () => {
+    const fastify = await buildTestApp()
+    const response = await fastify.inject({
+      method: 'POST', url: '/forget',
+      payload: { sessionId: 's1', fromTime: 2000, toTime: 1000 },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(broadcastEvent).not.toHaveBeenCalled()
+  })
+
+  it('409 时不广播', async () => {
+    const id1 = addMessage('s1', 'a', 1000)
+    insertSummary({ sessionId: 's1', content: '摘要', fromMessageId: id1, toMessageId: id1 })
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({
+      method: 'POST', url: '/forget',
+      payload: { sessionId: 's1', fromTime: 1000, toTime: 1000, alsoDeleteAffectedSummaries: false },
+    })
+
+    expect(response.statusCode).toBe(409)
+    expect(broadcastEvent).not.toHaveBeenCalled()
+  })
+
+  it('删除抛出其它错误时不广播', async () => {
+    addMessage('s1', 'a', 1000)
+    const fastify = await buildTestApp()
+    vi.mocked(forgetTimeRange).mockImplementationOnce(() => { throw new Error('boom') })
+
+    const response = await fastify.inject({
+      method: 'POST', url: '/forget',
+      payload: { sessionId: 's1', fromTime: 1000, toTime: 1000, alsoDeleteAffectedSummaries: false },
+    })
+
+    expect(response.statusCode).toBe(500)
+    expect(broadcastEvent).not.toHaveBeenCalled()
   })
 })

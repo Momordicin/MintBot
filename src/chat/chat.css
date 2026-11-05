@@ -350,6 +350,22 @@
   color: var(--system-msg-text);
 }
 
+.msg-system__action {
+  margin-left: 8px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: inherit;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.msg-system__action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* ─── 三点输入动效 ─────────────────────────────────────── */
 
 .typing-indicator {
