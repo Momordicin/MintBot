@@ -1,7 +1,7 @@
 // electron/preload/index.ts — 渲染进程预加载脚本：经 contextBridge 暴露 window.electronAPI（文件选择、设置窗口、桌宠拖拽 / 贴边 / 存在状态 / 右键菜单（含穿透手柄窗口）、标题栏配色、界面语言、开机自启、语音输入快捷键）
 // 用法：electron/main/index.ts 创建聊天、overlay、设置窗口时作为 webPreferences.preload（构建产物 index.cjs）；渲染进程调 window.electronAPI.*
 // 形状：暴露只读 platform 与各 electronAPI 方法；每个方法对应一个 ipcRenderer.invoke / send / on 通道，on 类方法返回取消监听函数
-// 对应文件：electron/main/index.ts（ipcMain 处理端、拖拽事件发送端）/ electron/main/windowBehavior.ts（desktop-presence:changed 发送端）/ electron/main/index.ts（ui:get-locale 处理端、ui:locale-changed 发送端、autostart:get / autostart:set 处理端、voice-hotkeys:get / voice-hotkeys:set / voice-hotkeys:capture 处理端、chat:ready 处理端、chat:painted 接收端）/ electron/main/chatReveal.ts（chat:shown 发送端）/ src/electron-api.d.ts / electron.vite.config.ts
+// 对应文件：electron/main/index.ts（ipcMain 处理端、拖拽事件发送端）/ electron/main/windowBehavior.ts（desktop-presence:changed 发送端）/ electron/main/index.ts（ui:get-locale 处理端、ui:locale-changed 发送端、autostart:get / autostart:set 处理端、app:relaunch-info / app:relaunch 处理端、voice-hotkeys:get / voice-hotkeys:set / voice-hotkeys:capture 处理端、chat:ready 处理端、chat:painted 接收端）/ electron/main/chatReveal.ts（chat:shown 发送端）/ src/electron-api.d.ts / electron.vite.config.ts
 import { contextBridge, ipcRenderer } from 'electron'
 import type { VoiceHotkeySetResult, VoiceHotkeysState } from '../../shared/voiceHotkeys.js'
 
@@ -59,6 +59,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   getAutostart: (): Promise<{ available: boolean; enabled: boolean }> => ipcRenderer.invoke('autostart:get'),
   setAutostart: (enabled: boolean): Promise<{ available: boolean; enabled: boolean }> => ipcRenderer.invoke('autostart:set', enabled),
+  getRelaunchInfo: (): Promise<{ available: boolean }> => ipcRenderer.invoke('app:relaunch-info'),
+  relaunchApp: (): Promise<void> => ipcRenderer.invoke('app:relaunch'),
   openMicSettings: (): Promise<void> => ipcRenderer.invoke('voice:open-mic-settings'),
   getVoiceHotkeys: (): Promise<VoiceHotkeysState> => ipcRenderer.invoke('voice-hotkeys:get'),
   setVoiceHotkeys: (input: { listen?: string; transcribe?: string }): Promise<VoiceHotkeySetResult> => ipcRenderer.invoke('voice-hotkeys:set', input),

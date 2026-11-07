@@ -1,5 +1,5 @@
 // electron/main/index.ts — Electron 主进程入口：app ready 后创建聊天窗口、桌宠 overlay 与托盘，注册 IPC，启动前台窗口监控与 core /events 订阅，will-quit 时收尾
-// 用法：electron.vite.config.ts 的主进程 entry；注册 autostart:get / autostart:set；监听 second-instance；注册 app 协议 protocol.handle('app')；第一条 import 为 logBootstrap；注册 chat:ready（聊天窗口首次显示）/ chat:painted（聊天窗口唤起后淡入）；注册 ui:get-locale，向窗口发 ui:locale-changed；设置窗口按 open-settings-window IPC 按需创建；订阅 voice-type（textOutput）与 voice-status-changed（托盘「语音输入」）；注册 voice-hotkeys:get / voice-hotkeys:set / voice-hotkeys:capture，app ready 后 voiceHotkeys.start()，will-quit 时 stop()；显示器拓扑变化时 handleDisplayTopologyChange 先调 clearStableDisplayKeyCache()
+// 用法：electron.vite.config.ts 的主进程 entry；注册 autostart:get / autostart:set、app:relaunch-info / app:relaunch；监听 second-instance；注册 app 协议 protocol.handle('app')；第一条 import 为 logBootstrap；注册 chat:ready（聊天窗口首次显示）/ chat:painted（聊天窗口唤起后淡入）；注册 ui:get-locale，向窗口发 ui:locale-changed；设置窗口按 open-settings-window IPC 按需创建；订阅 voice-type（textOutput）与 voice-status-changed（托盘「语音输入」）；注册 voice-hotkeys:get / voice-hotkeys:set / voice-hotkeys:capture，app ready 后 voiceHotkeys.start()，will-quit 时 stop()；显示器拓扑变化时 handleDisplayTopologyChange 先调 clearStableDisplayKeyCache()
 // 对应文件：electron/preload/index.ts（暴露的 IPC 通道）/ electron/main/windowBehavior.ts / electron/main/petContextMenu.ts / electron/main/coreEventsConsumer.ts / electron/main/i18n.ts / electron/main/foregroundWorldModel.ts / electron/main/windowDragMonitor.ts / electron/main/nativeWindowDrag.ts / electron/main/petTopmostGuard.ts / electron/main/startupGate.ts / electron/main/displayIdentity.ts / electron/main/appOrigin.ts / electron/main/appAssetPath.ts / electron/main/coreProcess.ts / electron/main/autostart.ts / electron/main/chatFirstShow.ts / electron/main/chatReveal.ts / electron/main/textOutput.ts / electron/main/sendInput.ts / electron/main/voiceTray.ts / electron/main/voiceHotkeys.ts / shared/voiceHotkeys.ts / shared/voiceInputMode.ts / shared/windowBehavior.ts / shared/portraitForm.ts
 import './logBootstrap'
 import { app, BrowserWindow, Menu, Notification, Tray, clipboard, globalShortcut, powerMonitor, ipcMain, dialog, screen, nativeImage, protocol, net, shell } from 'electron'
@@ -22,7 +22,7 @@ import { windowNameFromUrl } from './logWindowName'
 import { APP_ORIGIN } from './appOrigin'
 import { resolveAppAssetPath } from './appAssetPath'
 import { ensureCoreRunning, stopSpawnedCore } from './coreProcess'
-import { hasAutostartFlag, legacyLoginItemOptions, loginItemOptions, shouldMigrateAutostart } from './autostart'
+import { AUTOSTART_FLAG, hasAutostartFlag, legacyLoginItemOptions, loginItemOptions, shouldMigrateAutostart } from './autostart'
 import { CHAT_READY_TIMEOUT_MS, shouldShowChatOnFirstReady } from './chatFirstShow'
 import { notifyChatPainted, revealChat } from './chatReveal'
 import type { ChatPinMode, WindowBehaviorConfig, WindowBehaviorSnapshot } from '../../shared/windowBehavior.js'
@@ -357,6 +357,15 @@ function migrateLegacyAutostart(): void {
 }
 
 ipcMain.handle('autostart:get', () => readAutostart())
+
+ipcMain.handle('app:relaunch-info', () => ({ available: !isDevMode }))
+
+ipcMain.handle('app:relaunch', () => {
+  if (isDevMode) throw new Error('relaunch-unavailable')
+  app.relaunch({ args: process.argv.slice(1).filter((a) => a !== AUTOSTART_FLAG) })
+  isQuitting = true
+  app.quit()
+})
 
 ipcMain.handle('voice:open-mic-settings', () => shell.openExternal('ms-settings:privacy-microphone'))
 

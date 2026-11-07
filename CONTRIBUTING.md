@@ -20,7 +20,7 @@
 
 | 工具 | 版本要求 | 说明 |
 |---|---|---|
-| Node.js | 20+ | 核心服务和 Electron |
+| Node.js | 22.19+ | 核心服务和 Electron |
 | pnpm | 见 `package.json` | 包管理器，不接受 npm / yarn |
 | Python | 3.10+ | AI 模型服务（Phase 4 语音功能需要） |
 | Ollama | 最新版 | 可选，本地模型推理 |

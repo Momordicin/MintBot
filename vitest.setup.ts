@@ -9,6 +9,7 @@ dotenv.config({ path: '.env.test', quiet: true, override: true })
 const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mintbot-vitest-'))
 process.env.ASSET_PATH = path.join(testRoot, 'assets')
 process.env.WALLPAPER_PATH = path.join(testRoot, 'wallpapers')
+process.env.PLUGINS_PATH = path.join(testRoot, 'plugins-root')
 fs.mkdirSync(path.join(testRoot, 'assets', 'characters'), { recursive: true })
 fs.mkdirSync(path.join(testRoot, 'wallpapers'), { recursive: true })
 

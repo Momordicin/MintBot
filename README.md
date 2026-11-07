@@ -59,7 +59,7 @@ A locally-run AI character companion desktop app. Supports custom character pers
 > ⚠️ Windows only for now; macOS is not yet supported.
 
 **Prerequisites**
-- Node.js 20+
+- Node.js 22.19+
 - pnpm (version per `package.json`)
 - Python 3.10+
 - (Optional) either Ollama or an Anthropic / OpenAI / DeepSeek API key

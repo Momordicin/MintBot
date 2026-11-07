@@ -1,6 +1,6 @@
 // shared/errorCodes.ts — core 返回给渲染进程的错误代码与响应体
 // 用法：services/core/routes/*.ts 与 characters/cardImport.ts 用 errorBody / invalidRequest 生成响应体；src/errorText.ts 与各面板用 isErrorBody 判断并按代码翻译
-// 对应文件：services/core/routes/chat.ts / services/core/routes/presets.ts / services/core/routes/models.ts / src/errorText.ts
+// 对应文件：services/core/routes/chat.ts / services/core/routes/presets.ts / services/core/routes/models.ts / services/core/plugins/routes.ts / src/errorText.ts
 export const ERROR_CODES = {
   API_KEY_INVALID: 'API_KEY_INVALID',
   SUMMARY_API_KEY_INVALID: 'SUMMARY_API_KEY_INVALID',
@@ -28,6 +28,14 @@ export const ERROR_CODES = {
   VOICE_BUSY: 'VOICE_BUSY',
   VOICE_ENROLL_NOT_READY: 'VOICE_ENROLL_NOT_READY',
   VOICE_INSTALL_UNCONFIGURED: 'VOICE_INSTALL_UNCONFIGURED',
+  PLUGIN_BUSY: 'PLUGIN_BUSY',
+  PLUGIN_DOWNLOAD_FAILED: 'PLUGIN_DOWNLOAD_FAILED',
+  PLUGIN_PACKAGE_INVALID: 'PLUGIN_PACKAGE_INVALID',
+  PLUGIN_INSTALL_FAILED: 'PLUGIN_INSTALL_FAILED',
+  PLUGIN_NOT_FOUND: 'PLUGIN_NOT_FOUND',
+  PLUGIN_CONFIG_INVALID: 'PLUGIN_CONFIG_INVALID',
+  PLUGIN_LATEST_FAILED: 'PLUGIN_LATEST_FAILED',
+  PLUGIN_FORCE_ENABLE_REJECTED: 'PLUGIN_FORCE_ENABLE_REJECTED',
 } as const
 
 export type ErrorCode = typeof ERROR_CODES[keyof typeof ERROR_CODES]

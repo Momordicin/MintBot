@@ -1,6 +1,6 @@
 // services/core/index.ts — core 服务进程入口：构建 Fastify 实例，在 start() 里装配依赖并注册路由，监听 CORE_PORT
-// 用法：作为独立进程运行；start() 装配 provider、配置监听、DB、定时任务、AI 服务、Ollama 与启动会话，再注册 CORS、静态目录与各 routes，监听 CORE_PORT；自带 GET /health、GET /state
-// 对应文件：services/core/logBootstrap.ts / services/core/config/ports.ts / services/core/logBootstrap.test.ts
+// 用法：作为独立进程运行；start() 装配 provider、配置监听、DB、定时任务、AI 服务、Ollama 与启动会话，再注册 CORS、静态目录与各 routes，监听 CORE_PORT；注册路由后、监听前调 loadInstalledPlugins()；自带 GET /health、GET /state
+// 对应文件：services/core/logBootstrap.ts / services/core/config/ports.ts / services/core/plugins/manager.ts / services/core/plugins/routes.ts / services/core/logBootstrap.test.ts
 import './logBootstrap.js'
 import Fastify from 'fastify'
 import path from 'path'
@@ -33,6 +33,8 @@ import { ensureOllama, shouldEnsureOllama, stopOllamaIfManaged } from './provide
 import { ensureAiService, shutdownAiService } from './providers/aiService.js'
 import { cancelInstallForShutdown, startVoice, stopVoice } from './voice/agent.js'
 import { voiceRoutes } from './voice/routes.js'
+import { loadInstalledPlugins } from './plugins/manager.js'
+import { pluginRoutes } from './plugins/routes.js'
 import { startOrganizeModeScheduler } from './memory/orchestrator.js'
 import { buildStatePayload } from './state.js'
 import { logServerErrors } from './errorLogging.js'
@@ -138,7 +140,7 @@ async function start() {
 
   await fastify.register(fastifyCors, {
   origin: [...RENDERER_ORIGINS],
-  methods: ['GET', 'HEAD', 'POST', 'PATCH', 'DELETE'],
+  methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'],
   })
 
   await fastify.register(fastifyStatic, {
@@ -168,6 +170,8 @@ async function start() {
   await fastify.register(uiRoutes)
   await fastify.register(transitionChainRoutes)
   await fastify.register(voiceRoutes)
+  await loadInstalledPlugins()
+  await fastify.register(pluginRoutes)
   await fastify.listen({ port: PORT, host: LOOPBACK_HOST })
   console.log(`[Core] Running on port ${PORT}`)
 
