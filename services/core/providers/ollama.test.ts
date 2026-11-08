@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { EventEmitter } from 'events'
-import { listOllamaModels, shouldEnsureOllama, getOllamaBaseUrl } from './ollama.js'
+import { listOllamaModels, shouldEnsureOllama, getOllamaBaseUrl, ollamaSupportsTools } from './ollama.js'
 
 // listOllamaModels 是 GET /models（CharacterPanel.tsx §2 模型名下拉框）的数据源，
 // 与 isOllamaRunning 同款降级风格测试：只验证成功解析 + 各类失败都降级为空数组，不抛错
@@ -294,5 +294,53 @@ describe('ensureOllama', () => {
     await ensureOllama()
 
     expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('ollamaSupportsTools', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it.each([
+    { name: 'capabilities 含 tools', model: 'm-tools', response: () => ({ ok: true, json: async () => ({ capabilities: ['completion', 'tools'] }) }), expected: true },
+    { name: 'capabilities 不含 tools', model: 'm-plain', response: () => ({ ok: true, json: async () => ({ capabilities: ['completion'] }) }), expected: false },
+    { name: '没有 capabilities 字段', model: 'm-none', response: () => ({ ok: true, json: async () => ({}) }), expected: false },
+    { name: '响应 ok=false', model: 'm-http', response: () => ({ ok: false, status: 500 }), expected: false },
+  ])('$name：返回 $expected，并以 POST /api/show 查询该模型', async ({ model, response, expected }) => {
+    const fetchSpy = vi.fn().mockResolvedValue(response())
+    vi.stubGlobal('fetch', fetchSpy)
+
+    expect(await ollamaSupportsTools('http://host:1', model)).toBe(expected)
+
+    const [url, init] = fetchSpy.mock.calls[0]
+    expect(url).toBe('http://host:1/api/show')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual({ model })
+  })
+
+  it('查询失败时返回 false 并写日志，且不缓存，下次重新查询', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fetchSpy = vi.fn()
+      .mockRejectedValueOnce(new Error('down'))
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ capabilities: ['tools'] }) })
+    vi.stubGlobal('fetch', fetchSpy)
+
+    expect(await ollamaSupportsTools('http://host:2', 'm-retry')).toBe(false)
+    expect(errorSpy).toHaveBeenCalledTimes(1)
+    expect(await ollamaSupportsTools('http://host:2', 'm-retry')).toBe(true)
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+  })
+
+  it('成功的结果按地址加模型名缓存，不重复查询', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ capabilities: ['tools'] }) })
+    vi.stubGlobal('fetch', fetchSpy)
+
+    await ollamaSupportsTools('http://host:3', 'm-cache')
+    await ollamaSupportsTools('http://host:3', 'm-cache')
+    await ollamaSupportsTools('http://host:4', 'm-cache')
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
   })
 })

@@ -26,6 +26,8 @@ vi.mock('openai', () => ({
   },
 }))
 
+import type { TurnMessage } from './ModelProvider.js'
+
 const { createModelProviderForPreset, createSummaryModelProviderForPreset, createModelProvider, resolveApiKey, stripThinkTags } = await import('./ModelProvider.js')
 const { wipeCredentialEnv } = await import('./envCredentials.js')
 
@@ -1223,5 +1225,207 @@ describe('Ollama 超时', () => {
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
     expect(caller.signal.aborted).toBe(true)
     expect(timeoutController.signal.aborted).toBe(false)
+  })
+})
+
+describe('chatTurn：四家服务商的工具请求与返回转换', () => {
+  const tool = {
+    name: 'get_weather',
+    description: '查天气',
+    parameters: { type: 'object', properties: { period: { type: 'string' } }, required: ['period'] },
+  }
+  const messages: TurnMessage[] = [
+    { role: 'user', content: '天气？' },
+    { role: 'assistant', content: '我查一下', toolCalls: [{ id: 'c1', name: 'get_weather', args: { period: 'today' } }] },
+    { role: 'tool', toolCallId: 'c1', content: '晴' },
+  ]
+  const request = { system: 'sys', messages, tools: [tool], maxTokens: 321, stream: false }
+  const syncCalls = [{ id: 'c1', name: 'get_weather', args: { period: 'today' } }]
+  const streamCalls = [
+    { id: 'c1', name: 'get_weather', args: { period: 'today' } },
+    { id: 'c2', name: 'get_weather', args: { period: 'tomorrow' } },
+  ]
+
+  const openaiWire = [
+    { role: 'system', content: 'sys' },
+    { role: 'user', content: '天气？' },
+    {
+      role: 'assistant',
+      content: '我查一下',
+      tool_calls: [{ id: 'c1', type: 'function', function: { name: 'get_weather', arguments: '{"period":"today"}' } }],
+    },
+    { role: 'tool', tool_call_id: 'c1', content: '晴' },
+  ]
+  const openaiTools = [{ type: 'function', function: { name: 'get_weather', description: '查天气', parameters: tool.parameters } }]
+
+  async function* chunks(...items: unknown[]) {
+    for (const item of items) yield item
+  }
+
+  const openaiSyncMessage = {
+    choices: [{ message: { content: 'hi', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'get_weather', arguments: '{"period":"today"}' } }] } }],
+  }
+  const openaiStreamChunks = [
+    { choices: [{ delta: { content: 'a' } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'get_weather', arguments: '{"per' } }] } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 1, id: 'c2', function: { name: 'get_weather', arguments: '{"period"' } }] } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: 'iod":"today"}' } }] } }] },
+    { choices: [{ delta: { content: 'b', tool_calls: [{ index: 1, function: { arguments: ':"tomorrow"}' } }] } }] },
+  ]
+
+  function sse(items: unknown[]): Response {
+    const body = items.map(item => `data: ${JSON.stringify(item)}\n\n`).join('') + 'data: [DONE]\n\n'
+    return new Response(body, { status: 200 })
+  }
+
+  const rows = [
+    {
+      name: 'openai',
+      config: { type: 'openai', openaiApiKey: 'k', modelName: 'gpt-4o' } as ModelConfig,
+      arrange(stream: boolean) {
+        openaiCreateMock.mockResolvedValue(stream ? chunks(...openaiStreamChunks) : openaiSyncMessage)
+      },
+      sent: () => openaiCreateMock.mock.calls[0][0],
+      expectWire(body: any) {
+        expect(body.messages).toEqual(openaiWire)
+        expect(body.tools).toEqual(openaiTools)
+        expect(body.max_completion_tokens).toBe(321)
+        expect(body.response_format).toBeUndefined()
+      },
+    },
+    {
+      name: 'deepseek',
+      config: { type: 'deepseek', deepseekApiKey: 'k', modelName: 'deepseek-v4-flash' } as ModelConfig,
+      arrange(stream: boolean) {
+        openaiCreateMock.mockResolvedValue(stream ? chunks(...openaiStreamChunks) : openaiSyncMessage)
+      },
+      sent: () => openaiCreateMock.mock.calls[0][0],
+      expectWire(body: any) {
+        expect(body.messages).toEqual(openaiWire)
+        expect(body.tools).toEqual(openaiTools)
+        expect(body.max_tokens).toBe(321)
+        expect(body.thinking).toEqual({ type: 'disabled' })
+      },
+    },
+    {
+      name: 'ollama',
+      config: { type: 'ollama', ollamaModel: 'qwen3' } as ModelConfig,
+      arrange(stream: boolean) {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream ? sse(openaiStreamChunks) : new Response(JSON.stringify(openaiSyncMessage), { status: 200 })))
+      },
+      sent: () => JSON.parse((vi.mocked(fetch).mock.calls[0][1] as RequestInit).body as string),
+      expectWire(body: any) {
+        expect(body.messages).toEqual(openaiWire)
+        expect(body.tools).toEqual(openaiTools)
+        expect(body.model).toBe('qwen3')
+        expect(body.response_format).toBeUndefined()
+      },
+    },
+    {
+      name: 'anthropic',
+      config: { type: 'anthropic', anthropicApiKey: 'k', modelName: 'claude-x' } as ModelConfig,
+      arrange(stream: boolean) {
+        if (!stream) {
+          anthropicCreateMock.mockResolvedValue({
+            content: [{ type: 'text', text: 'hi' }, { type: 'tool_use', id: 'c1', name: 'get_weather', input: { period: 'today' } }],
+          })
+          return
+        }
+        anthropicStreamMock.mockResolvedValue(chunks(
+          { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'a' } },
+          { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'c1', name: 'get_weather', input: {} } },
+          { type: 'content_block_start', index: 2, content_block: { type: 'tool_use', id: 'c2', name: 'get_weather', input: {} } },
+          { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"per' } },
+          { type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: '{"period"' } },
+          { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: 'iod":"today"}' } },
+          { type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: ':"tomorrow"}' } },
+          { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'b' } },
+        ))
+      },
+      sent: () => (anthropicCreateMock.mock.calls[0] ?? anthropicStreamMock.mock.calls[0])[0],
+      expectWire(body: any) {
+        expect(body.system).toBe('sys')
+        expect(body.max_tokens).toBe(321)
+        expect(body.tools).toEqual([{ name: 'get_weather', description: '查天气', input_schema: tool.parameters }])
+        expect(body.messages).toEqual([
+          { role: 'user', content: '天气？' },
+          {
+            role: 'assistant',
+            content: [
+              { type: 'text', text: '我查一下' },
+              { type: 'tool_use', id: 'c1', name: 'get_weather', input: { period: 'today' } },
+            ],
+          },
+          { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'c1', content: '晴' }] },
+        ])
+      },
+    },
+  ]
+
+  it.each(rows)('$name：非流式，请求带工具与工具结果，解析出文字和工具调用', async row => {
+    row.arrange(false)
+
+    const result = await createModelProvider(row.config).chatTurn(request)
+
+    row.expectWire(row.sent())
+    expect(result).toEqual({ text: 'hi', toolCalls: syncCalls })
+  })
+
+  it.each(rows)('$name：流式，请求格式相同，按编号拼接工具调用片段', async row => {
+    row.arrange(true)
+
+    const result = await createModelProvider(row.config).chatTurn({ ...request, stream: true })
+
+    row.expectWire(row.sent())
+    expect(result).toEqual({ text: 'ab', toolCalls: streamCalls })
+  })
+
+  it('anthropic：多个工具结果合并进同一条 user 消息，后面的用户消息接在其后', async () => {
+    anthropicCreateMock.mockResolvedValue({ content: [{ type: 'text', text: 'ok' }] })
+
+    await createModelProvider({ type: 'anthropic', anthropicApiKey: 'k', modelName: 'claude-x' }).chatTurn({
+      system: '',
+      tools: [],
+      stream: false,
+      messages: [
+        { role: 'user', content: 'q' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'a', name: 't', args: {} }, { id: 'b', name: 't', args: {} }] },
+        { role: 'tool', toolCallId: 'a', content: 'ra' },
+        { role: 'tool', toolCallId: 'b', content: 'rb' },
+        { role: 'user', content: '上限' },
+      ],
+    })
+
+    const body = anthropicCreateMock.mock.calls[0][0]
+    expect(body.system).toBeUndefined()
+    expect(body.tools).toBeUndefined()
+    expect(body.messages[1].content).toEqual([
+      { type: 'tool_use', id: 'a', name: 't', input: {} },
+      { type: 'tool_use', id: 'b', name: 't', input: {} },
+    ])
+    expect(body.messages[2]).toEqual({
+      role: 'user',
+      content: [
+        { type: 'tool_result', tool_use_id: 'a', content: 'ra' },
+        { type: 'tool_result', tool_use_id: 'b', content: 'rb' },
+        { type: 'text', text: '上限' },
+      ],
+    })
+  })
+
+  it.each([
+    { name: 'openai', config: { type: 'openai', openaiApiKey: 'k' } as ModelConfig },
+    { name: 'ollama', config: { type: 'ollama', ollamaModel: 'qwen3' } as ModelConfig },
+  ])('$name：不带工具的请求不带 response_format', async row => {
+    openaiCreateMock.mockResolvedValue(openaiSyncMessage)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(openaiSyncMessage), { status: 200 })))
+
+    await createModelProvider(row.config).chatTurn({ ...request, tools: [] })
+
+    const body = row.name === 'openai'
+      ? openaiCreateMock.mock.calls[0][0]
+      : JSON.parse((vi.mocked(fetch).mock.calls[0][1] as RequestInit).body as string)
+    expect(body.tools).toBeUndefined()
+    expect(body.response_format).toBeUndefined()
   })
 })

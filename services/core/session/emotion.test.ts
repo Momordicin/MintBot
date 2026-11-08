@@ -1,78 +1,30 @@
 import { describe, it, expect } from 'vitest'
-import { parseSelfEmotion, parseEmoteTag } from './emotion.js'
+import { parseReplyTags } from './emotion.js'
 
-describe('parseSelfEmotion', () => {
-  it('合法输入：解析出 self 情绪', () => {
-    const raw = JSON.stringify({
-      reply: '今天怎么样？',
-      emotion: { self: { label: 'curious', intensity: 0.7 }, perceived_user: null },
+const EMOTIONS = ['happy', 'curious', 'shy']
+const EMOTES = ['playful', 'comforting']
+
+describe('parseReplyTags', () => {
+  it.each([
+    { name: '情绪标签在末尾', reply: '今天怎么样？\n&&curious&&', text: '今天怎么样？', emotion: 'curious', emote: null },
+    { name: '情绪加表情，各占一行', reply: '好呀\n&&happy&&\n&&playful&&', text: '好呀', emotion: 'happy', emote: 'playful' },
+    { name: '标签内外有空白，取词时去掉首尾空白', reply: '好呀\n&& happy &&', text: '好呀', emotion: 'happy', emote: null },
+    { name: '多个情绪标签取第一个词表内的', reply: '嗯\n&&unknown&&&&shy&&&&happy&&', text: '嗯', emotion: 'shy', emote: null },
+    { name: '不在词表里的标签也从文字里删掉，情绪与表情为 null', reply: '你好&&other&&呀', text: '你好呀', emotion: null, emote: null },
+    { name: '没有标签：文字原样（去首尾空白），情绪与表情为 null', reply: '  你好  ', text: '你好', emotion: null, emote: null },
+    { name: '标签写在正文中间也被识别并删除', reply: '你&&happy&&好', text: '你好', emotion: 'happy', emote: null },
+    { name: '标签词含换行不算标签', reply: '你好&&hap\npy&&', text: '你好&&hap\npy&&', emotion: null, emote: null },
+    { name: '标签词超过 64 个字符不算标签', reply: `你好&&${'a'.repeat(65)}&&`, text: `你好&&${'a'.repeat(65)}&&`, emotion: null, emote: null },
+    { name: '情绪词只出现在表情词表里：不当作情绪', reply: '好\n&&playful&&', text: '好', emotion: null, emote: 'playful' },
+  ])('$name', ({ reply, text, emotion, emote }) => {
+    expect(parseReplyTags(reply, EMOTIONS, EMOTES)).toEqual({
+      text,
+      emotion: emotion === null ? null : { label: emotion, intensity: 0.7 },
+      emote,
     })
-    expect(parseSelfEmotion(raw)).toEqual({ label: 'curious', intensity: 0.7 })
   })
 
-  it('非 JSON：返回 null', () => {
-    expect(parseSelfEmotion('不是 JSON 的普通回复')).toBeNull()
-  })
-
-  it('缺少 emotion 字段：返回 null', () => {
-    expect(parseSelfEmotion(JSON.stringify({ reply: '你好' }))).toBeNull()
-  })
-
-  it('emotion.self 缺失：返回 null', () => {
-    expect(parseSelfEmotion(JSON.stringify({ reply: '你好', emotion: {} }))).toBeNull()
-  })
-
-  it('label 为空字符串：返回 null', () => {
-    const raw = JSON.stringify({ reply: '你好', emotion: { self: { label: '', intensity: 0.5 } } })
-    expect(parseSelfEmotion(raw)).toBeNull()
-  })
-
-  it('intensity 超出 0-1 范围：返回 null', () => {
-    const raw = JSON.stringify({ reply: '你好', emotion: { self: { label: 'happy', intensity: 1.5 } } })
-    expect(parseSelfEmotion(raw)).toBeNull()
-
-    const raw2 = JSON.stringify({ reply: '你好', emotion: { self: { label: 'happy', intensity: -0.1 } } })
-    expect(parseSelfEmotion(raw2)).toBeNull()
-  })
-
-  it('intensity 非 number：返回 null', () => {
-    const raw = JSON.stringify({ reply: '你好', emotion: { self: { label: 'happy', intensity: '0.7' } } })
-    expect(parseSelfEmotion(raw)).toBeNull()
-  })
-
-  it('```json 代码块包裹：兜底解析出 self 情绪（本地模型/DeepSeek 常见输出形式）', () => {
-    const raw = '```json\n' + JSON.stringify({
-      reply: '今天怎么样？',
-      emotion: { self: { label: 'curious', intensity: 0.7 }, perceived_user: null },
-    }) + '\n```'
-    expect(parseSelfEmotion(raw)).toEqual({ label: 'curious', intensity: 0.7 })
-  })
-})
-
-describe('parseEmoteTag', () => {
-  it('合法输入：解析出 emote tag 字符串', () => {
-    const raw = JSON.stringify({ reply: '好呀', emotion: { self: { label: 'happy', intensity: 0.7 } }, emote: 'playful' })
-    expect(parseEmoteTag(raw)).toBe('playful')
-  })
-
-  it('emote 字段缺失：返回 null（模型本轮不附表情，是预期中的常见情况）', () => {
-    expect(parseEmoteTag(JSON.stringify({ reply: '你好' }))).toBeNull()
-  })
-
-  it('emote 为非字符串类型：返回 null', () => {
-    expect(parseEmoteTag(JSON.stringify({ reply: '你好', emote: 123 }))).toBeNull()
-  })
-
-  it('emote 为空字符串：返回 null', () => {
-    expect(parseEmoteTag(JSON.stringify({ reply: '你好', emote: '' }))).toBeNull()
-  })
-
-  it('非 JSON：返回 null', () => {
-    expect(parseEmoteTag('不是 JSON 的普通回复')).toBeNull()
-  })
-
-  it('```json 代码块包裹：兜底解析出 emote tag', () => {
-    const raw = '```json\n' + JSON.stringify({ reply: '好呀', emote: 'playful' }) + '\n```'
-    expect(parseEmoteTag(raw)).toBe('playful')
+  it('词表为空：任何标签都不识别，但仍从文字里删除', () => {
+    expect(parseReplyTags('你好\n&&happy&&', [], [])).toEqual({ text: '你好', emotion: null, emote: null })
   })
 })

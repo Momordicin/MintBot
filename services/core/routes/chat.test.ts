@@ -73,6 +73,9 @@ vi.mock('../characters/manifest.js', async importOriginal => {
   return {
     ...actual,
     loadCharacterManifest: (characterId: string) => {
+      if (characterId === 'char-emotion') {
+        return fakeManifest({ emotionVocabulary: ['happy', 'sleep'] })
+      }
       if (characterId === 'char-single-emote') {
         return fakeManifest({
           emoteTagVocabulary: ['comforting'],
@@ -101,7 +104,7 @@ beforeEach(() => {
   upsertPreset({
     presetId: 'p1',
     name: '角色一',
-    characterId: 'char-001',
+    characterId: 'char-emotion',
     modelType: 'ollama',
     modelName: 'qwen3',
     systemPrompt: '你是角色一',
@@ -125,15 +128,21 @@ function fakeEmbeddingProvider(): EmbeddingProvider {
   }
 }
 
+// chat.ts 经工具循环调 provider.chatTurn(request)；这里把"返回回复文字"的旧式替身适配成 chatTurn，
+// 替身收到的两个参数都是同一个 request，所以 options.signal / options.maxTokens 的读法不变
+function turnOf(fn: (...args: any[]) => unknown) {
+  return async (request: unknown) => ({ text: (await fn(request, request)) as string, toolCalls: [] })
+}
+
 // 起一个干净的 Fastify 实例（非 services/core/index.ts 里真实启动的那个），
-// 非流式模式（streaming: false）走 completeSync 分支，避免实现 complete 异步生成器。
+// 非流式模式（streaming: false），替身只需实现 chatTurn，不必实现流式。
 // chat.ts 现在按请求捕获的 preset 通过 createModelProviderForPreset 现场构建 provider，
 // 不再读 fastify.modelProvider 全局单例，因此这里 spy 掉 createModelProviderForPreset
 // 而不是直接 decorate modelProvider
 async function buildTestApp(fakeReply: string) {
   const fastify = Fastify()
   const fakeModelProvider = {
-    completeSync: async () => fakeReply,
+    chatTurn: turnOf(async () => fakeReply),
   }
   const createSpy = vi.spyOn(ModelProviderModule, 'createModelProviderForPreset')
     .mockReturnValue(fakeModelProvider as unknown as ModelProvider)
@@ -160,15 +169,9 @@ function parseSSE(payload: string): Array<{ event: string; data: any }> {
 }
 
 describe('POST /chat', () => {
-  it('self 情绪合法且模型尝试输出 perceived_user 时，落库与 SSE 都强制 perceived_user 为 null', async () => {
+  it('回复带词表内的情绪标签时，落库与 SSE 都是默认强度 0.7，perceived_user 为 null', async () => {
     const { session } = loadSession('p1')
-    const { fastify } = await buildTestApp(JSON.stringify({
-      reply: '你好呀',
-      emotion: {
-        self: { label: 'happy', intensity: 0.8 },
-        perceived_user: { label: '???', intensity: 0.5 },
-      },
-    }))
+    const { fastify } = await buildTestApp('你好呀\n&&happy&&')
 
     const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
     const events = parseSSE(response.payload)
@@ -178,14 +181,14 @@ describe('POST /chat', () => {
 
     const emotion = events.find(e => e.event === 'emotion')
     expect(emotion?.data).toEqual({
-      self: { label: 'happy', intensity: 0.8 },
+      self: { label: 'happy', intensity: 0.7 },
       perceived_user: null,
       sessionId: session.sessionId,
       explicitSleep: false,
     })
 
     const stored = getEmotionState(session.sessionId)
-    expect(stored?.self).toEqual({ label: 'happy', intensity: 0.8 })
+    expect(stored?.self).toEqual({ label: 'happy', intensity: 0.7 })
     expect(stored?.perceived_user).toBeNull()
   })
 
@@ -194,7 +197,7 @@ describe('POST /chat', () => {
     // 纯靠 controller.signal.aborted 拦不住"切换检测本身还没跑完、旧 session 模型调用
     // 却先一步完成"这种时序，必须由后端把回复真正所属的 session 显式带回去
     const { session } = loadSession('p1')
-    const { fastify } = await buildTestApp(JSON.stringify({ reply: '你好呀' }))
+    const { fastify } = await buildTestApp('你好呀')
 
     const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
     const events = parseSSE(response.payload)
@@ -207,7 +210,7 @@ describe('POST /chat', () => {
     const { session } = loadSession('p1')
     const fastify = Fastify()
     const throwingModelProvider = {
-      completeSync: async () => { throw new Error('model boom') },
+      chatTurn: turnOf(async () => { throw new Error('model boom') }),
     }
     const createSpy = vi.spyOn(ModelProviderModule, 'createModelProviderForPreset')
       .mockReturnValue(throwingModelProvider as unknown as ModelProvider)
@@ -228,24 +231,22 @@ describe('POST /chat', () => {
 
   it('self 情绪合法时，广播流也收到与私有流一致的 emotion payload', async () => {
     const { session } = loadSession('p1')
-    const { fastify } = await buildTestApp(JSON.stringify({
-      reply: '你好呀',
-      emotion: { self: { label: 'happy', intensity: 0.8 }, perceived_user: null },
-    }))
+    const { fastify } = await buildTestApp('你好呀\n&&happy&&')
 
     await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
 
     expect(BroadcastModule.broadcastEvent).toHaveBeenCalledWith('emotion', {
-      self: { label: 'happy', intensity: 0.8 },
+      self: { label: 'happy', intensity: 0.7 },
       perceived_user: null,
       sessionId: session.sessionId,
       explicitSleep: false,
     })
   })
 
-  it('emotion 字段缺失/不合法时，不落库，也不报错，SSE 正常返回', async () => {
+  it('回复没有词表内的情绪标签时，清掉已存的情绪，推送 self: null，SSE 正常返回', async () => {
     const { session } = loadSession('p1')
-    const { fastify } = await buildTestApp(JSON.stringify({ reply: '嗯嗯' }))
+    queries.upsertEmotionState(session.sessionId, { self: { label: 'happy', intensity: 0.7 }, perceived_user: null })
+    const { fastify } = await buildTestApp('嗯嗯')
 
     const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
     const events = parseSSE(response.payload)
@@ -263,7 +264,7 @@ describe('POST /chat', () => {
 
   it('reply 正文命中困意检测规则时，emotion 帧的 explicitSleep 携带 true（私有流与广播流一致，TDD §3.7 附「入睡转场」"回复内容检测到困意"）', async () => {
     const { session } = loadSession('p1')
-    const { fastify } = await buildTestApp(JSON.stringify({ reply: '啊我好困呀' }))
+    const { fastify } = await buildTestApp('啊我好困呀')
 
     const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
     const events = parseSSE(response.payload)
@@ -280,10 +281,7 @@ describe('POST /chat', () => {
     const { session } = loadSession('p1')
     // reply 正文特意选用不会触发文本检测类（好困/困了等模式）的中性文本，这样这里观察到
     // 的行为只来自 emotion.label === 'sleep' 这条路径本身，不与 §3.8 的困意文本检测混在一起
-    const { fastify } = await buildTestApp(JSON.stringify({
-      reply: '嗯嗯',
-      emotion: { self: { label: 'sleep', intensity: 0.9 }, perceived_user: null },
-    }))
+    const { fastify } = await buildTestApp('嗯嗯\n&&sleep&&')
 
     await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
 
@@ -295,10 +293,7 @@ describe('POST /chat', () => {
     const { session } = loadSession('p1')
     // reply 正文特意选用不会触发文本检测类（好困/困了等模式）的中性文本，这样这里观察到
     // 的行为只来自 emotion.label === 'sleep' 这条路径本身，不与 §3.8 的困意文本检测混在一起
-    const { fastify } = await buildTestApp(JSON.stringify({
-      reply: '嗯嗯',
-      emotion: { self: { label: 'sleep', intensity: 0.9 }, perceived_user: null },
-    }))
+    const { fastify } = await buildTestApp('嗯嗯\n&&sleep&&')
 
     // broadcastEvent 是整个测试文件共享的模块级 mock（vi.mock 工厂里手写的 vi.fn()），不是
     // 通过 vi.spyOn() 创建的——afterEach 的 vi.restoreAllMocks() 只对 spyOn 创建的 mock 生效，
@@ -331,10 +326,7 @@ describe('POST /chat', () => {
     // 这是本条修复真正针对的场景：§3.8 的文本检测与 §3.9 的 label 守卫读的是同一段「角色说
     // 自己困了」的文本，所以两者会相关地一起命中。此前 emotion 帧被 isSleep 整个吞掉，
     // 标记置上了却送不出去，悬浮窗要等下一次阈值轮询才知道——正好回到这两个字段要消除的洞
-    const { fastify } = await buildTestApp(JSON.stringify({
-      reply: '啊我好困呀',
-      emotion: { self: { label: 'sleep', intensity: 0.9 }, perceived_user: null },
-    }))
+    const { fastify } = await buildTestApp('啊我好困呀\n&&sleep&&')
 
     const callsBefore = (BroadcastModule.broadcastEvent as unknown as { mock: { calls: unknown[] } }).mock.calls.length
     const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
@@ -357,10 +349,7 @@ describe('POST /chat', () => {
 
     // reply 正文特意选用不会触发文本检测类（好困/困了等模式）的中性文本，这样这里观察到
     // 的行为只来自 emotion.label === 'sleep' 这条路径本身，不与 §3.8 的困意文本检测混在一起
-    const { fastify } = await buildTestApp(JSON.stringify({
-      reply: '嗯嗯',
-      emotion: { self: { label: 'sleep', intensity: 0.9 }, perceived_user: null },
-    }))
+    const { fastify } = await buildTestApp('嗯嗯\n&&sleep&&')
 
     await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
 
@@ -374,7 +363,7 @@ describe('POST /chat', () => {
     expect(isExplicitSleep(session.sessionId)).toBe(true)
 
     const before = Date.now()
-    const { fastify } = await buildTestApp(JSON.stringify({ reply: '嗯嗯' }))
+    const { fastify } = await buildTestApp('嗯嗯')
     await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
 
     expect(getLastAttentionAt(session.sessionId)).toBeGreaterThanOrEqual(before)
@@ -387,7 +376,7 @@ describe('POST /chat', () => {
     const fixedPast = Date.now() - 1000 * 60 * 60
     recordAttention(session.sessionId, fixedPast)
 
-    const { fastify } = await buildTestApp(JSON.stringify({ reply: '   ' }))
+    const { fastify } = await buildTestApp('&&happy&&')
     await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
 
     expect(getLastAttentionAt(session.sessionId)).toBe(fixedPast)
@@ -401,7 +390,7 @@ describe('POST /chat', () => {
 
     const fastify = Fastify()
     const throwingModelProvider = {
-      completeSync: async () => { throw new Error('model boom') },
+      chatTurn: turnOf(async () => { throw new Error('model boom') }),
     }
     const createSpy = vi.spyOn(ModelProviderModule, 'createModelProviderForPreset')
       .mockReturnValue(throwingModelProvider as unknown as ModelProvider)
@@ -421,7 +410,7 @@ describe('POST /chat', () => {
     const { session } = loadSession('p1')
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-    const { fastify } = await buildTestApp(JSON.stringify({ reply: '   ' }))
+    const { fastify } = await buildTestApp('&&happy&&')
     const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
     const events = parseSSE(response.payload)
 
@@ -442,7 +431,7 @@ describe('POST /chat', () => {
   async function buildThrowingApp(error: unknown) {
     const fastify = Fastify()
     vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
-      completeSync: async () => { throw error },
+      chatTurn: turnOf(async () => { throw error }),
     } as unknown as ModelProvider)
     fastify.decorate('streamingEnabled', false)
     fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
@@ -483,14 +472,14 @@ describe('POST /chat', () => {
       done()
     })
     vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
-      completeSync: (_context: unknown, options: { signal?: AbortSignal }) => {
+      chatTurn: turnOf((_context: unknown, options: { signal?: AbortSignal }) => {
         completeSyncCalled()
         return new Promise((_resolve, reject) => {
           options.signal?.addEventListener('abort', () => {
             reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
           })
         })
-      },
+      }),
     } as unknown as ModelProvider)
     await fastify.register(chatRoutes)
 
@@ -529,10 +518,10 @@ describe('POST /chat', () => {
       done()
     })
     vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
-      completeSync: () => {
+      chatTurn: turnOf(() => {
         completeSyncCalled()
         return releasePromise
-      },
+      }),
     } as unknown as ModelProvider)
     await fastify.register(chatRoutes)
 
@@ -542,7 +531,7 @@ describe('POST /chat', () => {
     await completeSyncCalledPromise
 
     capturedReply!.raw.emit('close')
-    release!(JSON.stringify({ reply: '你好呀' }))
+    release!('你好呀')
     await new Promise(resolve => setImmediate(resolve))
     await new Promise(resolve => setImmediate(resolve))
 
@@ -560,10 +549,10 @@ describe('POST /chat', () => {
     try {
       const fastify = Fastify()
       vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
-        completeSync: async () => {
+        chatTurn: turnOf(async () => {
           vi.setSystemTime(repliedAt)
-          return JSON.stringify({ reply: '你好呀' })
-        },
+          return '你好呀'
+        }),
       } as unknown as ModelProvider)
       fastify.decorate('streamingEnabled', false)
       fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
@@ -587,7 +576,7 @@ describe('POST /chat', () => {
   it('回复为空时：日志记录 fullReply 全文，不截取前 200 字', async () => {
     loadSession('p1')
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const fullReply = JSON.stringify({ reply: '   ', padding: 'x'.repeat(300), tail: 'END-OF-REPLY' })
+    const fullReply = '&&happy&&\n'.repeat(30)
     const { fastify } = await buildTestApp(fullReply)
 
     await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
@@ -676,7 +665,7 @@ describe('POST /chat', () => {
     loadSession('p1')
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(BuildContextModule, 'buildContext').mockRejectedValue(new Error('boom'))
-    const { fastify } = await buildTestApp(JSON.stringify({ reply: '嗯嗯' }))
+    const { fastify } = await buildTestApp('嗯嗯')
 
     await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '用户消息-内容-丁' } })
 
@@ -686,7 +675,7 @@ describe('POST /chat', () => {
   it('reply 正文命中困意检测规则时置显式睡着标记，且照常入库（TDD §3.8「回复检查」文本检测类，不依赖 emotion.label）', async () => {
     const { session } = loadSession('p1')
     const before = Date.now()
-    const { fastify } = await buildTestApp(JSON.stringify({ reply: '啊我好困呀' }))
+    const { fastify } = await buildTestApp('啊我好困呀')
 
     const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
     const events = parseSSE(response.payload)
@@ -706,10 +695,7 @@ describe('POST /chat', () => {
     })
 
     try {
-      const { fastify } = await buildTestApp(JSON.stringify({
-        reply: '你好呀',
-        emotion: { self: { label: 'happy', intensity: 0.8 }, perceived_user: null },
-      }))
+      const { fastify } = await buildTestApp('你好呀\n&&happy&&')
 
       const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
       const events = parseSSE(response.payload)
@@ -723,7 +709,7 @@ describe('POST /chat', () => {
 
   it('按请求捕获的 preset 和 getModelProviderConfig() 构建 provider', async () => {
     const { preset } = loadSession('p1')
-    const { fastify, createSpy } = await buildTestApp(JSON.stringify({ reply: '嗯嗯' }))
+    const { fastify, createSpy } = await buildTestApp('嗯嗯')
 
     await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
 
@@ -754,7 +740,7 @@ describe('POST /chat', () => {
     let completeSyncCalled: () => void
     const completeSyncCalledPromise = new Promise<void>(resolve => { completeSyncCalled = resolve })
     vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
-      completeSync: (_context: unknown, options: { signal?: AbortSignal }) => {
+      chatTurn: turnOf((_context: unknown, options: { signal?: AbortSignal }) => {
         receivedOptions = options
         completeSyncCalled()
         return new Promise((_resolve, reject) => {
@@ -762,7 +748,7 @@ describe('POST /chat', () => {
             reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
           })
         })
-      },
+      }),
     } as unknown as ModelProvider)
 
     await fastify.register(chatRoutes)
@@ -770,7 +756,7 @@ describe('POST /chat', () => {
     const injectPromise = fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
     injectPromise.catch(() => {}) // 断开场景下不关心最终 settle 结果，避免未处理 rejection 警告
     await onRequestPromise
-    // 等 handler 真正调用到 modelProvider.completeSync（拿到 signal）之后再模拟断开，
+    // 等 handler 真正调用到 modelProvider.chatTurn（拿到 signal）之后再模拟断开，
     // 否则 close 事件可能在 buildContext 等前置异步步骤完成前就触发，signal 还没被传入
     await completeSyncCalledPromise
 
@@ -822,9 +808,9 @@ describe('POST /chat', () => {
     // 不再往下走到 modelProvider——因此这里改为断言 completeSync 从未被调用，
     // 用它来证明 close 监听器注册得足够早：如果注册得太晚（signal 没能及时变成 aborted），
     // 这个守卫就会形同虚设，completeSync 反而会被调用到
-    const completeSyncMock = vi.fn(async () => JSON.stringify({ reply: '嗯嗯' }))
+    const completeSyncMock = vi.fn(async () => '嗯嗯')
     vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
-      completeSync: completeSyncMock,
+      chatTurn: turnOf(completeSyncMock),
     } as unknown as ModelProvider)
 
     await fastify.register(chatRoutes)
@@ -897,7 +883,7 @@ describe('POST /chat', () => {
     })
 
     vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
-      completeSync: async () => JSON.stringify({ reply: '嗯嗯' }),
+      chatTurn: turnOf(async () => '嗯嗯'),
     } as unknown as ModelProvider)
 
     await fastify.register(chatRoutes)
@@ -989,7 +975,7 @@ describe('POST /chat', () => {
     const buildContextSpy = vi.spyOn(BuildContextModule, 'buildContext').mockRejectedValue(new Error('boom'))
 
     try {
-      const { fastify } = await buildTestApp(JSON.stringify({ reply: '嗯嗯' }))
+      const { fastify } = await buildTestApp('嗯嗯')
       const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
 
       expect(response.statusCode).toBe(500)
@@ -1014,9 +1000,9 @@ describe('POST /chat', () => {
       callCount += 1
       if (callCount === 1) {
         signalFirstCalled()
-        return { completeSync: async () => firstCompletePromise } as unknown as ModelProvider
+        return { chatTurn: turnOf(async () => firstCompletePromise) } as unknown as ModelProvider
       }
-      return { completeSync: async () => JSON.stringify({ reply: '第二条回复' }) } as unknown as ModelProvider
+      return { chatTurn: turnOf(async () => '第二条回复') } as unknown as ModelProvider
     })
 
     const fastify = Fastify()
@@ -1036,7 +1022,7 @@ describe('POST /chat', () => {
     await new Promise(resolve => setImmediate(resolve))
     expect(callCount).toBe(1)
 
-    resolveFirstComplete!(JSON.stringify({ reply: '第一条回复' }))
+    resolveFirstComplete!('第一条回复')
     await Promise.all([p1, p2])
 
     const rows = db.prepare('SELECT role, content FROM Messages WHERE sessionId = ? ORDER BY id ASC')
@@ -1068,7 +1054,7 @@ describe('POST /chat', () => {
     const firstCompletePromise = new Promise<string>(resolve => { resolveFirstComplete = resolve })
     const completeSyncMock = vi.fn(async () => firstCompletePromise)
     vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
-      completeSync: completeSyncMock,
+      chatTurn: turnOf(completeSyncMock),
     } as unknown as ModelProvider)
 
     await fastify.register(chatRoutes)
@@ -1085,7 +1071,7 @@ describe('POST /chat', () => {
     capturedReplies[1].raw.emit('close')
 
     // 放行第一条请求，让队列继续往下轮到第二条
-    resolveFirstComplete!(JSON.stringify({ reply: '第一条回复' }))
+    resolveFirstComplete!('第一条回复')
     // 断开场景下不关心两个 inject() 最终各自 settle 成什么，用 allSettled 稳妥地把两者都消费掉，
     // 避免 promise rejection 未被处理
     await Promise.allSettled([p1, p2])
@@ -1118,10 +1104,10 @@ describe('POST /chat', () => {
     fastify.decorate('streamingEnabled', false)
     fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
     vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
-      completeSync: async () => {
+      chatTurn: turnOf(async () => {
         deleteSessionRows(session.sessionId)
-        return JSON.stringify({ reply: '你好呀', emotion: { self: { label: 'happy', intensity: 0.8 } } })
-      },
+        return '你好呀\n&&happy&&'
+      }),
     } as unknown as ModelProvider)
     await fastify.register(chatRoutes)
 
@@ -1148,7 +1134,7 @@ describe('POST /chat', () => {
       return firstCompletePromise
     })
     vi.spyOn(ModelProviderModule, 'createModelProviderForPreset').mockReturnValue({
-      completeSync: completeSyncMock,
+      chatTurn: turnOf(completeSyncMock),
     } as unknown as ModelProvider)
 
     const fastify = Fastify()
@@ -1162,7 +1148,7 @@ describe('POST /chat', () => {
     await new Promise(resolve => setImmediate(resolve))
 
     deleteSessionRows(session.sessionId)
-    resolveFirstComplete!(JSON.stringify({ reply: '第一条回复' }))
+    resolveFirstComplete!('第一条回复')
     const [, second] = await Promise.all([p1, p2])
     const events = parseSSE(second.payload)
 
@@ -1175,7 +1161,7 @@ describe('POST /chat', () => {
 describe('POST /chat — CORS 头由 @fastify/cors 插件唯一决定', () => {
   async function chatWithOrigin(origin: string) {
     loadSession('p1')
-    const { fastify } = await buildTestApp(JSON.stringify({ reply: '你好呀' }))
+    const { fastify } = await buildTestApp('你好呀')
     await fastify.register(fastifyCors, { origin: [...RENDERER_ORIGINS], methods: ['GET', 'HEAD', 'POST', 'PATCH'] })
     return fastify.inject({ method: 'POST', url: '/chat', headers: { origin }, payload: { message: '你好' } })
   }
@@ -1196,11 +1182,11 @@ describe('POST /chat — CORS 头由 @fastify/cors 插件唯一决定', () => {
 })
 
 describe('POST /chat — max_tokens 配置入口（Fix 2）', () => {
-  it('modelProvider 配置里的 maxTokens 会透传给 completeSync/complete 的 options', async () => {
+  it('modelProvider 配置里的 maxTokens 会透传给 chatTurn 的请求', async () => {
     loadSession('p1')
-    const completeSyncMock = vi.fn(async () => JSON.stringify({ reply: '嗯嗯' }))
+    const completeSyncMock = vi.fn(async () => '嗯嗯')
     const createSpy = vi.spyOn(ModelProviderModule, 'createModelProviderForPreset')
-      .mockReturnValue({ completeSync: completeSyncMock } as unknown as ModelProvider)
+      .mockReturnValue({ chatTurn: turnOf(completeSyncMock) } as unknown as ModelProvider)
     vi.mocked(ConfigModule.getModelProviderConfig).mockReturnValueOnce({
       type: 'ollama', ollamaModel: 'qwen3', maxTokens: 2000,
     })
@@ -1224,9 +1210,9 @@ describe('POST /chat — max_tokens 配置入口（Fix 2）', () => {
 
   it('未配置 maxTokens 时，透传 undefined（各 ModelProvider 调用点自行回落到既有默认值 1000，行为不变）', async () => {
     loadSession('p1')
-    const completeSyncMock = vi.fn(async () => JSON.stringify({ reply: '嗯嗯' }))
+    const completeSyncMock = vi.fn(async () => '嗯嗯')
     const createSpy = vi.spyOn(ModelProviderModule, 'createModelProviderForPreset')
-      .mockReturnValue({ completeSync: completeSyncMock } as unknown as ModelProvider)
+      .mockReturnValue({ chatTurn: turnOf(completeSyncMock) } as unknown as ModelProvider)
 
     try {
       const fastify = Fastify()
@@ -1246,36 +1232,26 @@ describe('POST /chat — max_tokens 配置入口（Fix 2）', () => {
   })
 })
 
-describe('POST /chat — JSON 解析兜底（parseJsonSalvage，本地模型/DeepSeek 常见的代码块包裹输出）', () => {
-  it('模型回复整体被 ```json 代码块包裹时，reply/emotion/emote 仍能正常解析出来，不再把整段 JSON 原文当成聊天气泡', async () => {
-    const { session } = loadSession('p1')
-    const fenced = '```json\n' + JSON.stringify({
-      reply: '你好呀',
-      emotion: { self: { label: 'happy', intensity: 0.8 } },
-      emote: 'playful',
-    }) + '\n```'
-    const { fastify } = await buildTestApp(fenced)
-
-    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
-    const events = parseSSE(response.payload)
-    const messageDone = events.find(e => e.event === 'message_done')
-    const emotion = events.find(e => e.event === 'emotion')
-
-    expect(messageDone?.data.text).toBe('你好呀')
-    expect(emotion?.data).toMatchObject({
-      self: { label: 'happy', intensity: 0.8 },
-      sessionId: session.sessionId,
-    })
-  })
-
-  it('模型回复真的不是 JSON（无花括号）时，仍降级为原文兜底，不报错', async () => {
+describe('POST /chat — 回复里的标签从显示文字中去掉', () => {
+  it('回复带标签（含不认识的）时，显示和入库的文字不含标签', async () => {
     loadSession('p1')
-    const { fastify } = await buildTestApp('这不是 JSON 的普通回复')
+    const { fastify } = await buildTestApp('你好呀\n&&happy&&\n&&other&&')
 
     const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
     const messageDone = parseSSE(response.payload).find(e => e.event === 'message_done')
 
-    expect(messageDone?.data.text).toBe('这不是 JSON 的普通回复')
+    expect(messageDone?.data.text).toBe('你好呀')
+    expect(getHistory(50).map(m => m.content)).toEqual(['你好', '你好呀'])
+  })
+
+  it('回复没有标签时，原文显示，不报错', async () => {
+    loadSession('p1')
+    const { fastify } = await buildTestApp('这是普通回复')
+
+    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
+    const messageDone = parseSSE(response.payload).find(e => e.event === 'message_done')
+
+    expect(messageDone?.data.text).toBe('这是普通回复')
   })
 })
 
@@ -1321,11 +1297,7 @@ describe('POST /chat — 表情包挑选（emote 字段，TDD §3.9「表情包�
     })
     loadSession('p-single-emote')
 
-    const { fastify } = await buildTestApp(JSON.stringify({
-      reply: '好呀',
-      emotion: { self: { label: 'happy', intensity: 0.5 } },
-      emote: 'comforting',
-    }))
+    const { fastify } = await buildTestApp('好呀\n&&happy&&\n&&comforting&&')
 
     const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
     const messageDone = parseSSE(response.payload).find(e => e.event === 'message_done')
@@ -1344,11 +1316,7 @@ describe('POST /chat — 表情包挑选（emote 字段，TDD §3.9「表情包�
     })
     loadSession('p-single-emote')
 
-    const { fastify } = await buildTestApp(JSON.stringify({
-      reply: '好呀',
-      emotion: { self: { label: 'happy', intensity: 0.5 } },
-      emote: 'not-a-real-tag',
-    }))
+    const { fastify } = await buildTestApp('好呀\n&&happy&&\n&&not-a-real-tag&&')
 
     const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
     const messageDone = parseSSE(response.payload).find(e => e.event === 'message_done')
@@ -1367,10 +1335,7 @@ describe('POST /chat — 表情包挑选（emote 字段，TDD §3.9「表情包�
     })
     loadSession('p-single-emote')
 
-    const { fastify } = await buildTestApp(JSON.stringify({
-      reply: '好呀',
-      emotion: { self: { label: 'happy', intensity: 0.5 } },
-    }))
+    const { fastify } = await buildTestApp('好呀\n&&happy&&')
 
     const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
     const messageDone = parseSSE(response.payload).find(e => e.event === 'message_done')
@@ -1378,13 +1343,17 @@ describe('POST /chat — 表情包挑选（emote 字段，TDD §3.9「表情包�
     expect(messageDone?.data).not.toHaveProperty('emote')
   })
 
-  it('角色包缺失 manifest（如 char-001）时，即使模型输出了 emote 字段，也不附带表情', async () => {
-    loadSession('p1')
-    const { fastify } = await buildTestApp(JSON.stringify({
-      reply: '好呀',
-      emotion: { self: { label: 'happy', intensity: 0.5 } },
-      emote: 'playful',
-    }))
+  it('角色包缺失 manifest（如 char-001）时，即使模型输出了表情标签，也不附带表情', async () => {
+    upsertPreset({
+      presetId: 'p-no-manifest',
+      name: '无 manifest 测试',
+      characterId: 'char-001',
+      modelType: 'ollama',
+      modelName: 'qwen3',
+      systemPrompt: '你是角色',
+    })
+    loadSession('p-no-manifest')
+    const { fastify } = await buildTestApp('好呀\n&&happy&&\n&&playful&&')
 
     const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
     const messageDone = parseSSE(response.payload).find(e => e.event === 'message_done')
@@ -1406,11 +1375,7 @@ describe('POST /chat — 表情包挑选（emote 字段，TDD §3.9「表情包�
     // 2 个候选（emotes/a.jpg、emotes/b.jpg），Math.floor(0.99 * 2) = 1 → 取到第二个
     const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.99)
     try {
-      const { fastify } = await buildTestApp(JSON.stringify({
-        reply: '好呀',
-        emotion: { self: { label: 'happy', intensity: 0.5 } },
-        emote: 'playful',
-      }))
+      const { fastify } = await buildTestApp('好呀\n&&happy&&\n&&playful&&')
 
       const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
       const messageDone = parseSSE(response.payload).find(e => e.event === 'message_done')
@@ -1439,7 +1404,7 @@ describe('POST /chat — 角色单独配置的 API Key', () => {
     db.exec(`DELETE FROM PresetApiKeys`)
     openaiCtorMock.mockReset()
     openaiCreateMock.mockReset()
-    openaiCreateMock.mockResolvedValue({ choices: [{ message: { content: JSON.stringify({ reply: '嗯嗯' }) } }] })
+    openaiCreateMock.mockResolvedValue({ choices: [{ message: { content: '嗯嗯' } }] })
   })
 
   it('角色单独配置 openai：使用该角色保存的 key，不使用全局 key', async () => {

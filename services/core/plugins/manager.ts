@@ -1,6 +1,6 @@
 // services/core/plugins/manager.ts — 可安装插件清单、启动时加载、安装与更新任务、版本检查与"仍然启用"、配置读写与整理，以及留给阶段 3 的 ToolContext 组装
-// 用法：index.ts 的 start() 调 loadInstalledPlugins()；plugins/routes.ts 调 getPluginsSnapshot / fetchLatestVersion / startPluginInstall / savePluginConfig / forceEnablePlugin / cancelForceEnablePlugin；状态变化时 broadcastEvent('plugins-changed')
-// 对应文件：services/core/plugins/install.ts / services/core/plugins/package.ts / services/core/plugins/pluginFetch.ts / services/core/plugins/versionRange.ts / services/core/plugins/paths.ts / services/core/plugins/routes.ts / services/core/events/broadcast.ts
+// 用法：index.ts 的 start() 调 loadInstalledPlugins()；plugins/routes.ts 调 getPluginsSnapshot / fetchLatestVersion / startPluginInstall / savePluginConfig / forceEnablePlugin / cancelForceEnablePlugin；状态变化时 broadcastEvent('plugins-changed')；plugins/toolLoop.ts 每次聊天调 getEnabledTools，执行工具时调 createToolContext
+// 对应文件：services/core/plugins/install.ts / services/core/plugins/package.ts / services/core/plugins/pluginFetch.ts / services/core/plugins/versionRange.ts / services/core/plugins/paths.ts / services/core/plugins/routes.ts / services/core/plugins/toolLoop.ts / services/core/events/broadcast.ts
 import fs from 'fs'
 import path from 'path'
 import { randomUUID } from 'crypto'
@@ -13,6 +13,7 @@ import {
   parsePluginPackage,
   type ConfigSchema,
   type PluginMetadata,
+  type PluginStandard,
 } from './package.js'
 import { createPluginFetch, type PluginFetch } from './pluginFetch.js'
 import { pluginConfigPath, pluginDataDir, pluginInstallDir, pluginOverridesPath } from './paths.js'
@@ -278,6 +279,38 @@ export function createToolContext(name: string, signal: AbortSignal): ToolContex
       error: message => console.error(`${prefix} ${message}`),
     },
   }
+}
+
+export interface EnabledTool {
+  pluginName: string
+  displayName: string
+  tool: ToolDefinition
+  standard: PluginStandard
+  config: Record<string, unknown>
+}
+
+export function getEnabledTools(): EnabledTool[] {
+  const result: EnabledTool[] = []
+  const seen = new Set<string>()
+  for (const record of records.values()) {
+    const loaded = record.loaded
+    if (!loaded) continue
+    for (const tool of loaded.tools) {
+      if (seen.has(tool.name)) {
+        console.error(`[Plugins] ${record.entry.name}: tool ${tool.name} skipped, the name is already provided by an earlier plugin`)
+        continue
+      }
+      seen.add(tool.name)
+      result.push({
+        pluginName: record.entry.name,
+        displayName: record.entry.displayName,
+        tool,
+        standard: loaded.metadata.standard,
+        config: loaded.config,
+      })
+    }
+  }
+  return result
 }
 
 export function getPluginsSnapshot() {

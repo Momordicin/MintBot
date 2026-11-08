@@ -1,6 +1,6 @@
 // services/core/providers/ollama.ts — Ollama 本地模型服务的探测、模型列表查询，以及未运行时由 core 启动 `ollama serve`
-// 用法：index.ts 的 start() 调 shouldEnsureOllama / ensureOllama，SIGINT/SIGTERM 时调 stopOllamaIfManaged；routes/models.ts 调 ensureOllama / listOllamaModels / getOllamaBaseUrl；state.ts 调 isOllamaRunning
-// 对应文件：services/core/index.ts / services/core/routes/models.ts / services/core/state.ts / services/core/providers/ollama.test.ts
+// 用法：index.ts 的 start() 调 shouldEnsureOllama / ensureOllama，SIGINT/SIGTERM 时调 stopOllamaIfManaged；routes/models.ts 调 ensureOllama / listOllamaModels / getOllamaBaseUrl；state.ts 调 isOllamaRunning；ModelProvider.ts 的 supportsTools 调 ollamaSupportsTools
+// 对应文件：services/core/index.ts / services/core/routes/models.ts / services/core/state.ts / services/core/providers/ModelProvider.ts / services/core/providers/ollama.test.ts
 import { spawn, ChildProcess } from 'child_process'
 
 let ollamaProcess: ChildProcess | null = null
@@ -36,6 +36,30 @@ export async function listOllamaModels(baseUrl: string): Promise<string[]> {
       .filter((name: string | null): name is string => name !== null)
   } catch {
     return []
+  }
+}
+
+const toolSupportCache = new Map<string, boolean>()
+
+export async function ollamaSupportsTools(baseUrl: string, model: string): Promise<boolean> {
+  const key = `${baseUrl}\n${model}`
+  const cached = toolSupportCache.get(key)
+  if (cached !== undefined) return cached
+  try {
+    const response = await fetch(`${baseUrl}/api/show`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+      signal: AbortSignal.timeout(3000),
+    })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const json = await response.json()
+    const supported = Array.isArray(json?.capabilities) && json.capabilities.includes('tools')
+    toolSupportCache.set(key, supported)
+    return supported
+  } catch (err) {
+    console.error(`[Ollama] Failed to query capabilities of ${model}, sending this request without tools:`, err)
+    return false
   }
 }
 

@@ -29,6 +29,7 @@ export interface ToolSchema {
 
 export interface BuiltContext {
   system: string
+  outputRules?: string
   messages: ChatMessage[]
   tools?: ToolSchema[]       // Phase 5 预留
 }
