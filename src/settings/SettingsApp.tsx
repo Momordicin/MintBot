@@ -1,6 +1,6 @@
-// src/settings/SettingsApp.tsx — 设置窗口根组件：加载当前预设并按其显示配置应用主题色，左栏角色下拉框与导航切换"角色 / 外观 / 人设与模型 / 记忆 / 模型服务 / 窗口行为 / 通用"七个页面
+// src/settings/SettingsApp.tsx — 设置窗口根组件：加载当前预设并按其显示配置应用主题色，左栏角色下拉框与导航切换"角色 / 外观 / 人设与模型 / 记忆 / 模型服务 / 窗口行为 / 语音 / 插件 / 通用"八个页面
 // 用法：settings/main.tsx 渲染 <SettingsApp />；GET /state；useCharacterPanel 通过 onSwitched 回传新的 AppState，记忆页把 sessionId 传给 MemoryPanel
-// 对应文件：src/settings/main.tsx / src/settings/useCharacterPanel.ts / src/settings/CharacterPanel.tsx / src/settings/AppearancePanel.tsx / src/settings/PersonaModelPanel.tsx / src/settings/ModelConfigPanel.tsx / src/settings/WindowBehaviorPanel.tsx / src/settings/GeneralPanel.tsx / src/settings/memory/MemoryPanel.tsx / src/settings/settings.css / src/chat/theme.ts / src/chat/themeVars.ts / services/core/index.ts / electron/main/index.ts（open-settings-window）
+// 对应文件：src/settings/main.tsx / src/settings/useCharacterPanel.ts / src/settings/CharacterPanel.tsx / src/settings/AppearancePanel.tsx / src/settings/PersonaModelPanel.tsx / src/settings/ModelConfigPanel.tsx / src/settings/WindowBehaviorPanel.tsx / src/settings/GeneralPanel.tsx / src/settings/VoicePanel.tsx / src/settings/PluginsPanel.tsx / src/settings/memory/MemoryPanel.tsx / src/settings/settings.css / src/chat/theme.ts / src/chat/themeVars.ts / services/core/index.ts / electron/main/index.ts（open-settings-window）
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { AppState } from '../../shared/types/index.js'
 import { deriveTheme } from '../chat/theme.js'
@@ -15,16 +15,17 @@ import { useCharacterPanel } from './useCharacterPanel'
 import { WindowBehaviorPanel } from './WindowBehaviorPanel'
 import { GeneralPanel } from './GeneralPanel'
 import { VoicePanel } from './VoicePanel'
+import { PluginsPanel } from './PluginsPanel'
 import { useTranslation } from 'react-i18next'
 import './settings.css'
 
 import { CORE_URL } from '../coreUrl.js'
 
-type Page = 'character' | 'appearance' | 'persona' | 'memory' | 'modelService' | 'window' | 'voice' | 'general'
+type Page = 'character' | 'appearance' | 'persona' | 'memory' | 'modelService' | 'window' | 'voice' | 'plugins' | 'general'
 
 const PRIMARY_NAV: Page[] = ['character', 'appearance', 'persona', 'memory']
 
-const SECONDARY_NAV: Page[] = ['modelService', 'window', 'voice']
+const SECONDARY_NAV: Page[] = ['modelService', 'window', 'voice', 'plugins']
 
 interface SettingsBodyProps {
   appState: AppState | null
@@ -55,6 +56,7 @@ function SettingsBody({ appState, onSwitched }: SettingsBodyProps) {
       case 'modelService': return t('全局模型服务')
       case 'window': return t('窗口行为')
       case 'voice': return t('语音')
+      case 'plugins': return t('插件')
       case 'general': return t('通用')
     }
   }
@@ -107,6 +109,7 @@ function SettingsBody({ appState, onSwitched }: SettingsBodyProps) {
         {activePage === 'modelService' && <ModelConfigPanel />}
         {activePage === 'window' && <WindowBehaviorPanel />}
         {activePage === 'voice' && <VoicePanel />}
+        {activePage === 'plugins' && <PluginsPanel />}
         {activePage === 'general' && <GeneralPanel />}
       </div>
     </div>

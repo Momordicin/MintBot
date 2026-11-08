@@ -1,6 +1,6 @@
 // src/chat/ChatWindow.tsx — 聊天窗口主界面：加载当前预设与历史消息，发送消息并读取回复，按预设显示配置应用壁纸、头像与主题色
-// 用法：App 渲染 <ChatWindow />；GET /state、/ai-available、/messages、/characters/:id/manifest.json，POST /chat（读 SSE：message_done / system），GET /events（preset-switched）；调用 electronAPI.setTitlebarOverlay / notifyChatReady / onChatShown / notifyChatPainted
-// 对应文件：src/App.tsx / src/chat/MessageList.tsx / src/chat/InputBar.tsx / src/chat/TitleBar.tsx / src/chat/MessageBubble.tsx / src/chat/sse.ts / src/chat/theme.ts / src/eventsWatchdog.ts / src/errorText.ts / services/core/index.ts / services/core/routes/chat.ts / services/core/routes/messages.ts / services/core/routes/status.ts / services/core/routes/events.ts / electron/main/index.ts（titlebar:set-overlay / chat:ready / chat:painted）/ electron/main/chatReveal.ts（chat:shown）
+// 用法：App 渲染 <ChatWindow />；GET /state、/ai-available、/messages、/characters/:id/manifest.json，POST /chat（读 SSE：message_done / system），GET /events（preset-switched / messages-forgotten）；调用 electronAPI.setTitlebarOverlay / notifyChatReady / onChatShown / notifyChatPainted
+// 对应文件：src/App.tsx / src/chat/MessageList.tsx / src/chat/InputBar.tsx / src/chat/TitleBar.tsx / src/chat/MessageBubble.tsx / src/chat/mergeAfterForget.ts / src/chat/sse.ts / src/chat/theme.ts / src/eventsWatchdog.ts / src/errorText.ts / services/core/index.ts / services/core/routes/chat.ts / services/core/routes/messages.ts / services/core/routes/status.ts / services/core/routes/events.ts / electron/main/index.ts（titlebar:set-overlay / chat:ready / chat:painted）/ electron/main/chatReveal.ts（chat:shown）
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { MessageList } from './MessageList'
@@ -9,6 +9,7 @@ import { InputBar, type InputBarHandle, type VoiceInputState } from './InputBar'
 import { TitleBar } from './TitleBar'
 import { MessageData } from './MessageBubble'
 import { parseSSE } from './sse'
+import { mergeAfterForget } from './mergeAfterForget'
 import { deriveTheme } from './theme.js'
 import { DEFAULT_CHAT_BG_OPACITY, DEFAULT_THEME_INPUT, resolveThemeMode, themeCssVars, titlebarOverlayFromTheme } from './themeVars.js'
 import { usePrefersDark } from '../usePrefersDark.js'
@@ -97,6 +98,9 @@ export function ChatWindow() {
   const [initialLoadSignal, setInitialLoadSignal] = useState(0)
   const oldestMessageIdRef = useRef<number | null>(null)
   const isLoadingMoreRef = useRef(false)
+  const pendingUserIdsRef = useRef<Set<string>>(new Set())
+  const isReloadingHistoryRef = useRef(false)
+  const [reloadingHistory, setReloadingHistory] = useState(false)
   const activeControllersRef = useRef<Set<AbortController>>(new Set())
   const sessionSyncControllerRef = useRef<AbortController | null>(null)
   const appStateRef = useRef<AppState | null>(null)
@@ -294,6 +298,13 @@ export function ChatWindow() {
         'preset-switched': () => {
           syncSessionOnFocus()
         },
+        'messages-forgotten': (event) => {
+          try {
+            const { sessionId }: { sessionId?: string } = JSON.parse(event.data)
+            reloadAfterForget(sessionId)
+          } catch {
+          }
+        },
         'voice-pending': () => {
           takeVoiceText()
         },
@@ -429,7 +440,7 @@ export function ChatWindow() {
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
-      addSystemMessage(i18n.t('加载历史消息失败'), true)
+      addSystemMessage(i18n.t('加载历史消息失败'), true, 'reloadHistory')
       applyNoHistoryAvatarDim(mode, signal)
     } finally {
       markBootPart('history')
@@ -460,26 +471,75 @@ export function ChatWindow() {
       }
     } catch (err) {
       if (!(err instanceof DOMException && err.name === 'AbortError')) {
-        addSystemMessage(i18n.t('加载历史消息失败'), true)
+        addSystemMessage(i18n.t('加载历史消息失败'), true, 'reloadHistory')
       }
     } finally {
       isLoadingMoreRef.current = false
     }
   }
 
-  function addSystemMessage(content: string, isError = false) {
-    setMessages(prev => [...prev, {
+  function reloadAfterForget(sessionId: string | undefined) {
+    if (!sessionId || sessionId !== appStateRef.current?.sessionId) return
+    reloadLatestMessages(sessionId)
+  }
+
+  function handleReloadHistory() {
+    const sessionId = appStateRef.current?.sessionId
+    if (!sessionId || isReloadingHistoryRef.current) return
+    reloadLatestMessages(sessionId)
+  }
+
+  async function reloadLatestMessages(sessionId: string) {
+    isReloadingHistoryRef.current = true
+    setReloadingHistory(true)
+    sessionSyncControllerRef.current?.abort()
+    const controller = new AbortController()
+    sessionSyncControllerRef.current = controller
+    isLoadingMoreRef.current = false
+
+    try {
+      const response = await fetch(
+        `${CORE_URL}/messages?sessionId=${encodeURIComponent(sessionId)}&limit=${INITIAL_HISTORY_LIMIT}`,
+        { signal: controller.signal }
+      )
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+
+      const page: MessagesPageResponse = await response.json()
+      if (controller.signal.aborted) return
+
+      setMessages(prev => mergeAfterForget(page.messages.map(toMessageData), prev, pendingUserIdsRef.current))
+      setHasMoreHistory(page.hasMore)
+      oldestMessageIdRef.current = page.messages[0]?.id ?? null
+      setInitialLoadSignal(n => n + 1)
+      const lastChatMessage = page.messages.filter(m => m.role !== 'system').pop()
+      if (lastChatMessage && appStateRef.current?.aiAvailable !== false) {
+        syncAvatarDim(lastChatMessage.createdAt)
+      }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return
+      addSystemMessage(i18n.t('加载历史消息失败'), true, 'reloadHistory')
+    } finally {
+      isReloadingHistoryRef.current = false
+      setReloadingHistory(false)
+    }
+  }
+
+  function addSystemMessage(content: string, isError = false, action?: MessageData['action']) {
+    setMessages(prev => [...(action === 'reloadHistory' ? prev.filter(m => m.action !== 'reloadHistory') : prev), {
       id: nextLocalMessageId(),
       role: 'system' as const,
       content,
       createdAt: Date.now(),
       isError,
+      action,
     }])
   }
 
   const sendMessage = useCallback(async (text: string) => {
+    const localId = nextLocalMessageId()
+    pendingUserIdsRef.current.add(localId)
     setMessages(prev => [...prev, {
-      id: nextLocalMessageId(),
+      id: localId,
       role: 'user' as const,
       content: text,
       createdAt: Date.now(),
@@ -506,6 +566,7 @@ export function ChatWindow() {
 
         if (event === 'message_done') {
           const { messageId, text: replyText, sessionId: replySessionId } = data as { messageId: string; text: string; sessionId: string }
+          pendingUserIdsRef.current.delete(localId)
           if (replySessionId !== appStateRef.current?.sessionId) continue
           setMessages(prev => [...prev, {
             id: String(messageId),
@@ -527,6 +588,7 @@ export function ChatWindow() {
 
         if (event === 'system') {
           const { payload, sessionId: replySessionId } = data as { type: string; payload: ErrorBody; sessionId: string }
+          pendingUserIdsRef.current.delete(localId)
           if (replySessionId !== appStateRef.current?.sessionId) continue
           addSystemMessage(errorText(payload, i18n.t), true)
         }
@@ -537,6 +599,7 @@ export function ChatWindow() {
         addSystemMessage(i18n.t('回复失败，请稍后重试'), true)
       }
     } finally {
+      pendingUserIdsRef.current.delete(localId)
       activeControllersRef.current.delete(controller)
       setIsReplying(activeControllersRef.current.size > 0)
     }
@@ -576,6 +639,8 @@ export function ChatWindow() {
           displayName={displayName}
           hasMoreHistory={hasMoreHistory}
           onLoadMore={loadMoreMessages}
+          onReloadHistory={handleReloadHistory}
+          reloadingHistory={reloadingHistory}
           scrollToBottomSignal={initialLoadSignal}
         />
       </div>

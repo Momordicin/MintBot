@@ -1,4 +1,4 @@
-// services/core/context/buildContext.ts — 为一次聊天请求组装发给模型的 BuiltContext：system（角色设定 + 情绪 + 已知实体 + 历史摘要 + 检索到的旧对话 + 词表/称呼/JSON 回复格式）与按条数、时间、字符预算裁剪的最近消息
+// services/core/context/buildContext.ts — 为一次聊天请求组装发给模型的 BuiltContext：system（角色设定 + 情绪 + 历史摘要 + 检索到的旧对话）、outputRules（词表/称呼/末尾标签写法）与按条数、时间、字符预算裁剪的最近消息
 // 用法：routes/chat.ts 的 POST /chat 每次请求 await buildContext(message, { embedding, signal })；读取当前会话状态（requireCurrentState）与 session/queries.ts，检索走 memory/retrieval.ts，预算取自 getMemoryConfig()
 // 对应文件：services/core/routes/chat.ts / services/core/memory/retrieval.ts / services/core/session/index.ts / services/core/session/queries.ts / services/core/config/index.ts / services/core/context/buildContext.test.ts
 import type { BuiltContext, ChatMessage, MessageEntity } from '../../../shared/types/index.js'
@@ -59,19 +59,19 @@ export async function buildContext(
     system = `${system}\n\n你当前的情绪状态是「${emotion.self.label}」，强度为 ${emotion.self.intensity}，请让回复的语气与这一情绪保持连贯。`
   }
 
-  const entities = getCurrentEntities(session.sessionId)
-  if (entities.length > 0) {
-    const grouped = new Map<MessageEntity['type'], string[]>()
-    for (const entity of entities) {
-      const list = grouped.get(entity.type) ?? []
-      list.push(entity.value)
-      grouped.set(entity.type, list)
-    }
-    const lines = ENTITY_TYPE_ORDER
-      .filter(type => grouped.has(type))
-      .map(type => `- ${ENTITY_TYPE_LABELS[type]}：${grouped.get(type)!.join('、')}`)
-    system = `${system}\n\n以下是已知的用户信息：\n${lines.join('\n')}`
-  }
+  // const entities = getCurrentEntities(session.sessionId)
+  // if (entities.length > 0) {
+  //   const grouped = new Map<MessageEntity['type'], string[]>()
+  //   for (const entity of entities) {
+  //     const list = grouped.get(entity.type) ?? []
+  //     list.push(entity.value)
+  //     grouped.set(entity.type, list)
+  //   }
+  //   const lines = ENTITY_TYPE_ORDER
+  //     .filter(type => grouped.has(type))
+  //     .map(type => `- ${ENTITY_TYPE_LABELS[type]}：${grouped.get(type)!.join('、')}`)
+  //   system = `${system}\n\n以下是已知的用户信息：\n${lines.join('\n')}`
+  // }
 
   const summaries = truncateToCharBudget(getSummaries(session.sessionId), memoryConfig.contextBudget.summary, s => s.content, 'oldest')
   if (summaries.length > 0) {
@@ -98,22 +98,26 @@ export async function buildContext(
     }
   }
 
+  const hasEmotionWords = !!manifest && manifest.emotionVocabulary.length > 0
+  const hasEmoteWords = !!manifest && manifest.emoteTagVocabulary.length > 0
   const contractLines: string[] = []
-  if (manifest && manifest.emotionVocabulary.length > 0) {
-    contractLines.push(`可用的情绪标签（emotion.self.label 只能从中选择一个）：${manifest.emotionVocabulary.join('、')}`)
+  if (manifest && hasEmotionWords) {
+    contractLines.push(`可用的情绪词：${manifest.emotionVocabulary.join('、')}`)
   }
-  if (manifest && manifest.emoteTagVocabulary.length > 0) {
-    contractLines.push(`可用的表情 tag（emote 字段可选，只能从中选择一个 tag 本身，不能选文件名）：${manifest.emoteTagVocabulary.join('、')}`)
+  if (manifest && hasEmoteWords) {
+    contractLines.push(`可用的表情词：${manifest.emoteTagVocabulary.join('、')}`)
   }
   if (preset.addressForms.length > 0) {
     contractLines.push(`你可以这样称呼用户（自行挑选，不必每轮都用同一个）：${preset.addressForms.join('、')}`)
   }
-  contractLines.push('请严格用以下 JSON 格式回复，不要输出任何其他内容：\n{"reply": "你的回复内容", "emotion": {"self": {"label": "情绪标签", "intensity": 0.7}, "perceived_user": null}, "emote": "表情 tag（可选，不附表情时省略该字段）"}')
-  system = `${system}\n\n${contractLines.join('\n')}`
-
-  if (!/json/i.test(system)) {
-    throw new Error('[BuildContext] system prompt must contain the literal word "json" (required by OpenAI json_object mode)')
+  if (hasEmotionWords) {
+    contractLines.push(
+      '回复正文写完后，在末尾另起一行写情绪标签 &&情绪词&&，情绪词只能从可用的情绪词中选一个；' +
+      (hasEmoteWords ? '想附表情时，再另起一行写 &&表情词&&，表情词只能从可用的表情词中选一个。' : '') +
+      '标签不要写在正文中间，也不要放进代码框。'
+    )
   }
+  const outputRules = contractLines.join('\n')
 
-  return { system, messages }
+  return { system, outputRules, messages }
 }

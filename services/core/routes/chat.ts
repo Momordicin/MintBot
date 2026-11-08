@@ -1,20 +1,20 @@
 // services/core/routes/chat.ts — 一轮聊天：建上下文、调模型，经 SSE 把回复交给发起请求的窗口
-// 用法：core/index.ts 注册 chatRoutes；POST /chat { message }
-// 对应文件：src/chat/ChatWindow.tsx / services/core/context/buildContext.ts / services/core/routes/chat.test.ts / shared/errorCodes.ts
+// 用法：core/index.ts 注册 chatRoutes；POST /chat { message }；模型调用交给 plugins/toolLoop.ts 的 runToolLoop
+// 对应文件：src/chat/ChatWindow.tsx / services/core/context/buildContext.ts / services/core/plugins/toolLoop.ts / services/core/routes/chat.test.ts / shared/errorCodes.ts
 import type { FastifyInstance } from 'fastify'
 import type { OutgoingHttpHeaders } from 'node:http'
 import { requireCurrentState } from '../session/index.js'
 import { buildContext } from '../context/buildContext.js'
-import { parseSelfEmotion, parseEmoteTag } from '../session/emotion.js'
+import { parseReplyTags } from '../session/emotion.js'
 import { selectEmoteFile } from '../characters/emotePool.js'
-import { upsertEmotionState, sessionExists, appendExchange } from '../session/queries.js'
+import { upsertEmotionState, resetEmotionState, sessionExists, appendExchange } from '../session/queries.js'
 import { recordAttention, markExplicitSleep, isExplicitSleep } from '../session/attention.js'
 import { broadcastEvent } from '../events/broadcast.js'
 import { createModelProviderForPreset, stripThinkTags } from '../providers/ModelProvider.js'
 import { getModelProviderConfig } from '../config/index.js'
+import { runToolLoop } from '../plugins/toolLoop.js'
 import { isEmptyReply } from '../reply/interceptor.js'
 import { detectSleepiness } from '../reply/sleepDetector.js'
-import { parseJsonSalvage } from '../util/jsonSalvage.js'
 import { ERROR_CODES, errorBody, invalidRequest } from '../../../shared/errorCodes.js'
 
 let queueTail: Promise<void> = Promise.resolve()
@@ -133,15 +133,13 @@ export async function chatRoutes(fastify: FastifyInstance) {
         const modelProvider = createModelProviderForPreset(state.preset, modelProviderConfig, state.credentials)
         const modelType = state.preset.modelType ?? modelProviderConfig.type
 
-        let fullReply = ''
-
-        if (streaming) {
-          for await (const chunk of modelProvider.complete(context, { maxTokens: modelProviderConfig.maxTokens, signal: abortController.signal, jsonMode: true })) {
-            fullReply += chunk
-          }
-        } else {
-          fullReply = await modelProvider.completeSync(context, { maxTokens: modelProviderConfig.maxTokens, signal: abortController.signal, jsonMode: true })
-        }
+        const fullReply = await runToolLoop({
+          provider: modelProvider,
+          context,
+          maxTokens: modelProviderConfig.maxTokens,
+          signal: abortController.signal,
+          streaming,
+        })
 
         if (abortController.signal.aborted) {
           return
@@ -154,10 +152,11 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
         const finalReply = modelType === 'ollama' ? stripThinkTags(fullReply) : fullReply
 
-        let replyText = finalReply
-
-        const parsed = parseJsonSalvage(finalReply) as any
-        replyText = parsed?.reply ?? finalReply
+        const { text: replyText, emotion: selfEmotion, emote: emoteTag } = parseReplyTags(
+          finalReply,
+          state.manifest?.emotionVocabulary ?? [],
+          state.manifest?.emoteTagVocabulary ?? []
+        )
 
         if (isEmptyReply(replyText)) {
           console.error(
@@ -176,7 +175,6 @@ export async function chatRoutes(fastify: FastifyInstance) {
           markExplicitSleep(sessionId)
         }
 
-        const emoteTag = parseEmoteTag(finalReply)
         const emoteFile = selectEmoteFile(emoteTag, state.manifest)
 
         send('message_done', {
@@ -186,13 +184,18 @@ export async function chatRoutes(fastify: FastifyInstance) {
           ...(emoteFile ? { emote: emoteFile } : {}),
         })
 
-        const selfEmotion = parseSelfEmotion(finalReply)
         const isSleep = selfEmotion?.label === 'sleep'
         if (selfEmotion && !isSleep) {
           try {
             upsertEmotionState(sessionId, { self: selfEmotion, perceived_user: null })
           } catch (err) {
             console.error('[Chat] Failed to persist emotion state:', err)
+          }
+        } else if (!selfEmotion) {
+          try {
+            resetEmotionState(sessionId)
+          } catch (err) {
+            console.error('[Chat] Failed to reset emotion state:', err)
           }
         }
 

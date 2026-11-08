@@ -1,9 +1,10 @@
 // services/core/routes/forget.ts — "忘记某时间段记忆"的预检与执行路由
-// 用法：core/index.ts 里 fastify.register(forgetRoutes)；POST /forget/check（只算影响范围）、POST /forget（执行删除，可带 alsoDeleteAffectedSummaries；受影响摘要冲突时返回 409 + impact）
+// 用法：core/index.ts 里 fastify.register(forgetRoutes)；POST /forget/check（只算影响范围）、POST /forget（执行删除，可带 alsoDeleteAffectedSummaries；受影响摘要冲突时返回 409 + impact）；删除成功后广播 messages-forgotten
 // 形状：请求体 { sessionId, fromTime, toTime（毫秒时间戳）, alsoDeleteAffectedSummaries? }
-// 对应文件：src/settings/memory/ForgetRangePanel.tsx（调用方）/ services/core/memory/forget.ts / services/core/routes/forget.test.ts
+// 对应文件：src/settings/memory/ForgetRangePanel.tsx（调用方）/ src/chat/ChatWindow.tsx（messages-forgotten 订阅方）/ services/core/events/broadcast.ts / services/core/memory/forget.ts / services/core/routes/forget.test.ts
 import type { FastifyInstance } from 'fastify'
 import { checkForgetImpact, forgetTimeRange, ForgetConflictError } from '../memory/forget.js'
+import { broadcastEvent } from '../events/broadcast.js'
 import { invalidRequest, type ErrorBody } from '../../../shared/errorCodes.js'
 
 interface ForgetCheckBody {
@@ -52,9 +53,11 @@ export async function forgetRoutes(fastify: FastifyInstance) {
     const { sessionId, fromTime, toTime, alsoDeleteAffectedSummaries } = request.body as Required<ForgetCheckBody> & ForgetBody
 
     try {
-      return forgetTimeRange(sessionId, fromTime, toTime, {
+      const result = forgetTimeRange(sessionId, fromTime, toTime, {
         alsoDeleteAffectedSummaries: alsoDeleteAffectedSummaries === true,
       })
+      broadcastEvent('messages-forgotten', { sessionId })
+      return result
     } catch (err) {
       if (err instanceof ForgetConflictError) {
         return reply.status(409).send(err.impact)

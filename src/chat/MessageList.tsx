@@ -1,6 +1,6 @@
 // src/chat/MessageList.tsx — 聊天窗口的消息滚动列表：渲染气泡，滚到顶部附近或内容未铺满容器时请求更早历史并保持滚动位置，离底部较远时显示回到底部按钮
 // 用法：ChatWindow 渲染 <MessageList />（以 sessionId 作 key）；scrollToBottomSignal 变化时滚到底部
-// 形状：props { messages, isReplying, avatarUrl?, userAvatarUrl?, displayName?, hasMoreHistory?, onLoadMore?, scrollToBottomSignal? }
+// 形状：props { messages, isReplying, avatarUrl?, userAvatarUrl?, displayName?, hasMoreHistory?, onLoadMore?, onReloadHistory?, reloadingHistory?, scrollToBottomSignal? }
 // 对应文件：src/chat/ChatWindow.tsx / src/chat/MessageBubble.tsx
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -16,6 +16,8 @@ interface MessageListProps {
   displayName?: string
   hasMoreHistory?: boolean
   onLoadMore?: () => void
+  onReloadHistory?: () => void
+  reloadingHistory?: boolean
   scrollToBottomSignal?: number
 }
 
@@ -27,6 +29,8 @@ export function MessageList({
   displayName,
   hasMoreHistory,
   onLoadMore,
+  onReloadHistory,
+  reloadingHistory,
   scrollToBottomSignal,
 }: MessageListProps) {
   const { t } = useTranslation()
@@ -91,6 +95,8 @@ export function MessageList({
             avatarUrl={avatarUrl}
             userAvatarUrl={userAvatarUrl}
             displayName={displayName}
+            onReloadHistory={onReloadHistory}
+            reloadingHistory={reloadingHistory}
           />
         ))}
         <div ref={bottomRef} />

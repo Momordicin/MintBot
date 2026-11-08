@@ -1,11 +1,12 @@
-// services/core/providers/ModelProvider.ts — 大语言模型调用封装：按配置类型（anthropic / openai / deepseek / ollama）发起流式 complete 或非流式 completeSync
-// 用法：routes/models.ts 调 createAnthropicClient / createOpenAIClient 构建 SDK 客户端；routes/chat.ts 每次聊天用 createModelProviderForPreset(preset, 全局配置, 角色凭据)（预设无模型覆盖则用全局配置）调 complete / completeSync；memory/orchestrator.ts 的按角色后台整理用 createSummaryModelProviderForPreset 调 completeSync；index.ts 与 routes/config.ts 用 createModelProvider 构建 fastify.modelProvider / backgroundModelProvider，后者的 completeSync 供 orchestrator 驱动 entityExtractor 与 summarizer
-// 对应文件：services/core/routes/chat.ts / services/core/routes/config.ts / services/core/routes/models.ts / services/core/index.ts / services/core/memory/orchestrator.ts / shared/types/index.ts / services/core/providers/envCredentials.ts / services/core/session/queries.ts / services/core/providers/ModelProvider.test.ts
+// services/core/providers/ModelProvider.ts — 大语言模型调用封装：按配置类型（anthropic / openai / deepseek / ollama）发起流式 complete、非流式 completeSync，以及带工具的单步聊天 chatTurn
+// 用法：routes/models.ts 调 createAnthropicClient / createOpenAIClient 构建 SDK 客户端；routes/chat.ts 每次聊天用 createModelProviderForPreset(preset, 全局配置, 角色凭据)（预设无模型覆盖则用全局配置）交给 plugins/toolLoop.ts，后者调 supportsTools / chatTurn；memory/orchestrator.ts 的按角色后台整理用 createSummaryModelProviderForPreset 调 completeSync；index.ts 与 routes/config.ts 用 createModelProvider 构建 fastify.modelProvider / backgroundModelProvider，后者的 completeSync 供 orchestrator 驱动 entityExtractor 与 summarizer
+// 对应文件：services/core/routes/chat.ts / services/core/routes/config.ts / services/core/routes/models.ts / services/core/index.ts / services/core/memory/orchestrator.ts / shared/types/index.ts / services/core/providers/envCredentials.ts / services/core/session/queries.ts / services/core/plugins/toolLoop.ts / services/core/providers/ollama.ts / services/core/providers/ModelProvider.test.ts
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
-import type { ChatCompletionCreateParamsBase } from 'openai/resources/chat/completions'
+import type { ChatCompletionCreateParamsBase, ChatCompletionMessageParam, ChatCompletionTool } from 'openai/resources/chat/completions'
 import type { ChatMessage, ModelConfig, CompletionOptions, BuiltContext, Preset } from '../../../shared/types/index.js'
 import { getEnvCredential, type KeyProvider } from './envCredentials.js'
+import { ollamaSupportsTools } from './ollama.js'
 import type { PresetCredentials } from '../session/queries.js'
 
 const STREAM_TIMEOUT_MS = 30000
@@ -141,6 +142,146 @@ function mapOllamaTimeout(err: unknown, callerSignal?: AbortSignal): unknown {
   return err
 }
 
+export interface ToolSpec {
+  name: string
+  description: string
+  parameters: object
+}
+
+export interface ToolCall {
+  id: string
+  name: string
+  args: Record<string, unknown>
+}
+
+export type TurnMessage =
+  | { role: 'system' | 'user'; content: string }
+  | { role: 'assistant'; content: string; toolCalls?: ToolCall[] }
+  | { role: 'tool'; toolCallId: string; content: string }
+
+export interface ChatTurnRequest {
+  system: string
+  messages: TurnMessage[]
+  tools: ToolSpec[]
+  maxTokens?: number
+  signal?: AbortSignal
+  stream: boolean
+}
+
+export interface ChatTurnResult {
+  text: string
+  toolCalls: ToolCall[]
+}
+
+interface ToolCallDelta {
+  index?: number
+  id?: string | null
+  function?: { name?: string | null; arguments?: string | null }
+}
+
+function parseToolArgs(raw: unknown): Record<string, unknown> {
+  let value = raw
+  if (typeof raw === 'string') {
+    if (!raw.trim()) return {}
+    try {
+      value = JSON.parse(raw)
+    } catch (err) {
+      console.error(`[ModelProvider] 解析工具参数失败: ${err instanceof Error ? err.message : String(err)}; 原文: ${raw.slice(0, 200)}`)
+      return {}
+    }
+  }
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+class ToolCallAssembler {
+  private calls = new Map<number, { id: string; name: string; args: string }>()
+
+  push(deltas: ToolCallDelta[] | null | undefined): void {
+    deltas?.forEach((delta, position) => {
+      const index = delta.index ?? position
+      const call = this.calls.get(index) ?? { id: '', name: '', args: '' }
+      if (delta.id) call.id = delta.id
+      if (delta.function?.name) call.name = delta.function.name
+      if (delta.function?.arguments) call.args += delta.function.arguments
+      this.calls.set(index, call)
+    })
+  }
+
+  result(): ToolCall[] {
+    return [...this.calls.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .filter(([, call]) => call.name !== '')
+      .map(([index, call]) => ({ id: call.id || `call_${index}`, name: call.name, args: parseToolArgs(call.args) }))
+  }
+}
+
+function openAIToolCalls(raw: unknown): ToolCall[] {
+  if (!Array.isArray(raw)) return []
+  const calls: ToolCall[] = []
+  raw.forEach((item, index) => {
+    const call = item as { id?: string; type?: string; function?: { name?: string; arguments?: unknown } } | null
+    if (!call?.function?.name || (call.type !== undefined && call.type !== 'function')) return
+    calls.push({ id: call.id || `call_${index}`, name: call.function.name, args: parseToolArgs(call.function.arguments) })
+  })
+  return calls
+}
+
+function toOpenAIMessages(system: string, messages: TurnMessage[]): ChatCompletionMessageParam[] {
+  const out: ChatCompletionMessageParam[] = system ? [{ role: 'system', content: system }] : []
+  for (const message of messages) {
+    if (message.role === 'tool') {
+      out.push({ role: 'tool', tool_call_id: message.toolCallId, content: message.content })
+    } else if (message.role === 'assistant' && message.toolCalls && message.toolCalls.length > 0) {
+      out.push({
+        role: 'assistant',
+        content: message.content || null,
+        tool_calls: message.toolCalls.map(call => ({
+          id: call.id,
+          type: 'function' as const,
+          function: { name: call.name, arguments: JSON.stringify(call.args) },
+        })),
+      })
+    } else {
+      out.push({ role: message.role, content: message.content })
+    }
+  }
+  return out
+}
+
+function toOpenAITools(tools: ToolSpec[]): ChatCompletionTool[] {
+  return tools.map(tool => ({
+    type: 'function' as const,
+    function: { name: tool.name, description: tool.description, parameters: tool.parameters as Record<string, unknown> },
+  }))
+}
+
+function toAnthropicMessages(messages: TurnMessage[]): Anthropic.MessageParam[] {
+  const out: Anthropic.MessageParam[] = []
+  const lastToolResults = (): Anthropic.ContentBlockParam[] | null => {
+    const last = out[out.length - 1]
+    return last?.role === 'user' && Array.isArray(last.content) ? last.content : null
+  }
+  for (const message of messages) {
+    if (message.role === 'system') continue
+    if (message.role === 'tool') {
+      const block: Anthropic.ToolResultBlockParam = { type: 'tool_result', tool_use_id: message.toolCallId, content: message.content }
+      const open = lastToolResults()
+      if (open) open.push(block)
+      else out.push({ role: 'user', content: [block] })
+    } else if (message.role === 'assistant' && message.toolCalls && message.toolCalls.length > 0) {
+      const blocks: Anthropic.ContentBlockParam[] = []
+      if (message.content) blocks.push({ type: 'text', text: message.content })
+      for (const call of message.toolCalls) blocks.push({ type: 'tool_use', id: call.id, name: call.name, input: call.args })
+      out.push({ role: 'assistant', content: blocks })
+    } else {
+      const open = message.role === 'user' ? lastToolResults() : null
+      if (open) open.push({ type: 'text', text: message.content })
+      else out.push({ role: message.role, content: message.content })
+    }
+  }
+  return out
+}
+
 export class ModelProvider {
   private config: ModelConfig
 
@@ -263,6 +404,133 @@ export class ModelProvider {
       default:
         throw new Error(`Unknown model provider type: ${this.config.type}`)
     }
+  }
+
+  async supportsTools(): Promise<boolean> {
+    if (this.config.type !== 'ollama') return true
+    return ollamaSupportsTools(this.config.ollamaBaseUrl || 'http://localhost:11434', this.config.ollamaModel ?? 'qwen3')
+  }
+
+  async chatTurn(request: ChatTurnRequest): Promise<ChatTurnResult> {
+    switch (this.config.type) {
+      case 'anthropic':
+        return this.chatTurnAnthropic(request)
+      case 'openai':
+        return this.chatTurnOpenAI('openai', request)
+      case 'deepseek':
+        return this.chatTurnOpenAI('deepseek', request)
+      case 'ollama':
+        try {
+          return await ModelProvider.callOpenAICompatibleTurn(
+            (this.config.ollamaBaseUrl || 'http://localhost:11434') + '/v1',
+            'ollama',
+            this.config.ollamaModel ?? 'qwen3',
+            request
+          )
+        } catch (err) {
+          throw mapOllamaTimeout(err, request.signal)
+        }
+      default:
+        throw new Error(`Unknown model provider type: ${this.config.type}`)
+    }
+  }
+
+  private buildOpenAITurnBody(
+    kind: 'openai' | 'deepseek',
+    request: ChatTurnRequest
+  ): ChatCompletionCreateParamsBase | (ChatCompletionCreateParamsBase & DeepSeekExtras) {
+    const maxTokens = request.maxTokens ?? this.config.maxTokens ?? 1000
+    const messages = toOpenAIMessages(request.system, request.messages)
+    const hasTools = request.tools.length > 0
+    const tools = hasTools ? { tools: toOpenAITools(request.tools) } : {}
+    if (kind === 'openai') {
+      return {
+        model: this.config.modelName ?? 'gpt-4o',
+        max_completion_tokens: maxTokens,
+        messages,
+        ...tools,
+      }
+    }
+    return {
+      model: this.config.modelName ?? 'deepseek-v4-flash',
+      max_tokens: maxTokens,
+      messages,
+      thinking: { type: 'disabled' as const },
+      ...tools,
+    }
+  }
+
+  private async chatTurnOpenAI(kind: 'openai' | 'deepseek', request: ChatTurnRequest): Promise<ChatTurnResult> {
+    const client = this.createOpenAIClient(kind)
+    const body = this.buildOpenAITurnBody(kind, request)
+    if (!request.stream) {
+      const completion = await client.chat.completions.create(
+        { ...body, stream: false },
+        { signal: request.signal }
+      )
+      const message = completion.choices[0]?.message
+      return { text: message?.content ?? '', toolCalls: openAIToolCalls(message?.tool_calls) }
+    }
+    const stream = await client.chat.completions.create(
+      { ...body, stream: true },
+      { signal: request.signal, timeout: STREAM_TIMEOUT_MS }
+    )
+    let text = ''
+    const assembler = new ToolCallAssembler()
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta
+      if (delta?.content) text += delta.content
+      assembler.push(delta?.tool_calls)
+    }
+    return { text, toolCalls: assembler.result() }
+  }
+
+  private async chatTurnAnthropic(request: ChatTurnRequest): Promise<ChatTurnResult> {
+    const client = this.createAnthropicClient()
+    const params = {
+      model: this.config.modelName ?? (() => {
+        throw new Error('[ModelProvider] modelName is required in config')
+      })(),
+      max_tokens: request.maxTokens ?? this.config.maxTokens ?? 1000,
+      system: request.system || undefined,
+      messages: toAnthropicMessages(request.messages),
+      tools: request.tools.length > 0
+        ? request.tools.map(tool => ({
+            name: tool.name,
+            description: tool.description,
+            input_schema: tool.parameters as Anthropic.Tool.InputSchema,
+          }))
+        : undefined,
+    }
+    if (!request.stream) {
+      const message = await client.messages.create(params, { signal: request.signal })
+      const text = message.content
+        .filter((block): block is Anthropic.TextBlock => block.type === 'text')
+        .map(block => block.text)
+        .join('')
+      const toolCalls = message.content
+        .filter((block): block is Anthropic.ToolUseBlock => block.type === 'tool_use')
+        .map(block => ({ id: block.id, name: block.name, args: parseToolArgs(block.input) }))
+      return { text, toolCalls }
+    }
+    const stream = await client.messages.stream(params, { signal: request.signal, timeout: STREAM_TIMEOUT_MS })
+    let text = ''
+    const pending = new Map<number, { id: string; name: string; json: string }>()
+    for await (const event of stream) {
+      if (event.type === 'content_block_start' && event.content_block.type === 'tool_use') {
+        pending.set(event.index, { id: event.content_block.id, name: event.content_block.name, json: '' })
+      } else if (event.type === 'content_block_delta') {
+        if (event.delta.type === 'text_delta') text += event.delta.text
+        else if (event.delta.type === 'input_json_delta') {
+          const call = pending.get(event.index)
+          if (call) call.json += event.delta.partial_json
+        }
+      }
+    }
+    const toolCalls = [...pending.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([, call]) => ({ id: call.id, name: call.name, args: parseToolArgs(call.json) }))
+    return { text, toolCalls }
   }
 
   private async *completeAnthropic(
@@ -537,6 +805,98 @@ export class ModelProvider {
 
     const json = await response.json()
     return stripThinkTags(json.choices?.[0]?.message?.content ?? '')
+  }
+
+  private static async callOpenAICompatibleTurn(
+    baseUrl: string,
+    apiKey: string,
+    model: string,
+    request: ChatTurnRequest
+  ): Promise<ChatTurnResult> {
+    const hasTools = request.tools.length > 0
+    const body = JSON.stringify({
+      model,
+      stream: request.stream,
+      messages: toOpenAIMessages(request.system, request.messages),
+      ...(hasTools ? { tools: toOpenAITools(request.tools) } : {}),
+    })
+    const headers = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    }
+
+    if (!request.stream) {
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers,
+        body,
+        signal: ollamaSignal(request.signal),
+      })
+      if (!response.ok) { throw new Error(`OpenAI API error: ${await ModelProvider.describeErrorResponse(response)}`) }
+      const json = await response.json()
+      const message = json.choices?.[0]?.message
+      return { text: stripThinkTags(message?.content ?? ''), toolCalls: openAIToolCalls(message?.tool_calls) }
+    }
+
+    const controller = new AbortController()
+    const signal = request.signal ? AbortSignal.any([request.signal, controller.signal]) : controller.signal
+    let timeoutError: Error | undefined
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const arm = (ms: number, message: string) => {
+      clearTimeout(timer)
+      timer = setTimeout(() => {
+        timeoutError = new Error(message)
+        controller.abort()
+      }, ms)
+    }
+    arm(OLLAMA_FIRST_OUTPUT_TIMEOUT_MS, `Ollama produced no output within ${OLLAMA_FIRST_OUTPUT_TIMEOUT_MS / 1000}s`)
+
+    try {
+      const response = await fetch(`${baseUrl}/chat/completions`, { method: 'POST', headers, body, signal })
+      if (!response.ok) { throw new Error(`OpenAI API error: ${await ModelProvider.describeErrorResponse(response)}`) }
+      if (!response.body) { throw new Error('[ModelProvider] Response body is null') }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      const filter = new ThinkTagFilter()
+      const assembler = new ToolCallAssembler()
+      let text = ''
+      let buffer = ''
+      let received = false
+      const finish = (): ChatTurnResult => {
+        text += filter.flush()
+        return { text, toolCalls: assembler.result() }
+      }
+
+      while (true) {
+        if (received) arm(OLLAMA_STALL_TIMEOUT_MS, `Ollama stream stalled for ${OLLAMA_STALL_TIMEOUT_MS / 1000}s`)
+        const { done, value } = await reader.read()
+        clearTimeout(timer)
+        received = true
+        if (done) return finish()
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const data = line.slice(6).trim()
+          if (data === '[DONE]') return finish()
+          try {
+            const delta = JSON.parse(data).choices?.[0]?.delta
+            text += filter.push(delta?.content ?? '')
+            assembler.push(delta?.tool_calls)
+          } catch {
+          }
+        }
+      }
+    } catch (err) {
+      if (timeoutError && !request.signal?.aborted) throw timeoutError
+      throw err
+    } finally {
+      clearTimeout(timer)
+    }
   }
 }
 

@@ -1,6 +1,6 @@
 // src/chat/MessageBubble.tsx — 单条消息气泡：用户/助手气泡带头像与时间，system 消息渲染为居中提示
 // 用法：MessageList 逐条渲染 <MessageBubble />；同时导出 MessageData 类型，供 ChatWindow / MessageList 使用
-// 形状：props { message: MessageData, prevRole?, avatarUrl?, userAvatarUrl?, displayName? }；与上一条 role 相同时头像留空
+// 形状：props { message: MessageData, prevRole?, avatarUrl?, userAvatarUrl?, displayName?, onReloadHistory?, reloadingHistory? }；与上一条 role 相同时头像留空
 // 对应文件：src/chat/MessageList.tsx / src/chat/ChatWindow.tsx / src/chat/chat.css
 import React from 'react'
 import { useTranslation } from 'react-i18next'
@@ -11,6 +11,7 @@ export interface MessageData {
   content: string
   createdAt: number
   isError?: boolean
+  action?: 'reloadHistory'
 }
 
 interface MessageBubbleProps {
@@ -19,6 +20,8 @@ interface MessageBubbleProps {
   avatarUrl?: string
   userAvatarUrl?: string
   displayName?: string
+  onReloadHistory?: () => void
+  reloadingHistory?: boolean
 }
 
 function formatTime(ts: number, locale: string): string {
@@ -42,15 +45,22 @@ export function MessageBubble({
   avatarUrl,
   userAvatarUrl,
   displayName,
+  onReloadHistory,
+  reloadingHistory,
 }: MessageBubbleProps) {
   const { t, i18n } = useTranslation()
-  const { role, content, createdAt, isError } = message
+  const { role, content, createdAt, isError, action } = message
   const showAvatar = role !== prevRole
 
   if (role === 'system') {
     return (
       <div className="msg-system">
         <span>{content}</span>
+        {action === 'reloadHistory' && onReloadHistory && (
+          <button className="msg-system__action" onClick={onReloadHistory} disabled={reloadingHistory}>
+            {reloadingHistory ? t('加载中…') : t('刷新')}
+          </button>
+        )}
       </div>
     )
   }

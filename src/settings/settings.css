@@ -243,6 +243,10 @@ option {
   font-size: 12px;
 }
 
+.plugin-card__forced-note {
+  text-align: right;
+}
+
 .character-panel__field-label {
   color: var(--label2);
   font-size: 12px;

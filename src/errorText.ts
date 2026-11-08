@@ -1,6 +1,6 @@
 // src/errorText.ts — 把 core 返回的错误响应体按当前界面语言翻成提示文字
 // 用法：聊天窗口与设置窗口各处调 errorText(body, i18n.t)，body 先经 shared/errorCodes.ts 的 isErrorBody 判断
-// 对应文件：shared/errorCodes.ts / src/chat/ChatWindow.tsx / src/settings/GeneralPanel.tsx / src/settings/ModelConfigPanel.tsx / src/settings/ModelNameField.tsx / src/settings/SubscriptionLogin.tsx / src/settings/WindowBehaviorPanel.tsx / src/settings/useCharacterPanel.ts
+// 对应文件：shared/errorCodes.ts / src/chat/ChatWindow.tsx / src/settings/GeneralPanel.tsx / src/settings/ModelConfigPanel.tsx / src/settings/ModelNameField.tsx / src/settings/SubscriptionLogin.tsx / src/settings/WindowBehaviorPanel.tsx / src/settings/PluginsPanel.tsx / src/settings/useCharacterPanel.ts
 import type { TFunction } from 'i18next'
 import type { ErrorBody } from '../shared/errorCodes.js'
 
@@ -56,6 +56,22 @@ export function errorText(body: ErrorBody, t: TFunction): string {
       return t('说的话还不够，请继续说')
     case 'VOICE_INSTALL_UNCONFIGURED':
       return t('语音组件的下载地址尚未配置')
+    case 'PLUGIN_BUSY':
+      return t('已有插件正在安装或更新，请稍后再试')
+    case 'PLUGIN_DOWNLOAD_FAILED':
+      return t('插件下载失败，请检查网络后重试')
+    case 'PLUGIN_PACKAGE_INVALID':
+      return t('插件包不合格，没有安装')
+    case 'PLUGIN_INSTALL_FAILED':
+      return t('插件写入失败，原有版本保持不变')
+    case 'PLUGIN_NOT_FOUND':
+      return t('插件不存在')
+    case 'PLUGIN_CONFIG_INVALID':
+      return t('插件配置不合格，没有保存')
+    case 'PLUGIN_LATEST_FAILED':
+      return t('无法获取')
+    case 'PLUGIN_FORCE_ENABLE_REJECTED':
+      return t('该插件当前不能强制启用')
     case 'INVALID_REQUEST':
       return t('请求无效（错误代码：{{code}}）', { code: body.code })
     default:
