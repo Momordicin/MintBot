@@ -14,6 +14,10 @@ const {
   updateBackgroundModelProviderConfigMock,
   getBackgroundModelProviderConfigMock,
   isEnvCredentialDetectedMock,
+  getWebSearchConfigMock,
+  updateWebSearchConfigMock,
+  getClaudeLoginStatusMock,
+  getCodexLoginStatusMock,
 } = vi.hoisted(() => ({
   getModelProviderConfigMock: vi.fn(),
   getRawBackgroundModelProviderConfigMock: vi.fn(),
@@ -21,6 +25,10 @@ const {
   updateBackgroundModelProviderConfigMock: vi.fn(),
   getBackgroundModelProviderConfigMock: vi.fn(),
   isEnvCredentialDetectedMock: vi.fn(),
+  getWebSearchConfigMock: vi.fn(),
+  updateWebSearchConfigMock: vi.fn(),
+  getClaudeLoginStatusMock: vi.fn(),
+  getCodexLoginStatusMock: vi.fn(),
 }))
 
 vi.mock('../config/index.js', () => ({
@@ -29,7 +37,13 @@ vi.mock('../config/index.js', () => ({
   updateModelProviderConfig: updateModelProviderConfigMock,
   updateBackgroundModelProviderConfig: updateBackgroundModelProviderConfigMock,
   getBackgroundModelProviderConfig: getBackgroundModelProviderConfigMock,
+  getWebSearchConfig: getWebSearchConfigMock,
+  updateWebSearchConfig: updateWebSearchConfigMock,
+  VALID_WEB_SEARCH_PROVIDERS: ['deepseek', 'tavily', 'anysearch', 'claude', 'codex'],
 }))
+
+vi.mock('../agents/claudeCode.js', () => ({ getClaudeLoginStatus: getClaudeLoginStatusMock }))
+vi.mock('../agents/codex.js', () => ({ getCodexLoginStatus: getCodexLoginStatusMock }))
 
 vi.mock('../providers/envCredentials.js', async importOriginal => {
   const actual = await importOriginal<typeof import('../providers/envCredentials.js')>()
@@ -42,6 +56,8 @@ async function buildTestApp() {
   return fastify
 }
 
+const emptyWebSearch = { order: [] as string[], anysearchZone: null }
+
 beforeEach(() => {
   getModelProviderConfigMock.mockReset()
   getRawBackgroundModelProviderConfigMock.mockReset()
@@ -49,9 +65,16 @@ beforeEach(() => {
   updateBackgroundModelProviderConfigMock.mockReset()
   getBackgroundModelProviderConfigMock.mockReset()
   isEnvCredentialDetectedMock.mockReset()
+  getWebSearchConfigMock.mockReset()
+  updateWebSearchConfigMock.mockReset()
+  getClaudeLoginStatusMock.mockReset()
+  getCodexLoginStatusMock.mockReset()
   getRawBackgroundModelProviderConfigMock.mockReturnValue(null)
   getBackgroundModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'qwen3' })
   isEnvCredentialDetectedMock.mockReturnValue(false)
+  getWebSearchConfigMock.mockReturnValue(emptyWebSearch)
+  getClaudeLoginStatusMock.mockResolvedValue(false)
+  getCodexLoginStatusMock.mockResolvedValue(false)
 })
 
 const noKeys = {
@@ -750,5 +773,116 @@ describe('PATCH /config/model — config.json 无法读取', () => {
 
     expect(response.statusCode).toBe(500)
     expect(JSON.parse(response.payload).code).not.toBe('CONFIG_FILE_UNREADABLE')
+  })
+})
+
+describe('PATCH /config/model — Key 去掉首尾空白', () => {
+  it('保存时去掉首尾空白，只有空白的 Key 不写入', async () => {
+    getModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'qwen3' })
+    updateModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'qwen3' })
+    const fastify = await buildTestApp()
+
+    await fastify.inject({ method: 'PATCH', url: '/config/model', payload: { modelProvider: { anthropicApiKey: '  sk-ant-1234 ', openaiApiKey: '  ' } } })
+
+    expect(updateModelProviderConfigMock).toHaveBeenLastCalledWith({ anthropicApiKey: 'sk-ant-1234' })
+  })
+})
+
+describe('GET /config/web-search', () => {
+  it('返回顺序、地区、模型名与各 Key 的 hasKey/last4，从不回显完整 Key', async () => {
+    getWebSearchConfigMock.mockReturnValue({
+      order: ['tavily', 'claude'],
+      anysearchZone: 'cn',
+      deepseekApiKey: 'ds-search-secret-1111',
+      tavilyApiKey: 'short',
+    })
+    getModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'qwen3', deepseekApiKey: 'ds-model-secret-2222' })
+    getClaudeLoginStatusMock.mockResolvedValue(true)
+    const fastify = await buildTestApp()
+
+    const response = await fastify.inject({ method: 'GET', url: '/config/web-search' })
+
+    expect(response.statusCode).toBe(200)
+    expect(JSON.parse(response.payload)).toEqual({
+      order: ['tavily', 'claude'],
+      anysearchZone: 'cn',
+      deepseek: { hasKey: true, last4: '1111' },
+      tavily: { hasKey: true, last4: null },
+      anysearch: { hasKey: false, last4: null },
+      modelDeepseek: { hasKey: true, last4: '2222' },
+      claude: { loggedIn: true },
+      codex: { loggedIn: false },
+    })
+    expect(response.payload).not.toContain('secret')
+  })
+
+})
+
+describe('PATCH /config/web-search', () => {
+  const patch = async (payload: Record<string, unknown>) => {
+    const fastify = await buildTestApp()
+    const response = await fastify.inject({ method: 'PATCH', url: '/config/web-search', payload })
+    return { status: response.statusCode, body: JSON.parse(response.payload) }
+  }
+
+  type Setup = { web?: Record<string, unknown>; model?: Record<string, unknown>; claude?: boolean; codex?: boolean }
+  const cases: [string, Setup, Record<string, unknown>, number, Record<string, unknown> | null][] = [
+    ['order 重复', {}, { order: ['anysearch', 'anysearch'] }, 400, { code: 'INVALID_REQUEST' }],
+    ['order 含未知服务', {}, { order: ['bing'] }, 400, { code: 'INVALID_REQUEST' }],
+    ['Tavily 没填 Key', {}, { order: ['tavily'] }, 400, { code: 'WEB_SEARCH_KEY_MISSING', params: { provider: 'tavily' } }],
+    ['DeepSeek 没填 Key', {}, { order: ['deepseek'] }, 400, { code: 'WEB_SEARCH_KEY_MISSING', params: { provider: 'deepseek' } }],
+    ['同一次请求里带上 Key 即可加入', {}, { order: ['tavily'], tavilyApiKey: 'tvly-key' }, 200, null],
+    ['已保存的 Key 可加入', { web: { tavilyApiKey: 'tvly-key' } }, { order: ['tavily'] }, 200, null],
+    ['AnySearch 不需要 Key', {}, { order: ['anysearch'] }, 200, null],
+    ['Claude Code 未登录', {}, { order: ['claude'] }, 400, { code: 'WEB_SEARCH_LOGIN_MISSING', params: { provider: 'claude' } }],
+    ['Codex 未登录', {}, { order: ['codex'] }, 400, { code: 'WEB_SEARCH_LOGIN_MISSING', params: { provider: 'codex' } }],
+    ['Claude Code、Codex 已登录', { claude: true, codex: true }, { order: ['codex', 'claude'] }, 200, null],
+    ['已在顺序里的订阅之后退出登录，不因重新保存而被拒', { web: { order: ['claude'] } }, { order: ['claude', 'anysearch'] }, 200, null],
+    ['anysearchZone 不合法', {}, { anysearchZone: 'both' }, 400, { code: 'INVALID_REQUEST' }],
+    ['anysearchZone: cn', {}, { anysearchZone: 'cn' }, 200, null],
+    ['anysearchZone: intl', {}, { anysearchZone: 'intl' }, 200, null],
+    ['anysearchZone: null', {}, { anysearchZone: null }, 200, null],
+  ]
+
+  it.each(cases)('%s', async (_name, setup, payload, status, error) => {
+    getWebSearchConfigMock.mockReturnValue({ ...emptyWebSearch, ...setup.web })
+    getModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'qwen3', ...setup.model })
+    getClaudeLoginStatusMock.mockResolvedValue(setup.claude === true)
+    getCodexLoginStatusMock.mockResolvedValue(setup.codex === true)
+
+    const result = await patch(payload)
+
+    expect(result.status).toBe(status)
+    if (error) {
+      expect(result.body).toMatchObject(error)
+      expect(updateWebSearchConfigMock).not.toHaveBeenCalled()
+    } else {
+      expect(updateWebSearchConfigMock).toHaveBeenCalledTimes(1)
+    }
+  })
+
+  it('空字符串的 Key 不写入，Key 保存时去掉首尾空白', async () => {
+    await patch({ tavilyApiKey: '  ', anysearchApiKey: ' any-key ' })
+    expect(updateWebSearchConfigMock).toHaveBeenCalledWith({ anysearchApiKey: 'any-key' })
+  })
+
+  it.each([
+    ['模型设置里有已保存的 Key：复制并可同时加入顺序', { deepseekApiKey: 'ds-model-key' }, 200],
+    ['模型设置里没有 Key', {}, 400],
+    ['模型设置里只有环境变量来源，没有已保存的 Key', { deepseekApiKeyFromEnv: true }, 400],
+  ])('copyDeepseekKeyFromModel：%s', async (_name, model, status) => {
+    getModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'qwen3', ...model })
+    isEnvCredentialDetectedMock.mockReturnValue(true)
+
+    const result = await patch({ copyDeepseekKeyFromModel: true, order: ['deepseek'] })
+
+    expect(result.status).toBe(status)
+    if (status === 200) {
+      expect(updateWebSearchConfigMock).toHaveBeenCalledWith({ order: ['deepseek'], deepseekApiKey: 'ds-model-key' })
+      expect(JSON.stringify(result.body)).not.toContain('ds-model-key')
+    } else {
+      expect(result.body).toEqual({ code: 'WEB_SEARCH_NO_SAVED_DEEPSEEK_KEY' })
+      expect(updateWebSearchConfigMock).not.toHaveBeenCalled()
+    }
   })
 })

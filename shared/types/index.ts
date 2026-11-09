@@ -21,6 +21,16 @@ export interface ModelConfig {
   
 }
 
+export type WebSearchProvider = 'deepseek' | 'tavily' | 'anysearch' | 'claude' | 'codex'
+
+export interface WebSearchConfig {
+  order: WebSearchProvider[]
+  deepseekApiKey?: string
+  tavilyApiKey?: string
+  anysearchApiKey?: string
+  anysearchZone: 'cn' | 'intl' | null
+}
+
 export interface ToolSchema {
   name: string
   description: string

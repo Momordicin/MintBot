@@ -1,12 +1,12 @@
 // services/core/config/index.ts — config.json 的读取、热重载与按段写回
-// 用法：core/index.ts 调 startConfigWatcher；其余模块用 getXxxConfig() 读取，用 update*Config / setDefaultPresetId 写回；界面语言由 routes/ui.ts 经 getUiLanguage / updateUiLanguage 直接读写 config.json 的 ui 段
+// 用法：core/index.ts 调 startConfigWatcher；其余模块用 getXxxConfig() 读取，用 update*Config / setDefaultPresetId 写回（含 getWebSearchConfig / updateWebSearchConfig 读写 webSearch 段）；界面语言由 routes/ui.ts 经 getUiLanguage / updateUiLanguage 直接读写 config.json 的 ui 段
 // 对应文件：services/core/config/configFileError.ts / services/core/config/index.test.ts
 import fs from 'fs'
 import path from 'path'
 import crypto from 'crypto'
 import chokidar from 'chokidar'
 import { ConfigFileUnreadableError } from './configFileError.js'
-import type { ModelConfig } from '../../../shared/types/index.js'
+import type { ModelConfig, WebSearchConfig, WebSearchProvider } from '../../../shared/types/index.js'
 import type { AppRule, AppRuleEffect, ChatPinMode, WindowBehaviorConfig } from '../../../shared/windowBehavior.js'
 import { VALID_UI_LANGUAGES } from '../../../shared/uiLocale.js'
 import type { UiLanguage } from '../../../shared/uiLocale.js'
@@ -73,6 +73,12 @@ const DEFAULT_WINDOW_BEHAVIOR_CONFIG: WindowBehaviorConfig = {
   appRules: [],
 }
 
+const DEFAULT_WEB_SEARCH_CONFIG: WebSearchConfig = {
+  order: [],
+  anysearchZone: null,
+}
+
+export const VALID_WEB_SEARCH_PROVIDERS: readonly WebSearchProvider[] = ['deepseek', 'tavily', 'anysearch', 'claude', 'codex']
 export const VALID_CHAT_PIN_MODES: readonly ChatPinMode[] = ['always', 'smart', 'off']
 export const VALID_APP_RULE_EFFECTS: readonly AppRuleEffect[] = ['allow', 'soft', 'hard']
 
@@ -80,6 +86,7 @@ let currentMemoryConfig: MemoryConfig = DEFAULT_MEMORY_CONFIG
 let currentModelProviderConfig: ModelConfig | undefined
 let currentBackgroundModelProviderConfig: BackgroundModelConfig | undefined
 let currentWindowBehaviorConfig: WindowBehaviorConfig = DEFAULT_WINDOW_BEHAVIOR_CONFIG
+let currentWebSearchConfig: WebSearchConfig = DEFAULT_WEB_SEARCH_CONFIG
 let windowBehaviorRevision = 1
 let windowBehaviorSignature = serializeWindowBehaviorConfig(DEFAULT_WINDOW_BEHAVIOR_CONFIG)
 let windowBehaviorSeeded = false
@@ -215,6 +222,24 @@ function mergeWindowBehaviorConfig(raw: unknown): WindowBehaviorConfig {
   return { chatPinMode, petAvoidanceEnabled, petClickThrough, petCollapsed, appRules: mergeAppRules(windowBehavior) }
 }
 
+function mergeWebSearchConfig(raw: unknown): WebSearchConfig {
+  const section = (raw as Record<string, unknown> | undefined)?.webSearch as Record<string, unknown> | undefined
+  const orderValue = section?.order
+  const order = Array.isArray(orderValue)
+    ? orderValue.filter((item, index): item is WebSearchProvider =>
+        VALID_WEB_SEARCH_PROVIDERS.includes(item as WebSearchProvider) && orderValue.indexOf(item) === index)
+    : []
+  const config: WebSearchConfig = {
+    order,
+    anysearchZone: section?.anysearchZone === 'cn' || section?.anysearchZone === 'intl' ? section.anysearchZone : null,
+  }
+  for (const field of ['deepseekApiKey', 'tavilyApiKey', 'anysearchApiKey'] as const) {
+    const value = section?.[field]
+    if (typeof value === 'string' && value !== '') config[field] = value
+  }
+  return config
+}
+
 function serializeWindowBehaviorConfig(config: WindowBehaviorConfig): string {
   return JSON.stringify([config.chatPinMode, config.petAvoidanceEnabled, config.petClickThrough, config.petCollapsed, config.appRules.map(rule => [rule.exeName, rule.effect])])
 }
@@ -246,6 +271,7 @@ function load(): LoadResult {
       currentModelProviderConfig = undefined
       currentBackgroundModelProviderConfig = undefined
       applyWindowBehaviorConfig(mergeWindowBehaviorConfig(undefined))
+      currentWebSearchConfig = mergeWebSearchConfig(undefined)
       currentDefaultPresetId = undefined
       loaded = true
     } else {
@@ -269,6 +295,8 @@ function load(): LoadResult {
     backgroundModelProviderRaw && typeof backgroundModelProviderRaw === 'object'
       ? pickBackgroundFields(backgroundModelProviderRaw)
       : undefined
+
+  currentWebSearchConfig = mergeWebSearchConfig(raw)
 
   const windowBehaviorChanged = applyWindowBehaviorConfig(mergeWindowBehaviorConfig(raw))
 
@@ -305,6 +333,11 @@ export function getWindowBehaviorConfig(): WindowBehaviorConfig {
 export function getWindowBehaviorRevision(): number {
   ensureLoaded()
   return windowBehaviorRevision
+}
+
+export function getWebSearchConfig(): WebSearchConfig {
+  ensureLoaded()
+  return currentWebSearchConfig
 }
 
 export function getDefaultPresetId(): string | undefined {
@@ -358,7 +391,7 @@ function readRawConfig(): Record<string, unknown> {
   return parsed as Record<string, unknown>
 }
 
-function readRawSection(section: 'modelProvider' | 'backgroundModelProvider' | 'windowBehavior' | 'ui' | 'voice'): Record<string, unknown> {
+function readRawSection(section: 'modelProvider' | 'backgroundModelProvider' | 'windowBehavior' | 'ui' | 'voice' | 'webSearch'): Record<string, unknown> {
   const value = readRawConfig()[section]
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
 }
@@ -367,6 +400,7 @@ type ConfigSectionValue = {
   modelProvider: ModelConfig
   backgroundModelProvider: BackgroundModelConfig
   windowBehavior: WindowBehaviorConfig
+  webSearch: WebSearchConfig
   ui: { language: UiLanguage }
   voice: { inputMode: VoiceInputMode }
   defaultPresetId: string
@@ -423,6 +457,14 @@ export function updateWindowBehaviorConfig(partial: Partial<WindowBehaviorConfig
   }
   writeConfigSection('windowBehavior', merged)
   applyWindowBehaviorConfig(merged)
+  loaded = true
+  return merged
+}
+
+export function updateWebSearchConfig(partial: Partial<WebSearchConfig>): WebSearchConfig {
+  const merged = { ...mergeWebSearchConfig({ webSearch: readRawSection('webSearch') }), ...partial }
+  writeConfigSection('webSearch', merged)
+  currentWebSearchConfig = merged
   loaded = true
   return merged
 }

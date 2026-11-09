@@ -1,8 +1,21 @@
 // src/errorText.ts — 把 core 返回的错误响应体按当前界面语言翻成提示文字
-// 用法：聊天窗口与设置窗口各处调 errorText(body, i18n.t)，body 先经 shared/errorCodes.ts 的 isErrorBody 判断
-// 对应文件：shared/errorCodes.ts / src/chat/ChatWindow.tsx / src/settings/GeneralPanel.tsx / src/settings/ModelConfigPanel.tsx / src/settings/ModelNameField.tsx / src/settings/SubscriptionLogin.tsx / src/settings/WindowBehaviorPanel.tsx / src/settings/PluginsPanel.tsx / src/settings/useCharacterPanel.ts
+// 用法：聊天窗口与设置窗口各处调 errorText(body, i18n.t)，body 先经 shared/errorCodes.ts 的 isErrorBody 判断；WebSearchPanel 复用导出的 providerName
+// 对应文件：shared/errorCodes.ts / src/chat/ChatWindow.tsx / src/settings/GeneralPanel.tsx / src/settings/ModelConfigPanel.tsx / src/settings/ModelNameField.tsx / src/settings/SubscriptionLogin.tsx / src/settings/WindowBehaviorPanel.tsx / src/settings/PluginsPanel.tsx / src/settings/WebSearchPanel.tsx / src/settings/useCharacterPanel.ts
 import type { TFunction } from 'i18next'
 import type { ErrorBody } from '../shared/errorCodes.js'
+import type { WebSearchProvider } from '../shared/types/index.js'
+
+export function providerName(provider: WebSearchProvider, t: TFunction): string {
+  switch (provider) {
+    case 'deepseek': return t('DeepSeek 搜索')
+    case 'tavily': return 'Tavily'
+    case 'anysearch': return 'AnySearch'
+    case 'claude': return t('Claude Code 订阅')
+    case 'codex': return t('Codex 订阅')
+  }
+}
+
+const SUBSCRIPTION_NAME: Partial<Record<string, string>> = { claude: 'Claude Code', codex: 'Codex' }
 
 export function errorText(body: ErrorBody, t: TFunction): string {
   switch (body.code) {
@@ -72,6 +85,12 @@ export function errorText(body: ErrorBody, t: TFunction): string {
       return t('无法获取')
     case 'PLUGIN_FORCE_ENABLE_REJECTED':
       return t('该插件当前不能强制启用')
+    case 'WEB_SEARCH_KEY_MISSING':
+      return t('{{provider}} 还没有填写 API Key', { provider: providerName((body.params?.provider ?? 'deepseek') as WebSearchProvider, t) })
+    case 'WEB_SEARCH_LOGIN_MISSING':
+      return t('{{provider}} 订阅还没有登录，请先在全局模型服务里登录', { provider: SUBSCRIPTION_NAME[body.params?.provider ?? ''] ?? '' })
+    case 'WEB_SEARCH_NO_SAVED_DEEPSEEK_KEY':
+      return t('模型设置里没有已保存的 DeepSeek Key')
     case 'INVALID_REQUEST':
       return t('请求无效（错误代码：{{code}}）', { code: body.code })
     default:

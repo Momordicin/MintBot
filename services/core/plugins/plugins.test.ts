@@ -313,12 +313,24 @@ describe('ctx.fetch', () => {
   let server: http.Server
   let base: string
   let hits: Record<string, number>
+  let received: string[]
 
   beforeEach(async () => {
     hits = {}
+    received = []
     server = http.createServer((request, response) => {
       const url = request.url ?? ''
       hits[url] = (hits[url] ?? 0) + 1
+      if (url === '/echo') {
+        let body = ''
+        request.on('data', chunk => { body += chunk })
+        request.on('end', () => {
+          received.push(`${request.method} ${body}`)
+          if (received.length === 1) response.writeHead(503).end('busy')
+          else response.writeHead(200).end('ok')
+        })
+        return
+      }
       if (url === '/flaky') {
         if (hits[url] === 1) response.writeHead(503).end('busy')
         else response.writeHead(200).end('ok')
@@ -345,6 +357,15 @@ describe('ctx.fetch', () => {
     const result = await createPluginFetch(STANDARD)(`${base}/flaky`, undefined, signal())
     expect(result).toEqual({ ok: true, status: 200, body: 'ok' })
     expect(hits['/flaky']).toBe(2)
+  })
+
+  it.each([
+    ['不带 method / body 时仍是 GET', undefined, ['GET ', 'GET ']],
+    ['带 method / body 时按 POST 发出，重试时仍带', { method: 'POST' as const, body: '{"q":1}' }, ['POST {"q":1}', 'POST {"q":1}']],
+  ])('%s', async (_name, init, expected) => {
+    const result = await createPluginFetch(STANDARD)(`${base}/echo`, init, signal())
+    expect(result).toEqual({ ok: true, status: 200, body: 'ok' })
+    expect(received).toEqual(expected)
   })
 
   it('超过重试次数后返回 http', async () => {

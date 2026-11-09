@@ -900,6 +900,35 @@ option {
   font-size: 12px;
 }
 
+/* 联网搜索页的调用顺序列表：一个外框，行之间细线分隔 */
+.web-search-panel__list {
+  border: 1px solid var(--input-border);
+  border-radius: 6px;
+}
+
+.web-search-panel__list-row {
+  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--label);
+}
+
+.web-search-panel__list-row + .web-search-panel__list-row {
+  border-top: 1px solid var(--input-border);
+}
+
+.web-search-panel__list-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.web-search-panel__list-row--disabled .web-search-panel__list-name {
+  opacity: 0.5;
+}
+
 .window-behavior-panel__list-row {
   border: 1px solid var(--input-border);
   border-radius: 6px;

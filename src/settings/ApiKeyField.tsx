@@ -1,6 +1,6 @@
 // src/settings/ApiKeyField.tsx — 设置窗口共用的 API Key 字段
-// 用法：ModelConfigPanel 的三个 Key 分组渲染 <ApiKeyField />，PersonaModelPanel 的模型行渲染 <ApiKeyField compact />；导出 KeyProvider / ENV_VAR
-// 对应文件：src/settings/ModelConfigPanel.tsx / src/settings/PersonaModelPanel.tsx / src/settings/settings.css
+// 用法：ModelConfigPanel 的三个 Key 分组渲染 <ApiKeyField />，PersonaModelPanel 的模型行渲染 <ApiKeyField compact />，WebSearchPanel 的三个 Key 传 showEnv={false} 隐藏环境变量选项；导出 KeyProvider / ENV_VAR
+// 对应文件：src/settings/ModelConfigPanel.tsx / src/settings/PersonaModelPanel.tsx / src/settings/WebSearchPanel.tsx / src/settings/settings.css
 import React, { useId } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -50,9 +50,10 @@ interface ApiKeyFieldProps {
   keyStatus?: ApiKeyLoadStatus
   envStatus?: ApiKeyLoadStatus
   compact?: boolean
+  showEnv?: boolean
 }
 
-export function ApiKeyField({ summary, envDetected, envVar, fromEnv, keyInput, editing, onKeyInputChange, onEditingChange, onFromEnvChange, keyStatus = 'ready', envStatus = 'ready', compact = false }: ApiKeyFieldProps) {
+export function ApiKeyField({ summary, envDetected, envVar, fromEnv, keyInput, editing, onKeyInputChange, onEditingChange, onFromEnvChange, keyStatus = 'ready', envStatus = 'ready', compact = false, showEnv = true }: ApiKeyFieldProps) {
   const { t } = useTranslation()
   const inputId = useId()
   const envHintId = useId()
@@ -102,6 +103,7 @@ export function ApiKeyField({ summary, envDetected, envVar, fromEnv, keyInput, e
           )}
         </div>
       </div>
+      {showEnv && <>
       <label
         className={compact ? 'model-config-panel__checkbox model-config-panel__checkbox--compact' : 'model-config-panel__checkbox'}
         title={compact ? envHint : undefined}
@@ -122,6 +124,7 @@ export function ApiKeyField({ summary, envDetected, envVar, fromEnv, keyInput, e
       {!compact && envStatus === 'ready' && !envDetected && (
         <div className="model-config-panel__checkbox">{t('未检测到环境变量 {{envVar}}；修改环境变量后需重启 MintBot', { envVar })}</div>
       )}
+      </>}
     </>
   )
 }

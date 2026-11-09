@@ -1,6 +1,6 @@
-// services/core/routes/config.ts — 模型配置的读取与修改路由
-// 用法：core/index.ts 注册 configRoutes；GET /config/model、PATCH /config/model
-// 对应文件：src/settings/ModelConfigPanel.tsx / services/core/config/index.ts / services/core/config/keySummary.ts / services/core/providers/envCredentials.ts / services/core/routes/config.test.ts / shared/errorCodes.ts
+// services/core/routes/config.ts — 模型配置与联网搜索设置的读取与修改路由
+// 用法：core/index.ts 注册 configRoutes；GET /config/model、PATCH /config/model、GET /config/web-search、PATCH /config/web-search
+// 对应文件：src/settings/ModelConfigPanel.tsx / src/settings/WebSearchPanel.tsx / services/core/config/index.ts / services/core/config/keySummary.ts / services/core/providers/envCredentials.ts / services/core/agents/claudeCode.ts / services/core/agents/codex.ts / services/core/routes/config.test.ts / shared/errorCodes.ts
 import type { FastifyInstance } from 'fastify'
 import {
   getModelProviderConfig,
@@ -8,13 +8,18 @@ import {
   getRawBackgroundModelProviderConfig,
   updateModelProviderConfig,
   updateBackgroundModelProviderConfig,
+  getWebSearchConfig,
+  updateWebSearchConfig,
+  VALID_WEB_SEARCH_PROVIDERS,
   type BackgroundModelConfig,
 } from '../config/index.js'
 import { summarizeSavedKey } from '../config/keySummary.js'
 import { ConfigFileUnreadableError } from '../config/configFileError.js'
 import { createModelProvider } from '../providers/ModelProvider.js'
 import { ENV_VAR_BY_PROVIDER, isEnvCredentialDetected, type KeyProvider } from '../providers/envCredentials.js'
-import type { ModelConfig } from '../../../shared/types/index.js'
+import { getClaudeLoginStatus } from '../agents/claudeCode.js'
+import { getCodexLoginStatus } from '../agents/codex.js'
+import type { ModelConfig, WebSearchConfig, WebSearchProvider } from '../../../shared/types/index.js'
 import { ERROR_CODES, errorBody, invalidRequest, type ErrorBody } from '../../../shared/errorCodes.js'
 
 const VALID_MODEL_TYPES: readonly string[] = ['anthropic', 'openai', 'ollama', 'deepseek']
@@ -109,7 +114,9 @@ function dropEmptyKeys(partial: Partial<ModelConfig> | undefined): Partial<Model
   for (const provider of KEY_PROVIDERS) {
     const field = KEY_FIELD[provider].key
     const value = cleaned[field]
-    if (typeof value === 'string' && value.trim() === '') delete cleaned[field]
+    if (typeof value !== 'string') continue
+    if (value.trim() === '') delete cleaned[field]
+    else cleaned[field] = value.trim()
   }
   return cleaned
 }
@@ -158,6 +165,103 @@ function pickBackgroundPartial(partial: Partial<ModelConfig>): Partial<ModelConf
   if (partial.modelName !== undefined) picked.modelName = partial.modelName
   if (partial.ollamaModel !== undefined) picked.ollamaModel = partial.ollamaModel
   return picked
+}
+
+const WEB_SEARCH_KEY_FIELDS = ['deepseekApiKey', 'tavilyApiKey', 'anysearchApiKey'] as const
+
+const WEB_SEARCH_KEY_BY_PROVIDER: Partial<Record<WebSearchProvider, (typeof WEB_SEARCH_KEY_FIELDS)[number]>> = {
+  deepseek: 'deepseekApiKey',
+  tavily: 'tavilyApiKey',
+}
+
+interface WebSearchPatchBody {
+  order?: unknown
+  deepseekApiKey?: unknown
+  tavilyApiKey?: unknown
+  anysearchApiKey?: unknown
+  anysearchZone?: unknown
+  copyDeepseekKeyFromModel?: unknown
+}
+
+function readModelConfig(): Partial<ModelConfig> {
+  try {
+    return getModelProviderConfig()
+  } catch {
+    return {}
+  }
+}
+
+async function buildWebSearchSummary() {
+  const config = getWebSearchConfig()
+  const model = readModelConfig()
+  const [claude, codex] = await Promise.all([getClaudeLoginStatus(), getCodexLoginStatus()])
+  return {
+    order: config.order,
+    anysearchZone: config.anysearchZone,
+    deepseek: summarizeSavedKey(config.deepseekApiKey),
+    tavily: summarizeSavedKey(config.tavilyApiKey),
+    anysearch: summarizeSavedKey(config.anysearchApiKey),
+    modelDeepseek: summarizeSavedKey(model.deepseekApiKey),
+    claude: { loggedIn: claude },
+    codex: { loggedIn: codex },
+  }
+}
+
+async function validateWebSearchOrder(order: WebSearchProvider[], current: WebSearchConfig, effective: WebSearchConfig): Promise<ErrorBody | null> {
+  for (const provider of order) {
+    if (current.order.includes(provider)) continue
+    const keyField = WEB_SEARCH_KEY_BY_PROVIDER[provider]
+    if (keyField && !effective[keyField]) {
+      return errorBody(ERROR_CODES.WEB_SEARCH_KEY_MISSING, { provider })
+    }
+    if (provider === 'claude' && !(await getClaudeLoginStatus())) {
+      return errorBody(ERROR_CODES.WEB_SEARCH_LOGIN_MISSING, { provider })
+    }
+    if (provider === 'codex' && !(await getCodexLoginStatus())) {
+      return errorBody(ERROR_CODES.WEB_SEARCH_LOGIN_MISSING, { provider })
+    }
+  }
+  return null
+}
+
+async function buildWebSearchPatch(body: WebSearchPatchBody, current: WebSearchConfig): Promise<{ patch: Partial<WebSearchConfig> } | { error: ErrorBody }> {
+  const patch: Partial<WebSearchConfig> = {}
+
+  if (body.order !== undefined) {
+    const { order } = body
+    if (!Array.isArray(order) || order.some(item => !VALID_WEB_SEARCH_PROVIDERS.includes(item as WebSearchProvider))) {
+      return { error: invalidRequest('order must be an array of deepseek, tavily, anysearch, claude, codex') }
+    }
+    if (new Set(order).size !== order.length) return { error: invalidRequest('order must not contain duplicates') }
+    patch.order = order as WebSearchProvider[]
+  }
+
+  for (const field of WEB_SEARCH_KEY_FIELDS) {
+    const value = body[field]
+    if (value === undefined) continue
+    if (typeof value !== 'string') return { error: invalidRequest(`${field} must be a string`) }
+    if (value.trim() !== '') patch[field] = value.trim()
+  }
+
+  if (body.anysearchZone !== undefined) {
+    if (body.anysearchZone !== 'cn' && body.anysearchZone !== 'intl' && body.anysearchZone !== null) {
+      return { error: invalidRequest('anysearchZone must be cn, intl or null') }
+    }
+    patch.anysearchZone = body.anysearchZone
+  }
+
+  if (body.copyDeepseekKeyFromModel !== undefined) {
+    if (body.copyDeepseekKeyFromModel !== true) return { error: invalidRequest('copyDeepseekKeyFromModel must be true') }
+    const saved = readModelConfig().deepseekApiKey
+    if (typeof saved !== 'string' || saved === '') return { error: errorBody(ERROR_CODES.WEB_SEARCH_NO_SAVED_DEEPSEEK_KEY) }
+    patch.deepseekApiKey = saved
+  }
+
+  if (patch.order) {
+    const error = await validateWebSearchOrder(patch.order, current, { ...current, ...patch })
+    if (error) return { error }
+  }
+  return { patch }
 }
 
 export async function configRoutes(fastify: FastifyInstance) {
@@ -243,5 +347,21 @@ export async function configRoutes(fastify: FastifyInstance) {
       modelProvider: modelProviderResult ? toSummary(modelProviderResult) : null,
       backgroundModelProvider: backgroundResult ? toBackgroundSummary(backgroundResult) : null,
     }
+  })
+
+  fastify.get('/config/web-search', async () => buildWebSearchSummary())
+
+  fastify.patch<{ Body: WebSearchPatchBody }>('/config/web-search', async (request, reply) => {
+    const built = await buildWebSearchPatch(request.body ?? {}, getWebSearchConfig())
+    if ('error' in built) return reply.status(400).send(built.error)
+
+    try {
+      updateWebSearchConfig(built.patch)
+    } catch (err) {
+      if (!(err instanceof ConfigFileUnreadableError)) throw err
+      console.error(err.message)
+      return reply.status(500).send(errorBody(ERROR_CODES.CONFIG_FILE_UNREADABLE))
+    }
+    return buildWebSearchSummary()
   })
 }

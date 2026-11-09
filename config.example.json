@@ -43,6 +43,13 @@
     "petCollapsed": false,
     "appRules": []
   },
+  "webSearch": {
+    "order": [],
+    "deepseekApiKey": "",
+    "tavilyApiKey": "",
+    "anysearchApiKey": "",
+    "anysearchZone": null
+  },
   "defaultPresetId": "preset-001",
   "streaming": true
 }
