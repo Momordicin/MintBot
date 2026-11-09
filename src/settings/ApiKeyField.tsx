@@ -255,18 +255,14 @@ export function ApiKeyField({
         {!keyReady ? (
           <input id={inputId} aria-label={inputLabel} key="view" type="text" readOnly value={keyStatus === 'loading' ? t('加载中…') : t('读取失败')} />
         ) : inlineText ? (
-          <div className="api-key-field__text">
-            <span>{fromEnv ? t('使用环境变量 {{envVar}}', { envVar }) : maskedValue}</span>
-            {!fromEnv && (
-              <button
-                type="button"
-                className="model-config-panel__icon-btn"
-                aria-label={t('编辑 API Key')}
-                onMouseDown={e => e.preventDefault()}
-                onClick={startEditing}
-              >
-                <PencilIcon />
-              </button>
+          <div className="api-key-field__text" role={fromEnv ? undefined : 'img'} aria-label={fromEnv ? undefined : maskedValue}>
+            {fromEnv ? (
+              <span>{t('使用环境变量 {{envVar}}', { envVar })}</span>
+            ) : (
+              <>
+                <span className="api-key-field__dots" aria-hidden="true">{'•'.repeat(64)}</span>
+                <span className="api-key-field__last4" aria-hidden="true">{summary.last4 ?? ''}</span>
+              </>
             )}
           </div>
         ) : fromEnv ? (
@@ -301,7 +297,7 @@ export function ApiKeyField({
         ) : (
           <input id={inputId} aria-label={inputLabel} key="view" type="text" readOnly value={maskedValue} />
         )}
-        {keyReady && !inlineText && !fromEnv && !saving && (compact || editing || keyInput !== '') && (
+        {compact && keyReady && !fromEnv && !saving && (
           <button
             type="button"
             className="model-config-panel__icon-btn"
@@ -315,6 +311,20 @@ export function ApiKeyField({
       </div>
     </div>
   )
+
+  const showEdit = keyReady && inlineText && !fromEnv
+  const showClose = keyReady && !inlineText && !fromEnv && !saving && (editing || keyInput !== '')
+  const editButton = showEdit || showClose ? (
+    <button
+      type="button"
+      className="model-config-panel__icon-btn api-key-field__edit"
+      aria-label={showClose ? t('取消编辑') : t('编辑 API Key')}
+      onMouseDown={e => e.preventDefault()}
+      onClick={showClose ? cancelEditing : startEditing}
+    >
+      {showClose ? <CloseIcon /> : <PencilIcon />}
+    </button>
+  ) : <span />
 
   const testButton = (
     <button type="button" className="rename-btn" disabled={testDisabled} onClick={() => void runTest()}>{t('测试')}</button>
@@ -359,6 +369,7 @@ export function ApiKeyField({
     <div className="api-key-field">
       <label className="api-key-field__label" htmlFor={inputId}>{label}</label>
       {keyBox}
+      {editButton}
       {testButton}
       {resultIcon}
       {hasSecondRow && (

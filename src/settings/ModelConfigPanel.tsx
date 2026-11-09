@@ -250,6 +250,7 @@ function OllamaUrlField({ saved, onCommit, onTest }: OllamaUrlFieldProps) {
           }}
         />
       </div>
+      <span />
       <button
         type="button"
         className="rename-btn"
