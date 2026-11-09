@@ -16,7 +16,7 @@ vi.mock('../agents/claudeCode.js', () => ({ claudeWebSearch: claudeMock }))
 vi.mock('../agents/codex.js', () => ({ codexWebSearch: codexMock }))
 vi.mock('../config/index.js', () => ({ getWebSearchConfig: getWebSearchConfigMock }))
 
-const { webSearch, WebSearchError } = await import('./webSearch.js')
+const { webSearch, testWebSearchKey, WebSearchError } = await import('./webSearch.js')
 
 type Order = ('deepseek' | 'tavily' | 'anysearch' | 'claude' | 'codex')[]
 
@@ -311,5 +311,50 @@ describe('中止', () => {
 
     expect(error.kind).toBe('aborted')
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('testWebSearchKey', () => {
+  const cases: [string, 'deepseek' | 'tavily', string, string][] = [
+    ['DeepSeek', 'deepseek', 'https://api.deepseek.com/models', 'ds-key'],
+    ['Tavily', 'tavily', 'https://api.tavily.com/usage', 'tv-key'],
+  ]
+
+  it.each(cases)('%s：GET 对应地址，带 Bearer Key', async (_name, provider, url, key) => {
+    configure({ deepseekApiKey: 'ds-key', tavilyApiKey: 'tv-key' })
+    fetchMock.mockResolvedValue(ok({}))
+    const abort = signal()
+
+    await testWebSearchKey(provider, abort)
+
+    expect(fetchMock).toHaveBeenCalledWith(url, { method: 'GET', headers: { Authorization: `Bearer ${key}` } }, abort)
+  })
+
+  it.each(['deepseek', 'tavily'] as const)('%s 没有 Key → not_configured，不发请求', async provider => {
+    configure({})
+
+    const error = await failure(testWebSearchKey(provider, signal()))
+
+    expect(error.kind).toBe('not_configured')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('AnySearch 没有 Key 也发一次搜索', async () => {
+    configure({})
+    fetchMock.mockResolvedValue(ok({ data: { results: [] } }))
+
+    await testWebSearchKey('anysearch', signal())
+
+    expect(fetchMock).toHaveBeenCalledWith('https://api.anysearch.com/v1/search', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ query: 'MintBot', max_results: 1 }) }, expect.any(AbortSignal))
+  })
+
+  it('HTTP 失败 → http 错误并带状态码', async () => {
+    configure({ deepseekApiKey: 'k' })
+    fetchMock.mockResolvedValue({ ok: false, kind: 'http', status: 401, message: 'bad' })
+
+    const error = await failure(testWebSearchKey('deepseek', signal()))
+
+    expect(error.kind).toBe('http')
+    expect(error.status).toBe(401)
   })
 })

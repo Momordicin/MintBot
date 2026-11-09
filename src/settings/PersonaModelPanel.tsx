@@ -1,11 +1,14 @@
 // src/settings/PersonaModelPanel.tsx — 设置窗口的「人设与模型」页
 // 用法：SettingsApp 渲染 <PersonaModelPanel panel={useCharacterPanel 的返回值} />
-// 对应文件：src/settings/SettingsApp.tsx / src/settings/useCharacterPanel.ts / src/settings/ApiKeyField.tsx / src/settings/ModelNameField.tsx
+// 对应文件：src/settings/SettingsApp.tsx / src/settings/useCharacterPanel.ts / src/settings/ApiKeyField.tsx / src/settings/ModelNameField.tsx / src/errorText.ts / services/core/routes/models.ts
 import React from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ModelConfig } from '../../shared/types/index.js'
 import type { CharacterPanelModel } from './useCharacterPanel'
-import { ApiKeyField, ENV_VAR, type ApiKeyLoadStatus, type ApiKeySummary, type KeyProvider } from './ApiKeyField.js'
+import { isErrorBody } from '../../shared/errorCodes.js'
+import { CORE_URL } from '../coreUrl.js'
+import { errorText } from '../errorText.js'
+import { ApiKeyField, ENV_VAR, type ApiKeyLoadStatus, type ApiKeySummary, type ApiKeyTestResult, type KeyProvider } from './ApiKeyField.js'
 import { ModelNameField } from './ModelNameField.js'
 
 interface PersonaModelPanelProps {
@@ -37,7 +40,26 @@ function ModelRow({
   label, type, modelName, presetId, purpose, keyProvider, keySummary, envDetected, fromEnv, keyInput, keyEditing,
   keyStatus, envStatus, onTypeChange, onModelNameChange, onKeyInputChange, onKeyEditingChange, onFromEnvChange,
 }: ModelRowProps) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+
+  const testKey = async (): Promise<ApiKeyTestResult> => {
+    const typed = keyInput.trim()
+    try {
+      const response = typed !== ''
+        ? await fetch(`${CORE_URL}/models`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type, apiKey: typed }),
+          })
+        : await fetch(`${CORE_URL}/models?type=${type}${presetId ? `&presetId=${encodeURIComponent(presetId)}` : ''}${purpose ? `&purpose=${purpose}` : ''}&fromEnv=${fromEnv ? 1 : 0}`)
+      if (!response.ok) return { ok: false, reason: `HTTP ${response.status}` }
+      const body: unknown = await response.json()
+      return isErrorBody(body) ? { ok: false, reason: errorText(body, i18n.t) } : { ok: true }
+    } catch {
+      return { ok: false, reason: i18n.t('连不上服务，请检查网络') }
+    }
+  }
+
   return (
     <>
     <div className="model-config-panel__row" role="group" aria-label={label}>
@@ -64,16 +86,13 @@ function ModelRow({
         <ApiKeyField
           compact
           summary={keySummary}
-          envDetected={envDetected}
-          envVar={ENV_VAR[keyProvider]}
-          fromEnv={fromEnv}
-          keyInput={keyInput}
-          editing={keyEditing}
-          onKeyInputChange={onKeyInputChange}
-          onEditingChange={onKeyEditingChange}
-          onFromEnvChange={onFromEnvChange}
           keyStatus={keyStatus}
-          envStatus={envStatus}
+          keyInput={keyInput}
+          onKeyInputChange={onKeyInputChange}
+          editing={keyEditing}
+          onEditingChange={onKeyEditingChange}
+          env={{ envVar: ENV_VAR[keyProvider], detected: envDetected, fromEnv, status: envStatus, onChange: onFromEnvChange }}
+          onTest={testKey}
         />
       )}
     </div>

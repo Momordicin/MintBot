@@ -12,6 +12,8 @@ const {
   getEnvCredentialMock,
   getPresetByIdMock,
   getPresetApiKeysMock,
+  AnthropicConnectionError,
+  OpenAIConnectionError,
 } = vi.hoisted(() => ({
   getModelProviderConfigMock: vi.fn(),
   listOllamaModelsMock: vi.fn(),
@@ -23,6 +25,8 @@ const {
   getEnvCredentialMock: vi.fn(),
   getPresetByIdMock: vi.fn(),
   getPresetApiKeysMock: vi.fn(),
+  AnthropicConnectionError: class extends Error {},
+  OpenAIConnectionError: class extends Error {},
 }))
 
 vi.mock('../session/queries.js', () => ({
@@ -38,6 +42,7 @@ vi.mock('../providers/ollama.js', () => ({
   listOllamaModels: listOllamaModelsMock,
   ensureOllama: ensureOllamaMock,
   getOllamaBaseUrl: (baseUrl?: string) => baseUrl ?? 'http://localhost:11434',
+  isLocalOllamaUrl: (baseUrl: string) => baseUrl.includes('localhost'),
 }))
 
 vi.mock('../providers/envCredentials.js', () => ({
@@ -46,6 +51,7 @@ vi.mock('../providers/envCredentials.js', () => ({
 
 vi.mock('@anthropic-ai/sdk', () => ({
   default: class {
+    static APIConnectionError = AnthropicConnectionError
     models = { list: anthropicListMock }
     constructor(options: unknown) {
       anthropicCtorMock(options)
@@ -55,6 +61,7 @@ vi.mock('@anthropic-ai/sdk', () => ({
 
 vi.mock('openai', () => ({
   default: class {
+    static APIConnectionError = OpenAIConnectionError
     models = { list: openaiListMock }
     constructor(options: unknown) {
       openaiCtorMock(options)
@@ -128,6 +135,16 @@ describe('GET /models', () => {
 
     expect(status).toBe(200)
     expect(body).toEqual({ models: [], code: 'OLLAMA_START_FAILED' })
+    expect(listOllamaModelsMock).not.toHaveBeenCalled()
+  })
+
+  it('type=ollama 地址不是本机且连不上时返回 PROVIDER_UNREACHABLE', async () => {
+    getModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaBaseUrl: 'http://192.168.1.5:11434' })
+    ensureOllamaMock.mockResolvedValue(false)
+
+    const { body } = await getModels('ollama')
+
+    expect(body).toEqual({ models: [], code: 'PROVIDER_UNREACHABLE' })
     expect(listOllamaModelsMock).not.toHaveBeenCalled()
   })
 
@@ -281,22 +298,31 @@ describe('GET /models', () => {
     expect(openaiListMock).not.toHaveBeenCalled()
   })
 
-  it.each(['anthropic', 'openai', 'deepseek'])('type=%s 的 SDK 抛错时返回通用失败提示且不泄露详情', async type => {
-    getModelProviderConfigMock.mockReturnValue({ type, anthropicApiKey: 'k', openaiApiKey: 'k', deepseekApiKey: 'k' })
+  const sdkFailures: [string, () => Error, string][] = [
+    ['401', () => Object.assign(new Error('401 secret-detail'), { status: 401 }), 'API_KEY_INVALID'],
+    ['连接错误（Anthropic SDK）', () => new AnthropicConnectionError('secret-detail'), 'PROVIDER_UNREACHABLE'],
+    ['连接错误（OpenAI SDK）', () => new OpenAIConnectionError('secret-detail'), 'PROVIDER_UNREACHABLE'],
+    ['其它', () => new Error('secret-detail'), 'MODEL_LIST_FAILED'],
+  ]
+
+  it.each(sdkFailures)('SDK 抛错（%s）时按类别返回错误码且不泄露详情', async (_name, makeError, code) => {
+    getModelProviderConfigMock.mockReturnValue({ type: 'openai', openaiApiKey: 'k', anthropicApiKey: 'k' })
     const failure = () => ({
       [Symbol.asyncIterator]() {
-        return { next: () => Promise.reject(new Error('401 secret-detail')) }
+        return { next: () => Promise.reject(makeError()) }
       },
     })
     anthropicListMock.mockImplementation(failure)
     openaiListMock.mockImplementation(failure)
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-    const { status, body } = await getModels(type)
+    for (const type of ['anthropic', 'openai']) {
+      const { status, body } = await getModels(type)
 
-    expect(status).toBe(200)
-    expect(body).toEqual({ models: [], code: 'MODEL_LIST_FAILED' })
-    expect(JSON.stringify(body)).not.toContain('secret-detail')
+      expect(status).toBe(200)
+      expect(body).toEqual({ models: [], code })
+      expect(JSON.stringify(body)).not.toContain('secret-detail')
+    }
     expect(errorSpy).toHaveBeenCalled()
   })
 

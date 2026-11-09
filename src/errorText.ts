@@ -15,6 +15,8 @@ export function providerName(provider: WebSearchProvider, t: TFunction): string 
   }
 }
 
+const KEY_PROVIDER_NAME: Record<string, string> = { anthropic: 'Anthropic', openai: 'OpenAI', deepseek: 'DeepSeek' }
+
 const SUBSCRIPTION_NAME: Partial<Record<string, string>> = { claude: 'Claude Code', codex: 'Codex' }
 
 export function errorText(body: ErrorBody, t: TFunction): string {
@@ -25,6 +27,8 @@ export function errorText(body: ErrorBody, t: TFunction): string {
       return t('摘要模型的 API key 无效或未配置')
     case 'ENV_VAR_MISSING':
       return t('未检测到环境变量 {{envVar}}', { envVar: body.params?.envVar ?? '' })
+    case 'KEY_SOURCE_IN_USE':
+      return t('{{provider}} 正在被对话模型或摘要模型使用，且没有已保存的 Key，不能取消自动配置', { provider: KEY_PROVIDER_NAME[body.params?.provider ?? ''] ?? '' })
     case 'MODEL_LIST_FAILED':
       return t('获取模型列表失败')
     case 'OLLAMA_START_FAILED':
@@ -91,6 +95,10 @@ export function errorText(body: ErrorBody, t: TFunction): string {
       return t('{{provider}} 订阅还没有登录，请先在全局模型服务里登录', { provider: SUBSCRIPTION_NAME[body.params?.provider ?? ''] ?? '' })
     case 'WEB_SEARCH_NO_SAVED_DEEPSEEK_KEY':
       return t('模型设置里没有已保存的 DeepSeek Key')
+    case 'PROVIDER_UNREACHABLE':
+      return t('连不上服务，请检查网络')
+    case 'WEB_SEARCH_TEST_FAILED':
+      return t('测试失败：{{reason}}', { reason: body.params?.reason ?? '' })
     case 'INVALID_REQUEST':
       return t('请求无效（错误代码：{{code}}）', { code: body.code })
     default:

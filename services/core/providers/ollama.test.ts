@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { EventEmitter } from 'events'
-import { listOllamaModels, shouldEnsureOllama, getOllamaBaseUrl, ollamaSupportsTools } from './ollama.js'
+import { listOllamaModels, shouldEnsureOllama, getOllamaBaseUrl, isLocalOllamaUrl, ollamaSupportsTools } from './ollama.js'
 
 // listOllamaModels 是 GET /models（CharacterPanel.tsx §2 模型名下拉框）的数据源，
 // 与 isOllamaRunning 同款降级风格测试：只验证成功解析 + 各类失败都降级为空数组，不抛错
@@ -82,6 +82,19 @@ describe('getOllamaBaseUrl', () => {
 
   it('地址非空时原样使用', () => {
     expect(getOllamaBaseUrl('http://192.168.1.5:11434')).toBe('http://192.168.1.5:11434')
+  })
+})
+
+describe('isLocalOllamaUrl', () => {
+  it.each([
+    ['http://localhost:11434', true],
+    ['http://127.0.0.1:11434', true],
+    ['http://[::1]:11434', true],
+    ['http://192.168.1.5:11434', false],
+    ['http://ollama.example.com', false],
+    ['not a url', false],
+  ])('%s 返回 %s', (baseUrl, expected) => {
+    expect(isLocalOllamaUrl(baseUrl)).toBe(expected)
   })
 })
 
@@ -213,6 +226,32 @@ describe('ensureOllama', () => {
     expect(spawnMock).toHaveBeenCalledTimes(2)
     await stopOllamaIfManaged()
     expect(second.kill).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['http://127.0.0.1:11434', true],
+    ['http://[::1]:11434', true],
+    ['http://192.168.1.5:11434', false],
+    ['not a url', false],
+  ])('地址 %s 未运行时：本机才 spawn（%s）', async (baseUrl, isLocal) => {
+    const fetchMock = stubFetch()
+    const { ensureOllama, stopOllamaIfManaged } = await loadModule()
+
+    const result = await ensureOllama(baseUrl)
+
+    expect(result).toBe(isLocal)
+    expect(spawnMock).toHaveBeenCalledTimes(isLocal ? 1 : 0)
+    if (!isLocal) expect(fetchMock).toHaveBeenCalledTimes(1)
+    await stopOllamaIfManaged()
+  })
+
+  it('非本机地址已在运行时返回 true，不 spawn', async () => {
+    up = true
+    stubFetch()
+    const { ensureOllama } = await loadModule()
+
+    expect(await ensureOllama('http://192.168.1.5:11434')).toBe(true)
+    expect(spawnMock).not.toHaveBeenCalled()
   })
 
   it('外部已运行的 Ollama 不 spawn，也不由 MintBot 管理', async () => {

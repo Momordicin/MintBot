@@ -1,6 +1,6 @@
 // services/core/search/webSearch.ts — 联网搜索服务：按设置里的顺序调用 DeepSeek 搜索 / Tavily / AnySearch / Claude Code 订阅 / Codex 订阅之一，返回统一的结果格式
-// 用法：core 内业务调 webSearch({ query, count?, signal })；顺序、Key、地区读 getWebSearchConfig
-// 对应文件：services/core/plugins/pluginFetch.ts / services/core/agents/claudeCode.ts / services/core/agents/codex.ts / services/core/config/index.ts / services/core/search/webSearch.test.ts
+// 用法：core 内业务调 webSearch({ query, count?, signal })；routes/config.ts 的 POST /config/web-search/test 调 testWebSearchKey(provider, signal)；顺序、Key、地区读 getWebSearchConfig
+// 对应文件：services/core/routes/config.ts / services/core/plugins/pluginFetch.ts / services/core/agents/claudeCode.ts / services/core/agents/codex.ts / services/core/config/index.ts / services/core/search/webSearch.test.ts
 import { claudeWebSearch } from '../agents/claudeCode.js'
 import { codexWebSearch } from '../agents/codex.js'
 import { getWebSearchConfig } from '../config/index.js'
@@ -10,7 +10,7 @@ import type { WebSearchProvider } from '../../../shared/types/index.js'
 export type WebSearchErrorKind = 'not_configured' | 'invalid_query' | 'http' | 'timeout' | 'connect' | 'invalid_response' | 'aborted'
 
 export class WebSearchError extends Error {
-  constructor(readonly kind: WebSearchErrorKind, message: string) {
+  constructor(readonly kind: WebSearchErrorKind, message: string, readonly status?: number) {
     super(message)
   }
 }
@@ -145,7 +145,7 @@ function buildRequest(provider: HttpProvider, query: string, count: number | und
 function fetchFailure(provider: WebSearchProvider, result: Extract<FetchResult, { ok: false }>): WebSearchError {
   const label = LABEL[provider]
   if (result.kind === 'aborted') return aborted()
-  if (result.kind === 'http') return new WebSearchError('http', `${label}：请求失败（HTTP ${result.status ?? '未知'}）${result.message}`)
+  if (result.kind === 'http') return new WebSearchError('http', `${label}：请求失败（HTTP ${result.status ?? '未知'}）${result.message}`, result.status)
   if (result.kind === 'timeout') return new WebSearchError('timeout', `${label}：请求超时（${result.message}）`)
   return new WebSearchError('connect', `${label}：无法连接（${result.message}）`)
 }
@@ -218,6 +218,24 @@ async function searchWith(provider: WebSearchProvider, query: string, count: num
     ? await searchSubscription(provider, query, signal)
     : await searchHttp(provider, query, count, signal)
   return { provider, query, ...parsed }
+}
+
+export async function testWebSearchKey(provider: HttpProvider, signal: AbortSignal): Promise<void> {
+  try {
+    if (provider === 'anysearch') {
+      await searchHttp('anysearch', 'MintBot', 1, signal)
+      return
+    }
+    const config = getWebSearchConfig()
+    const key = provider === 'deepseek' ? config.deepseekApiKey : config.tavilyApiKey
+    if (!key) throw missingKey(provider)
+    const url = provider === 'deepseek' ? 'https://api.deepseek.com/models' : 'https://api.tavily.com/usage'
+    const result = await fetcherFor(provider)(url, { method: 'GET', headers: { Authorization: `Bearer ${key}` } }, signal)
+    if (!result.ok) throw fetchFailure(provider, result)
+  } catch (err) {
+    console.error(`[WebSearch] 测试失败：${err instanceof Error ? err.message : String(err)}`)
+    throw err
+  }
 }
 
 export async function webSearch({ query, count, signal }: WebSearchParams): Promise<WebSearchResult> {

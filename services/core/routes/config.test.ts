@@ -1,8 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import Fastify from 'fastify'
 import { configRoutes } from './config.js'
 import * as ModelProviderModule from '../providers/ModelProvider.js'
 import { ConfigFileUnreadableError } from '../config/configFileError.js'
+import { WebSearchError } from '../search/webSearch.js'
+import { cancelUndetectedEnvSelections, clearEnvCleared } from '../providers/envCredentials.js'
 
 // routes/config.ts 只负责路由层的校验 + 响应整形，实际的读写职责在 config/index.ts——
 // mock 掉整个 config 模块，测试聚焦于本文件自己的行为（校验规则、key 脱敏、undefined/null
@@ -18,6 +20,8 @@ const {
   updateWebSearchConfigMock,
   getClaudeLoginStatusMock,
   getCodexLoginStatusMock,
+  testWebSearchKeyMock,
+  listProviderModelsMock,
 } = vi.hoisted(() => ({
   getModelProviderConfigMock: vi.fn(),
   getRawBackgroundModelProviderConfigMock: vi.fn(),
@@ -29,6 +33,8 @@ const {
   updateWebSearchConfigMock: vi.fn(),
   getClaudeLoginStatusMock: vi.fn(),
   getCodexLoginStatusMock: vi.fn(),
+  testWebSearchKeyMock: vi.fn(),
+  listProviderModelsMock: vi.fn(),
 }))
 
 vi.mock('../config/index.js', () => ({
@@ -42,8 +48,17 @@ vi.mock('../config/index.js', () => ({
   VALID_WEB_SEARCH_PROVIDERS: ['deepseek', 'tavily', 'anysearch', 'claude', 'codex'],
 }))
 
+vi.mock('./models.js', () => ({
+  listProviderModels: listProviderModelsMock,
+  getBaseConfig: (type: string) => ({ type }),
+}))
+
 vi.mock('../agents/claudeCode.js', () => ({ getClaudeLoginStatus: getClaudeLoginStatusMock }))
 vi.mock('../agents/codex.js', () => ({ getCodexLoginStatus: getCodexLoginStatusMock }))
+vi.mock('../search/webSearch.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../search/webSearch.js')>()
+  return { ...actual, testWebSearchKey: testWebSearchKeyMock }
+})
 
 vi.mock('../providers/envCredentials.js', async importOriginal => {
   const actual = await importOriginal<typeof import('../providers/envCredentials.js')>()
@@ -69,6 +84,9 @@ beforeEach(() => {
   updateWebSearchConfigMock.mockReset()
   getClaudeLoginStatusMock.mockReset()
   getCodexLoginStatusMock.mockReset()
+  testWebSearchKeyMock.mockReset()
+  listProviderModelsMock.mockReset()
+  listProviderModelsMock.mockResolvedValue({ models: ['m'] })
   getRawBackgroundModelProviderConfigMock.mockReturnValue(null)
   getBackgroundModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'qwen3' })
   isEnvCredentialDetectedMock.mockReturnValue(false)
@@ -77,10 +95,14 @@ beforeEach(() => {
   getCodexLoginStatusMock.mockResolvedValue(false)
 })
 
+afterEach(() => {
+  for (const provider of ['anthropic', 'openai', 'deepseek'] as const) clearEnvCleared(provider)
+})
+
 const noKeys = {
-  anthropic: { hasKey: false, last4: null, fromEnv: false, envDetected: false },
-  openai: { hasKey: false, last4: null, fromEnv: false, envDetected: false },
-  deepseek: { hasKey: false, last4: null, fromEnv: false, envDetected: false },
+  anthropic: { hasKey: false, last4: null, fromEnv: false, envDetected: false, envCleared: false },
+  openai: { hasKey: false, last4: null, fromEnv: false, envDetected: false, envCleared: false },
+  deepseek: { hasKey: false, last4: null, fromEnv: false, envDetected: false, envCleared: false },
 }
 
 describe('GET /config/model', () => {
@@ -99,7 +121,7 @@ describe('GET /config/model', () => {
     expect(body.modelProvider).toEqual({
       type: 'anthropic',
       modelName: 'claude-3',
-      keys: { ...noKeys, anthropic: { hasKey: true, last4: 'cret', fromEnv: false, envDetected: false } },
+      keys: { ...noKeys, anthropic: { hasKey: true, last4: 'cret', fromEnv: false, envDetected: false, envCleared: false } },
     })
     expect(JSON.stringify(body)).not.toContain('sk-real-secret')
     expect(JSON.stringify(body)).not.toContain('hasAnthropicApiKey')
@@ -138,9 +160,9 @@ describe('GET /config/model', () => {
     const response = await fastify.inject({ method: 'GET', url: '/config/model' })
     const { keys } = JSON.parse(response.payload).modelProvider
 
-    expect(keys.openai).toEqual({ hasKey: false, last4: null, fromEnv: true, envDetected: true })
-    expect(keys.deepseek).toEqual({ hasKey: false, last4: null, fromEnv: false, envDetected: false })
-    expect(keys.anthropic).toEqual({ hasKey: false, last4: null, fromEnv: false, envDetected: false })
+    expect(keys.openai).toEqual({ hasKey: false, last4: null, fromEnv: true, envDetected: true, envCleared: false })
+    expect(keys.deepseek).toEqual(noKeys.deepseek)
+    expect(keys.anthropic).toEqual(noKeys.anthropic)
   })
 
   it('返回 Base URL 与 maxTokens', async () => {
@@ -182,7 +204,7 @@ describe('GET /config/model', () => {
     expect(body.modelProvider).toEqual({
       type: 'deepseek',
       modelName: 'deepseek-v4-flash',
-      keys: { ...noKeys, deepseek: { hasKey: true, last4: 'cret', fromEnv: false, envDetected: false } },
+      keys: { ...noKeys, deepseek: { hasKey: true, last4: 'cret', fromEnv: false, envDetected: false, envCleared: false } },
     })
     expect(JSON.stringify(body)).not.toContain('sk-deepseek-secret')
   })
@@ -345,7 +367,7 @@ describe('PATCH /config/model — 校验', () => {
     expect(body.modelProvider).toEqual({
       type: 'deepseek',
       modelName: 'deepseek-v4-flash',
-      keys: { ...noKeys, deepseek: { hasKey: true, last4: 'seek', fromEnv: false, envDetected: false } },
+      keys: { ...noKeys, deepseek: { hasKey: true, last4: 'seek', fromEnv: false, envDetected: false, envCleared: false } },
     })
     expect(JSON.stringify(body)).not.toContain('sk-deepseek"')
   })
@@ -471,7 +493,7 @@ describe('PATCH /config/model — 成功路径', () => {
     expect(body.modelProvider).toEqual({
       type: 'ollama',
       ollamaModel: 'qwen3',
-      keys: { ...noKeys, anthropic: { hasKey: true, last4: '-key', fromEnv: false, envDetected: false } },
+      keys: { ...noKeys, anthropic: { hasKey: true, last4: '-key', fromEnv: false, envDetected: false, envCleared: false } },
     })
     expect(body.backgroundModelProvider).toEqual({ type: 'anthropic', modelName: 'claude-strong' })
   })
@@ -541,6 +563,31 @@ describe('PATCH /config/model — API Key 环境变量与有效性', () => {
 
     expect(response.statusCode).toBe(200)
     expect(updateModelProviderConfigMock).toHaveBeenCalledWith({ openaiApiKeyFromEnv: true, anthropicApiKeyFromEnv: false })
+    expect(listProviderModelsMock).not.toHaveBeenCalled()
+  })
+
+  const inUseCases: [string, Record<string, unknown>, Record<string, unknown> | null, Record<string, unknown>, number][] = [
+    ['对话模型在用且没有已保存 Key', { type: 'openai', modelName: 'gpt-4o' }, null, {}, 400],
+    ['对话模型在用但有已保存 Key', { type: 'openai', modelName: 'gpt-4o', openaiApiKey: 'sk-saved-openai' }, null, {}, 200],
+    ['对话模型在用，同一请求带了新 Key', { type: 'openai', modelName: 'gpt-4o' }, null, { openaiApiKey: 'sk-openai-new-1234' }, 200],
+    ['对话与摘要都不用该提供方', { type: 'ollama', ollamaModel: 'qwen3' }, { type: 'anthropic', modelName: 'claude-3' }, {}, 200],
+    ['摘要模型在用且没有已保存 Key', { type: 'ollama', ollamaModel: 'qwen3' }, { type: 'openai', modelName: 'gpt-4o' }, {}, 400],
+  ]
+
+  it.each(inUseCases)('取消自动配置：%s', async (_label, model, background, extra, status) => {
+    getModelProviderConfigMock.mockReturnValue({ ...model, openaiApiKeyFromEnv: true })
+    getRawBackgroundModelProviderConfigMock.mockReturnValue(background)
+    updateModelProviderConfigMock.mockReturnValue({ ...model })
+
+    const { response, body } = await patch({ modelProvider: { openaiApiKeyFromEnv: false, ...extra } })
+
+    expect(response.statusCode).toBe(status)
+    if (status === 400) {
+      expect(body).toEqual({ code: 'KEY_SOURCE_IN_USE', params: { provider: 'openai' } })
+      expect(updateModelProviderConfigMock).not.toHaveBeenCalled()
+    } else {
+      expect(updateModelProviderConfigMock).toHaveBeenCalledTimes(1)
+    }
   })
 
   it('选中的对话提供方没有已保存 key 且未勾选环境变量时返回 400 API key 无效或未配置', async () => {
@@ -643,14 +690,100 @@ describe('PATCH /config/model — API Key 环境变量与有效性', () => {
     expect(response.statusCode).toBe(400)
   })
 
-  it('可以为当前未选中的提供方保存 key', async () => {
-    getModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'qwen3' })
-    updateModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'qwen3', openaiApiKey: 'sk-openai-new' })
+  it.each([
+    ['anthropic', 'anthropicApiKey', 'anthropicApiKeyFromEnv'],
+    ['openai', 'openaiApiKey', 'openaiApiKeyFromEnv'],
+    ['deepseek', 'deepseekApiKey', 'deepseekApiKeyFromEnv'],
+  ])('%s：只带 Key 时用新 Key 列模型，通过即保存，不检查对话模型', async (provider, keyField, fromEnvField) => {
+    getModelProviderConfigMock.mockReturnValue({ type: 'openai', modelName: 'gpt-4o' })
+    updateModelProviderConfigMock.mockReturnValue({ type: 'openai', modelName: 'gpt-4o', [keyField]: 'sk-new-key-1234' })
 
-    const { response } = await patch({ modelProvider: { openaiApiKey: 'sk-openai-new' } })
+    const { response } = await patch({ modelProvider: { [keyField]: ' sk-new-key-1234 ' } })
 
     expect(response.statusCode).toBe(200)
-    expect(updateModelProviderConfigMock).toHaveBeenCalledWith({ openaiApiKey: 'sk-openai-new' })
+    expect(listProviderModelsMock).toHaveBeenCalledTimes(1)
+    expect(listProviderModelsMock).toHaveBeenCalledWith(provider, expect.objectContaining({ [keyField]: 'sk-new-key-1234', [fromEnvField]: false }))
+    expect(updateModelProviderConfigMock).toHaveBeenCalledWith({ [keyField]: 'sk-new-key-1234' })
+  })
+
+  it.each([
+    ['API_KEY_INVALID'],
+    ['PROVIDER_UNREACHABLE'],
+    ['MODEL_LIST_FAILED'],
+  ])('新 Key 列模型返回 %s：400 带同一错误码，配置不变', async code => {
+    getModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'qwen3' })
+    listProviderModelsMock.mockResolvedValue({ models: [], code })
+
+    const { response, body } = await patch({ modelProvider: { openaiApiKey: 'sk-bad-key-1234' } })
+
+    expect(response.statusCode).toBe(400)
+    expect(body).toEqual({ code })
+    expect(updateModelProviderConfigMock).not.toHaveBeenCalled()
+  })
+
+  it('当前对话模型那家没有可用 Key 时，保存别家有效 Key 仍成功', async () => {
+    getModelProviderConfigMock.mockReturnValue({ type: 'openai', modelName: 'gpt-4o' })
+    updateModelProviderConfigMock.mockReturnValue({ type: 'openai', modelName: 'gpt-4o', anthropicApiKey: 'sk-ant-new-1234' })
+
+    const { response } = await patch({ modelProvider: { anthropicApiKey: 'sk-ant-new-1234' } })
+
+    expect(response.statusCode).toBe(200)
+    expect(updateModelProviderConfigMock).toHaveBeenCalledWith({ anthropicApiKey: 'sk-ant-new-1234' })
+  })
+
+  it('config.json 没有 modelProvider 段时，只存一个 Key 也能写入', async () => {
+    getModelProviderConfigMock.mockImplementation(() => { throw new Error('not configured') })
+    updateModelProviderConfigMock.mockReturnValue({ deepseekApiKey: 'sk-ds-new-1234' })
+
+    const { response } = await patch({ modelProvider: { deepseekApiKey: 'sk-ds-new-1234' } })
+
+    expect(response.statusCode).toBe(200)
+    expect(updateModelProviderConfigMock).toHaveBeenCalledWith({ deepseekApiKey: 'sk-ds-new-1234' })
+  })
+
+  it.each([
+    ['只存 ollamaBaseUrl', { ollamaBaseUrl: 'http://127.0.0.1:11434' }],
+    ['只存 maxTokens', { maxTokens: 2000 }],
+  ])('%s：当前对话模型那家已坏也成功', async (_label, partial) => {
+    getModelProviderConfigMock.mockReturnValue({ type: 'openai', modelName: 'gpt-4o' })
+    updateModelProviderConfigMock.mockReturnValue({ type: 'openai', modelName: 'gpt-4o', ...partial })
+
+    const { response } = await patch({ modelProvider: partial })
+
+    expect(response.statusCode).toBe(200)
+    expect(updateModelProviderConfigMock).toHaveBeenCalledWith(partial)
+  })
+
+  it.each([
+    ['带 type', { type: 'openai', modelName: 'gpt-4o' }],
+    ['带 modelName', { modelName: 'gpt-4o-mini' }],
+    ['带 ollamaModel', { ollamaModel: 'qwen3' }],
+  ])('%s（即使同时带别的字段）：仍检查对话模型那家', async (_label, extra) => {
+    getModelProviderConfigMock.mockReturnValue({ type: 'openai', modelName: 'gpt-4o' })
+
+    const { response, body } = await patch({ modelProvider: { anthropicApiKey: 'sk-ant-new-1234', maxTokens: 2000, ...extra } })
+
+    expect(response.statusCode).toBe(400)
+    expect(body).toEqual({ code: 'API_KEY_INVALID' })
+    expect(updateModelProviderConfigMock).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['保存 Key', { openaiApiKey: 'sk-openai-new-1234' }],
+    ['改自动配置', { openaiApiKeyFromEnv: false }],
+  ])('启动时被取消自动配置的提供方：%s 之后 envCleared 标记清除', async (_label, partial) => {
+    getModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'qwen3', openaiApiKeyFromEnv: true })
+    updateModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'qwen3' })
+    cancelUndetectedEnvSelections()
+    expect(updateModelProviderConfigMock).toHaveBeenCalledWith({ openaiApiKeyFromEnv: false })
+    const fastify = await buildTestApp()
+    const before = await fastify.inject({ method: 'GET', url: '/config/model' })
+    expect(JSON.parse(before.payload).modelProvider.keys.openai.envCleared).toBe(true)
+
+    const after = await fastify.inject({ method: 'PATCH', url: '/config/model', payload: { modelProvider: partial } })
+
+    expect(after.statusCode).toBe(200)
+    expect(JSON.parse(after.payload).modelProvider.keys.openai.envCleared).toBe(false)
   })
 
   it('后台提供方没有可用 key 时返回 400 API key 无效或未配置', async () => {
@@ -884,5 +1017,42 @@ describe('PATCH /config/web-search', () => {
       expect(result.body).toEqual({ code: 'WEB_SEARCH_NO_SAVED_DEEPSEEK_KEY' })
       expect(updateWebSearchConfigMock).not.toHaveBeenCalled()
     }
+  })
+})
+
+describe('POST /config/web-search/test', () => {
+  const post = async (payload: Record<string, unknown>) => {
+    const fastify = await buildTestApp()
+    const response = await fastify.inject({ method: 'POST', url: '/config/web-search/test', payload })
+    return { status: response.statusCode, body: JSON.parse(response.payload) }
+  }
+
+  const cases: [string, Error | null, Record<string, unknown>][] = [
+    ['成功', null, { ok: true }],
+    ['没有 Key', new WebSearchError('not_configured', 'x'), { ok: false, code: 'WEB_SEARCH_KEY_MISSING', params: { provider: 'tavily' } }],
+    ['HTTP 401', new WebSearchError('http', 'x', 401), { ok: false, code: 'API_KEY_INVALID' }],
+    ['HTTP 403', new WebSearchError('http', 'x', 403), { ok: false, code: 'API_KEY_INVALID' }],
+    ['超时', new WebSearchError('timeout', 'x'), { ok: false, code: 'PROVIDER_UNREACHABLE' }],
+    ['连不上', new WebSearchError('connect', 'x'), { ok: false, code: 'PROVIDER_UNREACHABLE' }],
+    ['其它 HTTP 错误', new WebSearchError('http', '服务出错', 500), { ok: false, code: 'WEB_SEARCH_TEST_FAILED', params: { reason: '服务出错' } }],
+  ]
+
+  it.each(cases)('%s → 200', async (_name, error, expected) => {
+    if (error) testWebSearchKeyMock.mockRejectedValue(error)
+    else testWebSearchKeyMock.mockResolvedValue(undefined)
+
+    const result = await post({ provider: 'tavily' })
+
+    expect(result.status).toBe(200)
+    expect(result.body).toEqual(expected)
+    expect(testWebSearchKeyMock).toHaveBeenCalledWith('tavily', expect.any(AbortSignal))
+  })
+
+  it.each([{ provider: 'claude' }, { provider: 'bing' }, {}])('provider 非法（%j）→ 400，不测试', async payload => {
+    const result = await post(payload)
+
+    expect(result.status).toBe(400)
+    expect(result.body).toMatchObject({ code: 'INVALID_REQUEST' })
+    expect(testWebSearchKeyMock).not.toHaveBeenCalled()
   })
 })

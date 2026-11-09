@@ -1,5 +1,5 @@
-// services/core/providers/ollama.ts — Ollama 本地模型服务的探测、模型列表查询，以及未运行时由 core 启动 `ollama serve`
-// 用法：index.ts 的 start() 调 shouldEnsureOllama / ensureOllama，SIGINT/SIGTERM 时调 stopOllamaIfManaged；routes/models.ts 调 ensureOllama / listOllamaModels / getOllamaBaseUrl；state.ts 调 isOllamaRunning；ModelProvider.ts 的 supportsTools 调 ollamaSupportsTools
+// services/core/providers/ollama.ts — Ollama 本地模型服务的探测、模型列表查询，以及本机地址未运行时由 core 启动 `ollama serve`
+// 用法：index.ts 的 start() 调 shouldEnsureOllama / ensureOllama，SIGINT/SIGTERM 时调 stopOllamaIfManaged；routes/models.ts 调 ensureOllama / listOllamaModels / getOllamaBaseUrl / isLocalOllamaUrl；state.ts 调 isOllamaRunning；ModelProvider.ts 的 supportsTools 调 ollamaSupportsTools
 // 对应文件：services/core/index.ts / services/core/routes/models.ts / services/core/state.ts / services/core/providers/ModelProvider.ts / services/core/providers/ollama.test.ts
 import { spawn, ChildProcess } from 'child_process'
 
@@ -10,6 +10,15 @@ let ollamaProcessFailure: Promise<void> = new Promise<void>(() => {})
 
 export function getOllamaBaseUrl(baseUrl?: string): string {
   return baseUrl || 'http://localhost:11434'
+}
+
+export function isLocalOllamaUrl(baseUrl: string): boolean {
+  try {
+    const { hostname } = new URL(baseUrl)
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]'
+  } catch {
+    return false
+  }
 }
 
 export async function isOllamaRunning(baseUrl: string): Promise<boolean> {
@@ -93,6 +102,15 @@ export function ensureOllama(ollamaBaseUrl?: string): Promise<boolean> {
 
 async function startOllamaIfNeeded(ollamaBaseUrl?: string): Promise<boolean> {
   const baseUrl = getOllamaBaseUrl(ollamaBaseUrl)
+
+  if (!isLocalOllamaUrl(baseUrl)) {
+    if (await isOllamaRunning(baseUrl)) {
+      console.log('[Ollama] Remote Ollama is reachable')
+      return true
+    }
+    console.error('[Ollama] Remote Ollama is not reachable, not starting a local one')
+    return false
+  }
 
   if (ollamaManagedByUs && ollamaProcess && ollamaProcess.exitCode === null && ollamaProcess.signalCode === null) {
     if (await isOllamaRunning(baseUrl)) return true

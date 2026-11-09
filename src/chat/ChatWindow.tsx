@@ -625,7 +625,7 @@ export function ChatWindow() {
 
       {appState?.ollamaReady === false && (
         <div className="banner banner--warn">
-          {t('Ollama 未运行，请先启动 Ollama')}
+          {t('连不上 Ollama，请确认 Ollama 已启动且地址正确')}
         </div>
       )}
 

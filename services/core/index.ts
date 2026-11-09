@@ -25,7 +25,7 @@ import { windowBehaviorRoutes, broadcastWindowBehaviorSnapshot } from './routes/
 import { uiRoutes } from './routes/ui.js'
 import { transitionChainRoutes } from './routes/transitionChain.js'
 import { createModelProvider, ModelProvider } from './providers/ModelProvider.js'
-import { wipeCredentialEnv } from './providers/envCredentials.js'
+import { wipeCredentialEnv, cancelUndetectedEnvSelections } from './providers/envCredentials.js'
 import { BGEProvider, getAiBaseUrl, type EmbeddingProvider } from './providers/EmbeddingProvider.js'
 import { Bert4NerProvider, type NERProvider } from './providers/NERProvider.js'
 import { startConfigWatcher, getModelProviderConfig, getBackgroundModelProviderConfig, getDefaultPresetId } from './config/index.js'
@@ -79,6 +79,7 @@ let organizeModeTask: ReturnType<typeof startOrganizeModeScheduler> | undefined
 
 async function start() {
   wipeCredentialEnv()
+  cancelUndetectedEnvSelections()
 
   process.on('SIGINT', async () => {
     organizeModeTask?.stop()

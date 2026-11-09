@@ -1,8 +1,10 @@
 // services/core/routes/models.ts — 按提供商类型返回可选模型名列表
 // 用法：core/index.ts 里 fastify.register(modelsRoutes)；GET /models?type=ollama|anthropic|openai|deepseek[&presetId=...][&fromEnv=1|0][&purpose=summary]、POST /models
-// 对应文件：src/settings/ModelConfigPanel.tsx / src/settings/useCharacterPanel.ts / services/core/providers/ModelProvider.ts / services/core/providers/ollama.ts / services/core/config/index.ts / services/core/session/queries.ts / services/core/routes/models.test.ts / shared/errorCodes.ts
+// 对应文件：src/settings/ModelConfigPanel.tsx / src/settings/useCharacterPanel.ts / services/core/providers/ModelProvider.ts / services/core/providers/ollama.ts / services/core/config/index.ts / services/core/session/queries.ts / services/core/routes/models.test.ts / services/core/routes/config.ts / shared/errorCodes.ts
+import Anthropic from '@anthropic-ai/sdk'
+import OpenAI from 'openai'
 import type { FastifyInstance } from 'fastify'
-import { ensureOllama, listOllamaModels, getOllamaBaseUrl } from '../providers/ollama.js'
+import { ensureOllama, listOllamaModels, getOllamaBaseUrl, isLocalOllamaUrl } from '../providers/ollama.js'
 import { createAnthropicClient, createOpenAIClient } from '../providers/ModelProvider.js'
 import { getModelProviderConfig } from '../config/index.js'
 import { getPresetById, getPresetApiKeys } from '../session/queries.js'
@@ -36,7 +38,7 @@ function isKeyType(type: string | undefined): type is KeyType {
   return type === 'anthropic' || type === 'openai' || type === 'deepseek'
 }
 
-function getBaseConfig(type: KeyType): ModelConfig {
+export function getBaseConfig(type: KeyType): ModelConfig {
   try {
     return getModelProviderConfig()
   } catch {
@@ -47,12 +49,13 @@ function getBaseConfig(type: KeyType): ModelConfig {
 async function listOllama() {
   const baseUrl = getOllamaBaseUrl(getModelProviderConfig().ollamaBaseUrl)
   if (!(await ensureOllama(baseUrl))) {
-    return { models: [], ...errorBody(ERROR_CODES.OLLAMA_START_FAILED) }
+    const code = isLocalOllamaUrl(baseUrl) ? ERROR_CODES.OLLAMA_START_FAILED : ERROR_CODES.PROVIDER_UNREACHABLE
+    return { models: [], ...errorBody(code) }
   }
   return { models: await listOllamaModels(baseUrl) }
 }
 
-async function listProviderModels(type: KeyType, config: ModelConfig) {
+export async function listProviderModels(type: KeyType, config: ModelConfig) {
   let list: () => AsyncIterable<{ id: string }>
   try {
     if (type === 'anthropic') {
@@ -71,6 +74,11 @@ async function listProviderModels(type: KeyType, config: ModelConfig) {
     return { models }
   } catch (err) {
     console.error(`[models] failed to list ${type} models:`, err)
+    const status = (err as { status?: unknown }).status
+    if (status === 401 || status === 403) return { models: [], ...errorBody(ERROR_CODES.API_KEY_INVALID) }
+    if (err instanceof Anthropic.APIConnectionError || err instanceof OpenAI.APIConnectionError) {
+      return { models: [], ...errorBody(ERROR_CODES.PROVIDER_UNREACHABLE) }
+    }
     return { models: [], ...errorBody(ERROR_CODES.MODEL_LIST_FAILED) }
   }
 }

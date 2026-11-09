@@ -859,6 +859,94 @@ option {
   cursor: pointer;
 }
 
+.api-key-field {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr) auto 16px;
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 4px;
+}
+
+.api-key-field__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--label2);
+}
+
+.api-key-field__box {
+  min-width: 0;
+}
+
+.api-key-field__text {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 5px 0;
+  font-size: 12px;
+  color: var(--label);
+}
+
+.api-key-field__text .model-config-panel__icon-btn {
+  position: static;
+  transform: none;
+}
+
+.api-key-field__second {
+  grid-column: 2 / -1;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.api-key-field__note {
+  grid-column: 2 / -1;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.api-key-field__note--fail {
+  color: var(--error);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.api-key-field__result {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+.api-key-field__result--ok {
+  color: rgb(48, 209, 88);
+}
+
+.api-key-field__result--fail {
+  color: var(--error);
+}
+
+.api-key-field__warn {
+  flex: none;
+  font-weight: 700;
+  color: var(--error);
+  cursor: help;
+}
+
+.api-key-field__spin {
+  animation: api-key-field-spin 0.9s linear infinite;
+}
+
+@keyframes api-key-field-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* 本面板不嵌套在 .character-panel 下，.rename-btn 本身的颜色角色/状态由上面的控件表面
    三件套共享选择器组负责（那组选择器里已经列了 .model-config-panel .rename-btn），这里
    只补一份限定在本面板下的形状规则（同 .wallpaper-btn/.memory-btn 的既有重复模式，
@@ -927,6 +1015,21 @@ option {
 
 .web-search-panel__list-row--disabled .web-search-panel__list-name {
   opacity: 0.5;
+}
+
+.web-search-panel__save-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.api-key-field__zone label {
+  flex: none;
+}
+
+.api-key-field__zone select {
+  flex: 0 1 auto;
 }
 
 .window-behavior-panel__list-row {
