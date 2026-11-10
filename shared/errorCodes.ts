@@ -1,6 +1,6 @@
 // shared/errorCodes.ts — core 返回给渲染进程的错误代码与响应体
 // 用法：services/core/routes/*.ts 与 characters/cardImport.ts 用 errorBody / invalidRequest 生成响应体；src/errorText.ts 与各面板用 isErrorBody 判断并按代码翻译
-// 对应文件：services/core/routes/chat.ts / services/core/routes/presets.ts / services/core/routes/models.ts / services/core/plugins/routes.ts / src/errorText.ts
+// 对应文件：services/core/routes/chat.ts / services/core/routes/roleConfig.ts / services/core/routes/presets.ts / services/core/routes/models.ts / services/core/plugins/routes.ts / src/errorText.ts
 export const ERROR_CODES = {
   API_KEY_INVALID: 'API_KEY_INVALID',
   SUMMARY_API_KEY_INVALID: 'SUMMARY_API_KEY_INVALID',

@@ -51,6 +51,7 @@ export function WebSearchPanel() {
   const [keyEditing, setKeyEditing] = useState<Record<KeyedProvider, boolean>>({ deepseek: false, tavily: false, anysearch: false })
   const [savingKind, setSavingKind] = useState<SavingKind>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [copyError, setCopyError] = useState<string | null>(null)
   const [saveNotice, setSaveNotice] = useState<string | null>(null)
   const requestControllerRef = useRef<AbortController | null>(null)
 
@@ -87,6 +88,7 @@ export function WebSearchPanel() {
     requestControllerRef.current = controller
     setSavingKind(kind)
     setErrorMessage(null)
+    setCopyError(null)
     setSaveNotice(null)
     try {
       const response = await fetch(`${CORE_URL}/config/web-search`, {
@@ -152,7 +154,7 @@ export function WebSearchPanel() {
       setKeyInputs(prev => ({ ...prev, deepseek: '' }))
       setKeyEditing(prev => ({ ...prev, deepseek: false }))
     })
-    if (reason !== null) setErrorMessage(reason)
+    if (reason !== null) setCopyError(reason)
   }
 
   const handleZoneChange = async (zone: Zone) => {
@@ -181,16 +183,11 @@ export function WebSearchPanel() {
     }
   }
 
+  const copyButton = data.modelDeepseek.hasKey ? (
+    <button type="button" className="rename-btn" onMouseDown={e => e.preventDefault()} onClick={() => void handleCopy()}>{t('从模型设置复制')}</button>
+  ) : undefined
+
   const secondRowFor = (provider: KeyedProvider) => {
-    if (provider === 'deepseek') {
-      const copyDisabled = !data.modelDeepseek.hasKey
-      return (
-        <>
-          <button type="button" className="rename-btn" disabled={copyDisabled} onClick={() => void handleCopy()}>{t('从模型设置复制')}</button>
-          {copyDisabled && <span className="character-panel__hint">{t('模型设置里没有已保存的 DeepSeek Key')}</span>}
-        </>
-      )
-    }
     if (provider === 'anysearch') {
       return (
         <div className="model-config-panel__field api-key-field__zone">
@@ -216,14 +213,22 @@ export function WebSearchPanel() {
       label={providerName(provider, t)}
       summary={data[provider]}
       keyInput={keyInputs[provider]}
-      onKeyInputChange={value => setKeyInputs(prev => ({ ...prev, [provider]: value }))}
+      onKeyInputChange={value => {
+        if (provider === 'deepseek') setCopyError(null)
+        setKeyInputs(prev => ({ ...prev, [provider]: value }))
+      }}
       editing={keyEditing[provider]}
-      onEditingChange={editing => setKeyEditing(prev => ({ ...prev, [provider]: editing }))}
+      onEditingChange={editing => {
+        if (provider === 'deepseek' && !editing) setCopyError(null)
+        setKeyEditing(prev => ({ ...prev, [provider]: editing }))
+      }}
       emptyPlaceholder={provider === 'anysearch' ? t('不填使用匿名免费额度') : undefined}
       canTestWithoutKey={provider === 'anysearch'}
       onCommit={key => send({ [KEY_FIELD[provider]]: key }, 'auto', summary => setData(summary))}
       onTest={() => testKey(provider)}
       secondRow={secondRowFor(provider)}
+      editAction={provider === 'deepseek' ? copyButton : undefined}
+      notice={provider === 'deepseek' && copyError !== null ? copyError : undefined}
     />
   )
 

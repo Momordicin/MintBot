@@ -112,13 +112,14 @@ interface ApiKeyFieldProps {
   onTest: () => Promise<ApiKeyTestResult>
   canTestWithoutKey?: boolean
   secondRow?: ReactNode
+  editAction?: ReactNode
   notice?: string
   compact?: boolean
 }
 
 export function ApiKeyField({
   label, summary, keyStatus = 'ready', keyInput, onKeyInputChange, editing, onEditingChange, env, emptyPlaceholder,
-  onCommit, onTest, canTestWithoutKey = false, secondRow, notice, compact = false,
+  onCommit, onTest, canTestWithoutKey = false, secondRow, editAction, notice, compact = false,
 }: ApiKeyFieldProps) {
   const { t } = useTranslation()
   const inputId = useId()
@@ -333,16 +334,17 @@ export function ApiKeyField({
   const failTitle = test.reason ?? undefined
   const resultIcon = <TestResultIcon state={test.state} reason={test.reason} />
 
+  const envDisabled = envPending || (!envDetected && !fromEnv)
   const envCheckbox = env && (
     <label
-      className={compact ? 'model-config-panel__checkbox model-config-panel__checkbox--compact' : 'model-config-panel__checkbox'}
+      className={`model-config-panel__checkbox${compact ? ' model-config-panel__checkbox--compact' : ''}${envDisabled ? ' model-config-panel__checkbox--disabled' : ''}`}
       title={compact || (!envDetected && env.status === 'ready') ? envHint : undefined}
     >
       <input
         type="checkbox"
         checked={fromEnv}
         aria-describedby={compact ? envHintId : undefined}
-        disabled={envPending || (!envDetected && !fromEnv)}
+        disabled={envDisabled}
         onChange={e => env.onChange(e.target.checked)}
       />
       {compact ? t('环境变量') : envLabel}
@@ -370,7 +372,7 @@ export function ApiKeyField({
       <label className="api-key-field__label" htmlFor={inputId}>{label}</label>
       {keyBox}
       {editButton}
-      {testButton}
+      {editAction !== undefined && keyReady && !fromEnv && !saving && (editing || !summary.hasKey) ? editAction : testButton}
       {resultIcon}
       {hasSecondRow && (
         <div className="api-key-field__second">

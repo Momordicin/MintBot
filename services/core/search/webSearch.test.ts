@@ -110,6 +110,23 @@ describe('Claude Code、Codex 订阅', () => {
   })
 })
 
+describe('订阅提示词', () => {
+  it.each([
+    ['claude', claudeMock],
+    ['codex', codexMock],
+  ] as const)('%s：传了 subscriptionPrompt 时订阅收到它，网页接口仍收到 query', async (provider, mock) => {
+    configure({ order: [provider] })
+    mock.mockResolvedValue({ text: 'a' })
+    await webSearch({ query: 'q', subscriptionPrompt: '提示词', signal: signal() })
+    expect(mock).toHaveBeenCalledWith({ query: '提示词', signal: expect.any(AbortSignal) })
+
+    configure({ order: ['tavily'], tavilyApiKey: 'k' })
+    fetchMock.mockResolvedValue(ok({ results: [] }))
+    await webSearch({ query: 'q', subscriptionPrompt: '提示词', signal: signal() })
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ query: 'q' })
+  })
+})
+
 describe('不发请求就报错', () => {
   const cases: [string, Order, string, number | undefined][] = [
     ['DeepSeek 搜索词超过 128 字', ['deepseek'], '字'.repeat(129), undefined],

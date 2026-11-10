@@ -1,4 +1,4 @@
-// src/settings/CharacterPanel.tsx — 设置窗口的"角色"页：角色名与重命名、角色素材包、创建/导入角色、删除角色
+// src/settings/CharacterPanel.tsx — 设置窗口的"角色"页：角色名与重命名、角色素材包、一键生成角色配置、创建/导入角色、删除角色
 // 用法：SettingsApp 渲染 <CharacterPanel panel={useCharacterPanel 的返回值} />
 // 形状：props { panel: CharacterPanelModel }
 // 对应文件：src/settings/SettingsApp.tsx / src/settings/useCharacterPanel.ts
@@ -20,7 +20,20 @@ export function CharacterPanel({ panel }: CharacterPanelProps) {
     isUploadingWallpaper, isSwitchingPortrait, handleRenameStart, handleRenameCancel, handleRenameSave,
     handleDeleteStart, handleDeleteCancel, handleDeleteConfirm, handleCreateStart, handleCreateCancel,
     handleImportCardPick, handleRegenerateSystemPrompt, handleCreateSave,
+    roleConfigStatus, roleConfigLookup, roleConfigSelected, setRoleConfigSelected, roleConfigSteps, roleConfigMainName,
+    roleConfigNames, roleConfigInput, setRoleConfigInput, roleConfigSaved, roleConfigError, handleRoleConfigStart,
+    handleRoleConfigNext, handleRoleConfigPrevious, handleRoleConfigCancel, handleRoleConfigToggleName,
+    handleRoleConfigAddNames, handleRoleConfigConfirm,
   } = panel
+  const roleConfigBusy = roleConfigStatus === 'looking' || roleConfigStatus === 'choosing' || roleConfigStatus === 'naming' || roleConfigStatus === 'saving'
+  const roleConfigSaving = roleConfigStatus === 'saving'
+  const roleConfigStepRows = [
+    { step: 'extract' as const, label: t('从人设抽名字') },
+    { step: 'search' as const, label: t('联网搜索') },
+    { step: 'merge' as const, label: t('整理备选项') },
+  ]
+  const roleConfigCandidates = roleConfigLookup?.kind === 'candidates' ? roleConfigLookup.candidates : []
+  const roleConfigChosenCount = roleConfigNames.filter(item => item.selected).length
 
   return (
     <div className="character-panel">
@@ -65,6 +78,135 @@ export function CharacterPanel({ panel }: CharacterPanelProps) {
         <div className="character-panel__row">
           <span className="character-panel__field-label">{t('角色素材包')}</span>
           <span className="character-panel__name">{presetSnapshot?.characterId}</span>
+        </div>
+      )}
+      {presets.length > 0 && (
+        <div className="character-panel__role-config">
+          <div className="character-panel__row">
+            <button className="rename-btn" onClick={handleRoleConfigStart} disabled={roleConfigBusy}>
+              {t('一键生成角色配置')}
+            </button>
+            {roleConfigStatus === 'saved' && <span className="character-panel__name">{roleConfigSaved}</span>}
+          </div>
+          {Object.keys(roleConfigSteps).length > 0 && (
+            <div className="character-panel__role-config-list">
+              {roleConfigStepRows.map(({ step, label }) => {
+                const state = roleConfigSteps[step]
+                if (!state) return null
+                const text = state === 'start' ? `● ${label}……` : state === 'done' ? `✓ ${label}` : `✗ ${label}`
+                return (
+                  <div key={step} className="character-panel__role-config-step">
+                    <span className={state === 'failed' ? 'character-panel__error' : 'character-panel__name'}>{text}</span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+          {roleConfigStatus === 'choosing' && (
+            <>
+              <div className="character-panel__role-config-list">
+                {roleConfigCandidates.map((candidate, index) => (
+                  <label key={index} className="character-panel__role-config-option">
+                    <input
+                      type="radio"
+                      name="role-config-candidate"
+                      checked={roleConfigSelected === index}
+                      onChange={() => setRoleConfigSelected(index)}
+                    />
+                    <span>
+                      <span className="character-panel__name">
+                        {[candidate.main_name, ...candidate.aliases.map(alias => alias.name)].join('、')}
+                      </span>
+                      <span className="character-panel__hint">{candidate.source_summary}</span>
+                      {candidate.relation !== null && (
+                        <span className="character-panel__hint">{t('关系：{{relation}}', { relation: candidate.relation })}</span>
+                      )}
+                    </span>
+                  </label>
+                ))}
+                <label className="character-panel__role-config-option">
+                  <input
+                    type="radio"
+                    name="role-config-candidate"
+                    checked={roleConfigSelected === 'none'}
+                    onChange={() => setRoleConfigSelected('none')}
+                  />
+                  <span>{t('都不是')}</span>
+                </label>
+              </div>
+              <div className="character-panel__row">
+                <button className="rename-btn" onClick={handleRoleConfigCancel}>
+                  {t('返回')}
+                </button>
+                <button className="rename-btn" onClick={handleRoleConfigNext} disabled={roleConfigSelected === null}>
+                  {t('下一步')}
+                </button>
+              </div>
+            </>
+          )}
+          {(roleConfigStatus === 'naming' || roleConfigStatus === 'saving') && (
+            <>
+              {roleConfigLookup?.kind === 'names' && roleConfigLookup.failed && (
+                <div className="character-panel__error">{t('角色部分配置自动生成失败，详情见日志')}</div>
+              )}
+              <div className="character-panel__name">
+                {t('你想怎么称呼{{name}}（可多选）', { name: roleConfigMainName ?? presetSnapshot?.name ?? '' })}
+              </div>
+              <div className="character-panel__role-config-names">
+                {roleConfigNames.map(item => (
+                  <button
+                    key={item.name}
+                    className={`rename-btn${item.selected ? ' character-panel__name-btn--selected' : ''}`}
+                    aria-pressed={item.selected}
+                    onClick={() => handleRoleConfigToggleName(item.name)}
+                    disabled={roleConfigSaving}
+                  >
+                    {item.name}
+                  </button>
+                ))}
+              </div>
+              <div className="character-panel__row">
+                <input
+                  className="character-panel__rename-input"
+                  aria-label={t('添加')}
+                  placeholder={t('角色名/别称/昵称')}
+                  value={roleConfigInput}
+                  onChange={e => setRoleConfigInput(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) handleRoleConfigAddNames()
+                  }}
+                  onBlur={handleRoleConfigAddNames}
+                  disabled={roleConfigSaving}
+                />
+                <button className="rename-btn" onClick={handleRoleConfigAddNames} disabled={roleConfigSaving || roleConfigInput.trim() === ''}>
+                  {t('添加')}
+                </button>
+              </div>
+              <div className="character-panel__row">
+                <button className="rename-btn" onClick={handleRoleConfigCancel} disabled={roleConfigSaving}>
+                  {t('返回')}
+                </button>
+                {roleConfigCandidates.length >= 2 && (
+                  <button className="rename-btn" onClick={handleRoleConfigPrevious} disabled={roleConfigSaving}>
+                    {t('上一步')}
+                  </button>
+                )}
+                <button className="rename-btn" onClick={handleRoleConfigConfirm} disabled={roleConfigSaving || (roleConfigChosenCount === 0 && roleConfigInput.trim() === '')}>
+                  {roleConfigSaving ? t('保存中…') : t('保存')}
+                </button>
+              </div>
+            </>
+          )}
+          {roleConfigError && (
+            <div className="character-panel__row">
+              <span className="character-panel__error">{roleConfigError}</span>
+              {roleConfigStatus === 'error' && (
+                <button className="rename-btn" onClick={handleRoleConfigStart}>
+                  {t('重试')}
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
       <div className="character-panel__row">

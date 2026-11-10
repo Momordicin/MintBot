@@ -1,6 +1,6 @@
 // src/settings/useCharacterPanel.ts — 设置窗口角色相关页面（角色 / 外观 / 人设与模型）共用的状态与操作
-// 用法：SettingsApp 调用 useCharacterPanel({ presetSnapshot, onSwitched })，把返回值传给 CharacterPanel / AppearancePanel / PersonaModelPanel，并用其中的 presets / switchPreset 渲染左栏角色下拉框；GET /presets、/presets/:id/model-keys、/config/model、/characters、/characters/:id/manifest.json，POST /switch-preset、/presets、/presets/:id/wallpaper、/characters/import/{parse,generate}、/characters/:id/{avatar,metadata}，PATCH /presets/:id，DELETE /presets/:id；electronAPI.selectWallpaperFile / selectCharacterCardFile
-// 对应文件：src/settings/SettingsApp.tsx / src/settings/CharacterPanel.tsx / src/settings/AppearancePanel.tsx / src/settings/PersonaModelPanel.tsx / src/errorText.ts / src/settings/themeControls.ts / src/chat/theme.ts / src/chat/themeVars.ts / shared/portraitForm.ts / services/core/index.ts / services/core/routes/presets.ts / services/core/routes/characterImport.ts / electron/main/index.ts（select-wallpaper-file、select-character-card-file）
+// 用法：SettingsApp 调用 useCharacterPanel({ presetSnapshot, onSwitched })，把返回值传给 CharacterPanel / AppearancePanel / PersonaModelPanel，并用其中的 presets / switchPreset 渲染左栏角色下拉框；GET /presets、/presets/:id/model-keys、/config/model、/characters、/characters/:id/manifest.json，POST /switch-preset、/presets、/presets/:id/wallpaper、/characters/import/{parse,generate}、/characters/:id/{avatar,metadata}，PATCH /presets/:id，DELETE /presets/:id，POST /presets/:id/role-config/lookup、/presets/:id/role-config/confirm；electronAPI.selectWallpaperFile / selectCharacterCardFile
+// 对应文件：src/settings/SettingsApp.tsx / src/settings/CharacterPanel.tsx / src/settings/AppearancePanel.tsx / src/settings/PersonaModelPanel.tsx / src/errorText.ts / src/settings/themeControls.ts / src/chat/theme.ts / src/chat/themeVars.ts / src/chat/sse.ts / shared/portraitForm.ts / services/core/index.ts / services/core/routes/presets.ts / services/core/routes/characterImport.ts / services/core/routes/roleConfig.ts / electron/main/index.ts（select-wallpaper-file、select-character-card-file）
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { AppState, ModelConfig, PresetDisplayConfig, PresetSnapshot } from '../../shared/types/index.js'
@@ -8,6 +8,7 @@ import { hexToRgb, percentToTintStrength } from './themeControls.js'
 import { deriveTheme } from '../chat/theme.js'
 import { resolveThemeMode, themeCssVars } from '../chat/themeVars.js'
 import { usePrefersDark } from '../usePrefersDark.js'
+import { parseSSE } from '../chat/sse.js'
 import { isErrorBody } from '../../shared/errorCodes.js'
 import { errorText } from '../errorText.js'
 import type { ApiKeySummary, KeyProvider } from './ApiKeyField.js'
@@ -34,6 +35,53 @@ export interface PresetOption {
 type SystemPromptStep = 'idle' | 'editing' | 'confirmingSave' | 'confirmingApply' | 'saving'
 
 type ModelOverrideStep = 'idle' | 'editing' | 'chooseApply' | 'saving'
+
+type RoleConfigStatus = 'idle' | 'looking' | 'choosing' | 'naming' | 'saving' | 'saved' | 'error'
+
+type RoleConfigStep = 'extract' | 'search' | 'merge'
+
+type RoleConfigStepState = 'start' | 'done' | 'failed'
+
+interface RoleConfigName {
+  name: string
+  selected: boolean
+}
+
+interface RoleConfigCandidate {
+  main_name: string
+  aliases: { name: string; pages: number[] }[]
+  source_summary: string
+  relation: string | null
+  pages: number[]
+}
+
+type RoleConfigLookup =
+  | { kind: 'candidates'; candidates: RoleConfigCandidate[]; personaMainName: string; personaNames: string[] }
+  | { kind: 'names'; mainName: string | null; names: string[]; failed: boolean }
+
+function cleanNames(raw: string[]): string[] {
+  const seen = new Set<string>()
+  for (const item of raw) {
+    const name = item.trim()
+    if (name !== '') seen.add(name)
+  }
+  return [...seen]
+}
+
+function addRoleConfigNames(prev: RoleConfigName[], added: string[]): RoleConfigName[] {
+  const known = new Set(prev.map(item => item.name))
+  const marked = prev.map(item => (added.includes(item.name) ? { ...item, selected: true } : item))
+  return [...marked, ...added.filter(name => !known.has(name)).map(name => ({ name, selected: true }))]
+}
+
+function roleConfigChoice(lookup: RoleConfigLookup, selected: number | 'none' | null): { mainName: string | null; names: string[] } {
+  if (lookup.kind === 'names') return { mainName: lookup.mainName, names: lookup.names }
+  if (typeof selected === 'number') {
+    const candidate = lookup.candidates[selected]
+    return { mainName: candidate.main_name, names: [candidate.main_name, ...candidate.aliases.map(alias => alias.name)] }
+  }
+  return { mainName: lookup.personaMainName, names: lookup.personaNames }
+}
 
 type ModelKeyState = ApiKeySummary & { fromEnv: boolean }
 
@@ -121,6 +169,15 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
   const [modelKeysStatus, setModelKeysStatus] = useState<KeyLoadStatus>('loading')
   const [envStatus, setEnvStatus] = useState<KeyLoadStatus>('loading')
   const [modelOverrideNotice, setModelOverrideNotice] = useState<string | null>(null)
+  const [roleConfigStatus, setRoleConfigStatus] = useState<RoleConfigStatus>('idle')
+  const [roleConfigLookup, setRoleConfigLookup] = useState<RoleConfigLookup | null>(null)
+  const [roleConfigSelected, setRoleConfigSelected] = useState<number | 'none' | null>(null)
+  const [roleConfigSteps, setRoleConfigSteps] = useState<Partial<Record<RoleConfigStep, RoleConfigStepState>>>({})
+  const [roleConfigMainName, setRoleConfigMainName] = useState<string | null>(null)
+  const [roleConfigNames, setRoleConfigNames] = useState<RoleConfigName[]>([])
+  const [roleConfigInput, setRoleConfigInput] = useState('')
+  const [roleConfigSaved, setRoleConfigSaved] = useState('')
+  const [roleConfigError, setRoleConfigError] = useState<string | null>(null)
   const switchPresetControllerRef = useRef<AbortController | null>(null)
   const wallpaperControllerRef = useRef<AbortController | null>(null)
   const renameControllerRef = useRef<AbortController | null>(null)
@@ -134,6 +191,7 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
   const modelOverrideControllerRef = useRef<AbortController | null>(null)
   const modelKeysControllerRef = useRef<AbortController | null>(null)
   const envControllerRef = useRef<AbortController | null>(null)
+  const roleConfigControllerRef = useRef<AbortController | null>(null)
   const presetSnapshotRef = useRef<PresetSnapshot | null>(presetSnapshot)
   const [chatBgOpacity, setChatBgOpacity] = useState<number>(DEFAULT_DISPLAY_CONFIG.chatBgOpacity)
   const [themeMode, setThemeMode] = useState<PresetDisplayConfig['themeMode']>(DEFAULT_DISPLAY_CONFIG.themeMode)
@@ -222,6 +280,19 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
   }, [presetSnapshot?.presetId])
 
   useEffect(() => {
+    roleConfigControllerRef.current?.abort()
+    setRoleConfigStatus('idle')
+    setRoleConfigLookup(null)
+    setRoleConfigSelected(null)
+    setRoleConfigSteps({})
+    setRoleConfigMainName(null)
+    setRoleConfigNames([])
+    setRoleConfigInput('')
+    setRoleConfigSaved('')
+    setRoleConfigError(null)
+  }, [presetSnapshot?.presetId])
+
+  useEffect(() => {
     return () => {
       switchPresetControllerRef.current?.abort()
       wallpaperControllerRef.current?.abort()
@@ -233,6 +304,7 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
       modelOverrideControllerRef.current?.abort()
       modelKeysControllerRef.current?.abort()
       envControllerRef.current?.abort()
+      roleConfigControllerRef.current?.abort()
       importControllerRef.current?.abort()
       generateControllerRef.current?.abort()
       avatarUploadControllerRef.current?.abort()
@@ -734,6 +806,153 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
     }
   }, [createName, createCharacterId, createSystemPrompt, importedAvatarFile, importedMetadataFields, switchPreset])
 
+  const handleRoleConfigStart = useCallback(async () => {
+    const presetId = presetSnapshotRef.current?.presetId
+    if (!presetId) return
+
+    roleConfigControllerRef.current?.abort()
+    const controller = new AbortController()
+    roleConfigControllerRef.current = controller
+    setRoleConfigStatus('looking')
+    setRoleConfigLookup(null)
+    setRoleConfigSelected(null)
+    setRoleConfigSteps({})
+    setRoleConfigMainName(null)
+    setRoleConfigNames([])
+    setRoleConfigInput('')
+    setRoleConfigSaved('')
+    setRoleConfigError(null)
+
+    try {
+      const response = await fetch(`${CORE_URL}/presets/${encodeURIComponent(presetId)}/role-config/lookup`, {
+        method: 'POST',
+        signal: controller.signal,
+      })
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => null)
+        throw new Error(isErrorBody(body) ? errorText(body, i18n.t) : i18n.t('生成角色配置失败，请稍后重试'))
+      }
+
+      let result: RoleConfigLookup | null = null
+      for await (const { event, data } of parseSSE(response)) {
+        if (controller.signal.aborted) return
+        if (event === 'step') {
+          const { step, state } = data as { step: RoleConfigStep; state: RoleConfigStepState }
+          setRoleConfigSteps(prev => ({ ...prev, [step]: state }))
+        } else if (event === 'result') {
+          result = data as RoleConfigLookup
+        }
+      }
+      if (controller.signal.aborted) return
+      if (!result) throw new Error(i18n.t('生成角色配置失败，请稍后重试'))
+
+      setRoleConfigLookup(result)
+      if (result.kind === 'candidates' && result.candidates.length >= 2) {
+        setRoleConfigStatus('choosing')
+        return
+      }
+      const selected = result.kind === 'candidates' ? 0 : null
+      const choice = roleConfigChoice(result, selected)
+      setRoleConfigSelected(selected)
+      setRoleConfigMainName(choice.mainName)
+      setRoleConfigNames(cleanNames(choice.names).map(name => ({ name, selected: false })))
+      setRoleConfigStatus('naming')
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return
+      if (controller.signal.aborted) return
+      setRoleConfigError(err instanceof Error && err.message ? err.message : i18n.t('生成角色配置失败，请稍后重试'))
+      setRoleConfigStatus('error')
+    }
+  }, [])
+
+  const handleRoleConfigNext = useCallback(() => {
+    if (!roleConfigLookup || roleConfigSelected === null) return
+    const choice = roleConfigChoice(roleConfigLookup, roleConfigSelected)
+    setRoleConfigMainName(choice.mainName)
+    setRoleConfigNames(cleanNames(choice.names).map(name => ({ name, selected: false })))
+    setRoleConfigInput('')
+    setRoleConfigError(null)
+    setRoleConfigStatus('naming')
+  }, [roleConfigLookup, roleConfigSelected])
+
+  const handleRoleConfigPrevious = useCallback(() => {
+    setRoleConfigError(null)
+    setRoleConfigStatus('choosing')
+  }, [])
+
+  const handleRoleConfigCancel = useCallback(() => {
+    roleConfigControllerRef.current?.abort()
+    setRoleConfigStatus('idle')
+    setRoleConfigLookup(null)
+    setRoleConfigSelected(null)
+    setRoleConfigSteps({})
+    setRoleConfigMainName(null)
+    setRoleConfigNames([])
+    setRoleConfigInput('')
+    setRoleConfigSaved('')
+    setRoleConfigError(null)
+  }, [])
+
+  const handleRoleConfigToggleName = useCallback((name: string) => {
+    setRoleConfigNames(prev => prev.map(item => (item.name === name ? { ...item, selected: !item.selected } : item)))
+  }, [])
+
+  const handleRoleConfigAddNames = useCallback(() => {
+    const added = cleanNames(roleConfigInput.split(/[|/、]/))
+    if (added.length === 0) return
+    setRoleConfigNames(prev => addRoleConfigNames(prev, added))
+    setRoleConfigInput('')
+  }, [roleConfigInput])
+
+  const handleRoleConfigConfirm = useCallback(async () => {
+    const presetId = presetSnapshotRef.current?.presetId
+    if (!presetId) return
+    const added = cleanNames(roleConfigInput.split(/[|/、]/))
+    const nextNames = addRoleConfigNames(roleConfigNames, added)
+    const chosen = nextNames.filter(item => item.selected).map(item => item.name)
+    if (chosen.length === 0) return
+    setRoleConfigNames(nextNames)
+    setRoleConfigInput('')
+
+    roleConfigControllerRef.current?.abort()
+    const controller = new AbortController()
+    roleConfigControllerRef.current = controller
+    setRoleConfigStatus('saving')
+    setRoleConfigError(null)
+
+    try {
+      const response = await fetch(`${CORE_URL}/presets/${encodeURIComponent(presetId)}/role-config/confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ names: chosen }),
+        signal: controller.signal,
+      })
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => null)
+        throw new Error(isErrorBody(body) ? errorText(body, i18n.t) : i18n.t('保存称呼失败，请稍后重试'))
+      }
+
+      const { names }: { names: string[] } = await response.json()
+      if (controller.signal.aborted) return
+
+      setRoleConfigSaved(i18n.t('已保存：{{names}}', { names: names.join('、') }))
+      setRoleConfigLookup(null)
+      setRoleConfigSelected(null)
+      setRoleConfigSteps({})
+      setRoleConfigMainName(null)
+      setRoleConfigNames([])
+      setRoleConfigInput('')
+      setRoleConfigStatus('saved')
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return
+      if (controller.signal.aborted) return
+      setRoleConfigError(err instanceof Error && err.message ? err.message : i18n.t('保存称呼失败，请稍后重试'))
+      setRoleConfigStatus('naming')
+    }
+  }, [roleConfigNames, roleConfigInput])
+
   const handleSystemPromptEditStart = useCallback(() => {
     setSystemPromptValue(presetSnapshotRef.current?.systemPrompt ?? '')
     setPersonaError(null)
@@ -1204,6 +1423,24 @@ export function useCharacterPanel({ presetSnapshot, onSwitched }: UseCharacterPa
     handleImportCardPick,
     handleRegenerateSystemPrompt,
     handleCreateSave,
+    roleConfigStatus,
+    roleConfigLookup,
+    roleConfigSelected,
+    setRoleConfigSelected,
+    roleConfigSteps,
+    roleConfigMainName,
+    roleConfigNames,
+    roleConfigInput,
+    setRoleConfigInput,
+    roleConfigSaved,
+    roleConfigError,
+    handleRoleConfigStart,
+    handleRoleConfigNext,
+    handleRoleConfigPrevious,
+    handleRoleConfigCancel,
+    handleRoleConfigToggleName,
+    handleRoleConfigAddNames,
+    handleRoleConfigConfirm,
     handleSystemPromptEditStart,
     handleSystemPromptEditCancel,
     handleSystemPromptSaveClick,

@@ -288,6 +288,49 @@ option {
   gap: 6px;
 }
 
+.character-panel__role-config {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.character-panel__role-config-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.character-panel__role-config-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.character-panel__role-config-option > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.character-panel__role-config-step {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.character-panel__role-config-names {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.character-panel .rename-btn.character-panel__name-btn--selected {
+  border-color: rgba(var(--accent-rgb), 0.9);
+  box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.4);
+}
+
 .character-panel__display-label {
   display: flex;
   align-items: center;
@@ -861,7 +904,7 @@ option {
 
 .api-key-field {
   display: grid;
-  grid-template-columns: 96px minmax(0, 1fr) 20px auto 16px;
+  grid-template-columns: 96px minmax(0, 1fr) 20px 108px 16px;
   align-items: center;
   column-gap: 8px;
   row-gap: 4px;
@@ -904,6 +947,10 @@ option {
 .api-key-field__edit {
   position: static;
   transform: none;
+}
+.api-key-field > .rename-btn {
+  justify-self: end;
+  white-space: nowrap;
 }
 
 .api-key-field__second {
@@ -1025,6 +1072,10 @@ option {
 .web-search-panel__list-actions {
   display: flex;
   gap: 6px;
+}
+
+.model-config-panel__checkbox--disabled {
+  color: var(--label3);
 }
 
 .web-search-panel__list-row--disabled .web-search-panel__list-name {

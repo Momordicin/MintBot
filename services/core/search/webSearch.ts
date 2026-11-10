@@ -1,5 +1,5 @@
 // services/core/search/webSearch.ts — 联网搜索服务：按设置里的顺序调用 DeepSeek 搜索 / Tavily / AnySearch / Claude Code 订阅 / Codex 订阅之一，返回统一的结果格式
-// 用法：core 内业务调 webSearch({ query, count?, signal })；routes/config.ts 的 POST /config/web-search/test 调 testWebSearchKey(provider, signal)；顺序、Key、地区读 getWebSearchConfig
+// 用法：core 内业务调 webSearch({ query, count?, subscriptionPrompt?, signal })；routes/config.ts 的 POST /config/web-search/test 调 testWebSearchKey(provider, signal)；顺序、Key、地区读 getWebSearchConfig
 // 对应文件：services/core/routes/config.ts / services/core/plugins/pluginFetch.ts / services/core/agents/claudeCode.ts / services/core/agents/codex.ts / services/core/config/index.ts / services/core/search/webSearch.test.ts
 import { claudeWebSearch } from '../agents/claudeCode.js'
 import { codexWebSearch } from '../agents/codex.js'
@@ -33,6 +33,7 @@ export interface WebSearchResult {
 export interface WebSearchParams {
   query: string
   count?: number
+  subscriptionPrompt?: string
   signal: AbortSignal
 }
 
@@ -196,12 +197,12 @@ async function searchHttp(provider: HttpProvider, query: string, count: number |
   return parseBody(provider, body)
 }
 
-async function searchSubscription(provider: SubscriptionProvider, query: string, signal: AbortSignal): Promise<Parsed> {
+async function searchSubscription(provider: SubscriptionProvider, prompt: string, signal: AbortSignal): Promise<Parsed> {
   const timeout = new AbortController()
   const timer = setTimeout(() => timeout.abort(), SUBSCRIPTION_TIMEOUT_MS)
   const call = provider === 'claude' ? claudeWebSearch : codexWebSearch
   try {
-    const { text: answer } = await call({ query, signal: AbortSignal.any([signal, timeout.signal]) })
+    const { text: answer } = await call({ query: prompt, signal: AbortSignal.any([signal, timeout.signal]) })
     return { results: [], answer }
   } catch (err) {
     if (signal.aborted) throw aborted()
@@ -212,10 +213,10 @@ async function searchSubscription(provider: SubscriptionProvider, query: string,
   }
 }
 
-async function searchWith(provider: WebSearchProvider, query: string, count: number | undefined, signal: AbortSignal): Promise<WebSearchResult> {
+async function searchWith(provider: WebSearchProvider, query: string, count: number | undefined, subscriptionPrompt: string | undefined, signal: AbortSignal): Promise<WebSearchResult> {
   checkRequest(provider, query, count)
   const parsed = provider === 'claude' || provider === 'codex'
-    ? await searchSubscription(provider, query, signal)
+    ? await searchSubscription(provider, subscriptionPrompt ?? query, signal)
     : await searchHttp(provider, query, count, signal)
   return { provider, query, ...parsed }
 }
@@ -238,7 +239,7 @@ export async function testWebSearchKey(provider: HttpProvider, signal: AbortSign
   }
 }
 
-export async function webSearch({ query, count, signal }: WebSearchParams): Promise<WebSearchResult> {
+export async function webSearch({ query, count, subscriptionPrompt, signal }: WebSearchParams): Promise<WebSearchResult> {
   const { order } = getWebSearchConfig()
   if (order.length === 0) throw new WebSearchError('not_configured', '联网搜索没有启用任何服务，请先在设置里添加')
   if (query.trim() === '') throw new WebSearchError('invalid_query', '搜索词不能为空')
@@ -248,7 +249,7 @@ export async function webSearch({ query, count, signal }: WebSearchParams): Prom
   for (const provider of order) {
     if (signal.aborted) throw aborted()
     try {
-      return await searchWith(provider, query, count, signal)
+      return await searchWith(provider, query, count, subscriptionPrompt, signal)
     } catch (err) {
       if (err instanceof WebSearchError && err.kind === 'aborted') throw err
       last = err instanceof WebSearchError
