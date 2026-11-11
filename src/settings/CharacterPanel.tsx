@@ -360,8 +360,9 @@ export function CharacterPanel({ panel }: CharacterPanelProps) {
           )}
           {roleConfigStatus === 'reading' && (
             <>
+              <div className="character-panel__role-config-tip">{t('如果发现{{name}}识别有误属正常现象，这正是要收集的，不用重录。', { name: roleName })}</div>
               <div className="character-panel__role-config-notice">
-                <div className="character-panel__section-title">{t('录音须知')}</div>
+                <div className="character-panel__section-title">{t('{{name}}的人声强化小贴士', { name: roleName })}</div>
                 <ul>
                   <li>{t('请在安静的环境里录制，远离音乐、视频和其他人说话的声音')}</li>
                   <li>{t('用平时跟角色说话的语气和语速念，不用刻意放慢或咬字')}</li>
@@ -410,7 +411,7 @@ export function CharacterPanel({ panel }: CharacterPanelProps) {
               </ol>
               {roleConfigAllRead && (
                 <div className="character-panel__role-config-recorded">
-                  <span className="character-panel__name">{t('全部念完了。转写不对的句子可以点\'重录\'，确认后点\'下一步\'')}</span>
+                  <span className="character-panel__name">{t('全部识别成功，点\'下一步\'继续。')}</span>
                   <button className="rename-btn" onClick={handleRoleConfigFinish}>
                     {t('下一步')}
                   </button>

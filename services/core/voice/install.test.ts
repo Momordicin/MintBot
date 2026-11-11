@@ -28,6 +28,7 @@ vi.mock('./install.js', () => ({
   resolveManifestUrl: mocks.resolveManifestUrl,
   fetchRemoteManifestInfo: mocks.fetchRemoteManifestInfo,
   removeStaleVoiceVersions: mocks.removeStaleVoiceVersions,
+  MIN_VOICE_VERSION: '0.2.4',
 }))
 vi.mock('../events/broadcast.js', () => ({ broadcastEvent: mocks.broadcastEvent }))
 vi.mock('../config/index.js', () => ({

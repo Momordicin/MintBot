@@ -8,6 +8,7 @@ import { createModelProviderForPreset } from '../providers/ModelProvider.js'
 import { getPresetApiKeys } from '../session/queries.js'
 import { parseJsonSalvage } from '../util/jsonSalvage.js'
 import { getVoiceStatus, isNewerVersion, reloadHotwords, startInstall, waitForInstall } from '../voice/agent.js'
+import { MIN_VOICE_VERSION } from '../voice/install.js'
 import { readNamesDraft } from './confirm.js'
 import { saveHotwordsSection } from './hotwords.js'
 import { buildMisspellingPrompt, type MisspellingGroup } from './prompts.js'
@@ -35,7 +36,6 @@ export interface FinishResult {
 
 export class RoleConfigStepFailed extends Error {}
 
-const MIN_VOICE_VERSION = '0.2.4'
 
 const BAD_FORMAT_REASON = '模型返回的内容不是要求的格式'
 

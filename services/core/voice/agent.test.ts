@@ -26,6 +26,7 @@ vi.mock('./install.js', () => ({
   resolveManifestUrl: mocks.resolveManifestUrl,
   fetchRemoteManifestInfo: mocks.fetchRemoteManifestInfo,
   removeStaleVoiceVersions: mocks.removeStaleVoiceVersions,
+  MIN_VOICE_VERSION: '0.2.4',
 }))
 vi.mock('../events/broadcast.js', () => ({ broadcastEvent: mocks.broadcastEvent }))
 vi.mock('../config/index.js', () => ({
@@ -225,6 +226,8 @@ describe('voice settings page', () => {
       installed: true,
       version: '0.1.0',
       updateVersion: null,
+      minVersion: '0.2.4',
+      belowMinVersion: true,
       enrollInterrupted: false,
       phase: 'running',
       listening: true,
@@ -283,6 +286,18 @@ describe('voice settings page', () => {
       expect(mocks.fetchRemoteManifestInfo).toHaveBeenCalledWith('https://example.invalid/manifest.json')
       expect(body.version).toBe(installed)
       expect(body.updateVersion).toBe(expected)
+    })
+
+    it.each([
+      ['0.2.3', true],
+      ['0.2.4', false],
+      ['0.2.5', false],
+    ])('installed %s gives belowMinVersion %s', async (installed, expected) => {
+      await restartInstalled(installed)
+      mocks.fetchRemoteManifestInfo.mockResolvedValue({ version: installed, apiVersion: 1 })
+      const body = await check()
+      expect(body.minVersion).toBe('0.2.4')
+      expect(body.belowMinVersion).toBe(expected)
     })
 
     it('reports no update and logs one line when the remote manifest cannot be read, then retries on the next check', async () => {
@@ -350,6 +365,8 @@ describe('voice settings page', () => {
       installed: false,
       version: null,
       updateVersion: null,
+      minVersion: '0.2.4',
+      belowMinVersion: false,
       enrollInterrupted: false,
       phase: null,
       listening: false,

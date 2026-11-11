@@ -54,6 +54,8 @@ interface VoiceStatus {
   installed: boolean
   version: string | null
   updateVersion: string | null
+  minVersion: string
+  belowMinVersion: boolean
   enrollInterrupted: boolean
   phase: string | null
   listening: boolean
@@ -424,10 +426,15 @@ export function VoicePanel() {
               {t('下载并安装语音组件')}
             </button>
           )}
-          {status.installed && !installing && install.state === 'idle' && status.updateVersion !== null && (
+          {status.installed &&
+            !installing &&
+            install.state === 'idle' &&
+            (status.belowMinVersion || status.updateVersion !== null) && (
             <>
               {' '}
-              {t('当前 {{current}}，可更新到 {{next}}', { current: status.version ?? '', next: status.updateVersion })}
+              {status.belowMinVersion
+                ? t('当前 {{current}}，MintBot 需要 {{min}} 或更高，请更新', { current: status.version ?? '', min: status.minVersion })
+                : t('当前 {{current}}，可更新到 {{next}}', { current: status.version ?? '', next: status.updateVersion ?? '' })}
               <button className="memory-btn" disabled={locked || mode !== 'normal'} onClick={() => post('/voice/install')}>
                 {t('更新')}
               </button>

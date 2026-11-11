@@ -19,6 +19,7 @@ import { broadcastEvent } from '../events/broadcast.js'
 import {
   fetchRemoteManifestInfo,
   installVoice,
+  MIN_VOICE_VERSION,
   readVoiceInstallation,
   removeStaleVoiceVersions,
   resolveManifestUrl,
@@ -78,6 +79,8 @@ export interface VoiceStatus {
   installed: boolean
   version: string | null
   updateVersion: string | null
+  minVersion: string
+  belowMinVersion: boolean
   enrollInterrupted: boolean
   phase: string | null
   listening: boolean
@@ -390,6 +393,8 @@ export async function getVoiceStatus(): Promise<VoiceStatus> {
       installedVersion !== null && updateCheck?.version && isNewerVersion(updateCheck.version, installedVersion)
         ? updateCheck.version
         : null,
+    minVersion: MIN_VOICE_VERSION,
+    belowMinVersion: installedVersion !== null && isNewerVersion(MIN_VOICE_VERSION, installedVersion),
     enrollInterrupted,
     phase: latestState?.phase ?? null,
     listening: latestState?.listening ?? false,

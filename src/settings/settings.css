@@ -382,6 +382,10 @@ option {
   font-weight: 700;
 }
 
+.character-panel__role-config-tip {
+  background: rgba(var(--accent-rgb), 0.25);
+}
+
 .role-config-row {
   align-items: center;
 }

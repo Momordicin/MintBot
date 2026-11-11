@@ -12,6 +12,8 @@ import {
   type InstallOptions,
 } from '@mintbot/voice-agent-client'
 
+export const MIN_VOICE_VERSION = '0.2.4'
+
 export const VOICE_INSTALL_ROOT = path.resolve(process.cwd(), 'data', 'voice-agent')
 
 export const PINNED_MANIFEST_URL: string | null =
