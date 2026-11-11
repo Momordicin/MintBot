@@ -45,7 +45,7 @@ vi.mock('@mintbot/voice-agent-client', () => ({
   },
 }))
 
-import { startVoice, stopVoice, takePending } from './agent.js'
+import { setHotwordsRole, startVoice, stopVoice, takePending } from './agent.js'
 import { voiceRoutes } from './routes.js'
 import { ConfigFileUnreadableError } from '../config/configFileError.js'
 import Fastify from 'fastify'
@@ -1464,5 +1464,51 @@ describe('voice input toggle', () => {
       expect((await post('/voice/enroll/commit')).statusCode).toBe(409)
       expect((await status()).enrollInterrupted).toBe(true)
     })
+  })
+})
+
+describe('hotwords reload', () => {
+  const state = (phase: string) => ({ phase, listening: true, restarts: 0 })
+
+  beforeEach(async () => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mintbot-voice-test-'))
+    mocks.readVoiceInstallation.mockReset()
+    mocks.call.mockReset()
+    mocks.call.mockResolvedValue({})
+    mocks.supervisorOptions = null
+    resetListenMocks('listen')
+    mocks.readVoiceInstallation.mockResolvedValue({ version: '0.2.4' })
+    await startVoice(dataDir)
+  })
+
+  afterEach(async () => {
+    await stopVoice()
+    fs.rmSync(dataDir, { recursive: true, force: true })
+  })
+
+  it.each([
+    { name: 'sends the encoded path and role while running', phase: 'running', sent: true },
+    { name: 'does not send while not running', phase: 'restarting', sent: false },
+  ])('setHotwordsRole $name', async ({ phase, sent }) => {
+    mocks.supervisorOptions!.onState(state(phase))
+    mocks.call.mockClear()
+    setHotwordsRole('role a/1')
+    if (!sent) {
+      expect(mocks.call).not.toHaveBeenCalled()
+      return
+    }
+    const hotwords = encodeURIComponent(path.join(dataDir, 'hotwords.txt'))
+    expect(mocks.call).toHaveBeenCalledWith('POST', `/v1/hotwords/reload?path=${hotwords}&role=${encodeURIComponent('role a/1')}`)
+  })
+
+  it('sends again when the agent enters running', async () => {
+    mocks.supervisorOptions!.onState(state('restarting'))
+    setHotwordsRole('role a/1')
+    mocks.call.mockClear()
+    mocks.supervisorOptions!.onState(state('running'))
+    expect(mocks.call).toHaveBeenCalledTimes(1)
+    expect(mocks.call.mock.calls[0][1]).toContain('role=role%20a%2F1')
+    mocks.supervisorOptions!.onState(state('running'))
+    expect(mocks.call).toHaveBeenCalledTimes(1)
   })
 })

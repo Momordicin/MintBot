@@ -1,5 +1,5 @@
 // services/core/voice/agent.ts — 托管语音输入进程：转写结果追加到本地记录，并累积为待放入聊天输入框的文字
-// 用法：index.ts 的 start() 调 startVoice()，SIGINT/SIGTERM 时调 stopVoice()；voice/routes.ts 调 takePending() / setInputMode()；聆听模式有新文字时 broadcastEvent('voice-pending')，转写模式 broadcastEvent('voice-type', { text })
+// 用法：index.ts 的 start() 调 startVoice()，session/index.ts 的 loadSession 调 setHotwordsRole()，roleConfig/collect.ts 调 reloadHotwords()，SIGINT/SIGTERM 时调 stopVoice()；voice/routes.ts 调 takePending() / setInputMode()；聆听模式有新文字时 broadcastEvent('voice-pending')，转写模式 broadcastEvent('voice-type', { text })
 // 对应文件：services/core/voice/install.ts / services/core/voice/routes.ts / services/core/events/broadcast.ts / services/core/voice/agent.test.ts
 import fs from 'fs'
 import path from 'path'
@@ -101,6 +101,7 @@ let voiceDataDir = VOICE_DATA_DIR
 let transcriptsPath = path.join(VOICE_DATA_DIR, 'transcripts.jsonl')
 let pending: string[] = []
 let latestState: SupervisorState | null = null
+let hotwordsRole: string | null = null
 let mode: VoiceMode = 'normal'
 let modeSeq = 0
 let modeHistory: Array<{ mode: VoiceMode; since: number; seq: number }> = [{ mode: 'normal', since: Date.now(), seq: 0 }]
@@ -565,7 +566,9 @@ export async function startVoice(dataDir: string = VOICE_DATA_DIR): Promise<void
     args: ['--hotwords', hotwordsPath()],
     onEvent: handleEvent,
     onState: state => {
+      const becameRunning = latestState?.phase !== 'running' && state.phase === 'running'
       latestState = state
+      if (becameRunning) reloadHotwords().catch(() => {})
       if (state.phase !== 'running' && mode === 'enrolling') {
         endMode()
         return
@@ -634,14 +637,21 @@ export async function waitForInstall(): Promise<void> {
   await installTask
 }
 
-export function assertVoiceRestartable(): void {
-  if (mode !== 'normal' || install.state === 'installing') throw new VoiceOperationError(409, ERROR_CODES.VOICE_BUSY)
+export async function reloadHotwords(): Promise<'sent' | 'deferred'> {
+  if (!supervisor || latestState?.phase !== 'running' || hotwordsRole === null) return 'deferred'
+  const url = `/v1/hotwords/reload?path=${encodeURIComponent(hotwordsPath())}&role=${encodeURIComponent(hotwordsRole)}`
+  try {
+    await supervisor.call('POST', url)
+  } catch (err) {
+    console.error('[Voice] 热词表重新载入失败', err)
+    throw err
+  }
+  return 'sent'
 }
 
-export async function restartVoice(): Promise<void> {
-  assertVoiceRestartable()
-  await stopVoice()
-  await startVoice(voiceDataDir)
+export function setHotwordsRole(presetId: string): void {
+  hotwordsRole = presetId
+  reloadHotwords().catch(() => {})
 }
 
 export function cancelInstall(): void {

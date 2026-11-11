@@ -7,7 +7,7 @@ import { getModelProviderConfig } from '../config/index.js'
 import { createModelProviderForPreset } from '../providers/ModelProvider.js'
 import { getPresetApiKeys } from '../session/queries.js'
 import { parseJsonSalvage } from '../util/jsonSalvage.js'
-import { assertVoiceRestartable, getVoiceStatus, isNewerVersion, restartVoice, startInstall, waitForInstall } from '../voice/agent.js'
+import { getVoiceStatus, isNewerVersion, reloadHotwords, startInstall, waitForInstall } from '../voice/agent.js'
 import { readNamesDraft } from './confirm.js'
 import { saveHotwordsSection } from './hotwords.js'
 import { buildMisspellingPrompt, type MisspellingGroup } from './prompts.js'
@@ -35,7 +35,7 @@ export interface FinishResult {
 
 export class RoleConfigStepFailed extends Error {}
 
-const MIN_VOICE_VERSION = '0.2.3'
+const MIN_VOICE_VERSION = '0.2.4'
 
 const BAD_FORMAT_REASON = '模型返回的内容不是要求的格式'
 
@@ -225,9 +225,8 @@ export async function finishRoleConfig(
   signal.throwIfAborted()
   await runStep('write', signal, onStep, async () => {
     const entries = names.map(name => ({ name, misspellings: found.get(name) ?? [] }))
-    assertVoiceRestartable()
     await saveHotwordsSection(preset.name, preset.presetId, entries)
-    await restartVoice()
+    await reloadHotwords()
   })
   return { complete: true }
 }
