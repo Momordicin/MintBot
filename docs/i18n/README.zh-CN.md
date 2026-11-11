@@ -31,11 +31,13 @@
 | 模块 | 说明 |
 |---|---|
 | 聊天 | 按角色个性化配置, 兼容酒馆角色卡并做更多拓展 |
-| 桌宠 | 分像素和立绘两种形态；情绪立绘可穿透、拖动、隐藏；智能避让工作娱乐屏幕并记住位置 |
-| 角色 | 新建、切换，或角色卡导入；编辑名字、人设、壁纸和主题；删除角色时连同聊天和记忆一起删除 |
+| 悬浮窗 | 双形态自由切换；情绪立绘与动画控制；智能屏幕避让 |
+| 角色 | 一键生成角色配置；角色卡与记忆管理 |
 | 记忆 | 近期对话直接进入上下文，更早的对话按需召回；后台生成摘要、提取事实；可浏览记忆，按时间范围删除 |
 | 模型 | Anthropic / OpenAI / DeepSeek / Ollama；支持深度用户根据角色卡需要使用不同模型用于对话和后台整理；每个角色可单独设置模型和 Key |
-| 语音输入 | 一键安装和更新；主人跨设备识别 |
+| 语音输入 | 按角色智能适配识别，采样设备切换时自动适配；支持一键安装和更新 |
+| 插件 | 支持聊天角色的插件管理（如天气、待办清单） |
+| 联网搜索 | 角色自动联网搜索 |
 | 语音回复 | 流式语音合成，按情绪调整语气 |
 | 工具与主动对话 | 本地操作、MCP、按日程、事件或情绪发起对话 |
 | 手机端 | 在手机上使用本机服务，与桌面端共享会话 |
@@ -45,10 +47,10 @@
 ## 开发阶段
 
 - [x] Phase 1：核心对话链路 + 主动对话
-- [x] Phase 2：记忆系统（调研优化中）
+- [x] Phase 2：记忆系统
 - [x] Phase 3：悬浮窗 + 窗口管理
 - [ ] Phase 4：语音（ASR已完成，TTS调研中）
-- [ ] Phase 5：人机交互工具 + MCP
+- [x] Phase 5：Agent 工具与工作流支持
 - [ ] Phase 6：手机端
 
 ---
@@ -137,24 +139,40 @@ assets/characters/my-character/
 
 - 所有对话数据存储在本地 SQLite，不上传任何服务器
 - API Key 留在本机：全局 Key 存在 `config.json`，角色单独的 Key 存在本地数据库；从环境变量读取的 Key 只在启动时读入，不会保存
-- Claude Code / Codex 订阅的登录完全由官方命令行和你的浏览器完成，MintBot 不接触账号和凭据；凭据由命令行保存在 MintBot 自己的本地数据目录里
+- Claude Code / Codex 订阅的登录完全由官方命令行和用户的浏览器完成，MintBot 不接触账号和凭据；凭据由命令行保存在 MintBot 自己的本地数据目录里
 - 删除的对话会从数据库文件中擦除，无法再从中恢复
 - 语音输入在本机处理，不保存音频；识别出的文字和你的声纹保存在本地文件中。语音组件本身在安装或更新时从 GitHub 发布页下载
-- 使用外部 API（Anthropic / OpenAI / DeepSeek）时，对话内容会发送至对应服务商；隐私优先用户建议配置本地 Ollama
+- 一键生成角色配置不保存或上传音频
+- 只有在完成用户要求的复杂任务，或通过API、订阅等方式聊天时，才会按需发送给用户启用的搜索服务和模型服务商
+- 支持Ollama 模型离线本地化配置
 
 ---
 
 ## 特别鸣谢
 
+**作者的其他项目**
+
+- [mintbot-voice-agent](https://github.com/Momordicin/mintbot-voice-agent) —— MintBot 的本地语音输入组件
+- [mintbot-weather](https://github.com/Momordicin/mintbot-weather) —— MintBot 的天气插件
+- [ameath](https://gitee.com/lzy-buaa-jdi/ameath)
+
 **开源项目**
 
-本项目作者参与开发, 或参考设计与实现的开源项目：
-- [ameath](https://gitee.com/lzy-buaa-jdi/ameath)
-- [新世界（Shinsekai）](https://github.com/RachelForster/Shinsekai)
+本项目参考设计与实现，或直接用到的开源项目：
 - [Graphiti](https://github.com/getzep/graphiti)
 - [Mem0](https://github.com/mem0ai/mem0)
 - [AstrBot](https://github.com/AstrBotDevs/AstrBot)
 - [wangfenjin/simple](https://github.com/wangfenjin/simple)（libsimple）—— 本项目 vendor 进来的 SQLite FTS5 中文分词扩展
+- [SenseVoice](https://github.com/FunAudioLLM/SenseVoice) 与 [FunASR](https://github.com/modelscope/FunASR) —— 语音组件的语音识别与断句
+- [3D-Speaker](https://github.com/modelscope/3D-Speaker)（CAM++）—— 主人声纹模型
+- [ggml](https://github.com/ggml-org/ggml) —— 极低占用的模型运行底层支持
+- [asr-hotword](https://github.com/HaujetZhao/asr-hotword) —— 语音组件采用的热词表格式与匹配规则
+- [CapsWriter-Offline](https://github.com/HaujetZhao/CapsWriter-Offline) —— 转写模式输入的参考
+- 语音组件还用到 [WebRTC AudioProcessing](https://freedesktop.org/software/pulseaudio/webrtc-audio-processing/)、[miniaudio](https://github.com/mackron/miniaudio) 和 [cpp-httplib](https://github.com/yhirose/cpp-httplib)
+
+**友情链接**
+
+- [新世界（Shinsekai）](https://github.com/RachelForster/Shinsekai)
 
 **表情包与素材**
 

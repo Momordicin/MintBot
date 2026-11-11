@@ -31,11 +31,13 @@ A locally-run AI character companion desktop app. Supports custom character pers
 | Module | What it does |
 |---|---|
 | Chat | Per-character configuration; compatible with SillyTavern character cards, with further extensions |
-| Desktop pet | Pixel and illustration forms; emotion portraits that can be clicked through, dragged and hidden; smart avoidance of work and entertainment screens, remembering its position |
-| Characters | Create, switch, or import from a character card; edit name, persona, wallpaper and theme; deleting a character removes its chats and memories |
+| Overlay window | Two forms; emotion portraits and animation control; smart screen avoidance |
+| Characters | One-click character setup; character card and memory management |
 | Memory | Recent conversation in context, older conversation recalled on demand; background summaries and fact extraction; browse memories and delete a time range |
 | Models | Anthropic / OpenAI / DeepSeek / Ollama; power users can use different models for chat and for background organizing, as each character card needs; each character can have its own model and key |
-| Voice input | One-click install and update; owner recognition across devices |
+| Voice input | Recognition tuned to each character, adapting automatically when the recording device changes; one-click install and update |
+| Plugins | Plugin management for chat characters (e.g. weather, to-do list) |
+| Web search | Characters search the web automatically |
 | Voice replies | Streaming speech synthesis with emotion-guided tone |
 | Tools and proactive chat | Local actions, MCP, conversations started by schedule, events or mood |
 | Mobile | Use the local service from your phone, sharing sessions with the desktop |
@@ -45,10 +47,10 @@ A locally-run AI character companion desktop app. Supports custom character pers
 ## Development stages
 
 - [x] Phase 1: Core chat pipeline + proactive conversation
-- [x] Phase 2: Memory system (being researched and optimized)
+- [x] Phase 2: Memory system
 - [x] Phase 3: Overlay window + window management
 - [ ] Phase 4: Voice (ASR done, TTS under research)
-- [ ] Phase 5: Human-computer interaction tools + MCP
+- [x] Phase 5: Agent tools and workflow support
 - [ ] Phase 6: Mobile client
 
 ---
@@ -137,24 +139,40 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
 
 - All conversation data is stored in local SQLite — nothing is uploaded to any server
 - API keys stay on your machine: global keys in `config.json`, per-character keys in the local database. Keys taken from environment variables are read at startup and never saved
-- Claude Code / Codex subscription logins are handled entirely by the official command-line tools and your browser. MintBot never sees the account or its credentials; the tools store them in MintBot's own local data folder
+- Claude Code / Codex subscription logins are handled entirely by the official command-line tools and the user's browser. MintBot never sees the account or its credentials; the tools store them in MintBot's own local data folder
 - Deleted conversations are erased from the database file and can't be recovered from it
 - Voice input is processed on your machine and no audio is saved; recognized text and your voiceprint are kept in local files. The voice component itself is downloaded from GitHub releases when you install or update it
-- When using an external API (Anthropic / OpenAI / DeepSeek), conversation content is sent to that provider; for privacy-first use, we recommend configuring local Ollama instead
+- One-click character setup neither saves nor uploads audio
+- Content is sent, only as needed, to the search services and model providers the user enabled, and only when completing a complex task the user asked for or when chatting through an API or a subscription
+- Ollama models can be configured to run offline on your own machine
 
 ---
 
 ## Acknowledgements
 
+**More from the author**
+
+- [mintbot-voice-agent](https://github.com/Momordicin/mintbot-voice-agent) — MintBot's local voice input component
+- [mintbot-weather](https://github.com/Momordicin/mintbot-weather) — MintBot's weather plugin
+- [ameath](https://gitee.com/lzy-buaa-jdi/ameath)
+
 **Open-source projects**
 
-Projects the author of this project contributed to, or appreciated:
-- [ameath](https://gitee.com/lzy-buaa-jdi/ameath)
-- [Shinsekai](https://github.com/RachelForster/Shinsekai)
+Projects this project learned from or builds on:
 - [Graphiti](https://github.com/getzep/graphiti)
 - [Mem0](https://github.com/mem0ai/mem0)
 - [AstrBot](https://github.com/AstrBotDevs/AstrBot)
 - [wangfenjin/simple](https://github.com/wangfenjin/simple) (libsimple) — the SQLite FTS5 Chinese tokenizer this project vendors
+- [SenseVoice](https://github.com/FunAudioLLM/SenseVoice) and [FunASR](https://github.com/modelscope/FunASR) — the speech recognition and voice activity detection behind the voice component
+- [3D-Speaker](https://github.com/modelscope/3D-Speaker) (CAM++) — the owner voiceprint model
+- [ggml](https://github.com/ggml-org/ggml) — the very lightweight foundation that runs the models
+- [asr-hotword](https://github.com/HaujetZhao/asr-hotword) — the hotword list format and matching rules the voice component follows
+- [CapsWriter-Offline](https://github.com/HaujetZhao/CapsWriter-Offline) — the reference for transcribe-mode typing
+- The voice component also uses [WebRTC AudioProcessing](https://freedesktop.org/software/pulseaudio/webrtc-audio-processing/), [miniaudio](https://github.com/mackron/miniaudio) and [cpp-httplib](https://github.com/yhirose/cpp-httplib)
+
+**Friends**
+
+- [Shinsekai](https://github.com/RachelForster/Shinsekai)
 
 **Sticker packs and assets**
 
