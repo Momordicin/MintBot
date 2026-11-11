@@ -1,6 +1,6 @@
-// services/core/roleConfig/prompts.ts — 一键生成角色配置用到的三段提示词：A 从人设抽名字、B 交给订阅的联网搜索、C 统合搜索结果
-// 用法：roleConfig/lookup.ts 调 buildExtractPrompt / buildSearchPrompt / buildMergePrompt；work 为空时对应位置留空
-// 对应文件：services/core/roleConfig/lookup.ts / services/core/search/webSearch.ts
+// services/core/roleConfig/prompts.ts — 一键生成角色配置用到的四段提示词：A 从人设抽名字、B 交给订阅的联网搜索、C 统合搜索结果、D 找错写
+// 用法：roleConfig/lookup.ts 调 buildExtractPrompt / buildSearchPrompt / buildMergePrompt；roleConfig/collect.ts 调 buildMisspellingPrompt；work 为空时对应位置留空
+// 对应文件：services/core/roleConfig/lookup.ts / services/core/roleConfig/collect.ts / services/core/search/webSearch.ts
 import type { WebSearchResult } from '../search/webSearch.js'
 
 export function buildExtractPrompt(persona: string, displayName: string): string {
@@ -51,4 +51,22 @@ ${search.answer ?? ''}`
 
 只输出 JSON 对象，不要其他内容；没有任何一组和要找的角色有关时，candidates 为空数组：
 {"candidates": [{"main_name": "...", "aliases": [{"name": "...", "pages": [1, 3]}], "source_summary": "...", "relation": "..." 或 null, "pages": [1, 3]}]}`
+}
+
+export interface MisspellingGroup {
+  name: string
+  samples: { script: string; transcript: string }[]
+}
+
+export function buildMisspellingPrompt(groups: MisspellingGroup[]): string {
+  const body = groups
+    .map(group => `称呼：${group.name}
+${group.samples.map((sample, i) => `[${i + 1}] 朗读稿：${sample.script} 转写：${sample.transcript}`).join('\n')}`)
+    .join('\n')
+  return `下面是一组朗读稿和语音识别的转写。朗读稿里的称呼是正确写法；转写里同一位置的文字可能被识别成了别的字或词。
+${body}
+
+这次要取的是每个称呼被识别错的写法。请对每一句找出转写里对应称呼位置的文字，和称呼写法不同（不区分大小写）就记为一个错写。只根据转写原文，不要自己猜测可能的错写。
+只输出 JSON 对象，不要其他内容；没有错写时 misspellings 为空数组：
+{"names": [{"name": "...", "misspellings": ["..."]}]}`
 }

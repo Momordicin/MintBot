@@ -1,5 +1,5 @@
 // src/settings/memory/MessageBrowser.tsx — "消息浏览"子面板：分页列出当前会话消息，可向前加载更早消息
-// 用法：MemoryPanel 渲染 <MessageBrowser sessionId />；GET /messages?sessionId&limit&beforeId
+// 用法：MemoryPanel 渲染 <MessageBrowser sessionId assistantName />；GET /messages?sessionId&limit&beforeId
 // 对应文件：src/settings/memory/MemoryPanel.tsx / services/core/routes/messages.ts
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -21,13 +21,14 @@ interface MessagesPageResponse {
 
 interface MessageBrowserProps {
   sessionId: string
+  assistantName: string
 }
 
-export function MessageBrowser({ sessionId }: MessageBrowserProps) {
+export function MessageBrowser({ sessionId, assistantName }: MessageBrowserProps) {
   const { t, i18n } = useTranslation()
   const roleLabels: Record<HistoryMessage['role'], string> = {
-    user: t('用户'),
-    assistant: t('助手'),
+    user: t('我'),
+    assistant: assistantName || t('助手'),
     system: t('系统'),
   }
   const [messages, setMessages] = useState<HistoryMessage[]>([])

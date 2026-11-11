@@ -1,6 +1,6 @@
 // src/settings/memory/MemoryPanel.tsx — 设置窗口的"记忆管理"面板：五个子标签（消息浏览、实体列表、摘要列表、Embedding 状态、按时间段删除）；无活跃会话时只显示提示
-// 用法：SettingsApp 渲染 <MemoryPanel sessionId />，再按子标签渲染对应子组件
-// 形状：props { sessionId: string | null }
+// 用法：SettingsApp 渲染 <MemoryPanel sessionId assistantName />，再按子标签渲染对应子组件
+// 形状：props { sessionId: string | null; assistantName: string }
 // 对应文件：src/settings/SettingsApp.tsx / src/settings/memory/MessageBrowser.tsx / src/settings/memory/EntityList.tsx / src/settings/memory/SummaryList.tsx / src/settings/memory/EmbeddingQueueStatus.tsx / src/settings/memory/ForgetRangePanel.tsx
 import React, { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -14,9 +14,10 @@ type SubTab = 'messages' | 'entities' | 'summaries' | 'embedding' | 'forget'
 
 interface MemoryPanelProps {
   sessionId: string | null
+  assistantName: string
 }
 
-export function MemoryPanel({ sessionId }: MemoryPanelProps) {
+export function MemoryPanel({ sessionId, assistantName }: MemoryPanelProps) {
   const { t } = useTranslation()
   const [activeSubTab, setActiveSubTab] = useState<SubTab>('messages')
 
@@ -47,7 +48,7 @@ export function MemoryPanel({ sessionId }: MemoryPanelProps) {
       </div>
 
       <div className="memory-panel__content">
-        {activeSubTab === 'messages' && <MessageBrowser sessionId={sessionId} />}
+        {activeSubTab === 'messages' && <MessageBrowser sessionId={sessionId} assistantName={assistantName} />}
         {activeSubTab === 'entities' && <EntityList sessionId={sessionId} />}
         {activeSubTab === 'summaries' && <SummaryList sessionId={sessionId} />}
         {activeSubTab === 'embedding' && <EmbeddingQueueStatusView />}

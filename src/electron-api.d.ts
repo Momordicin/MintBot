@@ -52,6 +52,8 @@ export interface ElectronAPI {
   setVoiceHotkeyCapture: (active: boolean) => Promise<VoiceHotkeysState>
   notifyChatReady: () => Promise<void>
   onChatShown: (callback: () => void) => () => void
+  sendGreeting: (text: string) => Promise<void>
+  onGreeting: (listener: (text: string) => void) => () => void
   notifyChatPainted: () => void
   setTitlebarOverlay: (overlay: { color: string; symbolColor: string }) => void
 }

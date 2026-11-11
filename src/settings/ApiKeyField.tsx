@@ -1,6 +1,6 @@
 // src/settings/ApiKeyField.tsx — 设置窗口共用的 API Key 行：Key 框、失焦自动保存、测试按钮与结果图标、自动配置勾选
-// 用法：ModelConfigPanel 与 WebSearchPanel 渲染 <ApiKeyField label ... onCommit onTest />，PersonaModelPanel 渲染 <ApiKeyField compact ... onTest />；导出 KeyProvider / ENV_VAR / ApiKeyLoadStatus / ApiKeySummary / TestState / TestResultIcon（ModelConfigPanel 的 Ollama 地址行共用）
-// 对应文件：src/settings/ModelConfigPanel.tsx / src/settings/PersonaModelPanel.tsx / src/settings/WebSearchPanel.tsx / src/settings/useCharacterPanel.ts / src/settings/settings.css
+// 用法：ModelConfigPanel 与 WebSearchPanel 渲染 <ApiKeyField label ... onCommit onTest />，PersonaModelPanel 渲染 <ApiKeyField compact ... onTest />；导出 KeyProvider / ENV_VAR / ApiKeyLoadStatus / ApiKeySummary / TestState / TestResultIcon（ModelConfigPanel 的 Ollama 地址行共用）/ SpinnerIcon（RoleConfigStepRow 共用）
+// 对应文件：src/settings/ModelConfigPanel.tsx / src/settings/PersonaModelPanel.tsx / src/settings/WebSearchPanel.tsx / src/settings/useCharacterPanel.ts / src/settings/RoleConfigStepRow.tsx / src/settings/settings.css
 import React, { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -74,7 +74,7 @@ function CrossIcon() {
   )
 }
 
-function SpinnerIcon() {
+export function SpinnerIcon() {
   return (
     <svg className="api-key-field__spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" aria-hidden="true">
       <path d="M12 3a9 9 0 1 0 9 9" />

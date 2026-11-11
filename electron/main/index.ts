@@ -1,5 +1,5 @@
 // electron/main/index.ts — Electron 主进程入口：app ready 后创建聊天窗口、桌宠 overlay 与托盘，注册 IPC，启动前台窗口监控与 core /events 订阅，will-quit 时收尾
-// 用法：electron.vite.config.ts 的主进程 entry；注册 autostart:get / autostart:set、app:relaunch-info / app:relaunch；监听 second-instance；注册 app 协议 protocol.handle('app')；第一条 import 为 logBootstrap；注册 chat:ready（聊天窗口首次显示）/ chat:painted（聊天窗口唤起后淡入）；注册 ui:get-locale，向窗口发 ui:locale-changed；设置窗口按 open-settings-window IPC 按需创建；订阅 voice-type（textOutput）与 voice-status-changed（托盘「语音输入」）；注册 voice-hotkeys:get / voice-hotkeys:set / voice-hotkeys:capture，app ready 后 voiceHotkeys.start()，will-quit 时 stop()；显示器拓扑变化时 handleDisplayTopologyChange 先调 clearStableDisplayKeyCache()
+// 用法：electron.vite.config.ts 的主进程 entry；注册 autostart:get / autostart:set、app:relaunch-info / app:relaunch；监听 second-instance；注册 app 协议 protocol.handle('app')；第一条 import 为 logBootstrap；注册 chat:ready（聊天窗口首次显示）/ chat:greet（设置窗口的打招呼转发到聊天窗口）/ chat:painted（聊天窗口唤起后淡入）；注册 ui:get-locale，向窗口发 ui:locale-changed；设置窗口按 open-settings-window IPC 按需创建；订阅 voice-type（textOutput）与 voice-status-changed（托盘「语音输入」）；注册 voice-hotkeys:get / voice-hotkeys:set / voice-hotkeys:capture，app ready 后 voiceHotkeys.start()，will-quit 时 stop()；显示器拓扑变化时 handleDisplayTopologyChange 先调 clearStableDisplayKeyCache()
 // 对应文件：electron/preload/index.ts（暴露的 IPC 通道）/ electron/main/windowBehavior.ts / electron/main/petContextMenu.ts / electron/main/coreEventsConsumer.ts / electron/main/i18n.ts / electron/main/foregroundWorldModel.ts / electron/main/windowDragMonitor.ts / electron/main/nativeWindowDrag.ts / electron/main/petTopmostGuard.ts / electron/main/startupGate.ts / electron/main/displayIdentity.ts / electron/main/appOrigin.ts / electron/main/appAssetPath.ts / electron/main/coreProcess.ts / electron/main/autostart.ts / electron/main/chatFirstShow.ts / electron/main/chatReveal.ts / electron/main/textOutput.ts / electron/main/sendInput.ts / electron/main/voiceTray.ts / electron/main/voiceHotkeys.ts / shared/voiceHotkeys.ts / shared/voiceInputMode.ts / shared/windowBehavior.ts / shared/portraitForm.ts
 import './logBootstrap'
 import { app, BrowserWindow, Menu, Notification, Tray, clipboard, globalShortcut, powerMonitor, ipcMain, dialog, screen, nativeImage, protocol, net, shell } from 'electron'
@@ -414,9 +414,29 @@ function requestShowChat(): void {
 }
 
 let handleChatReady: ((event: IpcMainInvokeEvent) => void) | null = null
+let chatRendererReady = false
+let pendingGreeting: string | null = null
+
+function flushGreeting(): void {
+  if (!chatRendererReady || pendingGreeting === null || !mainWindow || mainWindow.isDestroyed()) return
+  mainWindow.webContents.send('chat:greet', pendingGreeting)
+  pendingGreeting = null
+}
 
 ipcMain.handle('chat:ready', event => {
   handleChatReady?.(event)
+  if (mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents) {
+    chatRendererReady = true
+    flushGreeting()
+  }
+})
+
+ipcMain.handle('chat:greet', (_event, text: unknown) => {
+  if (typeof text !== 'string' || text.length < 1 || text.length > 200) return
+  requestShowChat()
+  pendingGreeting = text
+  flushGreeting()
+  if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.close()
 })
 
 ipcMain.on('chat:painted', event => {
@@ -806,6 +826,7 @@ function createWindow(): BrowserWindow {
 
   mainWindow = win
   chatFirstShown = false
+  chatRendererReady = false
 
   let firstShowDone = false
   handleChatReady = event => {

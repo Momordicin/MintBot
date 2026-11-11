@@ -41,6 +41,7 @@ export interface TestResult {
   uncertain: boolean
   durationMs: number
   text?: string
+  textRaw?: string
   sameDevice?: boolean
   deviceName?: string
 }
@@ -205,6 +206,8 @@ function testResult(kind: TestResult['kind'], data: Partial<FinalEvent>, text?: 
   if (typeof data.speaker_score === 'number') result.score = data.speaker_score
   if (typeof data.speaker_threshold === 'number') result.threshold = data.speaker_threshold
   if (text !== undefined) result.text = text
+  const textRaw = (data as { text_raw?: unknown }).text_raw
+  if (typeof textRaw === 'string') result.textRaw = textRaw
   if (typeof data.speaker_same_device === 'boolean') result.sameDevice = data.speaker_same_device
   if (currentDeviceName !== null) result.deviceName = currentDeviceName
   return result
@@ -214,7 +217,7 @@ function parseVersion(version: string): number[] | null {
   return /^\d+(\.\d+)*$/.test(version) ? version.split('.').map(Number) : null
 }
 
-function isNewerVersion(remote: string, local: string): boolean {
+export function isNewerVersion(remote: string, local: string): boolean {
   const a = parseVersion(remote)
   const b = parseVersion(local)
   if (!a || !b) return false
@@ -536,10 +539,15 @@ export function setInputMode(next: VoiceInputMode): void {
   notifyStatusChanged()
 }
 
+export function hotwordsPath(): string {
+  return path.join(voiceDataDir, 'hotwords.txt')
+}
+
 export async function startVoice(dataDir: string = VOICE_DATA_DIR): Promise<void> {
   fs.mkdirSync(dataDir, { recursive: true })
   voiceDataDir = dataDir
   transcriptsPath = path.join(dataDir, 'transcripts.jsonl')
+  if (!fs.existsSync(hotwordsPath())) fs.writeFileSync(hotwordsPath(), '')
   resetState()
 
   const installation = await readVoiceInstallation()
@@ -554,6 +562,7 @@ export async function startVoice(dataDir: string = VOICE_DATA_DIR): Promise<void
     installation,
     listen: inputMode !== 'off',
     voiceprintPath: path.join(dataDir, 'owner.voiceprint.json'),
+    args: ['--hotwords', hotwordsPath()],
     onEvent: handleEvent,
     onState: state => {
       latestState = state
@@ -619,6 +628,20 @@ export function startInstall(): void {
   install = { state: 'installing' }
   notifyStatusChanged()
   installTask = runInstall(manifest, controller.signal).catch(err => console.error('[Voice] Install task error:', err))
+}
+
+export async function waitForInstall(): Promise<void> {
+  await installTask
+}
+
+export function assertVoiceRestartable(): void {
+  if (mode !== 'normal' || install.state === 'installing') throw new VoiceOperationError(409, ERROR_CODES.VOICE_BUSY)
+}
+
+export async function restartVoice(): Promise<void> {
+  assertVoiceRestartable()
+  await stopVoice()
+  await startVoice(voiceDataDir)
 }
 
 export function cancelInstall(): void {

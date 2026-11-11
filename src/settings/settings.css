@@ -279,6 +279,15 @@ option {
   margin-top: 4px;
 }
 
+.character-panel__create-zone {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--input-border);
+  padding-top: 10px;
+  margin-top: 4px;
+}
+
 /* 创建表单：与人设编辑区（.character-panel__persona）同款纵向 flex 布局，
    textarea 复用 .character-panel__persona-textarea 保持视觉一致 */
 
@@ -318,6 +327,92 @@ option {
   display: flex;
   align-items: baseline;
   gap: 8px;
+}
+
+.character-panel__role-config-recorded {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.character-panel__role-config-recorded > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.character-panel__role-config-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 10px;
+  border: 1px solid var(--input-border);
+  border-radius: 6px;
+  color: var(--label2);
+  font-size: 12px;
+}
+
+.character-panel__role-config-notice ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.character-panel__role-config-readings {
+  margin: 0;
+  padding-left: 24px;
+  color: var(--label);
+  font-size: 13px;
+}
+
+.character-panel__role-config-reading {
+  margin-bottom: 6px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  word-break: break-word;
+}
+
+.character-panel__role-config-reading--done {
+  color: var(--label2);
+  font-size: 12px;
+}
+
+.character-panel__role-config-reading--current {
+  background: rgba(var(--accent-rgb), 0.25);
+  font-weight: 700;
+}
+
+.role-config-row {
+  align-items: center;
+}
+
+.role-config-row--child {
+  padding-left: 20px;
+}
+
+.role-config-row__icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+}
+
+.role-config-row__ok {
+  color: rgb(48, 209, 88);
+}
+
+.role-config-row__draw {
+  stroke-dasharray: 24;
+  stroke-dashoffset: 24;
+  animation: role-config-row-draw 0.4s ease-out forwards;
+}
+
+@keyframes role-config-row-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
 }
 
 .character-panel__role-config-names {
@@ -1082,11 +1177,33 @@ option {
   opacity: 0.5;
 }
 
-.web-search-panel__save-row {
+.web-search-panel__section-head {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  justify-content: space-between;
   gap: 8px;
+}
+
+.web-search-panel__save-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.web-search-panel__save-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.web-search-panel__save-btn:disabled {
+  color: var(--label3);
+  cursor: default;
 }
 
 .api-key-field__zone label {

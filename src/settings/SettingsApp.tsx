@@ -40,7 +40,10 @@ function SettingsBody({ appState, onSwitched }: SettingsBodyProps) {
   const panel = useCharacterPanel({ presetSnapshot, onSwitched })
   const { presets, switchPreset, switchError, deleteTarget, isDeleting, isRenaming, isSavingRename } = panel
 
+  const navLocked = panel.roleConfigStatus !== 'idle'
+
   const navigateTo = (page: Page) => {
+    if (page !== 'character' && navLocked) return
     if (page !== 'character') {
       if (isRenaming && !isSavingRename) panel.handleRenameCancel()
       if (deleteTarget !== null && !isDeleting) panel.handleDeleteCancel()
@@ -67,6 +70,7 @@ function SettingsBody({ appState, onSwitched }: SettingsBodyProps) {
     <button
       key={page}
       className={`settings-nav-item${activePage === page ? ' settings-nav-item--active' : ''}`}
+      disabled={page !== 'character' && navLocked}
       onClick={() => navigateTo(page)}
     >
       {navLabel(page)}
@@ -81,7 +85,7 @@ function SettingsBody({ appState, onSwitched }: SettingsBodyProps) {
             className="settings-sidebar__preset"
             value={presetSnapshot?.presetId ?? ''}
             onChange={e => switchPreset(e.target.value)}
-            disabled={deleteTarget !== null || isDeleting || isRenaming || isSavingRename}
+            disabled={deleteTarget !== null || isDeleting || isRenaming || isSavingRename || navLocked}
           >
             {presets.map(p => (
               <option key={p.presetId} value={p.presetId}>{p.name}</option>
@@ -107,7 +111,7 @@ function SettingsBody({ appState, onSwitched }: SettingsBodyProps) {
         <div hidden={activePage !== 'persona'}>
           <PersonaModelPanel panel={panel} />
         </div>
-        {activePage === 'memory' && <MemoryPanel sessionId={appState?.sessionId ?? null} />}
+        {activePage === 'memory' && <MemoryPanel sessionId={appState?.sessionId ?? null} assistantName={appState?.presetSnapshot?.name ?? ''} />}
         {activePage === 'modelService' && <ModelConfigPanel />}
         {activePage === 'webSearch' && <WebSearchPanel />}
         {activePage === 'window' && <WindowBehaviorPanel />}

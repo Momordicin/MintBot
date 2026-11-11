@@ -1,6 +1,6 @@
 // src/settings/VoicePanel.tsx — 设置窗口的"语音"面板：语音组件与麦克风状态、主人声纹录入、自由测试、语音输入快捷键
 // 用法：SettingsApp 里渲染 <VoicePanel />；GET /voice/status、GET /voice/update-check、POST /voice/enroll/*、POST /voice/test/*、GET /events 的 voice-status-changed；electronAPI.openMicSettings / getVoiceHotkeys / setVoiceHotkeys / setVoiceHotkeyCapture
-// 对应文件：src/settings/SettingsApp.tsx / src/settings/voiceTestSummary.ts / shared/voiceHotkeys.ts / services/core/voice/routes.ts / services/core/voice/agent.ts
+// 对应文件：src/settings/SettingsApp.tsx / src/settings/VoiceEnrollProgress.tsx / src/settings/voiceTestSummary.ts / shared/voiceHotkeys.ts / services/core/voice/routes.ts / services/core/voice/agent.ts
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
@@ -14,6 +14,7 @@ import { DEFAULT_VOICE_HOTKEYS, VOICE_HOTKEY_ACTIONS, resolveHotkeyCapture } fro
 import type { HotkeyCaptureEvent, VoiceHotkeyAction, VoiceHotkeyFailure, VoiceHotkeysState } from '../../shared/voiceHotkeys.js'
 import { errorText } from '../errorText.js'
 import { deviceLineBetween, summarizeVoiceTest, testCutoff, type VoiceTestResultLike } from './voiceTestSummary.js'
+import { EnrollSentenceList, VoiceEnrollProgress, type EnrollSentence } from './VoiceEnrollProgress.js'
 
 type VoiceMode = 'normal' | 'enrolling' | 'testing'
 
@@ -37,11 +38,6 @@ interface SpeakerStatus {
   currentDevice: string | null
   enrolledDevice: string | null
   uncertainFloor: number | null
-}
-
-interface EnrollSentence {
-  text: string
-  durationMs: number
 }
 
 interface InstallStatus {
@@ -69,9 +65,6 @@ interface VoiceStatus {
   test: { results: VoiceTestResult[]; hasRun: boolean }
   install: InstallStatus
 }
-
-const MIN_ENROLL_UTTERANCES = 5
-const MIN_ENROLL_SECONDS = 10
 
 function seconds(ms: number, digits: number): string {
   return (ms / 1000).toFixed(digits)
@@ -387,8 +380,6 @@ export function VoicePanel() {
   const results = status.test.results
   const enrollCurrent = status.enroll.current
   const enrollCompleted = status.enroll.completed
-  const remainingSentences = Math.max(0, MIN_ENROLL_UTTERANCES - (speaker?.enrollUtterances ?? 0))
-  const remainingSeconds = Math.max(0, Math.ceil(MIN_ENROLL_SECONDS - (speaker?.enrollSpeechMs ?? 0) / 1000))
   const summary = summarizeVoiceTest(results)
   const { install } = status
   const installing = install.state === 'installing'
@@ -413,15 +404,6 @@ export function VoicePanel() {
     if (device.sameDevice === false) return `${device.name}${t('（非录入时原生设备）')}`
     return device.name
   }
-
-  const sentenceList = (label: string, sentences: EnrollSentence[]) => (
-    <div className="forget-panel__result">
-      <div>{label}</div>
-      {sentences.map((sentence, index) => (
-        <div key={index}>{t('{{text}}（{{sec}} 秒）', { text: sentence.text, sec: seconds(sentence.durationMs, 1) })}</div>
-      ))}
-    </div>
-  )
 
   return (
     <div className="window-behavior-panel">
@@ -501,29 +483,14 @@ export function VoicePanel() {
             </div>
           )}
           {mode === 'enrolling' ? (
-            <>
-              <div>{t('请在安静的环境里用正常语速说完整的句子，每句 5 到 10 秒，总共 35 到 45 秒更好；至少 5 句且累计超过 10 秒才能完成')}</div>
-              <div>
-                {t('已录 {{n}} 句 / {{sec}} 秒', {
-                  n: speaker?.enrollUtterances ?? 0,
-                  sec: (Math.floor((speaker?.enrollSpeechMs ?? 0) / 100) / 10).toFixed(1),
-                })}
-              </div>
-              {remainingSentences > 0 && <div>{t('还需要 {{count}} 句', { count: remainingSentences })}</div>}
-              {remainingSeconds > 0 && <div>{t('还需要 {{count}} 秒', { count: remainingSeconds })}</div>}
-              <button
-                className="memory-btn"
-                disabled={locked || !speaker || speaker.enrollUtterances < MIN_ENROLL_UTTERANCES || !speaker.enrollReady}
-                onClick={() => post('/voice/enroll/commit')}
-              >
-                {t('完成')}
-              </button>
-              <button className="memory-btn" disabled={locked} onClick={() => post('/voice/enroll/cancel')}>
-                {t('取消')}
-              </button>
-              {sentenceList(t('本次录入'), enrollCurrent)}
-              {enrollCompleted.length > 0 && sentenceList(t('上一次录入'), enrollCompleted)}
-            </>
+            <VoiceEnrollProgress
+              speaker={speaker}
+              current={enrollCurrent}
+              completed={enrollCompleted}
+              locked={locked}
+              onCommit={() => post('/voice/enroll/commit')}
+              onCancel={() => post('/voice/enroll/cancel')}
+            />
           ) : speaker?.enrolled ? (
             <>
               <div>{t('已录入（{{n}} 句，{{sec}} 秒）', { n: speaker.utterances, sec: seconds(speaker.speechMs, 1) })}</div>
@@ -559,7 +526,7 @@ export function VoicePanel() {
                   </button>
                 </div>
               )}
-              {enrollCompleted.length > 0 && sentenceList(t('上一次录入'), enrollCompleted)}
+              {enrollCompleted.length > 0 && <EnrollSentenceList label={t('上一次录入')} sentences={enrollCompleted} />}
             </>
           ) : (
             <>
@@ -571,7 +538,7 @@ export function VoicePanel() {
               >
                 {t('开始录入')}
               </button>
-              {enrollCompleted.length > 0 && sentenceList(t('上一次录入'), enrollCompleted)}
+              {enrollCompleted.length > 0 && <EnrollSentenceList label={t('上一次录入')} sentences={enrollCompleted} />}
             </>
           )}
         </div>

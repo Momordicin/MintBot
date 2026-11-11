@@ -40,6 +40,16 @@ const KEY_FIELD = {
   anysearch: 'anysearchApiKey',
 } as const
 
+function SaveIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z" />
+      <path d="M17 21v-8H7v8" />
+      <path d="M7 3v5h8" />
+    </svg>
+  )
+}
+
 export function WebSearchPanel() {
   const { t, i18n } = useTranslation()
   const zoneId = useId()
@@ -52,7 +62,7 @@ export function WebSearchPanel() {
   const [savingKind, setSavingKind] = useState<SavingKind>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [copyError, setCopyError] = useState<string | null>(null)
-  const [saveNotice, setSaveNotice] = useState<string | null>(null)
+  const [orderSaved, setOrderSaved] = useState(false)
   const requestControllerRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
@@ -89,7 +99,6 @@ export function WebSearchPanel() {
     setSavingKind(kind)
     setErrorMessage(null)
     setCopyError(null)
-    setSaveNotice(null)
     try {
       const response = await fetch(`${CORE_URL}/config/web-search`, {
         method: 'PATCH',
@@ -138,12 +147,13 @@ export function WebSearchPanel() {
 
   const isSaving = savingKind !== null
   const isButtonSaving = savingKind === 'button'
+  const dirty = order.length !== data.order.length || order.some((provider, index) => provider !== data.order[index])
 
   const handleSave = async () => {
     const reason = await send({ order }, 'button', summary => {
       setData(summary)
       setOrder(summary.order)
-      setSaveNotice(i18n.t('已保存'))
+      setOrderSaved(true)
     })
     if (reason !== null) setErrorMessage(reason)
   }
@@ -239,7 +249,23 @@ export function WebSearchPanel() {
       {isButtonSaving && <div className="model-config-panel__saving"><div className="model-config-panel__saving-label">{t('保存中…')}</div></div>}
 
       <div className="model-config-panel__section">
-        <div className="model-config-panel__section-label">{t('调用顺序')}</div>
+        <div className="web-search-panel__section-head">
+          <div className="model-config-panel__section-label">{t('调用顺序')}</div>
+          <div className="web-search-panel__save-actions">
+            {errorMessage && <span className="character-panel__error">{errorMessage}</span>}
+            {!dirty && orderSaved && <span className="character-panel__notice">{t('已保存')}</span>}
+            <button
+              type="button"
+              className="web-search-panel__save-btn"
+              title={t('保存')}
+              aria-label={t('保存')}
+              disabled={!dirty || isSaving}
+              onClick={() => void handleSave()}
+            >
+              <SaveIcon />
+            </button>
+          </div>
+        </div>
         <div className="character-panel__hint">{t('排在前面的一家失败时，自动改用下一家')}</div>
         {order.length === 0 && <div className="character-panel__hint">{t('还没有启用任何搜索服务')}</div>}
         <div className="web-search-panel__list">
@@ -263,14 +289,6 @@ export function WebSearchPanel() {
             )
           })}
         </div>
-      </div>
-
-      <div className="web-search-panel__save-row">
-        <button className="rename-btn" onClick={() => void handleSave()} disabled={isSaving}>
-          {isButtonSaving ? t('保存中…') : t('保存')}
-        </button>
-        {errorMessage && <span className="character-panel__error">{errorMessage}</span>}
-        {saveNotice && <span className="character-panel__notice">{saveNotice}</span>}
       </div>
 
       <div className="model-config-panel__section">
