@@ -1,4 +1,4 @@
-// src/chat/MessageList.tsx — 聊天窗口的消息滚动列表：渲染气泡，滚到顶部附近或内容未铺满容器时请求更早历史并保持滚动位置，离底部较远时显示回到底部按钮
+// src/chat/MessageList.tsx — 聊天窗口的消息滚动列表：渲染气泡，停在底部时跟随新内容，滚到顶部附近或内容未铺满容器时请求更早历史并保持滚动位置，离底部较远时显示回到底部按钮
 // 用法：ChatWindow 渲染 <MessageList />（以 sessionId 作 key）；scrollToBottomSignal 变化时滚到底部
 // 形状：props { messages, isReplying, avatarUrl?, userAvatarUrl?, displayName?, hasMoreHistory?, onLoadMore?, onReloadHistory?, reloadingHistory?, scrollToBottomSignal? }
 // 对应文件：src/chat/ChatWindow.tsx / src/chat/MessageBubble.tsx
@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next'
 import { MessageBubble, MessageData } from './MessageBubble'
 
 const LOAD_MORE_SCROLL_THRESHOLD = 40
+const NEAR_BOTTOM_THRESHOLD = 80
 
 interface MessageListProps {
   messages: MessageData[]
@@ -36,9 +37,11 @@ export function MessageList({
   const { t } = useTranslation()
   const bottomRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const innerRef = useRef<HTMLDivElement>(null)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
   const pendingScrollAdjustRef = useRef<number | null>(null)
   const prevFirstIdRef = useRef<string | undefined>(messages[0]?.id)
+  const stickToBottomRef = useRef(true)
 
   function scrollToBottom() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -48,7 +51,8 @@ export function MessageList({
     const el = containerRef.current
     if (!el) return
     const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-    setShowScrollBtn(distFromBottom > 80)
+    setShowScrollBtn(distFromBottom > NEAR_BOTTOM_THRESHOLD)
+    stickToBottomRef.current = distFromBottom <= NEAR_BOTTOM_THRESHOLD
 
     if (hasMoreHistory && onLoadMore && el.scrollTop < LOAD_MORE_SCROLL_THRESHOLD) {
       pendingScrollAdjustRef.current = el.scrollHeight
@@ -56,20 +60,34 @@ export function MessageList({
     }
   }
 
-  useEffect(() => {
-  }, [messages])
-
   useLayoutEffect(() => {
     const currentFirstId = messages[0]?.id
+    let adjusted = false
     if (pendingScrollAdjustRef.current !== null && currentFirstId !== prevFirstIdRef.current) {
       const el = containerRef.current
       if (el) {
         el.scrollTop += el.scrollHeight - pendingScrollAdjustRef.current
       }
       pendingScrollAdjustRef.current = null
+      adjusted = true
     }
     prevFirstIdRef.current = currentFirstId
+    if (!adjusted && stickToBottomRef.current) {
+      const el = containerRef.current
+      if (el) el.scrollTop = el.scrollHeight
+    }
   }, [messages])
+
+  useEffect(() => {
+    const inner = innerRef.current
+    const el = containerRef.current
+    if (!inner || !el) return
+    const observer = new ResizeObserver(() => {
+      if (stickToBottomRef.current) el.scrollTop = el.scrollHeight
+    })
+    observer.observe(inner)
+    return () => observer.disconnect()
+  }, [])
 
   useEffect(() => {
     if (scrollToBottomSignal === undefined) return
@@ -86,7 +104,7 @@ export function MessageList({
 
   return (
     <div className="msg-list" ref={containerRef} onScroll={handleScroll}>
-      <div className="msg-list__inner">
+      <div className="msg-list__inner" ref={innerRef}>
         {messages.map((msg, i) => (
           <MessageBubble
             key={msg.id}
