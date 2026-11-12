@@ -1,4 +1,4 @@
-// services/core/voice/agent.ts — 托管语音输入进程：转写结果和声音事件追加到本地记录，聆听模式为声音事件加括号标注并累积为待放入聊天输入框的文字
+// services/core/voice/agent.ts — 托管语音输入进程：转写结果和声音事件追加到本地记录，聆听模式和自由测试按主人、标签、字数计算打印文字，聆听模式累积为待放入聊天输入框的文字
 // 用法：index.ts 的 start() 调 startVoice()，session/index.ts 的 loadSession 调 setHotwordsRole()，roleConfig/collect.ts 调 reloadHotwords()，SIGINT/SIGTERM 时调 stopVoice()；voice/routes.ts 调 takePending() / setInputMode()；聆听模式有新文字时 broadcastEvent('voice-pending')，转写模式 broadcastEvent('voice-type', { text })
 // 对应文件：services/core/voice/install.ts / services/core/voice/routes.ts / services/core/events/broadcast.ts / services/core/voice/agent.test.ts
 import fs from 'fs'
@@ -39,6 +39,11 @@ const SOUND_EVENT_LABELS: ReadonlyMap<string, string> = new Map([
   ['Cry', '哭声'],
   ['Breath', '呼吸声'],
   ['Applause', '掌声'],
+  ['BGM', '背景音乐'],
+  ['Sing', '唱歌'],
+  ['Speech_Noise', '杂音'],
+  ['Event_UNK', '未知声音'],
+  ['GBG', 'GBG'],
 ])
 
 export type VoiceMode = 'normal' | 'enrolling' | 'testing'
@@ -51,6 +56,7 @@ export interface TestResult {
   durationMs: number
   text?: string
   textRaw?: string
+  display: string
   sameDevice?: boolean
   deviceName?: string
 }
@@ -209,9 +215,28 @@ function nonEmptyString(value: unknown): string | null {
   return typeof value === 'string' && value !== '' ? value : null
 }
 
-function testResult(kind: TestResult['kind'], data: Partial<FinalEvent>, text?: string): TestResult {
+function withMark(text: string, mark: string): string {
+  const end = /[。！？.!?…]+$/.exec(text)
+  return end === null ? `${text}${mark}` : `${text.slice(0, end.index)}${mark}${end[0]}`
+}
+
+function printText(text: string, event: string | null, isOwner: boolean): string {
+  const isSpeech = event === null || event === 'Speech'
+  const label = isSpeech ? '' : (SOUND_EVENT_LABELS.get(event) ?? event)
+  const chars = text.replace(/[\p{P}\s]/gu, '').length
+  if (isOwner) {
+    if (isSpeech) return text
+    if (chars === 0) return `（${label}）`
+    return withMark(text, chars === 1 ? `（疑似${label}）` : `（${label}）`)
+  }
+  if (isSpeech || chars > 1) return ''
+  return chars === 0 ? `（疑似${label}）` : withMark(text, `（疑似${label}）`)
+}
+
+function testResult(kind: TestResult['kind'], data: Partial<FinalEvent>, display: string, text?: string): TestResult {
   const result: TestResult = {
     kind,
+    display,
     uncertain: data.speaker_uncertain === true,
     durationMs: num(data.end_ms) - num(data.start_ms),
   }
@@ -304,9 +329,15 @@ function handleEvent(ev: AgentEvent): void {
       if (otherData.is_owner !== undefined) otherRecord.is_owner = otherData.is_owner
       appendTranscriptLine(otherRecord)
     }
-    if (otherOwner.mode !== 'testing' || otherOwner.seq !== testSeq) return
-    testResults.push(testResult('other', otherData))
-    notifyStatusChanged()
+    const otherDisplay = printText('', otherEvent, false)
+    if (otherOwner.mode === 'testing') {
+      if (otherOwner.seq !== testSeq) return
+      testResults.push(testResult('other', otherData, otherDisplay))
+      notifyStatusChanged()
+    } else if (otherOwner.mode === 'normal' && inputMode === 'listen' && otherDisplay !== '') {
+      pending.push(otherDisplay)
+      broadcastEvent('voice-pending', {})
+    }
     return
   }
   if (ev.type !== 'final') return
@@ -330,37 +361,37 @@ function handleEvent(ev: AgentEvent): void {
   if (owner === 'enrolling') return
   const soundEvent = nonEmptyString(data.event)
   const textEmpty = typeof text !== 'string' || text.trim() === ''
-  if (textEmpty && (soundEvent === null || soundEvent === 'Speech')) return
-
-  const record: Record<string, unknown> = {
-    at: data.end_unix_ms,
-    text: textEmpty ? '' : text,
-    language: data.language,
-    emotion: data.emotion,
-    mode: owner,
-    inputMode,
+  const body = textEmpty ? '' : text
+  if (!textEmpty || (soundEvent !== null && soundEvent !== 'Speech')) {
+    const record: Record<string, unknown> = {
+      at: data.end_unix_ms,
+      text: body,
+      language: data.language,
+      emotion: data.emotion,
+      mode: owner,
+      inputMode,
+    }
+    if (soundEvent !== null) record.soundEvent = soundEvent
+    if (data.speaker_score !== undefined) record.speaker_score = data.speaker_score
+    if (data.is_owner !== undefined) record.is_owner = data.is_owner
+    appendTranscriptLine(record)
   }
-  if (soundEvent !== null) record.soundEvent = soundEvent
-  if (data.speaker_score !== undefined) record.speaker_score = data.speaker_score
-  if (data.is_owner !== undefined) record.is_owner = data.is_owner
-  appendTranscriptLine(record)
-  if (textEmpty) return
+  const display = printText(body, soundEvent, data.is_owner !== false)
 
   if (owner === 'testing') {
     if (ownerSeq !== testSeq) return
     const kind = data.speaker_enrolled !== true ? 'unenrolled' : 'owner'
-    testResults.push(testResult(kind, data, text))
+    testResults.push(testResult(kind, data, display, textEmpty ? '' : text))
     notifyStatusChanged()
     return
   }
 
   if (owner !== 'normal') return
   if (inputMode === 'listen') {
-    const label = soundEvent === null ? undefined : SOUND_EVENT_LABELS.get(soundEvent)
-    const mark = label === undefined ? '' : data.speaker_uncertain === true ? `（疑似${label}）` : `（${label}）`
-    pending.push(`${text}${mark}`)
+    if (display === '') return
+    pending.push(display)
     broadcastEvent('voice-pending', {})
-  } else if (inputMode === 'transcribe') {
+  } else if (inputMode === 'transcribe' && !textEmpty) {
     broadcastEvent('voice-type', { text })
   }
 }

@@ -23,6 +23,7 @@ interface VoiceTestResult extends VoiceTestResultLike {
   uncertain: boolean
   durationMs: number
   text?: string
+  display: string
   sameDevice?: boolean
   deviceName?: string
 }
@@ -395,6 +396,12 @@ export function VoicePanel() {
   else if (running && status.listening) statusLabel = t('正在收听')
   else statusLabel = t('启动中')
 
+  const resultText = (result: VoiceTestResult): string => {
+    if (result.display !== '') return result.display
+    if (result.text === undefined) return t('（未识别）')
+    return result.text.trim() !== '' ? t('（不进入输入框）') : t('（空）')
+  }
+
   const verdictText = (result: VoiceTestResult): string => {
     if (result.kind === 'owner' && result.uncertain) return t('主人（短句）')
     const base = result.kind === 'owner' ? t('主人') : result.kind === 'other' ? t('其他人') : t('未录入')
@@ -592,7 +599,7 @@ export function VoicePanel() {
                         verdict: verdictText(result),
                         score: scoreText(result.score),
                         sec: seconds(result.durationMs, 1),
-                        text: result.text ?? t('（未识别）'),
+                        text: resultText(result),
                       })
                     : t('{{verdict}}，得分 {{score}}（{{op}}{{cutoff}}），{{sec}} 秒，{{text}}', {
                         verdict: verdictText(result),
@@ -600,7 +607,7 @@ export function VoicePanel() {
                         op: (result.score ?? 0) >= cutoff ? '≥' : '＜',
                         cutoff: scoreText(cutoff),
                         sec: seconds(result.durationMs, 1),
-                        text: result.text ?? t('（未识别）'),
+                        text: resultText(result),
                       })}
                 </div>
                 </React.Fragment>

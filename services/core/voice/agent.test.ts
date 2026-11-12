@@ -118,7 +118,7 @@ describe('voice agent', () => {
     expect(fs.existsSync(path.join(dataDir, 'transcripts.jsonl'))).toBe(false)
   })
 
-  const soundLine = (at: number, text: string, soundEvent: string, inputMode = 'listen') => ({
+  const soundLine = (at: number, text: string, soundEvent: string, inputMode = 'listen', extra: Record<string, unknown> = {}) => ({
     at,
     text,
     language: 'zh',
@@ -126,21 +126,27 @@ describe('voice agent', () => {
     mode: 'normal',
     inputMode,
     soundEvent,
+    ...extra,
   })
-  const otherSneezeLine = { at: 9, text: '', emotion: 'neutral', soundEvent: 'Sneeze', mode: 'normal', inputMode: 'listen' }
+  const otherLine = (soundEvent: string, inputMode = 'listen') => ({ at: 9, text: '', emotion: 'neutral', soundEvent, mode: 'normal', inputMode })
+  const notOwner = { is_owner: false }
 
   it.each([
-    { name: 'listen Speech keeps the text', inputMode: 'listen', type: 'final', data: { text: '你好', event: 'Speech' }, pending: ['你好'], voiceType: [], lines: [soundLine(9, '你好', 'Speech')] },
-    { name: 'listen Cough is marked', inputMode: 'listen', type: 'final', data: { text: '嗯。', event: 'Cough' }, pending: ['嗯。（咳嗽）'], voiceType: [], lines: [soundLine(9, '嗯。', 'Cough')] },
-    { name: 'listen uncertain Cough is marked as suspected', inputMode: 'listen', type: 'final', data: { text: '嗯。', event: 'Cough', speaker_uncertain: true }, pending: ['嗯。（疑似咳嗽）'], voiceType: [], lines: [soundLine(9, '嗯。', 'Cough')] },
-    { name: 'listen Laughter without text is recorded only', inputMode: 'listen', type: 'final', data: { text: '', event: 'Laughter' }, pending: [], voiceType: [], lines: [soundLine(9, '', 'Laughter')] },
-    { name: 'listen Speech without text is dropped', inputMode: 'listen', type: 'final', data: { text: '', event: 'Speech' }, pending: [], voiceType: [], lines: null },
-    { name: 'listen BGM without text is recorded only', inputMode: 'listen', type: 'final', data: { text: '', event: 'BGM' }, pending: [], voiceType: [], lines: [soundLine(9, '', 'BGM')] },
-    { name: 'listen BGM with text is not marked', inputMode: 'listen', type: 'final', data: { text: '歌词', event: 'BGM' }, pending: ['歌词'], voiceType: [], lines: [soundLine(9, '歌词', 'BGM')] },
-    { name: 'speech_other with event is recorded only', inputMode: 'listen', type: 'speech_other', data: { event: 'Sneeze' }, pending: [], voiceType: [], lines: [otherSneezeLine] },
+    { name: 'owner Speech keeps the text', inputMode: 'listen', type: 'final', data: { text: '你好', event: 'Speech' }, pending: ['你好'], voiceType: [], lines: [soundLine(9, '你好', 'Speech')] },
+    { name: 'owner Speech without text is dropped', inputMode: 'listen', type: 'final', data: { text: '', event: 'Speech' }, pending: [], voiceType: [], lines: null },
+    { name: 'owner Cough without text', inputMode: 'listen', type: 'final', data: { text: '', event: 'Cough' }, pending: ['（咳嗽）'], voiceType: [], lines: [soundLine(9, '', 'Cough')] },
+    { name: 'owner Cough with one char is suspected', inputMode: 'listen', type: 'final', data: { text: '嗯。', event: 'Cough' }, pending: ['嗯（疑似咳嗽）。'], voiceType: [], lines: [soundLine(9, '嗯。', 'Cough')] },
+    { name: 'owner Cough with a sentence', inputMode: 'listen', type: 'final', data: { text: '我有点累。', event: 'Cough' }, pending: ['我有点累（咳嗽）。'], voiceType: [], lines: [soundLine(9, '我有点累。', 'Cough')] },
+    { name: 'owner BGM without end punctuation', inputMode: 'listen', type: 'final', data: { text: '歌词', event: 'BGM' }, pending: ['歌词（背景音乐）'], voiceType: [], lines: [soundLine(9, '歌词', 'BGM')] },
+    { name: 'owner GBG without text', inputMode: 'listen', type: 'final', data: { text: '', event: 'GBG' }, pending: ['（GBG）'], voiceType: [], lines: [soundLine(9, '', 'GBG')] },
+    { name: 'owner Cough with a run of end punctuation', inputMode: 'listen', type: 'final', data: { text: '嗯？！', event: 'Cough' }, pending: ['嗯（疑似咳嗽）？！'], voiceType: [], lines: [soundLine(9, '嗯？！', 'Cough')] },
+    { name: 'non-owner Speech is not printed', inputMode: 'listen', type: 'final', data: { text: 'If.', event: 'Speech', ...notOwner }, pending: [], voiceType: [], lines: [soundLine(9, 'If.', 'Speech', 'listen', notOwner)] },
+    { name: 'non-owner Sneeze with one char is suspected', inputMode: 'listen', type: 'final', data: { text: '是。', event: 'Sneeze', ...notOwner }, pending: ['是（疑似喷嚏）。'], voiceType: [], lines: [soundLine(9, '是。', 'Sneeze', 'listen', notOwner)] },
+    { name: 'non-owner Cough with two chars is not printed', inputMode: 'listen', type: 'final', data: { text: '好的。', event: 'Cough', ...notOwner }, pending: [], voiceType: [], lines: [soundLine(9, '好的。', 'Cough', 'listen', notOwner)] },
+    { name: 'speech_other with event is suspected', inputMode: 'listen', type: 'speech_other', data: { event: 'Cough' }, pending: ['（疑似咳嗽）'], voiceType: [], lines: [otherLine('Cough')] },
     { name: 'speech_other without event is not recorded', inputMode: 'listen', type: 'speech_other', data: {}, pending: [], voiceType: [], lines: null },
     { name: 'transcribe Cough types the original text', inputMode: 'transcribe', type: 'final', data: { text: '嗯。', event: 'Cough' }, pending: [], voiceType: ['嗯。'], lines: [soundLine(9, '嗯。', 'Cough', 'transcribe')] },
-    { name: 'transcribe Laughter without text is recorded only', inputMode: 'transcribe', type: 'final', data: { text: '', event: 'Laughter' }, pending: [], voiceType: [], lines: [soundLine(9, '', 'Laughter', 'transcribe')] },
+    { name: 'transcribe speech_other is not typed', inputMode: 'transcribe', type: 'speech_other', data: { event: 'Cough' }, pending: [], voiceType: [], lines: [otherLine('Cough', 'transcribe')] },
   ])('sound events: $name', async ({ inputMode, type, data, pending, voiceType, lines }) => {
     mocks.store.inputMode = inputMode as 'listen' | 'transcribe'
     await startVoice(dataDir)
@@ -163,7 +169,7 @@ describe('voice agent', () => {
     expect(fs.existsSync(path.join(dataDir, 'transcripts.jsonl'))).toBe(false)
   })
 
-  it('with input off, a textless event during free testing is recorded but not listed', async () => {
+  it('with input off, a textless event during free testing is recorded and listed', async () => {
     mocks.store.inputMode = 'off'
     await startVoice(dataDir)
     mocks.supervisorOptions!.onState({ phase: 'running', listening: true, restarts: 0 })
@@ -172,7 +178,20 @@ describe('voice agent', () => {
     const lines = fs.readFileSync(path.join(dataDir, 'transcripts.jsonl'), 'utf-8').trim().split('\n').map(l => JSON.parse(l))
     expect(lines).toHaveLength(1)
     expect(lines[0]).toMatchObject({ text: '', soundEvent: 'Cough', mode: 'testing', inputMode: 'off' })
-    expect((await getVoiceStatus()).test.results).toEqual([])
+    expect((await getVoiceStatus()).test.results).toMatchObject([{ kind: 'unenrolled', display: '（咳嗽）', text: '' }])
+  })
+
+  it('free testing lists every segment with the printed text', async () => {
+    mocks.supervisorOptions!.onState({ phase: 'running', listening: true, restarts: 0 })
+    await startTest()
+    mocks.supervisorOptions!.onEvent({ id: 1, type: 'speech_other', data: { start_ms: 0, end_ms: 400, event: 'Cough', end_unix_ms: Date.now() + 1000 } })
+    final({ text: '', event: 'Speech', end_unix_ms: Date.now() + 1000 })
+    final({ text: 'If.', event: 'Speech', is_owner: false, speaker_enrolled: true, end_unix_ms: Date.now() + 1000 })
+    expect((await getVoiceStatus()).test.results).toMatchObject([
+      { kind: 'other', display: '（疑似咳嗽）' },
+      { kind: 'unenrolled', display: '', text: '' },
+      { kind: 'owner', display: '', text: 'If.' },
+    ])
   })
 
   it('appends a transcript line, queues the text and broadcasts', () => {
@@ -853,7 +872,7 @@ describe('voice settings page', () => {
     const lines = fs.readFileSync(path.join(dataDir, 'transcripts.jsonl'), 'utf-8').trim().split('\n')
     expect(lines).toHaveLength(1)
     expect((await status()).test.results).toEqual([
-      { kind: 'owner', score: 0.81, uncertain: true, durationMs: 1500, text: '你好' },
+      { kind: 'owner', score: 0.81, uncertain: true, durationMs: 1500, text: '你好', display: '你好' },
     ])
   })
 
@@ -865,8 +884,8 @@ describe('voice settings page', () => {
     final({ text: 'd', start_ms: 0, end_ms: 1000, speaker_enrolled: true })
     const results = (await status()).test.results
     expect(results.map((r: { kind: string }) => r.kind)).toEqual(['owner', 'owner', 'unenrolled', 'owner'])
-    expect(results[1]).toEqual({ kind: 'owner', score: 0.426, threshold: 0.5, uncertain: true, durationMs: 500, text: 'b' })
-    expect(results[2]).toEqual({ kind: 'unenrolled', uncertain: false, durationMs: 1000, text: 'c' })
+    expect(results[1]).toEqual({ kind: 'owner', score: 0.426, threshold: 0.5, uncertain: true, durationMs: 500, text: 'b', display: '' })
+    expect(results[2]).toEqual({ kind: 'unenrolled', uncertain: false, durationMs: 1000, text: 'c', display: 'c' })
   })
 
   it('reads the device names and the short-utterance floor from the speaker status', async () => {
@@ -887,9 +906,9 @@ describe('voice settings page', () => {
     final({ text: 'b', start_ms: 0, end_ms: 1000, speaker_enrolled: true, speaker_score: 0.4, speaker_threshold: 0.35, speaker_same_device: false })
     mocks.supervisorOptions!.onEvent({ id: 2, type: 'speech_other', data: { start_ms: 0, end_ms: 400, speaker_score: 0.1, speaker_threshold: 0.35, speaker_same_device: false } })
     const results = (await status()).test.results
-    expect(results[0]).toEqual({ kind: 'owner', score: 0.6, threshold: 0.5, uncertain: false, durationMs: 1000, text: 'a', sameDevice: true, deviceName: 'USB Mic' })
-    expect(results[1]).toEqual({ kind: 'owner', score: 0.4, threshold: 0.35, uncertain: false, durationMs: 1000, text: 'b', sameDevice: false, deviceName: 'USB Mic' })
-    expect(results[2]).toEqual({ kind: 'other', score: 0.1, threshold: 0.35, uncertain: false, durationMs: 400, sameDevice: false, deviceName: 'USB Mic' })
+    expect(results[0]).toEqual({ kind: 'owner', score: 0.6, threshold: 0.5, uncertain: false, durationMs: 1000, text: 'a', display: 'a', sameDevice: true, deviceName: 'USB Mic' })
+    expect(results[1]).toEqual({ kind: 'owner', score: 0.4, threshold: 0.35, uncertain: false, durationMs: 1000, text: 'b', display: 'b', sameDevice: false, deviceName: 'USB Mic' })
+    expect(results[2]).toEqual({ kind: 'other', score: 0.1, threshold: 0.35, uncertain: false, durationMs: 400, display: '', sameDevice: false, deviceName: 'USB Mic' })
   })
 
   it('tracks the current mic from device events, falling back to name and ignoring empty names', async () => {
@@ -954,8 +973,8 @@ describe('voice settings page', () => {
     final({ text: 'a', start_ms: 0, end_ms: 1000, speaker_enrolled: true, speaker_same_device: false })
     final({ text: 'b', start_ms: 0, end_ms: 1000, speaker_enrolled: true, speaker_same_device: 'yes' })
     const results = (await status()).test.results
-    expect(results[0]).toEqual({ kind: 'owner', uncertain: false, durationMs: 1000, text: 'a', sameDevice: false })
-    expect(results[1]).toEqual({ kind: 'owner', uncertain: false, durationMs: 1000, text: 'b' })
+    expect(results[0]).toEqual({ kind: 'owner', uncertain: false, durationMs: 1000, text: 'a', display: 'a', sameDevice: false })
+    expect(results[1]).toEqual({ kind: 'owner', uncertain: false, durationMs: 1000, text: 'b', display: 'b' })
     expect((await status()).speaker).toMatchObject({ currentDevice: null, enrolledDevice: null, uncertainFloor: null })
   })
 
@@ -965,7 +984,7 @@ describe('voice settings page', () => {
     await post('/voice/test/start')
     mocks.supervisorOptions!.onEvent({ id: 2, type: 'speech_other', data: { start_ms: 100, end_ms: 900, speaker_score: 0.12, speaker_threshold: 0.5, speaker_uncertain: true } })
     expect((await status()).test.results).toEqual([
-      { kind: 'other', score: 0.12, threshold: 0.5, uncertain: true, durationMs: 800 },
+      { kind: 'other', score: 0.12, threshold: 0.5, uncertain: true, durationMs: 800, display: '' },
     ])
   })
 
