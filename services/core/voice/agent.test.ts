@@ -46,7 +46,7 @@ vi.mock('@mintbot/voice-agent-client', () => ({
   },
 }))
 
-import { setHotwordsRole, startVoice, stopVoice, takePending } from './agent.js'
+import { getVoiceStatus, setHotwordsRole, startTest, startVoice, stopVoice, takePending } from './agent.js'
 import { voiceRoutes } from './routes.js'
 import { ConfigFileUnreadableError } from '../config/configFileError.js'
 import Fastify from 'fastify'
@@ -116,6 +116,63 @@ describe('voice agent', () => {
     expect(takePending()).toEqual([])
     expect(mocks.broadcastEvent).not.toHaveBeenCalled()
     expect(fs.existsSync(path.join(dataDir, 'transcripts.jsonl'))).toBe(false)
+  })
+
+  const soundLine = (at: number, text: string, soundEvent: string, inputMode = 'listen') => ({
+    at,
+    text,
+    language: 'zh',
+    emotion: 'neutral',
+    mode: 'normal',
+    inputMode,
+    soundEvent,
+  })
+  const otherSneezeLine = { at: 9, text: '', emotion: 'neutral', soundEvent: 'Sneeze', mode: 'normal', inputMode: 'listen' }
+
+  it.each([
+    { name: 'listen Speech keeps the text', inputMode: 'listen', type: 'final', data: { text: '你好', event: 'Speech' }, pending: ['你好'], voiceType: [], lines: [soundLine(9, '你好', 'Speech')] },
+    { name: 'listen Cough is marked', inputMode: 'listen', type: 'final', data: { text: '嗯。', event: 'Cough' }, pending: ['嗯。（咳嗽）'], voiceType: [], lines: [soundLine(9, '嗯。', 'Cough')] },
+    { name: 'listen uncertain Cough is marked as suspected', inputMode: 'listen', type: 'final', data: { text: '嗯。', event: 'Cough', speaker_uncertain: true }, pending: ['嗯。（疑似咳嗽）'], voiceType: [], lines: [soundLine(9, '嗯。', 'Cough')] },
+    { name: 'listen Laughter without text is recorded only', inputMode: 'listen', type: 'final', data: { text: '', event: 'Laughter' }, pending: [], voiceType: [], lines: [soundLine(9, '', 'Laughter')] },
+    { name: 'listen Speech without text is dropped', inputMode: 'listen', type: 'final', data: { text: '', event: 'Speech' }, pending: [], voiceType: [], lines: null },
+    { name: 'listen BGM without text is recorded only', inputMode: 'listen', type: 'final', data: { text: '', event: 'BGM' }, pending: [], voiceType: [], lines: [soundLine(9, '', 'BGM')] },
+    { name: 'listen BGM with text is not marked', inputMode: 'listen', type: 'final', data: { text: '歌词', event: 'BGM' }, pending: ['歌词'], voiceType: [], lines: [soundLine(9, '歌词', 'BGM')] },
+    { name: 'speech_other with event is recorded only', inputMode: 'listen', type: 'speech_other', data: { event: 'Sneeze' }, pending: [], voiceType: [], lines: [otherSneezeLine] },
+    { name: 'speech_other without event is not recorded', inputMode: 'listen', type: 'speech_other', data: {}, pending: [], voiceType: [], lines: null },
+    { name: 'transcribe Cough types the original text', inputMode: 'transcribe', type: 'final', data: { text: '嗯。', event: 'Cough' }, pending: [], voiceType: ['嗯。'], lines: [soundLine(9, '嗯。', 'Cough', 'transcribe')] },
+    { name: 'transcribe Laughter without text is recorded only', inputMode: 'transcribe', type: 'final', data: { text: '', event: 'Laughter' }, pending: [], voiceType: [], lines: [soundLine(9, '', 'Laughter', 'transcribe')] },
+  ])('sound events: $name', async ({ inputMode, type, data, pending, voiceType, lines }) => {
+    mocks.store.inputMode = inputMode as 'listen' | 'transcribe'
+    await startVoice(dataDir)
+    takePending()
+    mocks.broadcastEvent.mockClear()
+    const payload = { end_unix_ms: 9, language: 'zh', emotion: 'neutral', ...data }
+    if (type === 'final') final(payload)
+    else mocks.supervisorOptions!.onEvent({ id: 1, type, data: { end_unix_ms: 9, emotion: 'neutral', ...data } })
+    expect(takePending()).toEqual(pending)
+    const calls = mocks.broadcastEvent.mock.calls
+    expect(calls.filter(c => c[0] === 'voice-type').map(c => c[1].text)).toEqual(voiceType)
+    expect(calls.filter(c => c[0] === 'voice-pending')).toHaveLength(pending.length)
+    const file = path.join(dataDir, 'transcripts.jsonl')
+    if (lines === null) expect(fs.existsSync(file)).toBe(false)
+    else expect(fs.readFileSync(file, 'utf-8').trim().split('\n').map(l => JSON.parse(l))).toEqual(lines)
+  })
+
+  it('an enrolling final with no text and an event is not recorded', () => {
+    final({ text: '', event: 'Cough', enrolling: true, end_unix_ms: 1 })
+    expect(fs.existsSync(path.join(dataDir, 'transcripts.jsonl'))).toBe(false)
+  })
+
+  it('with input off, a textless event during free testing is recorded but not listed', async () => {
+    mocks.store.inputMode = 'off'
+    await startVoice(dataDir)
+    mocks.supervisorOptions!.onState({ phase: 'running', listening: true, restarts: 0 })
+    await startTest()
+    final({ text: '', event: 'Cough', end_unix_ms: Date.now() + 1000 })
+    const lines = fs.readFileSync(path.join(dataDir, 'transcripts.jsonl'), 'utf-8').trim().split('\n').map(l => JSON.parse(l))
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toMatchObject({ text: '', soundEvent: 'Cough', mode: 'testing', inputMode: 'off' })
+    expect((await getVoiceStatus()).test.results).toEqual([])
   })
 
   it('appends a transcript line, queues the text and broadcasts', () => {

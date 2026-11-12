@@ -12,7 +12,7 @@ import {
   type InstallOptions,
 } from '@mintbot/voice-agent-client'
 
-export const MIN_VOICE_VERSION = '0.2.4'
+export const MIN_VOICE_VERSION = '0.3.0'
 
 export const VOICE_INSTALL_ROOT = path.resolve(process.cwd(), 'data', 'voice-agent')
 
