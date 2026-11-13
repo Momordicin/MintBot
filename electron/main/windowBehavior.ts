@@ -1,10 +1,10 @@
 // electron/main/windowBehavior.ts — 窗口行为编排：缓存 window-behavior 配置快照，按显示器阻挡表为桌宠与聊天窗口套用迁移、置顶、显示/隐藏、贴边，并处理拖拽落点持久化、快捷键换屏、overlay 尺寸与收起手柄几何、穿透与透明度
-// 用法：index.ts 启动与事件里调 initWindowBehaviorConfig / applyWindowBehaviorSnapshot / evaluateDesktopPresence / movePetToNextDisplay（快捷键换屏）/ prepareChatForShow / handleWindowMoved / requestOverlayEdgeHover / applyOverlaySize / armPetSizeGate / getCurrentPetMode / noteOverlayCreatedCollapsed / setPetHandleWindow 等；向 overlay 发 desktop-presence:changed，并同步穿透手柄窗口的位置与显隐
+// 用法：index.ts 启动与事件里调 initWindowBehaviorConfig / applyWindowBehaviorSnapshot / evaluateDesktopPresence / movePetToNextDisplay（快捷键换屏）/ prepareChatForShow / handleWindowMoved / requestOverlayEdgeHover / applyOverlaySize / armPetSizeGate / getCurrentPetMode / noteOverlayCreatedCollapsed / setPetHandleWindow 等；向 overlay 发 desktop-presence:changed，显示聊天窗口时向它发 chat:shown，并同步穿透手柄窗口的位置与显隐
 // 形状：输入 WindowBehaviorSnapshot（core GET/PATCH /config/window-behavior 与 SSE window-behavior-changed）和阻挡表；输出为对 BrowserWindow 的操作与 IPC 推送
-// 对应文件：electron/main/index.ts / electron/main/desktopPresence.ts / electron/main/foregroundWorldModel.ts / electron/main/windowPositions.ts / electron/main/homeDisplayCommit.ts / electron/main/windowAnimation.ts / electron/main/chatReveal.ts / electron/main/petHandleWindow.ts / electron/main/petTopmostGuard.ts / shared/windowBehavior.ts / electron/main/windowBehavior.test.ts
+// 对应文件：electron/main/index.ts / electron/main/desktopPresence.ts / electron/main/foregroundWorldModel.ts / electron/main/windowPositions.ts / electron/main/homeDisplayCommit.ts / electron/main/windowAnimation.ts / electron/main/windowReveal.ts / electron/main/petHandleWindow.ts / electron/main/petTopmostGuard.ts / shared/windowBehavior.ts / electron/main/windowBehavior.test.ts
 import { BrowserWindow, screen } from 'electron'
 import { animateTo } from './windowAnimation'
-import { revealChat } from './chatReveal'
+import { revealWindow } from './windowReveal'
 import { syncPetHandleBounds, setPetHandleVisible, petShapeScaleStale, currentShapeScale } from './petHandleWindow'
 import { checkAndRepairPetTopmost } from './petTopmostGuard'
 import {
@@ -737,7 +737,7 @@ function evaluateChatPresence(mainWindow: BrowserWindow | null): void {
   const { chatPinMode } = currentConfig()
 
   if (chatPinMode !== 'smart') {
-    if (appliedChatPresence === 'SUPPRESSED') revealChat(mainWindow, () => mainWindow.showInactive())
+    if (appliedChatPresence === 'SUPPRESSED') revealWindow(mainWindow, () => mainWindow.showInactive(), () => mainWindow.webContents.send('chat:shown'))
     applyAlwaysOnTop(mainWindow, 'chat', chatPinMode === 'always')
     appliedChatPresence = null
     appliedChatDisplayId = null
@@ -755,7 +755,7 @@ function evaluateChatPresence(mainWindow: BrowserWindow | null): void {
     appliedChatDisplayId = transition.move
   }
   applyAlwaysOnTop(mainWindow, 'chat', transition.alwaysOnTop)
-  if (transition.visibility === 'show') revealChat(mainWindow, () => mainWindow.showInactive())
+  if (transition.visibility === 'show') revealWindow(mainWindow, () => mainWindow.showInactive(), () => mainWindow.webContents.send('chat:shown'))
   else if (transition.visibility === 'hide') mainWindow.hide()
 
   appliedChatPresence = desired.presence

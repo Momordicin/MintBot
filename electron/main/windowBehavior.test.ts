@@ -87,8 +87,8 @@ vi.mock('./windowAnimation', () => ({
   }),
 }))
 
-vi.mock('./chatReveal', () => ({
-  revealChat: vi.fn((_win: unknown, show: () => void) => show()),
+vi.mock('./windowReveal', () => ({
+  revealWindow: vi.fn((_win: unknown, show: () => void) => show()),
 }))
 
 vi.mock('./petTopmostGuard', () => ({

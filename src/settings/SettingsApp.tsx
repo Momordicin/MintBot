@@ -1,6 +1,6 @@
 // src/settings/SettingsApp.tsx — 设置窗口根组件：加载当前预设并按其显示配置应用主题色，左栏角色下拉框与导航切换"角色 / 外观 / 人设与模型 / 记忆 / 模型服务 / 联网搜索 / 窗口行为 / 语音 / 插件 / 通用"九个页面
-// 用法：settings/main.tsx 渲染 <SettingsApp />；GET /state；useCharacterPanel 通过 onSwitched 回传新的 AppState，记忆页把 sessionId 传给 MemoryPanel
-// 对应文件：src/settings/main.tsx / src/settings/useCharacterPanel.ts / src/settings/CharacterPanel.tsx / src/settings/AppearancePanel.tsx / src/settings/PersonaModelPanel.tsx / src/settings/ModelConfigPanel.tsx / src/settings/WebSearchPanel.tsx / src/settings/WindowBehaviorPanel.tsx / src/settings/GeneralPanel.tsx / src/settings/VoicePanel.tsx / src/settings/PluginsPanel.tsx / src/settings/memory/MemoryPanel.tsx / src/settings/settings.css / src/chat/theme.ts / src/chat/themeVars.ts / services/core/index.ts / electron/main/index.ts（open-settings-window）
+// 用法：settings/main.tsx 渲染 <SettingsApp />；GET /state；/state 加载完或显示连接错误后调一次 electronAPI.notifySettingsPainted；useCharacterPanel 通过 onSwitched 回传新的 AppState，记忆页把 sessionId 传给 MemoryPanel
+// 对应文件：src/settings/main.tsx / src/settings/useCharacterPanel.ts / src/settings/CharacterPanel.tsx / src/settings/AppearancePanel.tsx / src/settings/PersonaModelPanel.tsx / src/settings/ModelConfigPanel.tsx / src/settings/WebSearchPanel.tsx / src/settings/WindowBehaviorPanel.tsx / src/settings/GeneralPanel.tsx / src/settings/VoicePanel.tsx / src/settings/PluginsPanel.tsx / src/settings/memory/MemoryPanel.tsx / src/settings/settings.css / src/chat/theme.ts / src/chat/themeVars.ts / services/core/index.ts / electron/main/index.ts（open-settings-window / settings:painted）
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { AppState } from '../../shared/types/index.js'
 import { deriveTheme } from '../chat/theme.js'
@@ -126,6 +126,7 @@ function SettingsBody({ appState, onSwitched }: SettingsBodyProps) {
 export function SettingsApp() {
   const { t } = useTranslation()
   const hasFetched = useRef(false)
+  const paintedNotified = useRef(false)
   const [appState, setAppState] = useState<AppState | null>(null)
   const [error, setError] = useState(false)
 
@@ -175,6 +176,12 @@ export function SettingsApp() {
     }
     root.style.colorScheme = resolvedMode === 'day' ? 'light' : 'dark'
   }, [theme, chatBgOpacity, resolvedMode])
+
+  useEffect(() => {
+    if (paintedNotified.current || (!appState && !error)) return
+    paintedNotified.current = true
+    requestAnimationFrame(() => requestAnimationFrame(() => window.electronAPI.notifySettingsPainted()))
+  }, [appState, error])
 
   if (error) {
     return (
