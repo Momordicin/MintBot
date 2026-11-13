@@ -5,17 +5,37 @@ vi.mock('./windowAnimation', () => ({
   finishAnimation: vi.fn(),
 }))
 
-import { WINDOW_FADE_IN_MS, WINDOW_REVEAL_TIMEOUT_MS, notifyWindowPainted, onceWithTimeout, revealWindow } from './windowReveal'
+import {
+  CHILD_WINDOW_READY_TIMEOUT_MS,
+  WINDOW_FADE_IN_MS,
+  WINDOW_REVEAL_TIMEOUT_MS,
+  attachChildWindowReveal,
+  isChildWindowRevealPending,
+  notifyChildWindowPainted,
+  notifyChildWindowReady,
+  notifyWindowPainted,
+  onceWithTimeout,
+  revealWindow,
+} from './windowReveal'
 import { fadeIn, finishAnimation } from './windowAnimation'
 
 function makeWindow(options: { visible: boolean; minimized?: boolean }) {
   let visible = options.visible
   let minimized = options.minimized ?? false
   let opacity = 1
+  let destroyed = false
+  const closedListeners: Array<() => void> = []
   const webContents = { send: vi.fn() }
   return {
     webContents,
-    isDestroyed: () => false,
+    isDestroyed: () => destroyed,
+    once: (event: string, listener: () => void) => {
+      if (event === 'closed') closedListeners.push(listener)
+    },
+    close: () => {
+      destroyed = true
+      for (const listener of closedListeners) listener()
+    },
     isVisible: () => visible,
     isMinimized: () => minimized,
     getOpacity: () => opacity,
@@ -167,5 +187,80 @@ describe('revealWindow', () => {
     expect(fadeIn).toHaveBeenCalledTimes(2)
     expect(fadeIn).toHaveBeenCalledWith(a, WINDOW_FADE_IN_MS)
     expect(fadeIn).toHaveBeenCalledWith(b, WINDOW_FADE_IN_MS)
+  })
+})
+
+describe('attachChildWindowReveal', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.mocked(fadeIn).mockClear()
+  })
+  afterEach(() => vi.useRealTimers())
+
+  it('reveals once on window:ready, sends window:shown, and fades in on window:painted from that window', () => {
+    const win = makeWindow({ visible: false })
+    attachChildWindowReveal(asWindow(win), () => win.show())
+    expect(win.show).not.toHaveBeenCalled()
+
+    notifyChildWindowReady(asSender(win))
+    notifyChildWindowReady(asSender(win))
+    expect(win.show).toHaveBeenCalledTimes(1)
+    expect(win.setOpacity.mock.invocationCallOrder[0]).toBeLessThan(win.show.mock.invocationCallOrder[0])
+    expect(win.webContents.send).toHaveBeenCalledTimes(1)
+    expect(win.webContents.send).toHaveBeenCalledWith('window:shown')
+
+    notifyChildWindowPainted(asSender(win))
+    expect(fadeIn).toHaveBeenCalledWith(win, WINDOW_FADE_IN_MS)
+    vi.advanceTimersByTime(CHILD_WINDOW_READY_TIMEOUT_MS)
+    expect(win.show).toHaveBeenCalledTimes(1)
+    expect(fadeIn).toHaveBeenCalledTimes(1)
+    win.close()
+  })
+
+  it('reveals at the timeout when window:ready never arrives, and a late ready does nothing more', () => {
+    const win = makeWindow({ visible: false })
+    attachChildWindowReveal(asWindow(win), () => win.show())
+    vi.advanceTimersByTime(CHILD_WINDOW_READY_TIMEOUT_MS - 1)
+    expect(win.show).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+    expect(win.show).toHaveBeenCalledTimes(1)
+    expect(win.webContents.send).toHaveBeenCalledWith('window:shown')
+    win.hide()
+    notifyChildWindowReady(asSender(win))
+    expect(win.show).toHaveBeenCalledTimes(1)
+    expect(win.webContents.send).toHaveBeenCalledTimes(1)
+    win.close()
+  })
+
+  it('does not reveal a window closed before window:ready, and clears its timer', () => {
+    const win = makeWindow({ visible: false })
+    attachChildWindowReveal(asWindow(win), () => win.show())
+    win.close()
+    expect(vi.getTimerCount()).toBe(0)
+    notifyChildWindowReady(asSender(win))
+    vi.advanceTimersByTime(CHILD_WINDOW_READY_TIMEOUT_MS)
+    expect(win.show).not.toHaveBeenCalled()
+    expect(win.setOpacity).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['window:ready', (win: ReturnType<typeof makeWindow>) => notifyChildWindowReady(asSender(win))],
+    ['the timeout', () => vi.advanceTimersByTime(CHILD_WINDOW_READY_TIMEOUT_MS)],
+    ['close', (win: ReturnType<typeof makeWindow>) => win.close()],
+  ])('reports the first show as pending from attach until %s', (_label, settle) => {
+    const win = makeWindow({ visible: false })
+    expect(isChildWindowRevealPending(asWindow(win))).toBe(false)
+    attachChildWindowReveal(asWindow(win), () => win.show())
+    expect(isChildWindowRevealPending(asWindow(win))).toBe(true)
+    settle(win)
+    expect(isChildWindowRevealPending(asWindow(win))).toBe(false)
+    win.close()
+  })
+
+  it('ignores window:painted from a window that was not attached', () => {
+    const chat = makeWindow({ visible: false })
+    revealAsChat(chat)
+    notifyChildWindowPainted(asSender(chat))
+    expect(fadeIn).not.toHaveBeenCalled()
   })
 })

@@ -1,5 +1,5 @@
 // src/electron-api.d.ts — 渲染进程里 window.electronAPI 的类型声明（preload 暴露的接口与桌宠状态载荷）
-// 用法：渲染代码通过 window.electronAPI.* 调用：InputBar、ChatWindow、SettingsApp、OverlayApp、CharacterPanel、WindowBehaviorPanel、GeneralPanel、VoicePanel、HotkeysSection、PluginsPanel、handle/main.ts、i18n.ts
+// 用法：渲染代码通过 window.electronAPI.* 调用：InputBar、ChatWindow、SettingsApp、useWindowReveal、OverlayApp、CharacterPanel、WindowBehaviorPanel、GeneralPanel、VoicePanel、HotkeysSection、PluginsPanel、handle/main.ts、i18n.ts
 // 对应文件：electron/preload/index.ts（contextBridge 实现）/ electron/main/index.ts（ipcMain 处理）
 import type { HotkeyAction, HotkeySetResult, HotkeysState } from '../shared/hotkeys.js'
 
@@ -55,7 +55,9 @@ export interface ElectronAPI {
   sendGreeting: (text: string) => Promise<void>
   onGreeting: (listener: (text: string) => void) => () => void
   notifyChatPainted: () => void
-  notifySettingsPainted: () => void
+  notifyWindowReady: () => Promise<void>
+  onWindowShown: (callback: () => void) => () => void
+  notifyWindowPainted: () => void
   setTitlebarOverlay: (overlay: { color: string; symbolColor: string }) => void
 }
 
