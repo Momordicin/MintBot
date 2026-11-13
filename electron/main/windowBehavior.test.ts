@@ -88,6 +88,7 @@ vi.mock('./windowAnimation', () => ({
 }))
 
 vi.mock('./windowReveal', () => ({
+  CHAT_FADE_START_DELAY_MS: 400,
   revealWindow: vi.fn((_win: unknown, show: () => void) => show()),
 }))
 

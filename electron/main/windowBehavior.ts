@@ -4,7 +4,7 @@
 // 对应文件：electron/main/index.ts / electron/main/desktopPresence.ts / electron/main/foregroundWorldModel.ts / electron/main/windowPositions.ts / electron/main/homeDisplayCommit.ts / electron/main/windowAnimation.ts / electron/main/windowReveal.ts / electron/main/petHandleWindow.ts / electron/main/petTopmostGuard.ts / shared/windowBehavior.ts / electron/main/windowBehavior.test.ts
 import { BrowserWindow, screen } from 'electron'
 import { animateTo } from './windowAnimation'
-import { revealWindow } from './windowReveal'
+import { CHAT_FADE_START_DELAY_MS, revealWindow } from './windowReveal'
 import { syncPetHandleBounds, setPetHandleVisible, petShapeScaleStale, currentShapeScale } from './petHandleWindow'
 import { checkAndRepairPetTopmost } from './petTopmostGuard'
 import {
@@ -737,7 +737,7 @@ function evaluateChatPresence(mainWindow: BrowserWindow | null): void {
   const { chatPinMode } = currentConfig()
 
   if (chatPinMode !== 'smart') {
-    if (appliedChatPresence === 'SUPPRESSED') revealWindow(mainWindow, () => mainWindow.showInactive(), () => mainWindow.webContents.send('chat:shown'))
+    if (appliedChatPresence === 'SUPPRESSED') revealWindow(mainWindow, () => mainWindow.showInactive(), { label: 'chat', requestedAt: Date.now(), fadeStartDelayMs: CHAT_FADE_START_DELAY_MS, onShown: () => mainWindow.webContents.send('chat:shown') })
     applyAlwaysOnTop(mainWindow, 'chat', chatPinMode === 'always')
     appliedChatPresence = null
     appliedChatDisplayId = null
@@ -755,7 +755,7 @@ function evaluateChatPresence(mainWindow: BrowserWindow | null): void {
     appliedChatDisplayId = transition.move
   }
   applyAlwaysOnTop(mainWindow, 'chat', transition.alwaysOnTop)
-  if (transition.visibility === 'show') revealWindow(mainWindow, () => mainWindow.showInactive(), () => mainWindow.webContents.send('chat:shown'))
+  if (transition.visibility === 'show') revealWindow(mainWindow, () => mainWindow.showInactive(), { label: 'chat', requestedAt: Date.now(), fadeStartDelayMs: CHAT_FADE_START_DELAY_MS, onShown: () => mainWindow.webContents.send('chat:shown') })
   else if (transition.visibility === 'hide') mainWindow.hide()
 
   appliedChatPresence = desired.presence

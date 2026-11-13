@@ -6,15 +6,17 @@ vi.mock('./windowAnimation', () => ({
 }))
 
 import {
-  CHILD_WINDOW_READY_TIMEOUT_MS,
+  CHAT_FADE_START_DELAY_MS,
+  CHILD_WINDOW_FADE_START_DELAY_MS,
+  CHILD_WINDOW_FIRST_FADE_START_DELAY_MS,
   WINDOW_FADE_IN_MS,
-  WINDOW_REVEAL_TIMEOUT_MS,
   attachChildWindowReveal,
+  hideChildWindow,
   isChildWindowRevealPending,
   notifyChildWindowPainted,
   notifyChildWindowReady,
   notifyWindowPainted,
-  onceWithTimeout,
+  revealChildWindow,
   revealWindow,
 } from './windowReveal'
 import { fadeIn, finishAnimation } from './windowAnimation'
@@ -46,48 +48,30 @@ function makeWindow(options: { visible: boolean; minimized?: boolean }) {
       visible = true
       minimized = false
     }),
-    hide: () => {
+    hide: vi.fn(() => {
       visible = false
-    },
+    }),
   }
 }
 
-function asWindow(win: ReturnType<typeof makeWindow>): Electron.BrowserWindow {
+type FakeWindow = ReturnType<typeof makeWindow>
+
+function asWindow(win: FakeWindow): Electron.BrowserWindow {
   return win as unknown as Electron.BrowserWindow
 }
 
-function asSender(win: ReturnType<typeof makeWindow>): Electron.WebContents {
+function asSender(win: FakeWindow): Electron.WebContents {
   return win.webContents as unknown as Electron.WebContents
 }
 
-function revealAsChat(win: ReturnType<typeof makeWindow>): void {
-  revealWindow(asWindow(win), () => win.show(), () => win.webContents.send('chat:shown'))
+function revealAsChat(win: FakeWindow, requestedAt = Date.now()): void {
+  revealWindow(asWindow(win), () => win.show(), {
+    label: 'chat',
+    requestedAt,
+    fadeStartDelayMs: CHAT_FADE_START_DELAY_MS,
+    onShown: () => win.webContents.send('chat:shown'),
+  })
 }
-
-describe('onceWithTimeout', () => {
-  beforeEach(() => vi.useFakeTimers())
-  afterEach(() => vi.useRealTimers())
-
-  it('runs the action once when triggered before the timeout', () => {
-    const action = vi.fn()
-    const trigger = onceWithTimeout(action, 1000)
-    trigger()
-    trigger()
-    vi.advanceTimersByTime(1000)
-    expect(action).toHaveBeenCalledTimes(1)
-  })
-
-  it('runs the action at the timeout when never triggered, and not again on a late trigger', () => {
-    const action = vi.fn()
-    const trigger = onceWithTimeout(action, 1000)
-    vi.advanceTimersByTime(999)
-    expect(action).not.toHaveBeenCalled()
-    vi.advanceTimersByTime(1)
-    expect(action).toHaveBeenCalledTimes(1)
-    trigger()
-    expect(action).toHaveBeenCalledTimes(1)
-  })
-})
 
 describe('revealWindow', () => {
   beforeEach(() => {
@@ -96,43 +80,68 @@ describe('revealWindow', () => {
   })
   afterEach(() => vi.useRealTimers())
 
-  it('shows a hidden window transparent, runs onShown, and fades in on the painted signal from that window', () => {
+  it('shows a hidden window transparent after finishing any running animation, then runs onShown', () => {
+    vi.mocked(finishAnimation).mockClear()
     const win = makeWindow({ visible: false })
     revealAsChat(win)
 
+    expect(finishAnimation).toHaveBeenCalledWith(win)
+    expect(vi.mocked(finishAnimation).mock.invocationCallOrder[0]).toBeLessThan(win.setOpacity.mock.invocationCallOrder[0])
     expect(win.setOpacity).toHaveBeenCalledWith(0)
     expect(win.setOpacity.mock.invocationCallOrder[0]).toBeLessThan(win.show.mock.invocationCallOrder[0])
     expect(win.webContents.send).toHaveBeenCalledWith('chat:shown')
     expect(win.show.mock.invocationCallOrder[0]).toBeLessThan(win.webContents.send.mock.invocationCallOrder[0])
     expect(fadeIn).not.toHaveBeenCalled()
-
-    notifyWindowPainted({} as Electron.WebContents)
-    expect(fadeIn).not.toHaveBeenCalled()
-
-    notifyWindowPainted(asSender(win))
-    expect(fadeIn).toHaveBeenCalledWith(win, WINDOW_FADE_IN_MS)
-    expect(win.getOpacity()).toBe(1)
-
-    vi.advanceTimersByTime(WINDOW_REVEAL_TIMEOUT_MS)
-    expect(fadeIn).toHaveBeenCalledTimes(1)
   })
 
-  it('finishes any running move or fade before going transparent, so nothing raises opacity before the paint', () => {
-    vi.mocked(finishAnimation).mockClear()
+  it.each([
+    ['chat, painted before the deadline', CHAT_FADE_START_DELAY_MS, 100],
+    ['chat, painted after the deadline', CHAT_FADE_START_DELAY_MS, CHAT_FADE_START_DELAY_MS + 100],
+    ['chat, never painted', CHAT_FADE_START_DELAY_MS, null],
+    ['child first open, painted before the deadline', CHILD_WINDOW_FIRST_FADE_START_DELAY_MS, 500],
+    ['child first open, never painted', CHILD_WINDOW_FIRST_FADE_START_DELAY_MS, null],
+  ])('%s: fades in for WINDOW_FADE_IN_MS exactly at requestedAt + delay', (_label, delayMs, paintedAtMs) => {
     const win = makeWindow({ visible: false })
-    revealWindow(asWindow(win), () => win.show())
-    expect(finishAnimation).toHaveBeenCalledWith(win)
-    expect(vi.mocked(finishAnimation).mock.invocationCallOrder[0]).toBeLessThan(win.setOpacity.mock.invocationCallOrder[0])
-  })
-
-  it('fades in at the timeout when the painted signal never arrives', () => {
-    const win = makeWindow({ visible: false })
-    revealWindow(asWindow(win), () => win.show())
-    vi.advanceTimersByTime(WINDOW_REVEAL_TIMEOUT_MS - 1)
+    const requestedAt = Date.now()
+    revealWindow(asWindow(win), () => win.show(), { label: 'chat', requestedAt, fadeStartDelayMs: delayMs })
+    if (paintedAtMs !== null && paintedAtMs < delayMs) {
+      vi.advanceTimersByTime(paintedAtMs)
+      notifyWindowPainted(asSender(win))
+      expect(fadeIn).not.toHaveBeenCalled()
+    }
+    vi.advanceTimersByTime(requestedAt + delayMs - 1 - Date.now())
     expect(fadeIn).not.toHaveBeenCalled()
     vi.advanceTimersByTime(1)
     expect(fadeIn).toHaveBeenCalledTimes(1)
-    expect(win.getOpacity()).toBe(1)
+    expect(fadeIn).toHaveBeenCalledWith(win, 300)
+    expect(WINDOW_FADE_IN_MS).toBe(300)
+    if (paintedAtMs !== null && paintedAtMs >= delayMs) {
+      vi.advanceTimersByTime(paintedAtMs - delayMs)
+      notifyWindowPainted(asSender(win))
+    }
+    vi.advanceTimersByTime(2000)
+    expect(fadeIn).toHaveBeenCalledTimes(1)
+  })
+
+  it('counts the delay from requestedAt, not from the show call', () => {
+    const win = makeWindow({ visible: false })
+    const requestedAt = Date.now()
+    vi.advanceTimersByTime(150)
+    revealAsChat(win, requestedAt)
+    vi.advanceTimersByTime(CHAT_FADE_START_DELAY_MS - 150 - 1)
+    expect(fadeIn).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+    expect(fadeIn).toHaveBeenCalledTimes(1)
+  })
+
+  it('fades in immediately when requestedAt + delay has already passed at show time', () => {
+    const win = makeWindow({ visible: false })
+    const requestedAt = Date.now()
+    vi.advanceTimersByTime(CHAT_FADE_START_DELAY_MS + 50)
+    revealAsChat(win, requestedAt)
+    expect(fadeIn).toHaveBeenCalledTimes(1)
+    expect(fadeIn).toHaveBeenCalledWith(win, WINDOW_FADE_IN_MS)
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   it('reveals a minimized window the same way', () => {
@@ -148,58 +157,54 @@ describe('revealWindow', () => {
     expect(win.show).toHaveBeenCalledTimes(1)
     expect(win.setOpacity).not.toHaveBeenCalled()
     expect(win.webContents.send).not.toHaveBeenCalled()
-    vi.advanceTimersByTime(WINDOW_REVEAL_TIMEOUT_MS)
+    vi.advanceTimersByTime(CHAT_FADE_START_DELAY_MS)
     expect(fadeIn).not.toHaveBeenCalled()
   })
 
-  it('a superseded reveal of the same window does not fade in when its own timer fires', () => {
+  it('a new reveal of the same window replaces the pending one and fades in only at its own deadline', () => {
     const win = makeWindow({ visible: false })
     revealAsChat(win)
-    vi.advanceTimersByTime(WINDOW_REVEAL_TIMEOUT_MS / 2)
+    vi.advanceTimersByTime(CHAT_FADE_START_DELAY_MS / 2)
     win.hide()
     revealAsChat(win)
-    vi.advanceTimersByTime(WINDOW_REVEAL_TIMEOUT_MS / 2)
+    vi.advanceTimersByTime(CHAT_FADE_START_DELAY_MS / 2)
     expect(fadeIn).not.toHaveBeenCalled()
-    notifyWindowPainted(asSender(win))
+    vi.advanceTimersByTime(CHAT_FADE_START_DELAY_MS / 2)
+    expect(fadeIn).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(CHAT_FADE_START_DELAY_MS)
     expect(fadeIn).toHaveBeenCalledTimes(1)
   })
 
-  it.each([
-    ['painted signals', (a: ReturnType<typeof makeWindow>, b: ReturnType<typeof makeWindow>) => {
-      notifyWindowPainted(asSender(a))
-      expect(fadeIn).toHaveBeenCalledTimes(1)
-      expect(fadeIn).toHaveBeenLastCalledWith(a, WINDOW_FADE_IN_MS)
-      notifyWindowPainted(asSender(b))
-    }],
-    ['timeouts', (a: ReturnType<typeof makeWindow>) => {
-      vi.advanceTimersByTime(WINDOW_REVEAL_TIMEOUT_MS / 2)
-      expect(fadeIn).toHaveBeenCalledTimes(1)
-      expect(fadeIn).toHaveBeenLastCalledWith(a, WINDOW_FADE_IN_MS)
-    }],
-  ])('concurrent reveals of different windows each fade in on their own %s', (_label, settle) => {
+  it('concurrent reveals of different windows each fade in at their own deadline', () => {
     const a = makeWindow({ visible: false })
     const b = makeWindow({ visible: false })
-    revealWindow(asWindow(a), () => a.show())
-    vi.advanceTimersByTime(WINDOW_REVEAL_TIMEOUT_MS / 2)
-    revealWindow(asWindow(b), () => b.show())
-    settle(a, b)
-    vi.advanceTimersByTime(WINDOW_REVEAL_TIMEOUT_MS)
+    revealAsChat(a)
+    vi.advanceTimersByTime(CHAT_FADE_START_DELAY_MS / 2)
+    revealAsChat(b)
+    vi.advanceTimersByTime(CHAT_FADE_START_DELAY_MS / 2)
+    expect(fadeIn).toHaveBeenCalledTimes(1)
+    expect(fadeIn).toHaveBeenLastCalledWith(a, WINDOW_FADE_IN_MS)
+    vi.advanceTimersByTime(CHAT_FADE_START_DELAY_MS / 2)
     expect(fadeIn).toHaveBeenCalledTimes(2)
-    expect(fadeIn).toHaveBeenCalledWith(a, WINDOW_FADE_IN_MS)
-    expect(fadeIn).toHaveBeenCalledWith(b, WINDOW_FADE_IN_MS)
+    expect(fadeIn).toHaveBeenLastCalledWith(b, WINDOW_FADE_IN_MS)
   })
 })
 
-describe('attachChildWindowReveal', () => {
+describe('child window reveal', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     vi.mocked(fadeIn).mockClear()
   })
   afterEach(() => vi.useRealTimers())
 
-  it('reveals once on window:ready, sends window:shown, and fades in on window:painted from that window', () => {
+  function attach(win: FakeWindow, requestedAt = Date.now()): void {
+    attachChildWindowReveal(asWindow(win), () => win.show(), requestedAt, CHILD_WINDOW_FIRST_FADE_START_DELAY_MS, 'settings')
+  }
+
+  it('window:ready before the deadline shows at ready, sends window:shown once, and fades in at the deadline', () => {
     const win = makeWindow({ visible: false })
-    attachChildWindowReveal(asWindow(win), () => win.show())
+    attach(win)
+    vi.advanceTimersByTime(300)
     expect(win.show).not.toHaveBeenCalled()
 
     notifyChildWindowReady(asSender(win))
@@ -210,22 +215,24 @@ describe('attachChildWindowReveal', () => {
     expect(win.webContents.send).toHaveBeenCalledWith('window:shown')
 
     notifyChildWindowPainted(asSender(win))
-    expect(fadeIn).toHaveBeenCalledWith(win, WINDOW_FADE_IN_MS)
-    vi.advanceTimersByTime(CHILD_WINDOW_READY_TIMEOUT_MS)
-    expect(win.show).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(CHILD_WINDOW_FIRST_FADE_START_DELAY_MS - 300 - 1)
+    expect(fadeIn).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
     expect(fadeIn).toHaveBeenCalledTimes(1)
+    expect(fadeIn).toHaveBeenCalledWith(win, WINDOW_FADE_IN_MS)
     win.close()
   })
 
-  it('reveals at the timeout when window:ready never arrives, and a late ready does nothing more', () => {
+  it('the deadline before window:ready shows the window and fades in at that moment; a late ready does nothing more', () => {
     const win = makeWindow({ visible: false })
-    attachChildWindowReveal(asWindow(win), () => win.show())
-    vi.advanceTimersByTime(CHILD_WINDOW_READY_TIMEOUT_MS - 1)
+    attach(win)
+    vi.advanceTimersByTime(CHILD_WINDOW_FIRST_FADE_START_DELAY_MS - 1)
     expect(win.show).not.toHaveBeenCalled()
     vi.advanceTimersByTime(1)
     expect(win.show).toHaveBeenCalledTimes(1)
+    expect(win.setOpacity).toHaveBeenCalledWith(0)
     expect(win.webContents.send).toHaveBeenCalledWith('window:shown')
-    win.hide()
+    expect(fadeIn).toHaveBeenCalledTimes(1)
     notifyChildWindowReady(asSender(win))
     expect(win.show).toHaveBeenCalledTimes(1)
     expect(win.webContents.send).toHaveBeenCalledTimes(1)
@@ -234,33 +241,137 @@ describe('attachChildWindowReveal', () => {
 
   it('does not reveal a window closed before window:ready, and clears its timer', () => {
     const win = makeWindow({ visible: false })
-    attachChildWindowReveal(asWindow(win), () => win.show())
+    attach(win)
     win.close()
     expect(vi.getTimerCount()).toBe(0)
     notifyChildWindowReady(asSender(win))
-    vi.advanceTimersByTime(CHILD_WINDOW_READY_TIMEOUT_MS)
+    vi.advanceTimersByTime(CHILD_WINDOW_FIRST_FADE_START_DELAY_MS)
     expect(win.show).not.toHaveBeenCalled()
     expect(win.setOpacity).not.toHaveBeenCalled()
   })
 
   it.each([
-    ['window:ready', (win: ReturnType<typeof makeWindow>) => notifyChildWindowReady(asSender(win))],
-    ['the timeout', () => vi.advanceTimersByTime(CHILD_WINDOW_READY_TIMEOUT_MS)],
-    ['close', (win: ReturnType<typeof makeWindow>) => win.close()],
+    ['window:ready', (win: FakeWindow) => notifyChildWindowReady(asSender(win))],
+    ['the deadline', () => vi.advanceTimersByTime(CHILD_WINDOW_FIRST_FADE_START_DELAY_MS)],
+    ['close', (win: FakeWindow) => win.close()],
   ])('reports the first show as pending from attach until %s', (_label, settle) => {
     const win = makeWindow({ visible: false })
     expect(isChildWindowRevealPending(asWindow(win))).toBe(false)
-    attachChildWindowReveal(asWindow(win), () => win.show())
+    attach(win)
     expect(isChildWindowRevealPending(asWindow(win))).toBe(true)
     settle(win)
     expect(isChildWindowRevealPending(asWindow(win))).toBe(false)
     win.close()
   })
 
-  it('ignores window:painted from a window that was not attached', () => {
-    const chat = makeWindow({ visible: false })
-    revealAsChat(chat)
-    notifyChildWindowPainted(asSender(chat))
+  it('hiding an attached window sends window:hidden; a later reveal shows it transparent, sends window:shown and fades in at the passed delay', () => {
+    const win = makeWindow({ visible: false })
+    attach(win)
+    notifyChildWindowReady(asSender(win))
+    vi.advanceTimersByTime(CHILD_WINDOW_FIRST_FADE_START_DELAY_MS)
+    vi.mocked(fadeIn).mockClear()
+    win.webContents.send.mockClear()
+    win.setOpacity.mockClear()
+
+    hideChildWindow(asWindow(win))
+    expect(win.hide).toHaveBeenCalledTimes(1)
+    expect(win.webContents.send).toHaveBeenCalledWith('window:hidden')
+
+    revealChildWindow(asWindow(win), () => win.show(), Date.now(), CHILD_WINDOW_FADE_START_DELAY_MS, 'settings')
+    expect(win.setOpacity).toHaveBeenCalledWith(0)
+    expect(win.webContents.send).toHaveBeenLastCalledWith('window:shown')
+    vi.advanceTimersByTime(CHILD_WINDOW_FADE_START_DELAY_MS - 1)
     expect(fadeIn).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+    expect(fadeIn).toHaveBeenCalledWith(win, WINDOW_FADE_IN_MS)
+    win.close()
+  })
+
+  it('does not send window:hidden to a window that was not attached', () => {
+    const win = makeWindow({ visible: true })
+    hideChildWindow(asWindow(win))
+    expect(win.hide).toHaveBeenCalledTimes(1)
+    expect(win.webContents.send).not.toHaveBeenCalled()
+  })
+})
+
+describe('painted check', () => {
+  let warn: ReturnType<typeof vi.spyOn>
+  beforeEach(() => {
+    vi.useFakeTimers()
+    warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    warn.mockRestore()
+    vi.useRealTimers()
+  })
+
+  function revealChat(win: FakeWindow): void {
+    revealAsChat(win)
+  }
+
+  function revealSettings(win: FakeWindow): void {
+    attachChildWindowReveal(asWindow(win), () => win.show(), Date.now(), CHILD_WINDOW_FIRST_FADE_START_DELAY_MS, 'settings')
+    notifyChildWindowReady(asSender(win))
+  }
+
+  it.each([
+    ['chat', revealChat, notifyWindowPainted, CHAT_FADE_START_DELAY_MS],
+    ['settings', revealSettings, notifyChildWindowPainted, CHILD_WINDOW_FIRST_FADE_START_DELAY_MS],
+  ])('%s: painted at or before fade start logs nothing; painted after logs one warning with the delay; a duplicate logs nothing', (label, reveal, painted, delayMs) => {
+    const early = makeWindow({ visible: false })
+    reveal(early)
+    vi.advanceTimersByTime(delayMs)
+    painted(asSender(early))
+    expect(warn).not.toHaveBeenCalled()
+    early.close()
+
+    const late = makeWindow({ visible: false })
+    reveal(late)
+    vi.advanceTimersByTime(delayMs + 120)
+    painted(asSender(late))
+    painted(asSender(late))
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledWith(`[WindowReveal] ${label} painted 120ms after its fade started`)
+    late.close()
+  })
+
+  it.each([
+    ['an unknown sender on the chat path', (win: FakeWindow) => notifyWindowPainted(asSender(win))],
+    ['an unattached sender on the child path', (win: FakeWindow) => {
+      revealAsChat(win)
+      vi.advanceTimersByTime(CHAT_FADE_START_DELAY_MS + 100)
+      notifyChildWindowPainted(asSender(win))
+    }],
+    ['a closed window', (win: FakeWindow) => {
+      revealAsChat(win)
+      vi.advanceTimersByTime(CHAT_FADE_START_DELAY_MS + 100)
+      win.close()
+      notifyWindowPainted(asSender(win))
+    }],
+  ])('painted from %s logs nothing', (_label, act) => {
+    act(makeWindow({ visible: false }))
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('a new reveal of the same window resets the record', () => {
+    const win = makeWindow({ visible: false })
+    revealAsChat(win)
+    vi.advanceTimersByTime(CHAT_FADE_START_DELAY_MS + 50)
+    notifyWindowPainted(asSender(win))
+    expect(warn).toHaveBeenCalledTimes(1)
+
+    win.hide()
+    revealAsChat(win)
+    notifyWindowPainted(asSender(win))
+    expect(warn).toHaveBeenCalledTimes(1)
+
+    win.hide()
+    revealAsChat(win)
+    vi.advanceTimersByTime(CHAT_FADE_START_DELAY_MS + 30)
+    notifyWindowPainted(asSender(win))
+    expect(warn).toHaveBeenCalledTimes(2)
+    expect(warn).toHaveBeenLastCalledWith('[WindowReveal] chat painted 30ms after its fade started')
+    win.close()
   })
 })

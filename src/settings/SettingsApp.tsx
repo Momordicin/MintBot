@@ -1,5 +1,5 @@
 // src/settings/SettingsApp.tsx — 设置窗口根组件：加载当前预设并按其显示配置应用主题色，顶部自绘标题栏，左栏角色下拉框与导航切换"角色 / 外观 / 人设与模型 / 记忆 / 模型服务 / 联网搜索 / 窗口行为 / 语音 / 插件 / 通用"九个页面
-// 用法：settings/main.tsx 渲染 <SettingsApp />；GET /state；按主题调 electronAPI.setTitlebarOverlay；/state 加载完或显示连接错误后经 useWindowReveal 通知主进程页面就绪、显示后画好再淡入；useCharacterPanel 通过 onSwitched 回传新的 AppState，记忆页把 sessionId 传给 MemoryPanel
+// 用法：settings/main.tsx 渲染 <SettingsApp />；GET /state；调 electronAPI.onWindowHidden / onWindowShown / setTitlebarOverlay；useWindowReveal(ready, contentReady)；useCharacterPanel 通过 onSwitched 回传新的 AppState，记忆页把 sessionId 传给 MemoryPanel
 // 对应文件：src/settings/main.tsx / src/settings/useCharacterPanel.ts / src/settings/CharacterPanel.tsx / src/settings/AppearancePanel.tsx / src/settings/PersonaModelPanel.tsx / src/settings/ModelConfigPanel.tsx / src/settings/WebSearchPanel.tsx / src/settings/WindowBehaviorPanel.tsx / src/settings/GeneralPanel.tsx / src/settings/VoicePanel.tsx / src/settings/PluginsPanel.tsx / src/settings/memory/MemoryPanel.tsx / src/settings/settings.css / src/chat/theme.ts / src/chat/themeVars.ts / services/core/index.ts / src/useWindowReveal.ts / electron/main/index.ts（open-settings-window / titlebar:set-overlay）
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { AppState } from '../../shared/types/index.js'
@@ -137,10 +137,13 @@ export function SettingsApp() {
   const hasFetched = useRef(false)
   const [appState, setAppState] = useState<AppState | null>(null)
   const [error, setError] = useState(false)
+  const [hidden, setHidden] = useState(false)
+  const hiddenRef = useRef(false)
+  const hideSeqRef = useRef(0)
 
   const loadState = useCallback(() => {
     setError(false)
-    fetch(`${CORE_URL}/state`)
+    return fetch(`${CORE_URL}/state`)
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         return r.json()
@@ -158,6 +161,21 @@ export function SettingsApp() {
     hasFetched.current = true
     loadState()
   }, [loadState])
+
+  useEffect(() => window.electronAPI.onWindowHidden(() => {
+    hiddenRef.current = true
+    hideSeqRef.current += 1
+    setHidden(true)
+  }), [])
+
+  useEffect(() => window.electronAPI.onWindowShown(() => {
+    if (!hiddenRef.current) return
+    hiddenRef.current = false
+    const seq = hideSeqRef.current
+    loadState().finally(() => {
+      if (hideSeqRef.current === seq) setHidden(false)
+    })
+  }), [loadState])
 
   useEffect(() => {
     document.title = t('MintBot 设置')
@@ -189,7 +207,15 @@ export function SettingsApp() {
     window.electronAPI.setTitlebarOverlay(titlebarOverlayFromTheme(theme))
   }, [theme])
 
-  useWindowReveal(appState !== null || error)
+  useWindowReveal(appState !== null || error, !hidden)
+
+  if (hidden) {
+    return (
+      <div className="settings-window">
+        <SettingsTitleBar />
+      </div>
+    )
+  }
 
   if (error) {
     return (

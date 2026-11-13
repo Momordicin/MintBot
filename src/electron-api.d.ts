@@ -57,6 +57,7 @@ export interface ElectronAPI {
   notifyChatPainted: () => void
   notifyWindowReady: () => Promise<void>
   onWindowShown: (callback: () => void) => () => void
+  onWindowHidden: (callback: () => void) => () => void
   notifyWindowPainted: () => void
   setTitlebarOverlay: (overlay: { color: string; symbolColor: string }) => void
 }

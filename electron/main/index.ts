@@ -1,5 +1,5 @@
 // electron/main/index.ts — Electron 主进程入口：app ready 后创建聊天窗口、桌宠 overlay 与托盘，注册 IPC，启动前台窗口监控与 core /events 订阅，will-quit 时收尾
-// 用法：electron.vite.config.ts 的主进程 entry；注册 autostart:get / autostart:set、app:relaunch-info / app:relaunch；监听 second-instance；注册 app 协议 protocol.handle('app')；第一条 import 为 logBootstrap；注册 chat:ready（聊天窗口首次显示）/ chat:greet（设置窗口的打招呼转发到聊天窗口）/ chat:painted（聊天窗口唤起后淡入）；注册 window:ready / window:painted（子窗口首次显示与淡入，仅对 attachChildWindowReveal 登记过的窗口生效）；注册 ui:get-locale，向窗口发 ui:locale-changed；设置窗口按 open-settings-window IPC 按需创建；订阅 voice-type（textOutput）与 voice-status-changed（托盘「语音输入」）；注册 hotkeys:get / hotkeys:set / hotkeys:capture，app ready 后 hotkeys.start()，will-quit 时 stop()，角色换屏快捷键调 movePetToNextDisplay；显示器拓扑变化时 handleDisplayTopologyChange 先调 clearStableDisplayKeyCache()
+// 用法：electron.vite.config.ts 的主进程 entry；注册 autostart:get / autostart:set、app:relaunch-info / app:relaunch；监听 second-instance；注册 app 协议 protocol.handle('app')；第一条 import 为 logBootstrap；注册 chat:ready（聊天窗口首次显示）/ chat:greet（设置窗口的打招呼转发到聊天窗口）/ chat:painted；注册 window:ready（子窗口首次显示）/ window:painted（仅对 attachChildWindowReveal 登记过的窗口生效）；注册 ui:get-locale，向窗口发 ui:locale-changed；设置窗口按 open-settings-window IPC 创建或调 revealChildWindow 重新显示，关闭时调 hideChildWindow；订阅 voice-type（textOutput）与 voice-status-changed（托盘「语音输入」）；注册 hotkeys:get / hotkeys:set / hotkeys:capture，app ready 后 hotkeys.start()，will-quit 时 stop()，角色换屏快捷键调 movePetToNextDisplay；显示器拓扑变化时 handleDisplayTopologyChange 先调 clearStableDisplayKeyCache()
 // 对应文件：electron/preload/index.ts（暴露的 IPC 通道）/ electron/main/windowBehavior.ts / electron/main/petContextMenu.ts / electron/main/coreEventsConsumer.ts / electron/main/i18n.ts / electron/main/foregroundWorldModel.ts / electron/main/windowDragMonitor.ts / electron/main/nativeWindowDrag.ts / electron/main/petTopmostGuard.ts / electron/main/startupGate.ts / electron/main/displayIdentity.ts / electron/main/appOrigin.ts / electron/main/appAssetPath.ts / electron/main/coreProcess.ts / electron/main/autostart.ts / electron/main/chatFirstShow.ts / electron/main/windowReveal.ts / electron/main/textOutput.ts / electron/main/sendInput.ts / electron/main/voiceTray.ts / electron/main/hotkeys.ts / shared/hotkeys.ts / shared/voiceInputMode.ts / shared/windowBehavior.ts / shared/portraitForm.ts
 import './logBootstrap'
 import { app, BrowserWindow, Menu, Notification, Tray, clipboard, globalShortcut, powerMonitor, ipcMain, dialog, screen, nativeImage, protocol, net, shell } from 'electron'
@@ -24,7 +24,7 @@ import { resolveAppAssetPath } from './appAssetPath'
 import { ensureCoreRunning, stopSpawnedCore } from './coreProcess'
 import { AUTOSTART_FLAG, hasAutostartFlag, legacyLoginItemOptions, loginItemOptions, shouldMigrateAutostart } from './autostart'
 import { CHAT_READY_TIMEOUT_MS, shouldShowChatOnFirstReady } from './chatFirstShow'
-import { attachChildWindowReveal, isChildWindowRevealPending, notifyChildWindowPainted, notifyChildWindowReady, notifyWindowPainted, revealWindow } from './windowReveal'
+import { CHAT_FADE_START_DELAY_MS, CHILD_WINDOW_FADE_START_DELAY_MS, CHILD_WINDOW_FIRST_FADE_START_DELAY_MS, attachChildWindowReveal, hideChildWindow, isChildWindowRevealPending, notifyChildWindowPainted, notifyChildWindowReady, notifyWindowPainted, revealChildWindow, revealWindow } from './windowReveal'
 import type { ChatPinMode, WindowBehaviorConfig, WindowBehaviorSnapshot } from '../../shared/windowBehavior.js'
 import {
   initWindowBehaviorConfig,
@@ -407,37 +407,16 @@ ipcMain.handle('autostart:set', (_event, enabled: unknown) => {
 let pendingShowChat = false
 let chatFirstShown = false
 
-const revealDiagStart = new Map<string, number>()
-function revealDiag(kind: string, label: string): void {
-  const start = revealDiagStart.get(kind)
-  if (start === undefined) return
-  console.log(`[RevealDiag] ${kind} ${label} +${Date.now() - start}ms`)
-}
-function revealDiagMemory(kind: string, win: BrowserWindow | null): void {
-  setTimeout(() => {
-    const metrics = app.getAppMetrics()
-    const total = metrics.reduce((sum, m) => sum + m.memory.workingSetSize, 0)
-    const pidOf = (w: BrowserWindow | null) => (w && !w.isDestroyed() ? w.webContents.getOSProcessId() : -1)
-    const describe = (pid: number) => {
-      const m = metrics.find(entry => entry.pid === pid)
-      return m ? `ws=${Math.round(m.memory.workingSetSize / 1024)}MB private=${Math.round((m.memory.privateBytes ?? 0) / 1024)}MB` : 'n/a'
-    }
-    const browser = metrics.find(m => m.type === 'Browser')
-    revealDiag(kind, `fade-done mem: this-renderer ${describe(pidOf(win))}; chat-renderer ${describe(pidOf(mainWindow))}; main ${browser ? describe(browser.pid) : 'n/a'}; app-total ws=${Math.round(total / 1024)}MB processes=${metrics.length}`)
-  }, 600)
-}
-
 function showChatWindow(): void {
+  const requestedAt = Date.now()
   const win = mainWindow
   if (!win || win.isDestroyed()) return
   const onScreen = win.isVisible() && !win.isMinimized()
   if (!onScreen && !prepareChatForShow(win)) return
-  if (!onScreen) revealDiagStart.set('chat', Date.now())
   revealWindow(win, () => {
-    revealDiag('chat', 'show')
     if (win.isMinimized()) win.restore()
     win.show()
-  }, () => win.webContents.send('chat:shown'))
+  }, { label: 'chat', requestedAt, fadeStartDelayMs: CHAT_FADE_START_DELAY_MS, onShown: () => win.webContents.send('chat:shown') })
   evaluateDesktopPresence(mainWindow, overlayWindow)
   win.focus()
 }
@@ -470,15 +449,10 @@ ipcMain.handle('chat:greet', (_event, text: unknown) => {
   requestShowChat()
   pendingGreeting = text
   flushGreeting()
-  if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.close()
+  if (settingsWindow && !settingsWindow.isDestroyed()) hideSettingsWindow(settingsWindow)
 })
 
 ipcMain.on('chat:painted', event => {
-  if (revealDiagStart.has('chat')) {
-    revealDiag('chat', 'painted')
-    revealDiagMemory('chat', mainWindow)
-    setTimeout(() => revealDiagStart.delete('chat'), 700)
-  }
   notifyWindowPainted(event.sender)
 })
 
@@ -624,7 +598,12 @@ function isSettingsSender(event: IpcMainInvokeEvent): boolean {
   return settingsWindow !== null && !settingsWindow.isDestroyed() && event.sender === settingsWindow.webContents
 }
 
-function createSettingsWindow(): BrowserWindow {
+function hideSettingsWindow(win: BrowserWindow): void {
+  hideChildWindow(win)
+  hotkeys.setCapture(false)
+}
+
+function createSettingsWindow(requestedAt: number): BrowserWindow {
   const win = new BrowserWindow({
     width: 760,
     height: 560,
@@ -642,14 +621,17 @@ function createSettingsWindow(): BrowserWindow {
   })
 
   positionOnChatDisplay(win)
-  win.webContents.once('did-finish-load', () => revealDiag('settings', 'did-finish-load'))
-  attachChildWindowReveal(win, () => {
-    revealDiag('settings', 'show')
-    win.show()
-  })
+  attachChildWindowReveal(win, () => win.show(), requestedAt, CHILD_WINDOW_FIRST_FADE_START_DELAY_MS, 'settings')
 
   win.on('blur', () => {
     hotkeys.setCapture(false)
+  })
+
+  win.on('close', event => {
+    if (!isQuitting) {
+      event.preventDefault()
+      hideSettingsWindow(win)
+    }
   })
 
   win.on('closed', () => {
@@ -667,24 +649,23 @@ function createSettingsWindow(): BrowserWindow {
 }
 
 ipcMain.handle('window:ready', event => {
-  revealDiag('settings', 'window:ready')
   notifyChildWindowReady(event.sender)
 })
 
 ipcMain.on('window:painted', event => {
-  if (revealDiagStart.has('settings')) {
-    revealDiag('settings', 'window:painted')
-    revealDiagMemory('settings', settingsWindow)
-    setTimeout(() => revealDiagStart.delete('settings'), 700)
-  }
   notifyChildWindowPainted(event.sender)
 })
 
 ipcMain.handle('open-settings-window', () => {
-  if (!settingsWindow || settingsWindow.isDestroyed()) revealDiagStart.set('settings', Date.now())
+  const requestedAt = Date.now()
   if (settingsWindow && !settingsWindow.isDestroyed()) {
     positionOnChatDisplay(settingsWindow)
     if (isChildWindowRevealPending(settingsWindow)) return
+    if (!settingsWindow.isVisible()) {
+      const win = settingsWindow
+      revealChildWindow(win, () => win.show(), requestedAt, CHILD_WINDOW_FADE_START_DELAY_MS, 'settings')
+      return
+    }
     if (settingsWindow.isMinimized()) {
       settingsWindow.restore()
     }
@@ -692,7 +673,7 @@ ipcMain.handle('open-settings-window', () => {
     settingsWindow.focus()
     return
   }
-  settingsWindow = createSettingsWindow()
+  settingsWindow = createSettingsWindow(requestedAt)
   applyIconFromCurrentPreset()
 })
 

@@ -1,65 +1,76 @@
-// electron/main/windowReveal.ts — 聊天窗口与其子窗口每次出现时的透明显示与画好后淡入（按窗口各自等待）；子窗口首次显示等页面就绪
-// 用法：index.ts / windowBehavior.ts 显示聊天窗口时调 revealWindow(win, show, onShown?)，收到 chat:painted 时调 notifyWindowPainted(sender)；index.ts 创建子窗口时调 attachChildWindowReveal(win, show)，再次打开时用 isChildWindowRevealPending(win) 判断首次显示是否仍在等待，收到 window:ready / window:painted 时调 notifyChildWindowReady / notifyChildWindowPainted(sender)，向子窗口发 window:shown
-// 对应文件：electron/main/index.ts / electron/main/windowBehavior.ts / electron/main/windowAnimation.ts / electron/main/windowReveal.test.ts / src/useWindowReveal.ts
+// electron/main/windowReveal.ts — 聊天窗口与其子窗口的透明显示、固定延迟淡入、子窗口隐藏与页面画好时刻核对
+// 用法：index.ts / windowBehavior.ts 显示聊天窗口时调 revealWindow(win, show, { label, requestedAt, fadeStartDelayMs, onShown })，收到 chat:painted 时调 notifyWindowPainted(sender)；index.ts 创建子窗口时调 attachChildWindowReveal(win, show, requestedAt, fadeStartDelayMs, label)，用 isChildWindowRevealPending(win) 判断首次显示是否仍在等待，再次打开隐藏的子窗口时调 revealChildWindow，隐藏子窗口时调 hideChildWindow，收到 window:ready / window:painted 时调 notifyChildWindowReady / notifyChildWindowPainted(sender)；向子窗口发 window:shown / window:hidden
+// 对应文件：electron/main/index.ts / electron/main/windowBehavior.ts / electron/main/windowAnimation.ts / electron/main/windowReveal.test.ts / src/useWindowReveal.ts / src/settings/SettingsApp.tsx
 import type { BrowserWindow, WebContents } from 'electron'
 import { fadeIn, finishAnimation } from './windowAnimation'
 
-export const WINDOW_REVEAL_TIMEOUT_MS = 1000
-export const WINDOW_FADE_IN_MS = 500
-export const CHILD_WINDOW_READY_TIMEOUT_MS = 3000
+export const WINDOW_FADE_IN_MS = 300
+export const CHAT_FADE_START_DELAY_MS = 400
+export const CHILD_WINDOW_FIRST_FADE_START_DELAY_MS = 800
+export const CHILD_WINDOW_FADE_START_DELAY_MS = 400
 
-type PendingReveal = { trigger: () => void }
-
-const pendingReveals = new Map<BrowserWindow, PendingReveal>()
-
-export function onceWithTimeout(action: () => void, timeoutMs: number): () => void {
-  let done = false
-  const trigger = (): void => {
-    if (done) return
-    done = true
-    clearTimeout(timer)
-    action()
-  }
-  const timer = setTimeout(trigger, timeoutMs)
-  return trigger
+export type RevealOptions = {
+  label: string
+  requestedAt: number
+  fadeStartDelayMs: number
+  onShown?: () => void
 }
 
-export function revealWindow(win: BrowserWindow, show: () => void, onShown?: () => void): void {
+const pendingReveals = new Map<BrowserWindow, ReturnType<typeof setTimeout>>()
+const revealRecords = new Map<BrowserWindow, { label: string; fadeStartAt: number; painted: boolean }>()
+
+function cancelPendingReveal(win: BrowserWindow): void {
+  const timer = pendingReveals.get(win)
+  if (timer === undefined) return
+  clearTimeout(timer)
+  pendingReveals.delete(win)
+}
+
+export function revealWindow(win: BrowserWindow, show: () => void, options: RevealOptions): void {
   if (win.isDestroyed()) return
   if (win.isVisible() && !win.isMinimized()) {
     show()
     return
   }
+  cancelPendingReveal(win)
   finishAnimation(win)
   win.setOpacity(0)
   show()
-  onShown?.()
-  const reveal: PendingReveal = { trigger: () => {} }
-  reveal.trigger = onceWithTimeout(() => {
-    if (pendingReveals.get(win) !== reveal) return
-    pendingReveals.delete(win)
+  const fadeStartAt = options.requestedAt + options.fadeStartDelayMs
+  if (!revealRecords.has(win)) win.once('closed', () => revealRecords.delete(win))
+  revealRecords.set(win, { label: options.label, fadeStartAt, painted: false })
+  options.onShown?.()
+  const remainingMs = fadeStartAt - Date.now()
+  if (remainingMs <= 0) {
     fadeIn(win, WINDOW_FADE_IN_MS)
-  }, WINDOW_REVEAL_TIMEOUT_MS)
-  pendingReveals.set(win, reveal)
+    return
+  }
+  pendingReveals.set(win, setTimeout(() => {
+    pendingReveals.delete(win)
+    if (!win.isDestroyed()) fadeIn(win, WINDOW_FADE_IN_MS)
+  }, remainingMs))
 }
 
 export function notifyWindowPainted(sender: WebContents): void {
-  for (const [win, reveal] of pendingReveals) {
-    if (win.isDestroyed()) {
-      pendingReveals.delete(win)
-      continue
-    }
-    if (win.webContents === sender) {
-      reveal.trigger()
-      return
-    }
+  for (const [win, record] of revealRecords) {
+    if (record.painted || win.isDestroyed() || win.webContents !== sender) continue
+    record.painted = true
+    const lateMs = Date.now() - record.fadeStartAt
+    if (lateMs > 0) console.warn(`[WindowReveal] ${record.label} painted ${lateMs}ms after its fade started`)
+    return
   }
 }
 
 const childWindowReady = new Map<WebContents, () => void>()
 const pendingChildWindows = new Set<BrowserWindow>()
 
-export function attachChildWindowReveal(win: BrowserWindow, show: () => void): void {
+export function revealChildWindow(win: BrowserWindow, show: () => void, requestedAt: number, fadeStartDelayMs: number, label: string): void {
+  if (win.isDestroyed()) return
+  const webContents = win.webContents
+  revealWindow(win, show, { label, requestedAt, fadeStartDelayMs, onShown: () => webContents.send('window:shown') })
+}
+
+export function attachChildWindowReveal(win: BrowserWindow, show: () => void, requestedAt: number, fadeStartDelayMs: number, label: string): void {
   const webContents = win.webContents
   let done = false
   const ready = (): void => {
@@ -67,9 +78,9 @@ export function attachChildWindowReveal(win: BrowserWindow, show: () => void): v
     done = true
     clearTimeout(timer)
     pendingChildWindows.delete(win)
-    revealWindow(win, show, () => webContents.send('window:shown'))
+    revealChildWindow(win, show, requestedAt, fadeStartDelayMs, label)
   }
-  const timer = setTimeout(ready, CHILD_WINDOW_READY_TIMEOUT_MS)
+  const timer = setTimeout(ready, Math.max(0, requestedAt + fadeStartDelayMs - Date.now()))
   childWindowReady.set(webContents, ready)
   pendingChildWindows.add(win)
   win.once('closed', () => {
@@ -77,11 +88,18 @@ export function attachChildWindowReveal(win: BrowserWindow, show: () => void): v
     clearTimeout(timer)
     childWindowReady.delete(webContents)
     pendingChildWindows.delete(win)
+    cancelPendingReveal(win)
   })
 }
 
 export function isChildWindowRevealPending(win: BrowserWindow): boolean {
   return pendingChildWindows.has(win)
+}
+
+export function hideChildWindow(win: BrowserWindow): void {
+  if (win.isDestroyed()) return
+  win.hide()
+  if (childWindowReady.has(win.webContents)) win.webContents.send('window:hidden')
 }
 
 export function notifyChildWindowReady(sender: WebContents): void {
