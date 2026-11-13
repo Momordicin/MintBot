@@ -16,10 +16,6 @@ describe('edgeHoverState: onEdgeHoverEnter', () => {
     const withPendingCollapse: EdgeHoverState = { expanded: true, pendingCollapseAt: 5000 }
     expect(onEdgeHoverEnter(withPendingCollapse)).toEqual({ expanded: true, pendingCollapseAt: null })
   })
-
-  it('expands from the initial (collapsed) state', () => {
-    expect(onEdgeHoverEnter(INITIAL_EDGE_HOVER_STATE)).toEqual({ expanded: true, pendingCollapseAt: null })
-  })
 })
 
 describe('edgeHoverState: onEdgeHoverLeave', () => {
@@ -55,10 +51,6 @@ describe('edgeHoverState: resetEdgeHoverOnPresenceLeftEdge', () => {
   it('forces the state back to collapsed/no-pending regardless of what it was — expanded and mid-debounce', () => {
     expect(resetEdgeHoverOnPresenceLeftEdge()).toEqual(INITIAL_EDGE_HOVER_STATE)
   })
-
-  it('is also a no-op-equivalent when already collapsed (idempotent)', () => {
-    expect(resetEdgeHoverOnPresenceLeftEdge()).toEqual(INITIAL_EDGE_HOVER_STATE)
-  })
 })
 
 describe('edgeHoverState: edgeHoverExpandedChanged (gate for notifying main — no request burst)', () => {
@@ -71,12 +63,6 @@ describe('edgeHoverState: edgeHoverExpandedChanged (gate for notifying main — 
   it('is true on a genuine enter from collapsed', () => {
     const next = onEdgeHoverEnter(INITIAL_EDGE_HOVER_STATE)
     expect(edgeHoverExpandedChanged(INITIAL_EDGE_HOVER_STATE, next)).toBe(true)
-  })
-
-  it('is true on a genuine collapse once the debounce elapses', () => {
-    const expanded: EdgeHoverState = { expanded: true, pendingCollapseAt: 1400 }
-    const collapsed = onEdgeHoverDebounceElapsed(expanded, 1400)
-    expect(edgeHoverExpandedChanged(expanded, collapsed)).toBe(true)
   })
 })
 

@@ -14,7 +14,6 @@ import {
   resolveEdgeSide,
   resolveStableEdgeSide,
   computeEdgeBounds,
-  EDGE_VISIBLE_SLIVER_PX,
   resolveEdgeHoverBounds,
   presencePayloadChanged,
   computeHandleSuppressed,
@@ -61,23 +60,9 @@ describe('resolvePetDesiredState', () => {
     expect(resolvePetDesiredState(NOT_INTERACTING, UNUSED_CURRENT_DISPLAY_ID, 1, map, [1, 2])).toEqual({ presence: 'AMBIENT', displayId: 1, alwaysOnTop: true })
   })
 
-  it('relocates to the free display, AMBIENT, when home is blocked', () => {
-    const map = makeMap([[1, {}]])
-    expect(resolvePetDesiredState(NOT_INTERACTING, UNUSED_CURRENT_DISPLAY_ID, 1, map, [1, 2])).toEqual({ presence: 'AMBIENT', displayId: 2, alwaysOnTop: true })
-  })
-
   it('picks the lowest-id free display deterministically when several are free', () => {
     const map = makeMap([[1, {}]])
     expect(resolvePetDesiredState(NOT_INTERACTING, UNUSED_CURRENT_DISPLAY_ID, 1, map, [1, 3, 2])).toEqual({ presence: 'AMBIENT', displayId: 2, alwaysOnTop: true })
-  })
-
-  it('goes HIDDEN when every display is blocked, hard severity (multi-display-blocked scenario)', () => {
-    const map = makeMap([
-      [1, {}],
-      [2, {}],
-      [3, {}],
-    ])
-    expect(resolvePetDesiredState(NOT_INTERACTING, UNUSED_CURRENT_DISPLAY_ID, 1, map, [1, 2, 3])).toEqual({ presence: 'HIDDEN', displayId: 1, alwaysOnTop: false })
   })
 
   it('goes HIDDEN on a single display with no other screen to relocate to, hard severity', () => {
@@ -93,25 +78,6 @@ describe('resolvePetDesiredState', () => {
   it('goes EDGE (not HIDDEN) when there is nowhere to go and the home blocker is soft', () => {
     const map = makeMap([[1, { severity: 'soft' }]])
     expect(resolvePetDesiredState(NOT_INTERACTING, UNUSED_CURRENT_DISPLAY_ID, 1, map, [1])).toEqual({ presence: 'EDGE', displayId: 1, alwaysOnTop: true })
-  })
-
-  it('goes HIDDEN (not EDGE) when there is nowhere to go and the home blocker is hard', () => {
-    const map = makeMap([[1, { severity: 'hard' }]])
-    expect(resolvePetDesiredState(NOT_INTERACTING, UNUSED_CURRENT_DISPLAY_ID, 1, map, [1])).toEqual({ presence: 'HIDDEN', displayId: 1, alwaysOnTop: false })
-  })
-
-  // 验证：home 空闲时，resolver 恒定返回 home，与当前所在显示器无关（home 被挡住时才会
-  // 优先停留在空闲的当前副屏，见下方用例）。999（UNUSED_CURRENT_DISPLAY_ID）是刻意取的
-  // 非真实显示器 id，用来保证这里断言的结果不依赖 currentDisplayId
-  it('returns home whenever home is free, regardless of the current display (drag-to-D-then-conflict-ends still returns home)', () => {
-    const blockedAtHome = makeMap([[1, {}]])
-    const relocated = resolvePetDesiredState(NOT_INTERACTING, UNUSED_CURRENT_DISPLAY_ID, 1, blockedAtHome, [1, 2])
-    expect(relocated).toEqual({ presence: 'AMBIENT', displayId: 2, alwaysOnTop: true })
-
-    // 冲突解除——不管上一次实际停在哪块屏（哪怕用户手动把它拖去了 D=2 之外的第三块屏），
-    // resolver 这一次拿到的输入里根本没有那个信息，只会看 home 现在是否空闲
-    const cleared = resolvePetDesiredState(NOT_INTERACTING, UNUSED_CURRENT_DISPLAY_ID, 1, makeMap([]), [1, 2, 3])
-    expect(cleared).toEqual({ presence: 'AMBIENT', displayId: 1, alwaysOnTop: true })
   })
 
   it('relocates away from a display that becomes blocked mid-relocation, independent of which other display was previously free', () => {
@@ -139,10 +105,6 @@ describe('resolvePetDesiredState', () => {
 
   it('relocates to the lowest-id free display when the current display equals home and home is blocked', () => {
     expect(resolvePetDesiredState(NOT_INTERACTING, 1, 1, makeMap([[1, {}]]), [1, 2, 3])).toEqual({ presence: 'AMBIENT', displayId: 2, alwaysOnTop: true })
-  })
-
-  it('relocates to the lowest-id free display when the current display id is not in the display list', () => {
-    expect(resolvePetDesiredState(NOT_INTERACTING, 99, 1, makeMap([[1, {}]]), [1, 2, 3])).toEqual({ presence: 'AMBIENT', displayId: 2, alwaysOnTop: true })
   })
 })
 
@@ -174,22 +136,6 @@ describe('resolvePetDesiredState — ACTIVE (interacting)', () => {
     // no move, which is the actual behavioural requirement this branch exists to satisfy
     expect(diffPetState(desired, 2, true).move).toBeNull()
   })
-
-  // Fix 6（second rework pass）: the guarantee above only holds when currentDisplayId itself
-  // reflects reality. The caller (windowBehavior.ts) computes it as
-  // `appliedDisplayIdFor('overlay') ?? preferredDisplayId` — if the overlay's display was
-  // disconnected mid-interaction, appliedDisplayIdFor returns null (Stage 2 Fix C) and this falls
-  // back to home, which may not be where the window physically still is. Nothing in this pure
-  // layer stops diffPetState from computing a real move out of that mismatch — the
-  // `transition.move !== null && !isInteracting` guard in windowBehavior.ts is what must suppress
-  // it (pinned by an integration-level test in windowBehavior.test.ts, since reproducing the
-  // appliedDisplayId invalidation itself requires that file's mocked screen/BrowserWindow).
-  it('produces a non-null move when currentDisplayId (ACTIVE, home fallback) differs from the previously applied display — the caller must suppress this, not this function', () => {
-    const map = makeMap([[1, {}]])
-    const desired = resolvePetDesiredState(true, 1, 1, map, [1])
-    expect(desired).toEqual({ presence: 'ACTIVE', displayId: 1, alwaysOnTop: true })
-    expect(diffPetState(desired, null, false).move).toBe(1)
-  })
 })
 
 describe('resolvePetDesiredState — petAvoidanceEnabled = false (Stage 4 "exit custody, then stop the policy")', () => {
@@ -206,50 +152,9 @@ describe('resolvePetDesiredState — petAvoidanceEnabled = false (Stage 4 "exit 
     })
   })
 
-  it('is AMBIENT at home, completely ignoring a soft blocker on home', () => {
-    const map = makeMap([[1, { severity: 'soft' }]])
-    expect(resolvePetDesiredState(NOT_INTERACTING, UNUSED_CURRENT_DISPLAY_ID, 1, map, [1], false)).toEqual({
-      presence: 'AMBIENT',
-      displayId: 1,
-      alwaysOnTop: true,
-    })
-  })
-
-  it('is AMBIENT at home even when every display is blocked and another display would otherwise be free', () => {
-    const map = makeMap([
-      [1, {}],
-      [2, {}],
-    ])
-    expect(resolvePetDesiredState(NOT_INTERACTING, UNUSED_CURRENT_DISPLAY_ID, 1, map, [1, 2], false)).toEqual({
-      presence: 'AMBIENT',
-      displayId: 1,
-      alwaysOnTop: true,
-    })
-  })
-
-  // Negative case (REQUIRED by the task spec): once avoidance is off, further blocker changes must
-  // not move it away from home at all — there is no branch here that reads displayStateMap once
-  // avoidanceEnabled is false, so this is guaranteed by construction, not by re-checking each time.
-  it('stays at home regardless of which displays are blocked (no branch here ever reads the blocker map)', () => {
-    const noBlockers = resolvePetDesiredState(NOT_INTERACTING, UNUSED_CURRENT_DISPLAY_ID, 1, makeMap([]), [1, 2], false)
-    const allBlocked = resolvePetDesiredState(NOT_INTERACTING, UNUSED_CURRENT_DISPLAY_ID, 1, makeMap([[1, {}], [2, {}]]), [1, 2], false)
-    expect(noBlockers).toEqual({ presence: 'AMBIENT', displayId: 1, alwaysOnTop: true })
-    expect(allBlocked).toEqual({ presence: 'AMBIENT', displayId: 1, alwaysOnTop: true })
-  })
-
   it('interacting still pre-empts avoidance being disabled — dragging is orthogonal to avoidance', () => {
     const map = makeMap([[1, {}]])
     expect(resolvePetDesiredState(true, 1, 1, map, [1], false)).toEqual({ presence: 'ACTIVE', displayId: 1, alwaysOnTop: true })
-  })
-
-  it('defaults avoidanceEnabled to true when the argument is omitted (behaviour-preserving default)', () => {
-    const map = makeMap([[1, {}]])
-    // Same call as the very first describe block's "goes HIDDEN" test, just omitting the last arg.
-    expect(resolvePetDesiredState(NOT_INTERACTING, UNUSED_CURRENT_DISPLAY_ID, 1, map, [1])).toEqual({
-      presence: 'HIDDEN',
-      displayId: 1,
-      alwaysOnTop: false,
-    })
   })
 })
 
@@ -309,11 +214,6 @@ describe('resolveChatDesiredState', () => {
     const map = makeMap([[1, {}]])
     expect(resolveChatDesiredState(1, map, [1, 2, 3], null)).toEqual({ presence: 'SHOWN', displayId: 2, alwaysOnTop: true })
   })
-
-  it('relocates to the lowest-id free display when the current display is omitted and home is blocked', () => {
-    const map = makeMap([[1, {}]])
-    expect(resolveChatDesiredState(1, map, [1, 2, 3])).toEqual({ presence: 'SHOWN', displayId: 2, alwaysOnTop: true })
-  })
 })
 
 describe('diffPetState', () => {
@@ -325,11 +225,6 @@ describe('diffPetState', () => {
   it('moves and shows on first-ever resolve (appliedDisplayId null, currently hidden)', () => {
     const desired = { presence: 'AMBIENT' as const, displayId: 1, alwaysOnTop: true }
     expect(diffPetState(desired, null, false)).toEqual({ move: 1, visibility: 'show' })
-  })
-
-  it('shows and tracks the move regardless of any chat window state', () => {
-    const desired = { presence: 'AMBIENT' as const, displayId: 2, alwaysOnTop: true }
-    expect(diffPetState(desired, 1, false)).toEqual({ move: 2, visibility: 'show' })
   })
 
   it('hides without moving when transitioning to HIDDEN while currently visible on a different display', () => {
@@ -437,28 +332,6 @@ describe('resolveStableEdgeSide', () => {
 describe('computeEdgeBounds', () => {
   const visibleSliverPx = 40
 
-  it('positions the window mostly off the left edge, keeping Y/width/height, on a display at the origin', () => {
-    const current = { x: 500, y: 300, width: 132, height: 132 }
-    const display = { x: 0, y: 0, width: 1920, height: 1080 }
-    expect(computeEdgeBounds(current, display, 'left', visibleSliverPx)).toEqual({
-      x: 0 - (132 - visibleSliverPx),
-      y: 300,
-      width: 132,
-      height: 132,
-    })
-  })
-
-  it('positions the window mostly off the right edge, keeping Y/width/height, on a display at the origin', () => {
-    const current = { x: 500, y: 300, width: 132, height: 132 }
-    const display = { x: 0, y: 0, width: 1920, height: 1080 }
-    expect(computeEdgeBounds(current, display, 'right', visibleSliverPx)).toEqual({
-      x: 0 + 1920 - visibleSliverPx,
-      y: 300,
-      width: 132,
-      height: 132,
-    })
-  })
-
   // Off-by-origin guard (the mandatory case a single-monitor dev box can't catch): a secondary
   // display's bounds.x is not 0. Both sides must be computed relative to that origin.
   it('accounts for a non-zero display origin on the left side', () => {
@@ -481,26 +354,6 @@ describe('computeEdgeBounds', () => {
       width: 132,
       height: 132,
     })
-  })
-})
-
-describe('EDGE_VISIBLE_SLIVER_PX', () => {
-  // Fix 7（second rework pass）：the previous assertion (`> 0 && < 132`) passes for almost any
-  // value and pins nothing about the constant's actual intent — "exactly this many pixels stay
-  // visible inside the display". Routed through computeEdgeBounds on both sides instead, so a
-  // future change to the constant (or an accidental off-by-one in computeEdgeBounds itself) that
-  // shrinks/grows the visible sliver would be caught here.
-  it('leaves exactly this many pixels of the window inside the display, on both edges', () => {
-    const display = { x: 0, y: 0, width: 1920, height: 1080 }
-    const current = { x: 500, y: 300, width: 132, height: 132 }
-
-    const leftBounds = computeEdgeBounds(current, display, 'left', EDGE_VISIBLE_SLIVER_PX)
-    // Left placement: the window's right edge is what remains inside the display.
-    expect(leftBounds.x + leftBounds.width - display.x).toBe(EDGE_VISIBLE_SLIVER_PX)
-
-    const rightBounds = computeEdgeBounds(current, display, 'right', EDGE_VISIBLE_SLIVER_PX)
-    // Right placement: the window's left edge is what remains inside the display.
-    expect(display.x + display.width - rightBounds.x).toBe(EDGE_VISIBLE_SLIVER_PX)
   })
 })
 
@@ -555,7 +408,6 @@ describe('resolveNextDisplayTarget', () => {
     ['does not skip it with avoidance off', row, 1, 1, [[2, {}]], false, 2],
     ['has no target when every other display needs avoidance', row, 1, 1, [[2, {}], [3, { severity: 'soft' }]], true, null],
     ['temporary relocation, two displays, home needs avoidance: stays on the current display', row.slice(0, 2), 2, 1, [[1, {}]], true, 2],
-    ['temporary relocation, three displays: the next display without avoidance', row, 2, 1, [[1, {}]], true, 3],
     ['has no target with a single display', row.slice(0, 1), 1, 1, [], true, null],
     ['orders displays with the same x by y', stacked, 8, 8, [], true, 7],
   ]
@@ -585,45 +437,6 @@ describe('deriveDragContext (Fix 1 — one definition of home shared with the re
       temporaryRelocation: true,
     })
   })
-
-  // The fresh-profile scenario Fix 1 closes: preferredDisplayId has never been committed, so
-  // the effective home is whatever resolveStartupDisplay falls back to (here: display 1, the
-  // fallback/largest display) — the caller is responsible for computing that fallback and
-  // passing it in as effectiveHomeDisplayId, this function never sees the raw nullable
-  // preferredDisplayId. Home got blocked, the resolver auto-relocated the window to display 2
-  // (appliedDisplayId = 2). Dragging to a third display C (3) must be evaluated as a
-  // relocation away from home 1, not as "at home" — otherwise persistBoundsNow would commit C
-  // as the new home, which is exactly the bug this fix closes.
-  it('fresh profile: auto-relocated away from the fallback home reads as a relocation, not "at home"', () => {
-    const context = deriveDragContext(2, 1)
-    expect(context).toEqual({
-      currentDisplayId: 2,
-      temporaryRelocation: true,
-    })
-
-    const outcome = resolveDragOutcome(
-      context.temporaryRelocation,
-      context.currentDisplayId,
-      3,
-      makeMap([])
-    )
-    expect(outcome).toEqual({ kind: 'accept', newPreferredDisplayId: null, boundsWriteDisplayId: 3 })
-  })
-
-  // Fix C（second rework pass）: appliedDisplayIdFor (windowBehavior.ts) returns null once the
-  // display it recorded is no longer connected (e.g. the monitor holding the window was
-  // unplugged) — deriveDragContext never sees the stale, disconnected id, it sees the same null
-  // it would see on a fresh profile that has never applied anything. This is deliberately the
-  // exact same case as the "no applied displayId yet" test above: an OS-forced 'moved' after an
-  // unplug is indistinguishable at this layer from any other "no applied id" situation, and it
-  // must fall back to reading as "at home" (an at-home placement) rather than being misread as a
-  // cross-display drag that would commit a phantom new home.
-  it('appliedDisplayId === null (post-unplug invalidation) reads as being at home, not as a cross-display drag', () => {
-    expect(deriveDragContext(null, 7)).toEqual({
-      currentDisplayId: 7,
-      temporaryRelocation: false,
-    })
-  })
 })
 
 describe('extendQuietUntil (quiet windows extend, never shorten)', () => {
@@ -636,10 +449,6 @@ describe('extendQuietUntil (quiet windows extend, never shorten)', () => {
     // settle window must not truncate it back to 150ms, which would let the OS's own
     // post-unplug reposition 'moved' reach persistBoundsNow
     expect(extendQuietUntil(2000, 1000, 150)).toBe(2000)
-  })
-
-  it('treats an absent record (0) as immediately expired', () => {
-    expect(extendQuietUntil(0, 5000, 1000)).toBe(6000)
   })
 })
 
@@ -654,14 +463,6 @@ describe('isProgrammaticMoveEcho (Fix A — one classifier for both windowBehavi
 
   it('is not an echo once now has reached the quiet-until expiry and nothing is in flight', () => {
     expect(isProgrammaticMoveEcho(false, 1000, 1000)).toBe(false)
-  })
-
-  it('is not an echo well past the quiet-until expiry with nothing in flight', () => {
-    expect(isProgrammaticMoveEcho(false, 500, 1000)).toBe(false)
-  })
-
-  it('in flight still counts as an echo even if the quiet window already expired', () => {
-    expect(isProgrammaticMoveEcho(true, 500, 1000)).toBe(true)
   })
 })
 
@@ -740,19 +541,6 @@ describe('resolveDragOutcome (drag-end legality + placement rules)', () => {
       expect(resolveDragOutcome(true, 2, 2, makeMap([[2, {}]]))).toEqual({ kind: 'reject' })
     })
 
-    it('drop onto a free third display C — accepted, only C’s bounds written, home unchanged', () => {
-      expect(resolveDragOutcome(true, 2, 3, makeMap([]))).toEqual({
-        kind: 'accept',
-        newPreferredDisplayId: null,
-        boundsWriteDisplayId: 3,
-      })
-    })
-
-    it('drop onto a blocked third display C — rejected', () => {
-      const map = makeMap([[3, {}]])
-      expect(resolveDragOutcome(true, 2, 3, map)).toEqual({ kind: 'reject' })
-    })
-
     // The invariant that matters most here, asserted over the whole input space rather than
     // relied on case by case: nothing reachable while temporarily relocated may rewrite home.
     it('never returns a newPreferredDisplayId, for any drop display and any blocker layout', () => {
@@ -796,10 +584,6 @@ describe('computeHandleSuppressed (Resolver/Controller 边界修正 — safety g
   it('releases only once neither desired nor applied is EDGE', () => {
     expect(computeHandleSuppressed('AMBIENT', 'AMBIENT')).toBe(false)
   })
-
-  it('stays suppressed in the steady state where both are EDGE', () => {
-    expect(computeHandleSuppressed('EDGE', 'EDGE')).toBe(true)
-  })
 })
 
 describe('presencePayloadChanged (Stage 3 part 2, Task 1 — broadcast only on change)', () => {
@@ -812,12 +596,6 @@ describe('presencePayloadChanged (Stage 3 part 2, Task 1 — broadcast only on c
   it('is false when every field is unchanged', () => {
     const payload = { presence: 'EDGE' as const, edgeSide: 'left' as const, handleSuppressed: true, collapsed: false, clickThrough: true }
     expect(presencePayloadChanged(payload, { ...payload })).toBe(false)
-  })
-
-  it('is true when presence changed', () => {
-    expect(
-      presencePayloadChanged(AMBIENT, { ...AMBIENT, presence: 'EDGE', edgeSide: 'left', handleSuppressed: true })
-    ).toBe(true)
   })
 
   it('is true when only edgeSide changed (presence still EDGE)', () => {

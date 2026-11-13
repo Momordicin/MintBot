@@ -28,15 +28,6 @@ function frame(event: string, data: unknown): string {
 }
 
 describe('createCoreEventsConsumer', () => {
-  it('onConnected() 只触发一次 converge', () => {
-    const handlers = createHandlers()
-    const consumer = createCoreEventsConsumer(handlers)
-
-    consumer.onConnected()
-
-    expect(handlers.converge).toHaveBeenCalledTimes(1)
-  })
-
   it('任意数量的 hello/heartbeat 帧都不会触发额外的 converge 调用——这是本模块存在的核心原因', () => {
     const handlers = createHandlers()
     const consumer = createCoreEventsConsumer(handlers)

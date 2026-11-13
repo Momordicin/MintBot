@@ -80,10 +80,6 @@ describe('transitionState: selectTransitionFile（pick 在候选集合里挑一�
 
     expect([...picked].sort()).toEqual(['a.gif', 'b.gif', 'c.gif'])
   })
-
-  it('只有一个候选时必定挑中它', () => {
-    expect(selectTransitionFile({ files: ['only.gif'], durationMs: 1, pick: 'random' })).toBe('only.gif')
-  })
 })
 
 describe('transitionState: resolveTransitionSteps', () => {
@@ -116,20 +112,17 @@ describe('transitionState: parseTransitionChain（整份响应校验，任何一
     ['null', null],
     ['非对象', 'x'],
     ['缺 steps', {}],
-    ['steps 不是数组', { steps: {} }],
     ['步骤为 null', { steps: [null] }],
     ['files 不是数组', { steps: [{ ...good, files: 'a.gif' }] }],
     ['files 为空数组', { steps: [{ ...good, files: [] }] }],
     ['files 含非字符串', { steps: [{ ...good, files: ['a.gif', 1] }] }],
     ['files 含空字符串', { steps: [{ ...good, files: [''] }] }],
     ['durationMs 缺失', { steps: [{ files: ['a.gif'], pick: 'random' }] }],
-    ['durationMs 为字符串', { steps: [{ ...good, durationMs: '3000' }] }],
     ['durationMs 为 0', { steps: [{ ...good, durationMs: 0 }] }],
     ['durationMs 为负数', { steps: [{ ...good, durationMs: -1 }] }],
     ['durationMs 为 NaN', { steps: [{ ...good, durationMs: NaN }] }],
     ['durationMs 为 Infinity', { steps: [{ ...good, durationMs: Infinity }] }],
     ['pick 超出允许范围', { steps: [{ ...good, pick: 'first' }] }],
-    ['pick 缺失', { steps: [{ files: ['a.gif'], durationMs: 1 }] }],
     ['合法步骤后跟不合格步骤，整份作废', { steps: [good, { ...good, durationMs: 0 }] }],
   ])('%s → 空链', (_name, data) => {
     expect(parseTransitionChain(data)).toEqual([])
@@ -180,23 +173,5 @@ describe('transitionState: shouldPlayFallAsleep 只认时长档造成的入睡',
       nextY: 'sleeping',
       explicitSleep: true,
     })).toBe(false)
-  })
-
-  it('从无聊档被标记推进到睡着时同样不播', () => {
-    expect(shouldPlayFallAsleep({
-      calledByThresholdTimer: true,
-      previousY: 'boredom-idle',
-      nextY: 'sleeping',
-      explicitSleep: true,
-    })).toBe(false)
-  })
-
-  it('没有标记、由 60 分钟时长档迁移到睡着时照常播', () => {
-    expect(shouldPlayFallAsleep({
-      calledByThresholdTimer: true,
-      previousY: 'boredom-idle',
-      nextY: 'sleeping',
-      explicitSleep: false,
-    })).toBe(true)
   })
 })

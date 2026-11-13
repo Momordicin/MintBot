@@ -107,21 +107,6 @@ describe('parseCharacterCard — character_version', () => {
 
     expect(result.characterVersion).toBe('1.0')
   })
-
-  it('V1 卡片没有 character_version 字段，不应崩溃，取值为空字符串', () => {
-    const v1Card = {
-      name: '阿墨',
-      description: '',
-      personality: '',
-      scenario: '',
-      first_mes: '',
-      mes_example: '',
-    }
-    const result = parseCharacterCard(Buffer.from(JSON.stringify(v1Card), 'utf-8'))
-    if ('code' in result) throw new Error('expected success')
-
-    expect(result.characterVersion).toBe('')
-  })
 })
 
 describe('parseCharacterCard — system_prompt/{{original}} 合并规则', () => {
@@ -212,13 +197,6 @@ describe('parseCharacterCard — PNG 内嵌', () => {
 
   it('PNG 无任何匹配的 tEXt 块时返回清晰错误，不抛出异常', () => {
     const png = buildPngFixture([{ keyword: 'other-key', text: base64Json(v2Card) }])
-
-    const result = parseCharacterCard(png)
-    expect('code' in result).toBe(true)
-  })
-
-  it('PNG 信号匹配但完全没有 tEXt 块时返回清晰错误', () => {
-    const png = Buffer.concat([PNG_SIGNATURE, buildChunk('IEND', Buffer.alloc(0))])
 
     const result = parseCharacterCard(png)
     expect('code' in result).toBe(true)

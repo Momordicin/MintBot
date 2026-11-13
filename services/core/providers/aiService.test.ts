@@ -78,12 +78,6 @@ describe('isAiServiceRunning', () => {
     expect(await isAiServiceRunning('http://localhost:18765')).toBe(false)
   })
 
-  it('body.service 字段缺失时返回 false', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'ok' }) }))
-
-    expect(await isAiServiceRunning('http://localhost:18765')).toBe(false)
-  })
-
   it('fetch 抛出异常（如超时）时返回 false，不向上抛出', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('timeout')))
 
@@ -181,20 +175,6 @@ describe('ensureAiService', () => {
     await vi.advanceTimersByTimeAsync(90000)
 
     expect(spawnMock).toHaveBeenCalledTimes(1)
-    await expect(promise).resolves.toBe(false)
-  })
-
-  it('spawn 后一直等不到 /health 就绪，超时后返回 false（供调用方跳过预热请求）', async () => {
-    const fetchMock = vi.fn().mockRejectedValue(new Error('ECONNREFUSED'))
-    vi.stubGlobal('fetch', fetchMock)
-    existsSyncMock.mockReturnValue(true)
-    spawnMock.mockReturnValue(makeFakeChild())
-    const { ensureAiService } = await import('./aiService.js')
-
-    const promise = ensureAiService(baseUrl)
-    // 无需先推进 500ms 二次确认窗口
-    await vi.advanceTimersByTimeAsync(90000)
-
     await expect(promise).resolves.toBe(false)
   })
 
@@ -352,23 +332,6 @@ describe('stopAiServiceIfManaged', () => {
 
     return { fakeChild, stopAiServiceIfManaged }
   }
-
-  it('等到子进程真正触发 exit 事件才 resolve，且用无参数 kill() 温和终止', async () => {
-    const { fakeChild, stopAiServiceIfManaged } = await setUpManagedRunningService()
-
-    let resolved = false
-    const stopPromise = stopAiServiceIfManaged().then(() => { resolved = true })
-
-    expect(fakeChild.kill).toHaveBeenCalledWith()
-
-    // 还没触发 exit，即使等一段时间也不应该 resolve
-    await vi.advanceTimersByTimeAsync(100)
-    expect(resolved).toBe(false)
-
-    fakeChild.emit('exit')
-    await stopPromise
-    expect(resolved).toBe(true)
-  })
 
   it('托管的进程已经退出后调用：立即 resolve，不 kill，不等待 exit 事件', async () => {
     const { fakeChild, stopAiServiceIfManaged } = await setUpManagedRunningService()

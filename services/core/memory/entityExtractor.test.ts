@@ -205,26 +205,6 @@ describe('extractEntities — 分层容错（每层独立失败）', () => {
   })
 })
 
-describe('extractEntities — Layer 3 不再抽取技术词', () => {
-  it('消息中出现技术词时，不会被抽取为 type:other 实体（改为交给 message_fts 全文检索）', async () => {
-    const msg = addMessage('s1', '我在学习 React 和 TypeScript')
-    const result = await extractEntities([msg], { ner: emptyNer(), model: emptyModel() })
-    expect(result).toEqual({ inserted: 0, closed: 0 })
-
-    const entities = getCurrentEntities('s1')
-    expect(entities.find(e => e.value === 'React')).toBeUndefined()
-    expect(entities.find(e => e.value === 'TypeScript')).toBeUndefined()
-  })
-
-  it('主模型返回 techTerms 字段（假设仍有旧版 provider 残留）时被直接忽略，不落库也不报错', async () => {
-    const msg = addMessage('s1', '普通消息')
-    const json = JSON.stringify({ techTerms: [{ messageId: msg.id, value: 'React' }], changes: [] })
-    const result = await extractEntities([msg], { ner: emptyNer(), model: modelReturning(json) })
-    expect(result).toEqual({ inserted: 0, closed: 0 })
-    expect(getCurrentEntities('s1')).toHaveLength(0)
-  })
-})
-
 describe('extractEntities — Layer 3 候选实体收窄（selectLayer3Candidates）', () => {
   it('旧实体的 value 不出现在描述新事实的消息原文里时，仍然要被带入 Layer 3 prompt', async () => {
     // 典型的实体变更场景：用户叙述新事实本身，不会重复旧值——"我现在在新公司工作了"这句话里

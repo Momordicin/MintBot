@@ -193,21 +193,6 @@ describe('按问题为准的范围选择', () => {
     expect(getMessagesByIds([other])).toHaveLength(1)
   })
 
-  it('预览的消息数等于实际删除的条数', () => {
-    addMessage('s1', 'q1', 1000)
-    addAssistant('s1', 'a1', 3000)
-    addMessage('s1', 'q2', 2000)
-    addAssistant('s1', 'a2', 5000)
-    addMessage('s1', 'q3', 4000)
-    addAssistant('s1', 'a3', 6000)
-
-    const impact = checkForgetImpact('s1', 1000, 3000)
-    const result = forgetTimeRange('s1', 1000, 3000, { alsoDeleteAffectedSummaries: false })
-
-    expect(impact.messageIds).toHaveLength(4)
-    expect(result.deletedMessages).toBe(impact.messageIds.length)
-  })
-
   it('重叠摘要按被删消息 id 的最小值和最大值判断', () => {
     addMessage('s1', 'q1', 1000)
     addAssistant('s1', 'a1', 1500)

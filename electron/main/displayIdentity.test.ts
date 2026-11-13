@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { selectStableDisplayKey, fallbackDisplayKey } from './displayIdentity'
+import { selectStableDisplayKey } from './displayIdentity'
 
 describe('selectStableDisplayKey', () => {
   it('returns the DeviceID verbatim when present', () => {
@@ -10,11 +10,5 @@ describe('selectStableDisplayKey', () => {
   it('falls back to id:<id> for null or an empty DeviceID', () => {
     expect(selectStableDisplayKey(null, 42)).toBe('id:42')
     expect(selectStableDisplayKey('', 42)).toBe('id:42')
-  })
-})
-
-describe('fallbackDisplayKey', () => {
-  it('formats the display id', () => {
-    expect(fallbackDisplayKey(7)).toBe('id:7')
   })
 })

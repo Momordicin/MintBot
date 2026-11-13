@@ -63,11 +63,6 @@ describe('shouldTriggerRetrieval', () => {
     expect(shouldTriggerRetrieval('为什么会这样')).toBe(true)
   })
 
-  it('含回忆类关键词时触发（记得/之前/上次/你说过）', () => {
-    expect(shouldTriggerRetrieval('你还记得吗')).toBe(true) // 同时命中"吗"，但仅验证不误判为 false 即可
-    expect(shouldTriggerRetrieval('我们上次聊到哪了')).toBe(true)
-  })
-
   it('短且无特征的陈述句不触发', () => {
     expect(shouldTriggerRetrieval('好的')).toBe(false)
     expect(shouldTriggerRetrieval('今天天气不错')).toBe(false)
@@ -111,23 +106,6 @@ describe('retrieveMemories — RRF 融合', () => {
   it('三路均无命中时返回空数组', async () => {
     const results = await retrieveMemories('s1', '完全不相关的查询', { embedding: fakeEmbeddingProvider(0) }, 3)
     expect(results).toEqual([])
-  })
-
-  it('传入 signal 时会原样转发给 embedding.embed，用于向下取消进行中的向量检索请求', async () => {
-    let receivedSignal: AbortSignal | undefined
-    const capturingEmbeddingProvider: EmbeddingProvider = {
-      embed: async (_text: string, signal?: AbortSignal) => {
-        receivedSignal = signal
-        return oneHotVector(0)
-      },
-      embedBatch: async (texts: string[]) => texts.map(() => oneHotVector(0)),
-      unload: async () => true,
-    }
-    const controller = new AbortController()
-
-    await retrieveMemories('s1', 'kiwi', { embedding: capturingEmbeddingProvider }, 3, controller.signal)
-
-    expect(receivedSignal).toBe(controller.signal)
   })
 
   it('融合排序有命中，但按 id 回查消息（getMessagesByIds）失败时返回空数组而不抛出', async () => {

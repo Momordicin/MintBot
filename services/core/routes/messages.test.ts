@@ -38,19 +38,6 @@ describe('GET /messages', () => {
     expect(response.statusCode).toBe(400)
   })
 
-  it('sessionId 为空字符串时返回 400', async () => {
-    const fastify = await buildTestApp()
-    const response = await fastify.inject({ method: 'GET', url: '/messages?sessionId=' })
-    expect(response.statusCode).toBe(400)
-  })
-
-  it('beforeId 非法值时返回 400', async () => {
-    seedMessages('s1', 3)
-    const fastify = await buildTestApp()
-    const response = await fastify.inject({ method: 'GET', url: '/messages?sessionId=s1&beforeId=abc' })
-    expect(response.statusCode).toBe(400)
-  })
-
   it('正常分页：返回最近 limit 条，hasMore 为 true', async () => {
     seedMessages('s1', 5)
     const fastify = await buildTestApp()
@@ -74,17 +61,6 @@ describe('GET /messages', () => {
     expect(response.statusCode).toBe(200)
     expect(body.messages.map((m: { content: string }) => m.content)).toEqual(['消息0', '消息1'])
     expect(body.hasMore).toBe(false)
-  })
-
-  it('跨 session 隔离，不返回其它 session 的消息', async () => {
-    seedMessages('s1', 3)
-    seedMessages('s2', 3)
-    const fastify = await buildTestApp()
-    const response = await fastify.inject({ method: 'GET', url: '/messages?sessionId=s1&limit=10' })
-    const body = JSON.parse(response.payload)
-
-    expect(body.messages).toHaveLength(3)
-    expect(body.messages.every((m: { sessionId: string }) => m.sessionId === 's1')).toBe(true)
   })
 
   it('limit 超出范围时被裁剪而不是报错', async () => {

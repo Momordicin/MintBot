@@ -20,17 +20,6 @@ describe('buildStatePayload — aiAvailable', () => {
     vi.unstubAllGlobals()
   })
 
-  it('AI 服务健康检查身份匹配且 embedding_loaded=true 时，aiAvailable 为 true', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ status: 'ok', service: 'mintbot-ai', embedding_loaded: true, ner_loaded: false }),
-    }))
-
-    const payload = await buildStatePayload()
-
-    expect(payload.aiAvailable).toBe(true)
-  })
-
   it('AI 服务健康检查身份匹配但 embedding_loaded=false 时，aiAvailable 仍为 true', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,

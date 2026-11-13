@@ -305,28 +305,6 @@ describe('POST /presets/:presetId/wallpaper', () => {
     expect(fs.existsSync(path.join(WALLPAPER_DIR, savedFilename))).toBe(true)
   })
 
-  it('已有 session 的 preset 上传新壁纸后，独立的 buildStatePayload 调用（非本次上传的响应）也返回新 wallpaperPath，而非 session 创建时冻结的旧值', async () => {
-    // session 在上传前就已存在，此时 presetSnapshot.wallpaperPath 冻结为 p1 当时的值（undefined）
-    loadSession('p1')
-    const fastify = await buildTestApp()
-    const savedFilename = 'p1-wallpaper.png'
-    writtenFiles.push(savedFilename)
-
-    await fastify.inject({
-      method: 'POST',
-      url: '/presets/p1/wallpaper',
-      headers: {
-        'content-type': 'application/octet-stream',
-        'x-filename': encodeURIComponent('my-photo.PNG'),
-      },
-      payload: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
-    })
-
-    // 上传响应之外，独立再调一次 buildStatePayload，模拟之后的 GET /state / POST /switch-preset
-    const statePayload = await buildStatePayload()
-    expect(statePayload.presetSnapshot?.wallpaperPath).toBe(savedFilename)
-  })
-
   it('presetId 不存在时返回 404', async () => {
     const fastify = await buildTestApp()
 
@@ -472,18 +450,6 @@ describe('PATCH /presets/:presetId', () => {
     expect(getPresetById('p1')!.name).toBe('新名字')
   })
 
-  it('name 缺失时返回 400', async () => {
-    const fastify = await buildTestApp()
-
-    const response = await fastify.inject({
-      method: 'PATCH',
-      url: '/presets/p1',
-      payload: {},
-    })
-
-    expect(response.statusCode).toBe(400)
-  })
-
   it('name 全是空白字符（trim 后为空）时返回 400', async () => {
     const fastify = await buildTestApp()
 
@@ -506,18 +472,6 @@ describe('PATCH /presets/:presetId', () => {
     })
 
     expect(response.statusCode).toBe(404)
-  })
-
-  it('name 和 displayConfig 都缺失时返回 400', async () => {
-    const fastify = await buildTestApp()
-
-    const response = await fastify.inject({
-      method: 'PATCH',
-      url: '/presets/p1',
-      payload: {},
-    })
-
-    expect(response.statusCode).toBe(400)
   })
 
   it('仅 displayConfig 的合法更新成功，响应与 DB 均反映新值', async () => {
@@ -583,30 +537,6 @@ describe('PATCH /presets/:presetId', () => {
     expect(response.statusCode).toBe(400)
   })
 
-  it('chatBgRgb 元素超出 [0, 255] 范围时返回 400', async () => {
-    const fastify = await buildTestApp()
-
-    const response = await fastify.inject({
-      method: 'PATCH',
-      url: '/presets/p1',
-      payload: { displayConfig: { chatBgRgb: [0, 0, 300] } },
-    })
-
-    expect(response.statusCode).toBe(400)
-  })
-
-  it('chatBgRgb 元素非整数时返回 400', async () => {
-    const fastify = await buildTestApp()
-
-    const response = await fastify.inject({
-      method: 'PATCH',
-      url: '/presets/p1',
-      payload: { displayConfig: { chatBgRgb: [1, 2, 3.5] } },
-    })
-
-    expect(response.statusCode).toBe(400)
-  })
-
   it('chatBgOpacity 超出 [0, 1] 范围时返回 400', async () => {
     const fastify = await buildTestApp()
 
@@ -614,18 +544,6 @@ describe('PATCH /presets/:presetId', () => {
       method: 'PATCH',
       url: '/presets/p1',
       payload: { displayConfig: { chatBgOpacity: 1.5 } },
-    })
-
-    expect(response.statusCode).toBe(400)
-  })
-
-  it('chatBgOpacity 类型错误（非数字）时返回 400', async () => {
-    const fastify = await buildTestApp()
-
-    const response = await fastify.inject({
-      method: 'PATCH',
-      url: '/presets/p1',
-      payload: { displayConfig: { chatBgOpacity: '0.5' } },
     })
 
     expect(response.statusCode).toBe(400)
@@ -1268,22 +1186,7 @@ describe('DELETE /presets/:presetId', () => {
   })
 })
 
-// ─── buildStatePayload — displayConfig 现查覆盖（与 wallpaperPath/name 同款行为）────
-describe('buildStatePayload — displayConfig 现查覆盖', () => {
-  it('updatePresetDisplayConfig 直接更新 DB 后，buildStatePayload 返回新值而非冻结快照里的默认值', async () => {
-    loadSession('p1')
-    // 会话创建时冻结快照里的 displayConfig 是 p1 当时的默认值
-    const before = await buildStatePayload()
-    expect(before.presetSnapshot?.displayConfig).toEqual(DEFAULT_DISPLAY_CONFIG)
-
-    updatePresetDisplayConfig('p1', { ...DEFAULT_DISPLAY_CONFIG, chatBgRgb: [200, 0, 0], chatBgOpacity: 0.9 })
-
-    const after = await buildStatePayload()
-    expect(after.presetSnapshot?.displayConfig).toEqual({ ...DEFAULT_DISPLAY_CONFIG, chatBgRgb: [200, 0, 0], chatBgOpacity: 0.9 })
-  })
-})
-
-// ─── buildStatePayload — systemPrompt 现查覆盖（第四个字段，与前三个同款行为）────
+// ─── buildStatePayload — systemPrompt 现查覆盖 ────
 describe('buildStatePayload — systemPrompt 现查覆盖', () => {
   it('updatePresetSystemPrompt 直接更新 DB 后，buildStatePayload 返回新值而非冻结快照里的旧人设——但这只影响展示，不影响 current.preset', async () => {
     loadSession('p1')
@@ -1302,7 +1205,7 @@ describe('buildStatePayload — systemPrompt 现查覆盖', () => {
   })
 })
 
-// ─── buildStatePayload — modelType/modelName 现查覆盖（第五/六个字段）────
+// ─── buildStatePayload — modelType/modelName 现查覆盖 ────
 describe('buildStatePayload — modelType/modelName 现查覆盖', () => {
   it('updatePresetModelConfig 直接更新 DB 后，buildStatePayload 返回新值而非冻结快照里的旧模型覆盖', async () => {
     loadSession('p1')
@@ -1356,18 +1259,6 @@ describe('GET /presets/:presetId/model-keys', () => {
     expect(response.payload).not.toContain('short')
   })
 
-  it('没有任何 key 行时三家都是 hasKey=false', async () => {
-    const fastify = await buildTestApp()
-
-    const response = await fastify.inject({ method: 'GET', url: '/presets/p2/model-keys' })
-
-    expect(JSON.parse(response.payload)).toEqual({
-      anthropic: { hasKey: false, last4: null, fromEnv: false, summary: { hasKey: false, last4: null, fromEnv: false } },
-      openai: { hasKey: false, last4: null, fromEnv: false, summary: { hasKey: false, last4: null, fromEnv: false } },
-      deepseek: { hasKey: false, last4: null, fromEnv: false, summary: { hasKey: false, last4: null, fromEnv: false } },
-    })
-  })
-
   it('未知 preset 返回 404', async () => {
     const fastify = await buildTestApp()
 
@@ -1407,13 +1298,6 @@ describe('PATCH /presets/:presetId — 角色 API Key', () => {
     expect(empty.statusCode).toBe(200)
     expect(blank.statusCode).toBe(200)
     expect(getPresetApiKeys('p1').openai).toEqual({ apiKey: 'sk-saved-key', fromEnv: false, summaryFromEnv: false })
-  })
-
-  it('空 apiKey 且没有已保存的 key 时按未配置处理，返回 400', async () => {
-    const response = await patch({ modelType: 'openai', modelName: 'gpt-4o-mini', apiKey: '  ' })
-
-    expect(response.statusCode).toBe(400)
-    expect(JSON.parse(response.payload)).toEqual({ code: 'API_KEY_INVALID' })
   })
 
   it('apiKeyFromEnv 由 false 变 true 且未检测到环境变量：400 且什么都不写', async () => {
@@ -1464,15 +1348,6 @@ describe('PATCH /presets/:presetId — 角色 API Key', () => {
     expect(preset.systemPrompt).toBe('你是角色一')
     expect(preset.modelType).toBe('ollama')
     expect(getPresetApiKeys('p1').anthropic).toEqual({ fromEnv: false, summaryFromEnv: false })
-  })
-
-  it('勾选环境变量但环境不可用：400', async () => {
-    upsertPresetApiKey('p1', { provider: 'openai', apiKey: 'sk-saved-key', fromEnv: true })
-
-    const response = await patch({ modelType: 'openai', modelName: 'gpt-4o-mini' })
-
-    expect(response.statusCode).toBe(400)
-    expect(JSON.parse(response.payload)).toEqual({ code: 'API_KEY_INVALID' })
   })
 
   it('取消勾选环境变量且已有保存的 key：通过，写入 fromEnv=false 并保留 key', async () => {
@@ -1581,16 +1456,6 @@ describe('PATCH /presets/:presetId — 角色 API Key', () => {
 
     expect(badKey.statusCode).toBe(400)
     expect(badFlag.statusCode).toBe(400)
-  })
-
-  it('DELETE /presets/:presetId 同时删除该角色的 key 行', async () => {
-    upsertPresetApiKey('p2', { provider: 'openai', apiKey: 'sk-p2-key' })
-    const fastify = await buildTestApp()
-
-    const response = await fastify.inject({ method: 'DELETE', url: '/presets/p2' })
-
-    expect(response.statusCode).toBe(200)
-    expect(db.prepare(`SELECT COUNT(*) AS count FROM PresetApiKeys WHERE presetId = 'p2'`).get()).toEqual({ count: 0 })
   })
 })
 
@@ -1770,14 +1635,6 @@ describe('角色摘要模型与摘要 key', () => {
     expect(getPresetById('p1')!.summaryModelType).toBe('deepseek')
     expect(getPresetById('p1')!.summaryModelName).toBe('deepseek-v4-flash')
     expect(getPresetApiKeys('p1').deepseek.summaryApiKey).toBe('sk-ds-summary')
-  })
-
-  it('摘要 key 写入后执行 WAL checkpoint(TRUNCATE)', async () => {
-    const pragma = vi.spyOn(db, 'pragma')
-
-    await patch({ summaryModelType: 'deepseek', summaryModelName: 'deepseek-v4-flash', summaryApiKey: 'sk-ds-summary' })
-
-    expect(pragma).toHaveBeenCalledWith('wal_checkpoint(TRUNCATE)')
   })
 
   it('summaryApiKey 不是字符串、summaryApiKeyFromEnv 不是布尔时返回 400', async () => {

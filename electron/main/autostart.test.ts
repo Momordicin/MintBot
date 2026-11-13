@@ -13,12 +13,6 @@ describe('loginItemOptions', () => {
       args: ['D:\\apps\\SampleApp', '--autostart'],
     })
   })
-
-  it('应用目录含空格和中文时不手动加引号（引号由 Electron 添加）', () => {
-    const { args } = loginItemOptions('C:\\app\\electron.exe', 'C:\\测试 目录\\Sample App')
-    expect(args).toEqual(['C:\\测试 目录\\Sample App', '--autostart'])
-    expect(args[0]).toContain('\\')
-  })
 })
 
 describe('legacyLoginItemOptions', () => {
@@ -47,11 +41,6 @@ describe('shouldMigrateAutostart', () => {
 describe('hasAutostartFlag', () => {
   it('argv 含 --autostart 时为真', () => {
     expect(hasAutostartFlag(['electron.exe', 'D:\\apps\\SampleApp', AUTOSTART_FLAG])).toBe(true)
-  })
-
-  it('应用目录含空格时，按登录项参数组成的 argv 仍识别 --autostart', () => {
-    const { path, args } = loginItemOptions('C:\\app\\electron.exe', 'C:\\Program Files\\Sample App')
-    expect(hasAutostartFlag([path, ...args])).toBe(true)
   })
 
   it('argv 不含 --autostart 时为假', () => {

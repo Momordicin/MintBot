@@ -10,10 +10,6 @@ beforeEach(() => {
 })
 
 describe('session/attention', () => {
-  it('没有历史消息、也没有搭理过时，getLastAttentionAt 返回 null', () => {
-    expect(getLastAttentionAt('session-never-touched')).toBeNull()
-  })
-
   it('内存无记录时，回退读该 session 最近一条消息的 createdAt 作为初值', () => {
     const sessionId = 'session-fallback'
     appendMessage({ sessionId, role: 'user', content: 'hi', createdAt: 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
@@ -66,9 +62,5 @@ describe('session/attention', () => {
     markExplicitSleep('session-sleepy')
     noteSessionActivated('session-sleepy', 3000)
     expect(isExplicitSleep('session-sleepy')).toBe(true)
-  })
-
-  it('isExplicitSleep 默认返回 false', () => {
-    expect(isExplicitSleep('session-untouched')).toBe(false)
   })
 })

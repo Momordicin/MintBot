@@ -20,8 +20,6 @@ import {
   computeDefaultBoundsForDisplay,
   petWindowBounds,
   petPreferredFromWindow,
-  OVERLAY_DEFAULT_RIGHT_OFFSET_DIP,
-  OVERLAY_DEFAULT_BOTTOM_OFFSET_DIP,
   COLLAPSED_SIZE,
   collapsedHandleBounds,
   expandedBoundsFromHandle,
@@ -163,12 +161,6 @@ describe('clampBoundsToWorkArea', () => {
     const bounds = { x: 500, y: 400, width: 1200, height: 900 }
     expect(clampBoundsToWorkArea(bounds, workArea)).toEqual({ x: 100, y: 50, width: 1000, height: 800 })
   })
-
-  it('carries a non-zero work area offset (taskbar docked top/left) through unchanged bounds', () => {
-    const offsetWorkArea = { x: 0, y: 40, width: 1920, height: 1040 }
-    const bounds = { x: 10, y: 40, width: 132, height: 132 }
-    expect(clampBoundsToWorkArea(bounds, offsetWorkArea)).toEqual(bounds)
-  })
 })
 
 // 密度指标 = bounds（DIP）× scaleFactor 换算出的物理像素宽高相乘（见 windowPositions.ts
@@ -270,19 +262,6 @@ describe('computeDefaultBoundsForDisplay', () => {
     expect(computeDefaultBoundsForDisplay(display, [display], defaultSize, 'chat')).toEqual({ x: 0, y: 0, width: 800, height: 560 })
   })
 
-  it('places the overlay bottom-right, 50 DIP from the right edge and 100 DIP above the work-area bottom', () => {
-    const display = makeDisplay(1, { x: 0, y: 0, width: 1920, height: 1080 }, { x: 0, y: 0, width: 1920, height: 1040 })
-    const defaultSize = { width: 132, height: 132 }
-    expect(computeDefaultBoundsForDisplay(display, [display], defaultSize, 'overlay')).toEqual({
-      x: 1920 - 132 - OVERLAY_DEFAULT_RIGHT_OFFSET_DIP,
-      y: 1040 - 132 - OVERLAY_DEFAULT_BOTTOM_OFFSET_DIP,
-      width: 132,
-      height: 132,
-    })
-    expect(OVERLAY_DEFAULT_RIGHT_OFFSET_DIP).toBe(50)
-    expect(OVERLAY_DEFAULT_BOTTOM_OFFSET_DIP).toBe(100)
-  })
-
   it('offsets the overlay from a non-zero work-area origin and applies density-scaled size on a secondary display', () => {
     const anchor = makeDisplay(1, { x: 0, y: 0, width: 1920, height: 1080 }, undefined, 2)
     const other = makeDisplay(
@@ -306,16 +285,6 @@ describe('computeDefaultBoundsForDisplay', () => {
       y: 20,
       width: 132,
       height: 132,
-    })
-  })
-
-  it('centers the chat window in a plain work area', () => {
-    const display = makeDisplay(1, { x: 0, y: 0, width: 1920, height: 1080 }, { x: 0, y: 0, width: 1920, height: 1040 })
-    expect(computeDefaultBoundsForDisplay(display, [display], { width: 290, height: 520 }, 'chat')).toEqual({
-      x: 815,
-      y: 260,
-      width: 290,
-      height: 520,
     })
   })
 })

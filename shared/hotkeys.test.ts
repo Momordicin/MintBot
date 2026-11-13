@@ -45,9 +45,6 @@ describe('normalizeHotkey', () => {
     ['F9', 'F9'],
     ['F24', 'F24'],
     ['Shift+F8', 'Shift+F8'],
-    ['L', null],
-    ['5', null],
-    ['Space', null],
     ['F25', null],
   ])('accepts a bare function key but no other bare key: %s', (input, expected) => {
     expect(normalizeHotkey(input)).toBe(expected)

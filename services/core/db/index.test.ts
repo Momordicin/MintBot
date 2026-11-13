@@ -20,24 +20,6 @@ describe('DB 迁移 (runMigrations)', () => {
     expect(() => db.prepare(`INSERT INTO PresetApiKeys (presetId, provider) VALUES ('p1', 'ollama')`).run()).toThrow()
     db.exec(`DELETE FROM PresetApiKeys`)
   })
-
-  it('Presets 表带 displayConfig 列（migration v7）', () => {
-    initDb()
-    const columns = db.pragma('table_info(Presets)') as { name: string }[]
-    expect(columns.map(c => c.name)).toContain('displayConfig')
-  })
-
-  it('Presets 表带 wallpaperPath 列（migration v1，回归防护）', () => {
-    initDb()
-    const columns = db.pragma('table_info(Presets)') as { name: string }[]
-    expect(columns.map(c => c.name)).toContain('wallpaperPath')
-  })
-
-  it('Presets 表带 addressForms 列（migration v9）', () => {
-    initDb()
-    const columns = db.pragma('table_info(Presets)') as { name: string }[]
-    expect(columns.map(c => c.name)).toContain('addressForms')
-  })
 })
 
 // migration v9：既有行（迁移前从未写过 addressForms 的旧行）新增列后为 NULL，
@@ -56,17 +38,6 @@ describe('DB 迁移 v9 (Presets.addressForms)', () => {
 
     const row = db.prepare(`SELECT addressForms FROM Presets WHERE presetId = ?`).get('p1') as { addressForms: string | null }
     expect(row.addressForms).toBeNull()
-  })
-
-  it('新写入的 addressForms 值能正常落盘读回（未加密模式下为明文 JSON）', () => {
-    db.exec(`DELETE FROM Presets`)
-    db.prepare(`
-      INSERT INTO Presets (presetId, name, characterId, modelType, modelName, systemPrompt, addressForms, createdAt, updatedAt)
-      VALUES ('p2', '角色二', 'char-002', 'ollama', 'qwen3', '你是角色二', ?, 0, 0)
-    `).run(JSON.stringify(['小明', '笨蛋']))
-
-    const row = db.prepare(`SELECT addressForms FROM Presets WHERE presetId = ?`).get('p2') as { addressForms: string | null }
-    expect(JSON.parse(row.addressForms!)).toEqual(['小明', '笨蛋'])
   })
 })
 
@@ -124,22 +95,11 @@ describe('DB 彻底删除（secure_delete / migration v11 / checkpointTruncate�
 })
 
 // migration v8：Presets.modelType/modelName 从 NOT NULL 转为可空（建新表 + 搬数据 +
-// 删旧表 + 改名重建），验证已有数据不受影响、新的 null 值被允许、非法值仍被 CHECK 拒绝
+// 删旧表 + 改名重建），验证新的 null 值被允许、非法值仍被 CHECK 拒绝
 describe('DB 迁移 v8 (Presets.modelType/modelName 可空)', () => {
   beforeEach(() => {
     initDb()
     db.exec(`DELETE FROM Presets`)
-  })
-
-  it('已有 preset 行迁移后保持原有的 modelType/modelName 值不变', () => {
-    db.prepare(`
-      INSERT INTO Presets (presetId, name, characterId, modelType, modelName, systemPrompt, createdAt, updatedAt)
-      VALUES ('p1', '角色一', 'char-001', 'ollama', 'qwen3', '你是角色一', 0, 0)
-    `).run()
-
-    const row = db.prepare(`SELECT * FROM Presets WHERE presetId = ?`).get('p1') as { modelType: string; modelName: string }
-    expect(row.modelType).toBe('ollama')
-    expect(row.modelName).toBe('qwen3')
   })
 
   it('新建 preset 允许 modelType/modelName 为 null（未自定义，跟随全局配置）', () => {

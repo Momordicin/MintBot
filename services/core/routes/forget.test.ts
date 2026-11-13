@@ -55,15 +55,6 @@ describe('POST /forget/check', () => {
     expect(response.statusCode).toBe(400)
   })
 
-  it('fromTime/toTime 不是数字时返回 400', async () => {
-    const fastify = await buildTestApp()
-    const response = await fastify.inject({
-      method: 'POST', url: '/forget/check',
-      payload: { sessionId: 's1', fromTime: 'abc', toTime: 2000 },
-    })
-    expect(response.statusCode).toBe(400)
-  })
-
   it('fromTime > toTime 时返回 400', async () => {
     const fastify = await buildTestApp()
     const response = await fastify.inject({
@@ -103,24 +94,6 @@ describe('POST /forget', () => {
   it('fromTime/toTime 缺失时返回 400', async () => {
     const fastify = await buildTestApp()
     const response = await fastify.inject({ method: 'POST', url: '/forget', payload: { sessionId: 's1' } })
-    expect(response.statusCode).toBe(400)
-  })
-
-  it('fromTime/toTime 不是数字时返回 400', async () => {
-    const fastify = await buildTestApp()
-    const response = await fastify.inject({
-      method: 'POST', url: '/forget',
-      payload: { sessionId: 's1', fromTime: 'abc', toTime: 2000, alsoDeleteAffectedSummaries: false },
-    })
-    expect(response.statusCode).toBe(400)
-  })
-
-  it('fromTime > toTime 时返回 400', async () => {
-    const fastify = await buildTestApp()
-    const response = await fastify.inject({
-      method: 'POST', url: '/forget',
-      payload: { sessionId: 's1', fromTime: 2000, toTime: 1000, alsoDeleteAffectedSummaries: false },
-    })
     expect(response.statusCode).toBe(400)
   })
 

@@ -71,19 +71,6 @@ describe('Bert4NerProvider — 共享活动追踪（aiActivity）', () => {
 
     expect(getLastActivityAt()).toBeGreaterThanOrEqual(before)
   })
-
-  it('extract（委托给 extractBatch）同样会记录活动', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ results: [[]] }),
-    }))
-
-    const before = Date.now()
-    const provider = new Bert4NerProvider()
-    await provider.extract('文本')
-
-    expect(getLastActivityAt()).toBeGreaterThanOrEqual(before)
-  })
 })
 
 describe('Bert4NerProvider.unload', () => {

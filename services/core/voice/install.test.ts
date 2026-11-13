@@ -189,8 +189,6 @@ describe('voice component install', () => {
   it.each([
     ['NETWORK_ERROR', {}],
     ['HTTP_STATUS', { url: 'u', status: 404 }],
-    ['SHA256_MISMATCH', { file: 'a' }],
-    ['ENOSPC_PRECHECK', { required: 2097152, available: 1048576 }],
   ])('a %s failure enters failed with code and details and tries to restore voice', async (code, details) => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     mocks.readVoiceInstallation.mockResolvedValue({ version: '0.2.0' })

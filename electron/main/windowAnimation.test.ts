@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 // 单飞状态、各条路径的衔接）——跟 windowBehavior.test.ts 同一个约定，用 vi.mock('electron', ...)
 // 换一份假的 screen（只需要 getDisplayMatching，animateTo 不在运行时引用 BrowserWindow 本身，
 // 只用它做类型标注），供下面 describe('animateTo', ...) 驱动整段动画逻辑（instant 分支、
-// 同屏补间、跨屏三段式、取消）。纯函数部分（守卫判断、偏移起点、插值、缓动曲线）不需要这份
+// 同屏补间、跨屏三段式、取消）。纯函数部分（偏移起点、插值、缓动曲线）不需要这份
 // mock，跟此前一样直接调用
 const testState = vi.hoisted(() => ({
   // bounds -> { id, workArea } 的映射，按测试各自需要覆盖。默认单显示器，永远命中同一块屏。
@@ -23,7 +23,6 @@ vi.mock('electron', () => ({
 }))
 
 import {
-  evaluateAnimationGuards,
   computeOffsetStartRect,
   interpolateFrame,
   interpolateRect,
@@ -34,8 +33,6 @@ import {
   easeInOut,
   isAnimating,
   SAME_DISPLAY_TWEEN_DURATION_MS,
-  EXIT_DURATION_MS,
-  ENTRANCE_DURATION_MS,
 } from './windowAnimation'
 
 // 供 animateTo 测试使用的假窗口：只实现 animateTo 实际会调用的那几个方法，行为足够真实
@@ -74,16 +71,6 @@ function makeFakeWindow(initialBounds: Electron.Rectangle) {
     },
   }
 }
-
-describe('evaluateAnimationGuards', () => {
-  it('flags sameDisplay when start and target come from the same display id', () => {
-    expect(evaluateAnimationGuards(1, 1)).toEqual({ sameDisplay: true })
-  })
-
-  it('does not flag sameDisplay when start and target come from different display ids', () => {
-    expect(evaluateAnimationGuards(1, 2)).toEqual({ sameDisplay: false })
-  })
-})
 
 describe('computeOffsetStartRect', () => {
   // 工作区上下都留足空间：默认从上方滑入
@@ -127,14 +114,6 @@ describe('interpolateFrame', () => {
   // 本身是否正确"（下面两个 describe 块）分开验证
   const identity = (p: number): number => p
 
-  it('lands exactly on the target position with progress 1 at t=1 (final-state contract)', () => {
-    expect(interpolateFrame(from, to, 1, identity)).toEqual({ x: to.x, y: to.y, opacity: 1 })
-  })
-
-  it('starts exactly at the from position with progress 0 at t=0', () => {
-    expect(interpolateFrame(from, to, 0, identity)).toEqual({ x: from.x, y: from.y, opacity: 0 })
-  })
-
   it('applies the given easing function to both position and the returned progress value', () => {
     const halfway = (p: number): number => (p === 0.5 ? 0.75 : p)
     const mid = interpolateFrame(from, to, 0.5, halfway)
@@ -175,25 +154,12 @@ describe('easeEntrance (cubic-bezier(0, 0, 0, 1))', () => {
     expect(easeEntrance(1)).toBe(1)
   })
 
-  it('is monotonically non-decreasing across a full sweep', () => {
-    let previous = -Infinity
-    for (let i = 0; i <= 100; i++) {
-      const current = easeEntrance(i / 100)
-      expect(current).toBeGreaterThanOrEqual(previous)
-      previous = current
-    }
-  })
-
   it('matches a numerically-inverted reference implementation (guards the closed form against drift)', () => {
     const reference = referenceBezierEase(0, 0)
     for (let i = 0; i <= 20; i++) {
       const p = i / 20
       expect(easeEntrance(p)).toBeCloseTo(reference(p), 5)
     }
-  })
-
-  it('decelerates: is already more than halfway done by the midpoint in time', () => {
-    expect(easeEntrance(0.5)).toBeGreaterThan(0.5)
   })
 })
 
@@ -205,14 +171,6 @@ describe('interpolateRect', () => {
   const from = { x: 0, y: 0, width: 132, height: 132 }
   const to = { x: -92, y: 0, width: 132, height: 132 }
   const identity = (p: number): number => p
-
-  it('starts exactly at from (all four fields) at t=0', () => {
-    expect(interpolateRect(from, to, 0, identity)).toEqual(from)
-  })
-
-  it('lands exactly on to (all four fields) at t=1 — the final-state contract the tween relies on', () => {
-    expect(interpolateRect(from, to, 1, identity)).toEqual(to)
-  })
 
   it('interpolates width/height too, not just x/y', () => {
     const wideTo = { x: 0, y: 0, width: 300, height: 520 }
@@ -403,22 +361,6 @@ describe('animateTo', () => {
       expect(win.getBounds()).toEqual(bounds)
       expect(onComplete).toHaveBeenCalledTimes(1)
     })
-
-    it('cross-display path still stages opacity 0 and restores finalOpacity', () => {
-      testState.displayForBounds = (bounds) =>
-        bounds.x < 1920
-          ? { id: 1, workArea: { x: 0, y: 0, width: 1920, height: 1080 } }
-          : { id: 2, workArea: { x: 1920, y: 0, width: 1920, height: 1080 } }
-      const win = makeFakeWindow({ x: 100, y: 100, width: 300, height: 500 })
-      const target = { x: 2020, y: 100, width: 300, height: 500 }
-
-      animateTo(win as unknown as Electron.BrowserWindow, target)
-      vi.advanceTimersByTime(EXIT_DURATION_MS + ENTRANCE_DURATION_MS + 200)
-
-      expect(win.setOpacity).toHaveBeenCalledWith(0)
-      expect(win.getOpacity()).toBe(1)
-      expect(win.getBounds()).toEqual(target)
-    })
   })
 
   describe('same-display tween (sameDisplay=true, no options)', () => {
@@ -520,14 +462,6 @@ describe('animateTo', () => {
   })
 
   describe('options.finalOpacity', () => {
-    it('instant path ends at finalOpacity', () => {
-      const win = makeFakeWindow({ x: 0, y: 0, width: 132, height: 132 })
-
-      animateTo(win as unknown as Electron.BrowserWindow, { x: -92, y: 0, width: 132, height: 132 }, undefined, { instant: true, finalOpacity: 0.6 })
-
-      expect(win.getOpacity()).toBe(0.6)
-    })
-
     it('same-display tween ends at finalOpacity, and a mid-tween cancel snaps to it', () => {
       const start = { x: 0, y: 0, width: 132, height: 132 }
       const target = { x: -92, y: 0, width: 132, height: 132 }

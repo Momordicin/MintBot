@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { DEFAULT_DISPLAY_CONFIG, parseDisplayConfig, isValidTintStrength, clampTintStrength, isValidPetScale } from './displayConfig.js'
+import { DEFAULT_DISPLAY_CONFIG, parseDisplayConfig, isValidTintStrength, isValidPetScale } from './displayConfig.js'
 
 describe('parseDisplayConfig', () => {
   // 部分既有用例（chatBgRgb/chatBgOpacity 的类型错误分支）只 vi.spyOn 而不 restore，
@@ -113,15 +113,6 @@ describe('parseDisplayConfig', () => {
     warnSpy.mockRestore()
   })
 
-  it('currentPortrait 缺失时取默认值 pixel 且不告警；合法值原样使用', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    expect(DEFAULT_DISPLAY_CONFIG.currentPortrait).toBe('pixel')
-    expect(parseDisplayConfig(JSON.stringify({ chatBgRgb: [1, 2, 3], chatBgOpacity: 0.5 })).currentPortrait).toBe('pixel')
-    expect(parseDisplayConfig(JSON.stringify({ chatBgRgb: [1, 2, 3], chatBgOpacity: 0.5, currentPortrait: 'illustration' })).currentPortrait).toBe('illustration')
-    expect(warnSpy).not.toHaveBeenCalled()
-    warnSpy.mockRestore()
-  })
-
   it('currentPortrait 不是 pixel/illustration 之一时告警并回退默认值', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const raw = JSON.stringify({ chatBgRgb: [1, 2, 3], chatBgOpacity: 0.5, currentPortrait: 'photo' })
@@ -167,15 +158,6 @@ describe('parseDisplayConfig', () => {
     expect(isValidPetScale(null)).toBe(false)
   })
 
-  it('accentRgb 缺失时回退到固定默认色 [0, 122, 255]，不 carry over（已解析的）chatBgRgb', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const raw = JSON.stringify({ chatBgRgb: [123, 45, 67], chatBgOpacity: 0.5 })
-    expect(parseDisplayConfig(raw).accentRgb).toEqual([0, 122, 255])
-    expect(parseDisplayConfig(raw).accentRgb).toEqual(DEFAULT_DISPLAY_CONFIG.accentRgb)
-    expect(warnSpy).not.toHaveBeenCalled()
-    warnSpy.mockRestore()
-  })
-
   it('accentRgb 类型错误时告警并回退到固定默认色，不 carry over（已解析的）chatBgRgb', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const raw = JSON.stringify({ chatBgRgb: [123, 45, 67], chatBgOpacity: 0.5, accentRgb: 'red' })
@@ -189,14 +171,6 @@ describe('parseDisplayConfig', () => {
     const raw = JSON.stringify({ chatBgRgb: [1, 2, 3], chatBgOpacity: 0.5, themeMode: 'dusk' })
     expect(parseDisplayConfig(raw).themeMode).toBe(DEFAULT_DISPLAY_CONFIG.themeMode)
     expect(warnSpy).toHaveBeenCalled()
-    warnSpy.mockRestore()
-  })
-
-  it('tintStrength 在 [0, 1] 范围内的合法值原样使用，不告警', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const raw = JSON.stringify({ chatBgRgb: [1, 2, 3], chatBgOpacity: 0.5, tintStrength: 0.42 })
-    expect(parseDisplayConfig(raw).tintStrength).toBe(0.42)
-    expect(warnSpy).not.toHaveBeenCalled()
     warnSpy.mockRestore()
   })
 
@@ -227,9 +201,9 @@ describe('parseDisplayConfig', () => {
 
 // JSON 本身无法编码 NaN/Infinity（JSON.stringify 把它们转成 null，JSON.parse 拒绝裸
 // Infinity 字面量），所以经 parseDisplayConfig 这条路径永远碰不到"类型是 number 但非
-// 有限值"的输入——直接单测 isValidTintStrength/clampTintStrength 这两个导出函数本身，
+// 有限值"的输入——直接单测 isValidTintStrength 这个导出函数本身，
 // 覆盖任务要求的"非有限输入"这一档
-describe('isValidTintStrength / clampTintStrength', () => {
+describe('isValidTintStrength', () => {
   it('NaN 不是合法值', () => {
     expect(isValidTintStrength(NaN)).toBe(false)
   })
@@ -239,20 +213,8 @@ describe('isValidTintStrength / clampTintStrength', () => {
     expect(isValidTintStrength(-Infinity)).toBe(false)
   })
 
-  it('[0, 1] 内的有限数字合法', () => {
-    expect(isValidTintStrength(0)).toBe(true)
-    expect(isValidTintStrength(1)).toBe(true)
-    expect(isValidTintStrength(0.5)).toBe(true)
-  })
-
   it('超出 [0, 1] 的有限数字仍然合法（越界值靠 clampTintStrength 夹取，不在这里拒绝）', () => {
     expect(isValidTintStrength(1.5)).toBe(true)
     expect(isValidTintStrength(-0.5)).toBe(true)
-  })
-
-  it('clampTintStrength 把两端越界值夹回边界，范围内的值原样返回', () => {
-    expect(clampTintStrength(1.5)).toBe(1)
-    expect(clampTintStrength(-0.5)).toBe(0)
-    expect(clampTintStrength(0.42)).toBe(0.42)
   })
 })

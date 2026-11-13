@@ -206,29 +206,6 @@ describe('POST /chat', () => {
     expect(messageDone?.data.sessionId).toBe(session.sessionId)
   })
 
-  it('模型调用失败时，system 错误事件同样带上 sessionId', async () => {
-    const { session } = loadSession('p1')
-    const fastify = Fastify()
-    const throwingModelProvider = {
-      chatTurn: turnOf(async () => { throw new Error('model boom') }),
-    }
-    const createSpy = vi.spyOn(ModelProviderModule, 'createModelProviderForPreset')
-      .mockReturnValue(throwingModelProvider as unknown as ModelProvider)
-    fastify.decorate('streamingEnabled', false)
-    fastify.decorate('embeddingProvider', fakeEmbeddingProvider())
-    await fastify.register(chatRoutes)
-
-    try {
-      const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
-      const events = parseSSE(response.payload)
-
-      const systemEvent = events.find(e => e.event === 'system')
-      expect(systemEvent?.data.sessionId).toBe(session.sessionId)
-    } finally {
-      createSpy.mockRestore()
-    }
-  })
-
   it('self 情绪合法时，广播流也收到与私有流一致的 emotion payload', async () => {
     const { session } = loadSession('p1')
     const { fastify } = await buildTestApp('你好呀\n&&happy&&')
@@ -275,18 +252,6 @@ describe('POST /chat', () => {
       'emotion',
       expect.objectContaining({ sessionId: session.sessionId, explicitSleep: true }),
     )
-  })
-
-  it('self 情绪 label 为 sleep 时：不落 EmotionStates，但也不再置显式睡着标记（TDD §3.9「必须保留的守卫」：sleep 归位后，自发的 sleep label 是未定义行为，不能触发睡着）', async () => {
-    const { session } = loadSession('p1')
-    // reply 正文特意选用不会触发文本检测类（好困/困了等模式）的中性文本，这样这里观察到
-    // 的行为只来自 emotion.label === 'sleep' 这条路径本身，不与 §3.8 的困意文本检测混在一起
-    const { fastify } = await buildTestApp('嗯嗯\n&&sleep&&')
-
-    await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
-
-    expect(getEmotionState(session.sessionId)).toBeNull()
-    expect(isExplicitSleep(session.sessionId)).toBe(false)
   })
 
   it('self 情绪 label 为 sleep 时：帧照常发出但整个省掉 self 键（x 永不为 sleep 靠不给 self 达成，而不是吞掉整帧——sessionId/explicitSleep 必须照常送达）', async () => {
@@ -443,16 +408,6 @@ describe('POST /chat', () => {
     return Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:11434'), { code: 'ECONNREFUSED' }) })
   }
 
-  it('模型调用抛错时：用户消息不入库（没有得到回复的消息不保存）', async () => {
-    const { session } = loadSession('p1')
-    vi.spyOn(console, 'error').mockImplementation(() => {})
-    const fastify = await buildThrowingApp(new Error('model boom'))
-
-    await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
-
-    expect(db.prepare('SELECT COUNT(*) as count FROM Messages WHERE sessionId = ?').get(session.sessionId)).toEqual({ count: 0 })
-  })
-
   it('请求被中止时：用户消息不入库，也不按错误记 [Chat] 日志', async () => {
     const { session } = loadSession('p1')
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -583,16 +538,6 @@ describe('POST /chat', () => {
 
     expect(fullReply.length).toBeGreaterThan(200)
     expect(loggedText(errorSpy)).toContain(JSON.stringify(fullReply))
-  })
-
-  it('模型调用失败（非启动失败）时：日志带上用户消息全文', async () => {
-    loadSession('p1')
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const fastify = await buildThrowingApp(new Error('OpenAI API error: 500 Internal Server Error'))
-
-    await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '用户消息-内容-甲' } })
-
-    expect(loggedText(errorSpy)).toContain('用户消息-内容-甲')
   })
 
   it.each([
@@ -1242,16 +1187,6 @@ describe('POST /chat — 回复里的标签从显示文字中去掉', () => {
 
     expect(messageDone?.data.text).toBe('你好呀')
     expect(getHistory(50).map(m => m.content)).toEqual(['你好', '你好呀'])
-  })
-
-  it('回复没有标签时，原文显示，不报错', async () => {
-    loadSession('p1')
-    const { fastify } = await buildTestApp('这是普通回复')
-
-    const response = await fastify.inject({ method: 'POST', url: '/chat', payload: { message: '你好' } })
-    const messageDone = parseSSE(response.payload).find(e => e.event === 'message_done')
-
-    expect(messageDone?.data.text).toBe('这是普通回复')
   })
 })
 

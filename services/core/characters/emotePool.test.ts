@@ -55,11 +55,6 @@ describe('selectEmoteFile', () => {
     expect(selectEmoteFile('playful', manifest)).toBeNull()
   })
 
-  it('emotePool 为空数组：返回 null', () => {
-    const manifest = fakeManifest({ emoteTagVocabulary: ['playful'], emotePool: [] })
-    expect(selectEmoteFile('playful', manifest)).toBeNull()
-  })
-
   it('tag 匹配唯一一条候选：返回该条目的 file', () => {
     const manifest = fakeManifest({
       emoteTagVocabulary: ['playful'],

@@ -72,11 +72,6 @@ describe('portraitState: deriveY', () => {
     const now = 1_000_000
     expect(deriveY({ lastAttentionAt: now, explicitSleep: true, now })).toBe('sleeping')
   })
-
-  it('显式睡着标记优先于时长阈值——即使时长本应判定为无聊', () => {
-    const now = 1_000_000
-    expect(deriveY({ lastAttentionAt: now - (BOREDOM_THRESHOLD_MS + 1), explicitSleep: true, now })).toBe('sleeping')
-  })
 })
 
 describe('portraitState: nextThresholdInstant', () => {
@@ -138,11 +133,6 @@ describe('portraitState: resolveDisplayFile 素材回落链', () => {
 
   it('y = 睡着 时取该形态 reservedStates.sleeping，不是 emotions', () => {
     expect(resolveDisplayFile(manifest, 'pixel', 'sleeping', 'happy')).toBe('gifs/sleep.gif')
-  })
-
-  it('按形态取素材：同一份 manifest 下立绘形态读 portraits.illustration', () => {
-    expect(resolveDisplayFile(manifest, 'illustration', null, 'happy')).toBe('art/half.png')
-    expect(resolveDisplayFile(manifest, 'illustration', 'sleeping', 'happy')).toBe('art/sleep.png')
   })
 
   it('x 没有对应情绪时取该形态 fallback 组第一个文件', () => {

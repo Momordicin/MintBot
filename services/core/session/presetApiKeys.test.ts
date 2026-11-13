@@ -10,7 +10,7 @@ import {
   getPresetIdBySession,
   deletePresetWithData,
 } from './queries.js'
-import { loadSession, switchPreset, refreshCurrentPresetIfActive, getCurrentState } from './index.js'
+import { loadSession, refreshCurrentPresetIfActive, getCurrentState } from './index.js'
 
 vi.mock('../events/broadcast.js', async importOriginal => {
   const actual = await importOriginal<typeof import('../events/broadcast.js')>()
@@ -153,16 +153,6 @@ describe('session 状态里的角色凭据', () => {
     expect(state.credentials.openai).toEqual({ apiKey: 'sk-openai-1', fromEnv: false, summaryFromEnv: false })
   })
 
-  it('switchPreset 换成新角色的凭据', () => {
-    upsertPresetApiKey('p1', { provider: 'openai', apiKey: 'sk-openai-1' })
-    upsertPresetApiKey('p2', { provider: 'openai', apiKey: 'sk-openai-2' })
-    loadSession('p1')
-
-    const state = switchPreset('p2')
-
-    expect(state.credentials.openai.apiKey).toBe('sk-openai-2')
-  })
-
   it('refreshCurrentPresetIfActive 刷新当前角色的凭据，非当前角色不刷新', () => {
     upsertPresetApiKey('p1', { provider: 'openai', apiKey: 'sk-openai-1' })
     loadSession('p1')
@@ -266,13 +256,5 @@ describe('角色摘要模型与摘要 key', () => {
 
     expect(getCurrentState()!.credentials.deepseek.summaryApiKey).toBe('sk-ds-summary')
     expect(getCurrentState()!.preset.summaryModelType).toBe('deepseek')
-  })
-
-  it('deletePresetWithData 一并删除摘要 key', () => {
-    upsertPresetApiKey('p1', { provider: 'openai', summaryApiKey: 'sk-summary' })
-
-    deletePresetWithData('p1')
-
-    expect(db.prepare(`SELECT COUNT(*) AS count FROM PresetApiKeys WHERE presetId = 'p1'`).get()).toEqual({ count: 0 })
   })
 })

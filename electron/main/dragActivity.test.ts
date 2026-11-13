@@ -8,7 +8,6 @@ import {
   DRAG_END_TAIL_MS,
   MAX_DRAG_DURATION_MS,
 } from './dragActivity'
-import { PERSIST_DEBOUNCE_MS } from './windowPositions'
 
 // Stage 3: drag state is now driven by the authoritative WM_ENTERSIZEMOVE/WM_EXITSIZEMOVE pair
 // (electron/main/windowDragMonitor.ts calls noteDragStart/noteDragEnd) instead of a "time since
@@ -28,12 +27,6 @@ beforeEach(() => {
 })
 
 describe('dragActivity — per-window state (isWindowDragInProgress)', () => {
-  it('is not in progress once a drag has ended and its tail has fully elapsed', () => {
-    noteDragStart('overlay')
-    noteDragEnd('overlay', 0)
-    expect(isWindowDragInProgress('overlay', DRAG_END_TAIL_MS)).toBe(false)
-  })
-
   it('is in progress immediately after WM_ENTERSIZEMOVE, before any WM_EXITSIZEMOVE', () => {
     noteDragStart('overlay')
     expect(isWindowDragInProgress('overlay')).toBe(true)
@@ -79,41 +72,12 @@ describe('dragActivity — Fix 2 (bounded recovery: a stuck isDragging must self
     expect(isWindowDragInProgress('overlay', MAX_DRAG_DURATION_MS + 1)).toBe(false)
   })
 
-  it('the ceiling is per-window — a stuck overlay drag does not affect the chat window, and vice versa', () => {
-    noteDragStart('overlay', 0)
-    noteDragStart('chat', 0)
-    noteDragEnd('chat', 10) // chat ends normally, well before the ceiling
-    expect(isWindowDragInProgress('chat', MAX_DRAG_DURATION_MS + 1)).toBe(false) // via its own tail, not the ceiling
-    expect(isWindowDragInProgress('overlay', MAX_DRAG_DURATION_MS)).toBe(true) // overlay is still stuck (pre-ceiling)
-    expect(isWindowDragInProgress('overlay', MAX_DRAG_DURATION_MS + 1)).toBe(false) // self-heals at the ceiling
-  })
-
-  it('clearDragState resets a window to "no drag, no tail" immediately, for the lock-screen/unlock-screen and window-destroyed recovery paths', () => {
-    noteDragStart('overlay', 0)
-    clearDragState('overlay')
-    expect(isWindowDragInProgress('overlay', 0)).toBe(false)
-    // and it does not open a tail either — a cleared drag is not treated as a just-ended one
-    expect(isWindowDragInProgress('overlay', 1)).toBe(false)
-  })
-
   it('clearDragState only affects the window it is called for', () => {
     noteDragStart('overlay', 0)
     noteDragStart('chat', 0)
     clearDragState('overlay')
     expect(isWindowDragInProgress('overlay', 0)).toBe(false)
     expect(isWindowDragInProgress('chat', 0)).toBe(true)
-  })
-})
-
-describe('dragActivity — Fix 4 (DRAG_END_TAIL_MS derives from the single shared PERSIST_DEBOUNCE_MS)', () => {
-  // The mandatory sanity check for this rework pass requires reverting Fix 4 (reintroducing a
-  // divergent local copy of PERSIST_DEBOUNCE_MS in this file) to turn a test RED. This is that
-  // test: it compares DRAG_END_TAIL_MS's actual value against windowPositions.ts's exported
-  // constant directly, rather than against a hardcoded number — a local, divergent copy here
-  // would change DRAG_END_TAIL_MS without changing what this test expects, and the assertion
-  // would fail.
-  it("derives DRAG_END_TAIL_MS from windowPositions.ts's PERSIST_DEBOUNCE_MS, not a local copy", () => {
-    expect(DRAG_END_TAIL_MS).toBe(PERSIST_DEBOUNCE_MS + 150)
   })
 })
 

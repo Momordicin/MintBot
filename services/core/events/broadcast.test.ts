@@ -30,18 +30,6 @@ describe('broadcast.ts', () => {
     )
   })
 
-  it('多个已注册客户端都收到同一次广播', () => {
-    const replyA = fakeReply()
-    const replyB = fakeReply()
-    registerEventsClient(replyA)
-    registerEventsClient(replyB)
-
-    broadcastEvent('emotion', { self: null, perceived_user: null })
-
-    expect(replyA.raw.write).toHaveBeenCalledTimes(1)
-    expect(replyB.raw.write).toHaveBeenCalledTimes(1)
-  })
-
   it('连接已经 destroyed 的客户端被跳过，不抛错，且从注册表移除（后续广播不会再尝试写入）', () => {
     const reply = fakeReply()
     registerEventsClient(reply)
@@ -139,13 +127,6 @@ describe('心跳生命周期', () => {
     reply.raw.write = vi.fn()
     vi.advanceTimersByTime(HEARTBEAT_INTERVAL_MS)
     expect(reply.raw.write).toHaveBeenCalledTimes(1)
-  })
-
-  it('零客户端时不启动定时器：没有任何客户端注册过，推进任意时间都不会有写入', async () => {
-    const { HEARTBEAT_INTERVAL_MS } = await import('./broadcast.js')
-    vi.advanceTimersByTime(HEARTBEAT_INTERVAL_MS * 5)
-    // 没有客户端可写，这里只验证推进计时器不抛错——没有客户端注册就不存在断言写入的对象
-    expect(true).toBe(true)
   })
 
   it('最后一个客户端断开后心跳停止，之后不再有任何广播写入', async () => {

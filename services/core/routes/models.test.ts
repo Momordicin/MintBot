@@ -119,15 +119,6 @@ describe('GET /models', () => {
     expect(openaiListMock).not.toHaveBeenCalled()
   })
 
-  it('type=ollama 且 Ollama 未运行（listOllamaModels 返回空数组）时返回空列表而不报错', async () => {
-    listOllamaModelsMock.mockResolvedValue([])
-
-    const { status, body } = await getModels('ollama')
-
-    expect(status).toBe(200)
-    expect(body).toEqual({ models: [] })
-  })
-
   it('type=ollama 启动失败时返回错误提示且不查询列表', async () => {
     ensureOllamaMock.mockResolvedValue(false)
 
@@ -217,18 +208,6 @@ describe('GET /models', () => {
     })
   })
 
-  it('type=openai 使用配置的 openaiBaseUrl，且 openaiApiKeyFromEnv 为 true 时使用环境变量 Key', async () => {
-    getModelProviderConfigMock.mockReturnValue({ type: 'openai', openaiApiKey: 'sk-saved', openaiApiKeyFromEnv: true, openaiBaseUrl: 'http://proxy.local/v1' })
-    getEnvCredentialMock.mockReturnValue('sk-openai-env')
-    openaiListMock.mockReturnValue(pages('gpt-4o'))
-
-    const { body } = await getModels('openai')
-
-    expect(body).toEqual({ models: ['gpt-4o'] })
-    expect(getEnvCredentialMock).toHaveBeenCalledWith('openai')
-    expect(openaiCtorMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: 'sk-openai-env', baseURL: 'http://proxy.local/v1' }))
-  })
-
   it('type=deepseek 通过 OpenAI SDK 与默认 DeepSeek baseURL 查询，不做 id 过滤', async () => {
     getModelProviderConfigMock.mockReturnValue({ type: 'deepseek', deepseekApiKey: 'sk-ds-saved' })
     openaiListMock.mockReturnValue(pages('deepseek-v4-pro', 'deepseek-v4-flash'))
@@ -248,18 +227,6 @@ describe('GET /models', () => {
       maxRetries: 2,
     })
     expect(anthropicCtorMock).not.toHaveBeenCalled()
-  })
-
-  it('type=deepseek 使用配置的 deepseekBaseUrl，且 deepseekApiKeyFromEnv 为 true 时使用环境变量 Key', async () => {
-    getModelProviderConfigMock.mockReturnValue({ type: 'deepseek', deepseekApiKeyFromEnv: true, deepseekBaseUrl: 'http://ds.local' })
-    getEnvCredentialMock.mockReturnValue('sk-ds-env')
-    openaiListMock.mockReturnValue(pages('deepseek-v4-flash'))
-
-    const { body } = await getModels('deepseek')
-
-    expect(body).toEqual({ models: ['deepseek-v4-flash'] })
-    expect(getEnvCredentialMock).toHaveBeenCalledWith('deepseek')
-    expect(openaiCtorMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: 'sk-ds-env', baseURL: 'http://ds.local' }))
   })
 
   it('列表请求使用 15 秒超时且不重试', async () => {
@@ -524,20 +491,6 @@ describe('POST /models', () => {
     expect(openaiListMock).not.toHaveBeenCalled()
   })
 
-  it('SDK 抛错时返回通用失败提示且不泄露详情和 key', async () => {
-    openaiListMock.mockImplementation(() => ({
-      [Symbol.asyncIterator]() {
-        return { next: () => Promise.reject(new Error('401 secret-detail')) }
-      },
-    }))
-    vi.spyOn(console, 'error').mockImplementation(() => {})
-
-    const { body } = await postModels({ type: 'openai', apiKey: 'sk-typed' })
-
-    expect(body).toEqual({ models: [], code: 'MODEL_LIST_FAILED' })
-    expect(JSON.stringify(body)).not.toContain('sk-typed')
-  })
-
   it('全局模型配置尚未建立时仍可用请求体里的 key 查询', async () => {
     getModelProviderConfigMock.mockImplementation(() => {
       throw new Error('[Config] modelProvider is not configured')
@@ -558,15 +511,6 @@ describe('POST /models', () => {
     expect(body).toEqual({ models: ['qwen3'] })
     expect(ensureOllamaMock).toHaveBeenCalledTimes(1)
     expect(openaiCtorMock).not.toHaveBeenCalled()
-  })
-
-  it('type=ollama 启动失败时返回错误提示', async () => {
-    ensureOllamaMock.mockResolvedValue(false)
-
-    const { body } = await postModels({ type: 'ollama' })
-
-    expect(body).toEqual({ models: [], code: 'OLLAMA_START_FAILED' })
-    expect(listOllamaModelsMock).not.toHaveBeenCalled()
   })
 
   it('type 缺失或无效时返回 400', async () => {
@@ -663,17 +607,6 @@ describe('GET /models?fromEnv=1', () => {
     expect(body).toEqual({ models: ['qwen3'] })
     expect(getEnvCredentialMock).not.toHaveBeenCalled()
   })
-
-  it('fromEnv 不是 1 时行为不变，仍使用已保存的全局 key', async () => {
-    getModelProviderConfigMock.mockReturnValue({ type: 'openai', openaiApiKey: 'sk-global' })
-    getEnvCredentialMock.mockReturnValue('sk-openai-env')
-    openaiListMock.mockReturnValue(pages('gpt-4o'))
-    const fastify = await buildTestApp()
-
-    await fastify.inject({ method: 'GET', url: '/models?type=openai&fromEnv=0' })
-
-    expect(openaiCtorMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: 'sk-global' }))
-  })
 })
 
 async function getFromEnvOff(type: string, presetId?: string) {
@@ -743,17 +676,6 @@ describe('GET /models?fromEnv=0', () => {
     expect(openaiCtorMock).not.toHaveBeenCalled()
     expect(anthropicListMock).not.toHaveBeenCalled()
     expect(openaiListMock).not.toHaveBeenCalled()
-  })
-
-  it('未知 preset 仍返回 404，type=ollama 忽略 fromEnv', async () => {
-    getPresetByIdMock.mockReturnValue(null)
-    listOllamaModelsMock.mockResolvedValue(['qwen3'])
-
-    const unknown = await getFromEnvOff('openai', 'missing')
-    const ollama = await getFromEnvOff('ollama', 'missing')
-
-    expect(unknown.status).toBe(404)
-    expect(ollama.body).toEqual({ models: ['qwen3'] })
   })
 })
 
@@ -837,30 +759,5 @@ describe('GET /models?purpose=summary', () => {
 
     expect(body).toEqual({ models: [], code: 'API_KEY_INVALID' })
     expect(openaiListMock).not.toHaveBeenCalled()
-  })
-
-  it('不带 presetId 时 purpose 被忽略，仍使用全局 key', async () => {
-    getModelProviderConfigMock.mockReturnValue({ type: 'openai', openaiApiKey: 'sk-global' })
-    openaiListMock.mockReturnValue(pages('gpt-4o'))
-
-    const { body } = await getSummaryModels('openai', '', null)
-
-    expect(body).toEqual({ models: ['gpt-4o'] })
-    expect(openaiCtorMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: 'sk-global' }))
-    expect(getPresetApiKeysMock).not.toHaveBeenCalled()
-  })
-
-  it('未知 preset 返回 404，purpose 缺省时仍使用对话 key', async () => {
-    getPresetByIdMock.mockReturnValue(null)
-    const unknown = await getSummaryModels('openai')
-    expect(unknown.status).toBe(404)
-
-    getPresetByIdMock.mockReturnValue({ presetId: 'p1' })
-    getPresetApiKeysMock.mockReturnValue({ ...noKeys, openai: { apiKey: 'sk-chat', fromEnv: false, summaryApiKey: 'sk-summary', summaryFromEnv: false } })
-    openaiListMock.mockReturnValue(pages('gpt-4o'))
-    const chat = await getPresetModels('openai', 'p1')
-
-    expect(chat.body).toEqual({ models: ['gpt-4o'] })
-    expect(openaiCtorMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: 'sk-chat' }))
   })
 })

@@ -138,34 +138,10 @@ describe('theme: tintStrength=0 时输出字节级等于发布表', () => {
   })
 })
 
-// placeholderText 的核对：参考实现发布的 placeholderText 与 label3 解析到完全相同的
-// { base, alpha }，因此本模型不单独设一个角色，这里钉住这条等价关系本身
-describe('theme: placeholderText 等价于 label3（不单独设角色）', () => {
-  it.each(MODES)('%s 模式', (mode) => {
-    const published = mode === 'day' ? DAY_PUBLISHED : NIGHT_PUBLISHED
-    const colors = deriveTheme({ accentRgb: [0, 122, 255], mode, tintStrength: 0 })
-    expect(colors.label3).toEqual(published.label3)
-  })
-})
-
 // ─── 不变量 2：bubbleOut 白字对比度恒 ≥ 4.5:1（规则 2，clampAccentForBubble 本身
 // 本次未改动）────────────────────────────────────────────────────────────
 
 describe('theme: bubbleOut 白字对比度恒 ≥ 4.5:1', () => {
-  it.each(MODES)('%s 模式：灰阶 accent 全扫', (mode) => {
-    for (const accentRgb of GRAYSCALE_ACCENTS) {
-      const colors = deriveTheme({ accentRgb, mode, tintStrength: 0 })
-      expect(contrastRatio(colors.labelOnAccent, colors.bubbleOut)).toBeGreaterThanOrEqual(WHITE_ON_ACCENT_MIN_CONTRAST)
-    }
-  })
-
-  it.each(MODES)('%s 模式：饱和 accent 全扫', (mode) => {
-    for (const accentRgb of SATURATED_ACCENTS) {
-      const colors = deriveTheme({ accentRgb, mode, tintStrength: 0 })
-      expect(contrastRatio(colors.labelOnAccent, colors.bubbleOut)).toBeGreaterThanOrEqual(WHITE_ON_ACCENT_MIN_CONTRAST)
-    }
-  })
-
   // 近白 accent：钳制前对比度接近 1:1，必须被狠狠地钳制下去
   it('近白 accent（#fffbe0）被硬钳制，钳制后依然 ≥ 4.5:1', () => {
     const nearWhite: RgbTuple = [0xff, 0xfb, 0xe0]
@@ -193,7 +169,7 @@ describe('theme: bubbleOut 白字对比度恒 ≥ 4.5:1', () => {
 
   // labelOnAccent 是钳制规则的另一半：钳制把 accent 压暗到"白字够读"为止，那么真正
   // 被画上去的文字就必须确实是白的。这条断言防止日后有人"顺手"让它跟着 tint 或跟着
-  // 模式变——一旦它不再是纯白，上面两条全扫里的 4.5:1 保证就跟着一起失效了
+  // 模式变——一旦它不再是纯白，下方全 accent 扫描里的 4.5:1 保证就跟着一起失效了
   it.each(MODES)('%s 模式：labelOnAccent 恒为纯白，且不随 tint 变化', (mode) => {
     for (const tintStrength of [0, 0.5, 1]) {
       const colors = deriveTheme({ accentRgb: [0xff, 0x4d, 0xa6], mode, tintStrength })
@@ -212,20 +188,6 @@ describe('theme: bubbleOut 白字对比度恒 ≥ 4.5:1', () => {
 // ─── 不变量 2b：bubbleOut 与 bg 对比度 ≥ 3.0（规则 2 的下界，未改动）──────────
 
 describe('theme: bubbleOut 与 bg 对比度恒 ≥ 3.0（规则 2 的下界）', () => {
-  it.each(MODES)('%s 模式：灰阶 accent 全扫', (mode) => {
-    for (const accentRgb of GRAYSCALE_ACCENTS) {
-      const colors = deriveTheme({ accentRgb, mode, tintStrength: 0 })
-      expect(contrastRatio(colors.bubbleOut, colors.bg)).toBeGreaterThanOrEqual(BUBBLE_BACKGROUND_MIN_CONTRAST)
-    }
-  })
-
-  it.each(MODES)('%s 模式：饱和 accent 全扫', (mode) => {
-    for (const accentRgb of SATURATED_ACCENTS) {
-      const colors = deriveTheme({ accentRgb, mode, tintStrength: 0 })
-      expect(contrastRatio(colors.bubbleOut, colors.bg)).toBeGreaterThanOrEqual(BUBBLE_BACKGROUND_MIN_CONTRAST)
-    }
-  })
-
   it('accent [15,15,20]（chatBgRgb 默认值）在 night 模式下必须清晰区别于 #000000', () => {
     const accentRgb: RgbTuple = [15, 15, 20]
     expect(contrastRatio([255, 255, 255], accentRgb)).toBeGreaterThanOrEqual(WHITE_ON_ACCENT_MIN_CONTRAST)

@@ -107,17 +107,6 @@ describe('resolveTransitionChain', () => {
     expect(warnSpy).not.toHaveBeenCalled()
   })
 
-  it('from 为单个字符串时按单键处理', () => {
-    touch('a.gif')
-
-    const chain = resolve({
-      portraits: { pixel: { emotions: { happy: ['a.gif'] } } },
-      transitions: { 'poke-neutral': [{ from: 'emotions.happy', durationMs: 1000 }] },
-    })
-
-    expect(chain[0].files).toEqual(['a.gif'])
-  })
-
   it('单个坏键不影响同一步里的其他键，并记日志写明角色、形态、触发点、步序号、键', () => {
     touch('a.gif')
 

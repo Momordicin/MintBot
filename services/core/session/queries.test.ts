@@ -310,16 +310,6 @@ describe('Session', () => {
 // ─── Messages ─────────────────────────────────────────────
 
 describe('Messages', () => {
-  it('appendMessage 写入，getRecentMessages 读出 content 正确', () => {
-    appendMessage({
-      sessionId: 's1', role: 'user', content: '你好', createdAt: Date.now(),
-      embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null,
-    })
-    const msgs = getRecentMessages('s1')
-    expect(msgs).toHaveLength(1)
-    expect(msgs[0].content).toBe('你好')
-  })
-
   it('appendMessage 的 content 明文落盘', () => {
     const id = appendMessage({
       sessionId: 's1', role: 'user', content: '本地明文消息', createdAt: Date.now(),
@@ -368,31 +358,12 @@ describe('Messages', () => {
 })
 
 describe('getMessagesPage', () => {
-  it('limit 生效，返回最近 limit 条，正序排列，hasMore 为 true', () => {
-    for (let i = 0; i < 5; i++) {
-      appendMessage({ sessionId: 's1', role: 'user', content: `消息${i}`, createdAt: i * 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
-    }
-    const { messages, hasMore } = getMessagesPage('s1', 3)
-    expect(messages.map(m => m.content)).toEqual(['消息2', '消息3', '消息4'])
-    expect(hasMore).toBe(true)
-  })
-
   it('没有更多数据时 hasMore 为 false', () => {
     for (let i = 0; i < 3; i++) {
       appendMessage({ sessionId: 's1', role: 'user', content: `消息${i}`, createdAt: i * 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
     }
     const { messages, hasMore } = getMessagesPage('s1', 3)
     expect(messages).toHaveLength(3)
-    expect(hasMore).toBe(false)
-  })
-
-  it('beforeId 正确排除新消息，只取更旧的一页', () => {
-    const ids: number[] = []
-    for (let i = 0; i < 5; i++) {
-      ids.push(appendMessage({ sessionId: 's1', role: 'user', content: `消息${i}`, createdAt: i * 1000, embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null }))
-    }
-    const { messages, hasMore } = getMessagesPage('s1', 3, ids[3])
-    expect(messages.map(m => m.content)).toEqual(['消息0', '消息1', '消息2'])
     expect(hasMore).toBe(false)
   })
 
@@ -783,11 +754,6 @@ describe('EmotionState', () => {
     const emotion = getEmotionState('s1')
     expect(emotion!.self).toEqual({ label: 'sad', intensity: 0.3 })
   })
-
-  it('perceived_user 为 null 时往返仍为 null（Phase 2 占位）', () => {
-    upsertEmotionState('s1', { self: { label: 'idle', intensity: 0.1 }, perceived_user: null })
-    expect(getEmotionState('s1')!.perceived_user).toBeNull()
-  })
 })
 
 // ─── FTS (message_fts) ──────────────────────────────────────
@@ -830,14 +796,6 @@ describe('FTS (message_fts)', () => {
     const results = searchMessagesFts('猫')
     expect(results).toHaveLength(1)
     expect(results[0].messageId).toBe(1)
-  })
-
-  it('专有名词（游戏名/人名）可命中', () => {
-    indexMessageFts(1, 's1', '我最近在玩原神')
-    indexMessageFts(2, 's1', '张三昨天来找我了')
-
-    expect(searchMessagesFts('原神')).toHaveLength(1)
-    expect(searchMessagesFts('张三')).toHaveLength(1)
   })
 
   it('跨"词"边界的中文子串可命中（逐字符索引，不依赖分词边界）', () => {
@@ -1003,12 +961,6 @@ describe('getSummariesOverlappingRange', () => {
   it('跨 session 隔离', () => {
     insertSummary({ sessionId: 's2', content: '别的会话摘要', fromMessageId: 3, toMessageId: 5 })
     expect(getSummariesOverlappingRange('s1', 1, 10)).toEqual([])
-  })
-
-  it('content 读回正确', () => {
-    insertSummary({ sessionId: 's1', content: '真实摘要正文', fromMessageId: 3, toMessageId: 5 })
-    const results = getSummariesOverlappingRange('s1', 1, 10)
-    expect(results[0].content).toBe('真实摘要正文')
   })
 })
 

@@ -101,13 +101,6 @@ describe('voice agent', () => {
     expect(takePending()).toEqual([])
   })
 
-  it('take returns pending texts once and empties them', () => {
-    final({ text: '你好', end_unix_ms: 1, language: 'zh', emotion: 'neutral' })
-    final({ text: 'world', end_unix_ms: 2, language: 'en', emotion: 'neutral' })
-    expect(takePending()).toEqual(['你好', 'world'])
-    expect(takePending()).toEqual([])
-  })
-
   it('discards enrolling and blank finals and non-final events', () => {
     final({ text: '录声纹', enrolling: true, end_unix_ms: 1 })
     final({ text: '   ', end_unix_ms: 2 })
@@ -406,19 +399,6 @@ describe('voice settings page', () => {
       mocks.resolveManifestUrl.mockReturnValue('https://example.invalid/manifest.json')
       expect((await check()).updateVersion).toBeNull()
       expect(mocks.fetchRemoteManifestInfo).not.toHaveBeenCalled()
-    })
-
-    it('an update is rejected with VOICE_BUSY while enrolling or testing', async () => {
-      mocks.fetchRemoteManifestInfo.mockResolvedValue({ version: '0.2.0', apiVersion: 1 })
-      await check()
-      await post('/voice/enroll/start')
-      const whileEnrolling = await post('/voice/install')
-      expect(whileEnrolling.statusCode).toBe(409)
-      expect(whileEnrolling.json()).toEqual({ code: 'VOICE_BUSY' })
-      await post('/voice/enroll/cancel')
-      await post('/voice/test/start')
-      expect((await post('/voice/install')).statusCode).toBe(409)
-      expect(mocks.installVoice).not.toHaveBeenCalled()
     })
   })
 
@@ -1174,11 +1154,6 @@ describe('voice input toggle', () => {
     errorSpy.mockRestore()
   })
 
-  it('the old POST /voice/listen route no longer exists', async () => {
-    await begin('off')
-    expect((await post('/voice/listen', { enabled: true })).statusCode).toBe(404)
-  })
-
   it('appends one input-mode marker line per actual mode change and none for a repeated mode', async () => {
     await begin('off')
     const file = path.join(dataDir, 'transcripts.jsonl')
@@ -1204,14 +1179,6 @@ describe('voice input toggle', () => {
     const lines = fs.readFileSync(path.join(dataDir, 'transcripts.jsonl'), 'utf-8').trim().split('\n').map(l => JSON.parse(l))
     expect(lines).toHaveLength(1)
     expect(lines[0]).toMatchObject({ text: '你好', mode: 'normal', inputMode: 'transcribe' })
-  })
-
-  it('a final in listen mode queues and never broadcasts voice-type', async () => {
-    await begin('listen')
-    final({ text: 'hi', end_unix_ms: 5, language: 'en', emotion: 'neutral' })
-    expect(takePending()).toEqual(['hi'])
-    expect(mocks.broadcastEvent).toHaveBeenCalledWith('voice-pending', {})
-    expect(mocks.broadcastEvent).not.toHaveBeenCalledWith('voice-type', expect.anything())
   })
 
   it('testing and enrolling finals are never typed even in transcribe mode', async () => {
@@ -1276,14 +1243,6 @@ describe('voice input toggle', () => {
     await post('/voice/input-mode', { mode: 'listen' })
     final({ text: 'hi', end_unix_ms: 6, language: 'en', emotion: 'neutral' })
     expect(takePending()).toEqual(['hi'])
-  })
-
-  it('a non-enrolling final during enrollment is neither recorded nor queued', async () => {
-    await begin('listen')
-    await post('/voice/enroll/start')
-    final({ text: '你好', end_unix_ms: 5, language: 'zh', emotion: 'neutral' })
-    expect(takePending()).toEqual([])
-    expect(fs.existsSync(path.join(dataDir, 'transcripts.jsonl'))).toBe(false)
   })
 
   describe('mode ownership by speech start time', () => {

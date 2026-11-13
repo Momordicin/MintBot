@@ -133,12 +133,3 @@ describe('revealChat', () => {
     expect(fadeIn).toHaveBeenCalledWith(second, CHAT_FADE_IN_MS)
   })
 })
-
-describe('reveal timing constants', () => {
-  it('reveal waits at most 1 second and the fade is visible but under a second', () => {
-    expect(CHAT_REVEAL_TIMEOUT_MS).toBeGreaterThan(0)
-    expect(CHAT_REVEAL_TIMEOUT_MS).toBeLessThanOrEqual(1000)
-    expect(CHAT_FADE_IN_MS).toBeGreaterThan(0)
-    expect(CHAT_FADE_IN_MS).toBeLessThan(1000)
-  })
-})

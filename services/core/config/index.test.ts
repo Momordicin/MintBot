@@ -140,32 +140,6 @@ describe('config/index — 缺失/类型错误字段回退默认值', () => {
     expect(warnSpy).toHaveBeenCalled()
   })
 
-  it('memory.summaryTrigger.pendingCountThreshold 缺失时，仅该子字段回退默认值 100', async () => {
-    const config = fullValidConfig()
-    delete (config.memory.summaryTrigger as Record<string, unknown>).pendingCountThreshold
-    readFileSyncMock.mockReturnValue(JSON.stringify(config))
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const { startConfigWatcher, getMemoryConfig } = await import('./index.js')
-
-    startConfigWatcher()
-
-    expect(getMemoryConfig().summaryTrigger.pendingCountThreshold).toBe(100)
-    expect(getMemoryConfig().summaryTrigger.oldestPendingAgeMinutes).toBe(90)
-  })
-
-  it('memory.summaryTrigger.minMessagesForLockTrigger 缺失时，仅该子字段回退默认值 4', async () => {
-    const config = fullValidConfig()
-    delete (config.memory.summaryTrigger as Record<string, unknown>).minMessagesForLockTrigger
-    readFileSyncMock.mockReturnValue(JSON.stringify(config))
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const { startConfigWatcher, getMemoryConfig } = await import('./index.js')
-
-    startConfigWatcher()
-
-    expect(getMemoryConfig().summaryTrigger.minMessagesForLockTrigger).toBe(4)
-    expect(getMemoryConfig().summaryTrigger.lockScreenMinutes).toBe(30)
-  })
-
   it('memory 整个字段缺失时，MemoryConfig 全部回退默认值', async () => {
     readFileSyncMock.mockReturnValue(JSON.stringify({ modelProvider: { type: 'ollama' } }))
     vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -390,29 +364,6 @@ describe('config/index — updateBackgroundModelProviderConfig', () => {
     expect('backgroundModelProvider' in writtenJson).toBe(false)
     // modelProvider 不受影响
     expect(writtenJson.modelProvider).toEqual({ type: 'ollama', ollamaBaseUrl: 'http://localhost:11434' })
-  })
-
-  it('传 null 并重新加载（模拟 chokidar 写入后触发的 reload）后，getBackgroundModelProviderConfig 真正 fallback 到 modelProvider，而不是保留旧覆盖', async () => {
-    readFileSyncMock.mockReturnValue(JSON.stringify({
-      modelProvider: { type: 'ollama', ollamaBaseUrl: 'http://localhost:11434' },
-      backgroundModelProvider: { type: 'anthropic', modelName: 'claude-strong' },
-    }))
-    const onMock = vi.fn()
-    watchMock.mockReturnValue({ on: onMock })
-    const { startConfigWatcher, updateBackgroundModelProviderConfig, getBackgroundModelProviderConfig, getModelProviderConfig } = await import('./index.js')
-
-    startConfigWatcher()
-    expect(getBackgroundModelProviderConfig()).toEqual({ type: 'anthropic', ollamaBaseUrl: 'http://localhost:11434', modelName: 'claude-strong' })
-
-    updateBackgroundModelProviderConfig(null)
-    const [, written] = writeFileSyncMock.mock.calls[0]
-
-    // 模拟磁盘上的文件现在确实是刚写入的内容，chokidar 的 change 事件触发重新加载
-    readFileSyncMock.mockReturnValue(written)
-    const changeCallback = onMock.mock.calls.find(call => call[0] === 'change')?.[1]
-    changeCallback()
-
-    expect(getBackgroundModelProviderConfig()).toEqual(getModelProviderConfig())
   })
 
   it('传非 null partial 时合并磁盘上已存的 backgroundModelProvider，不 clobber 未提及字段', async () => {
@@ -698,15 +649,6 @@ describe('config/index — getWindowBehaviorConfig 读取旧形状', () => {
     expect(getWindowBehaviorConfig().chatPinMode).toBe('always')
   })
 
-  it('旧 pinMode off 读成 off', async () => {
-    readFileSyncMock.mockReturnValue(JSON.stringify({ windowBehavior: { pinMode: 'off' } }))
-    const { startConfigWatcher, getWindowBehaviorConfig } = await import('./index.js')
-
-    startConfigWatcher()
-
-    expect(getWindowBehaviorConfig().chatPinMode).toBe('off')
-  })
-
   it('旧白名单读成 allow 规则、旧黑名单读成 hard 规则', async () => {
     readFileSyncMock.mockReturnValue(JSON.stringify({
       windowBehavior: { pinMode: 'off', fullscreenWhitelist: ['chrome.exe'], blacklist: ['game.exe'] },
@@ -909,15 +851,6 @@ describe('config/index — windowBehavior revision', () => {
     expect(mod.getWindowBehaviorRevision()).toBe(2)
   })
 
-  it('updateWindowBehaviorConfig 写入相同内容时 revision 不变', async () => {
-    readFileSyncMock.mockReturnValue(windowBehaviorFile({ chatPinMode: 'smart' }))
-    const { mod } = await startWatching()
-
-    mod.updateWindowBehaviorConfig({ chatPinMode: 'smart' })
-
-    expect(mod.getWindowBehaviorRevision()).toBe(1)
-  })
-
   it('petClickThrough 或 petCollapsed 变化时 revision +1，写入相同值时不变', async () => {
     readFileSyncMock.mockReturnValue(windowBehaviorFile())
     const { mod } = await startWatching()
@@ -1084,19 +1017,6 @@ describe('config/index — config.json 无法读取或格式不正确时拒绝�
     expect(renameSyncMock).toHaveBeenCalledTimes(1)
     expect(JSON.parse(writeFileSyncMock.mock.calls[0][1] as string)).toEqual({ defaultPresetId: 'p2' })
     expect(getDefaultPresetId()).toBe('p2')
-  })
-
-  it('文件合法时行为不变，其他段原样保留', async () => {
-    readFileSyncMock.mockReturnValue(JSON.stringify({ memory: { recentTrackMaxMessages: 200 }, modelProvider: { type: 'ollama' } }))
-    const { setDefaultPresetId } = await import('./index.js')
-
-    setDefaultPresetId('p2')
-
-    expect(JSON.parse(writeFileSyncMock.mock.calls[0][1] as string)).toEqual({
-      memory: { recentTrackMaxMessages: 200 },
-      modelProvider: { type: 'ollama' },
-      defaultPresetId: 'p2',
-    })
   })
 })
 

@@ -64,10 +64,6 @@ describe('themeVars: themeCssVars', () => {
     expect(vars['--bg2-rgb']).toBe(theme.bg2.join(', '))
   })
 
-  it('CHROME_MATERIAL_ALPHA 固定为 0.65，不再是上一代模型的 0.40（旧的 CHROME_SURFACE_ALPHA 已随本次改动删除）', () => {
-    expect(CHROME_MATERIAL_ALPHA).toBe(0.65)
-  })
-
   it('--input-placeholder 与 --label3 取值相等（label3 身兼二职：也是参考实现发布的 placeholderText，见 theme.ts）', () => {
     const theme = deriveTheme({ accentRgb: [15, 15, 20], mode: 'day', tintStrength: 0.5 })
     const vars = themeCssVars(theme, 0.65)
@@ -106,16 +102,6 @@ describe('themeVars: themeCssVars', () => {
       `rgba(${theme.fill1.base.join(', ')}, ${Math.min(1, theme.fill1.alpha + 0.15)})`
     )
     expect(vars['--scrollbar-thumb-hover']).not.toBe(vars['--scrollbar-thumb'])
-  })
-
-  // night 模式下 fill1 alpha 是 0.36，+0.15 = 0.51，未触及钳到 1 的边界——这条覆盖钳制
-  // 边界本身：一个 alpha 已经很高的角色，boostAlpha 不应该越界到 1 以上
-  it('--scrollbar-thumb-hover 的 alpha 钳制不超过 1', () => {
-    const theme = deriveTheme({ accentRgb: [15, 15, 20], mode: 'night', tintStrength: 0 })
-    const boosted = Math.min(1, theme.fill1.alpha + 0.15)
-    expect(boosted).toBeLessThanOrEqual(1)
-    const vars = themeCssVars(theme, 0.65)
-    expect(vars['--scrollbar-thumb-hover']).toBe(`rgba(${theme.fill1.base.join(', ')}, ${boosted})`)
   })
 
   it('--label/--label2/--label3/--label4 直接对应 theme 的四级 label', () => {

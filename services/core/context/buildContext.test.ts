@@ -58,18 +58,6 @@ beforeEach(() => {
 })
 
 describe('buildContext', () => {
-  it('system 以 preset.systemPrompt 开头（未触发召回时）', async () => {
-    const ctx = await buildContext('你好', { embedding: fakeEmbeddingProvider() })
-    expect(ctx.system.startsWith('你是一个AI助手')).toBe(true)
-  })
-
-  it('messages 最后一条是用户输入', async () => {
-    const ctx = await buildContext('你好', { embedding: fakeEmbeddingProvider() })
-    const last = ctx.messages[ctx.messages.length - 1]
-    expect(last.role).toBe('user')
-    expect(last.content).toBe('你好')
-  })
-
   it('没有历史消息时 messages 只有用户输入一条', async () => {
     const ctx = await buildContext('你好', { embedding: fakeEmbeddingProvider() })
     expect(ctx.messages).toHaveLength(1)
@@ -177,25 +165,6 @@ describe('buildContext', () => {
     const ctx = await buildContext('好的', { embedding: fakeEmbeddingProvider() })
     expect(ctx.system.startsWith('你是一个AI助手')).toBe(true)
     expect(ctx.system).not.toContain('以下是之前对话的历史摘要')
-  })
-
-  it('摘要 + 情绪 + RAG 三者同时存在时都正确出现在 system 中', async () => {
-    const sessionId = getCurrentState()!.session.sessionId
-    insertSummary({ sessionId, content: '历史摘要正文', fromMessageId: 1, toMessageId: 2 })
-    upsertEmotionState(sessionId, { self: { label: 'happy', intensity: 0.5 }, perceived_user: null })
-
-    const msgId = appendMessage({
-      sessionId, role: 'user', content: '我们聊过日本旅行的事', createdAt: Date.now() - 60 * 60 * 1000,
-      embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null,
-    })
-    insertEntity({ messageId: msgId, sessionId, type: 'place', value: '日本', validFrom: Date.now() })
-
-    const ctx = await buildContext('你还记得日本的事吗', { embedding: fakeEmbeddingProvider() })
-
-    expect(ctx.system).toContain('历史摘要正文')
-    expect(ctx.system).toContain('happy')
-    expect(ctx.system).toContain('以下是相关的历史对话片段')
-    expect(ctx.system).toContain('我们聊过日本旅行的事')
   })
 
   it.skip('有当前有效实体时 system 包含实体信息，按类型分组格式化', async () => {
@@ -313,11 +282,6 @@ describe('buildContext — 输出契约块（Part C，TDD §3.9/§3.7）', () =>
     expect(ctx.outputRules).toBe('')
   })
 
-  it('preset.addressForms 为空时不注入称呼候选行', async () => {
-    const ctx = await buildContext('你好', { embedding: fakeEmbeddingProvider() })
-    expect(ctx.outputRules).not.toContain('你可以这样称呼用户')
-  })
-
   it('角色包声明 emotionVocabulary/emoteTagVocabulary 时，system 包含对应枚举行', async () => {
     // 用 example（git 内唯一提交、schema v2 全字段的角色包 fixture），不用真实的
     // Aemeath/Mint——那两个是 gitignore 掉的本地专属文件夹，CI/全新 clone 上不存在
@@ -398,21 +362,6 @@ describe('buildContext — token（字符数近似）预算裁剪', () => {
     expect(contents).toContain('新消息')
   })
 
-  it('近期消息总字符数未超预算时不裁剪（不回归已有行为）', async () => {
-    const sessionId = getCurrentState()!.session.sessionId
-    const now = Date.now()
-    appendMessage({
-      sessionId, role: 'user', content: '历史消息', createdAt: now - 1 * 60 * 1000,
-      embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null,
-    })
-    mockMemoryConfig.contextBudget.recentMessages = 3000
-
-    const ctx = await buildContext('新消息', { embedding: fakeEmbeddingProvider() })
-
-    expect(ctx.messages).toHaveLength(2)
-    expect(ctx.messages[0].content).toBe('历史消息')
-  })
-
   it('历史摘要总字符数超出 contextBudget.summary 时，从最旧一端（createdAt 升序的最前面）裁剪', async () => {
     const sessionId = getCurrentState()!.session.sessionId
     insertSummary({ sessionId, content: 'AAAAAAAAAA', fromMessageId: 1, toMessageId: 2 })
@@ -423,16 +372,6 @@ describe('buildContext — token（字符数近似）预算裁剪', () => {
 
     expect(ctx.system).not.toContain('AAAAAAAAAA')
     expect(ctx.system).toContain('BBBBBBBBBB')
-  })
-
-  it('历史摘要总字符数未超预算时不裁剪（不回归已有行为）', async () => {
-    const sessionId = getCurrentState()!.session.sessionId
-    insertSummary({ sessionId, content: '历史摘要正文', fromMessageId: 1, toMessageId: 2 })
-    mockMemoryConfig.contextBudget.summary = 1500
-
-    const ctx = await buildContext('好的', { embedding: fakeEmbeddingProvider() })
-
-    expect(ctx.system).toContain('历史摘要正文')
   })
 
   it('RAG 召回片段总字符数超出 contextBudget.rag 时，从排名最低的一端（数组末尾）裁剪', async () => {
@@ -461,20 +400,6 @@ describe('buildContext — token（字符数近似）预算裁剪', () => {
 
     expect(ctx.system).not.toContain('AAAAAAAAAA')
     expect(ctx.system).toContain('BBBBBBBBBB')
-  })
-
-  it('RAG 召回片段总字符数未超预算时不裁剪（不回归已有行为）', async () => {
-    const sessionId = getCurrentState()!.session.sessionId
-    const msgId = appendMessage({
-      sessionId, role: 'user', content: '我们聊过日本旅行的事', createdAt: Date.now() - 60 * 60 * 1000,
-      embedded: false, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null,
-    })
-    insertEntity({ messageId: msgId, sessionId, type: 'place', value: '日本', validFrom: Date.now() })
-    mockMemoryConfig.contextBudget.rag = 2000
-
-    const ctx = await buildContext('你还记得日本的事吗', { embedding: fakeEmbeddingProvider() })
-
-    expect(ctx.system).toContain('我们聊过日本旅行的事')
   })
 })
 

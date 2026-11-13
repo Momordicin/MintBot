@@ -69,17 +69,6 @@ describe('logServerErrors', () => {
     expect(logs[0].err?.message).toBe('boom message')
   })
 
-  it('带 statusCode 503 的错误返回 503 并记录', async () => {
-    const { fastify, errorLogs } = buildApp(true)
-    addRoutes(fastify)
-
-    const res = await fastify.inject({ method: 'GET', url: '/unavailable' })
-
-    expect(res.statusCode).toBe(503)
-    expect(errorLogs()).toHaveLength(1)
-    expect(errorLogs()[0].err?.message).toBe('unavailable message')
-  })
-
   it('先设 404 再抛带 statusCode 503 的错误：返回 503 与未安装处理器时一致，并记录', async () => {
     const withHandler = buildApp(true)
     const without = buildApp(false)

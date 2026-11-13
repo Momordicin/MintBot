@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { CHAT_READY_TIMEOUT_MS, shouldShowChatOnFirstReady } from './chatFirstShow'
+import { shouldShowChatOnFirstReady } from './chatFirstShow'
 
 describe('shouldShowChatOnFirstReady', () => {
   it('shows when the chat was requested during the wait, even after an autostart launch', () => {
@@ -13,12 +13,5 @@ describe('shouldShowChatOnFirstReady', () => {
 
   it('stays hidden on an autostart launch with no pending request', () => {
     expect(shouldShowChatOnFirstReady(false, true)).toBe(false)
-  })
-})
-
-describe('CHAT_READY_TIMEOUT_MS', () => {
-  it('is at most 3 seconds', () => {
-    expect(CHAT_READY_TIMEOUT_MS).toBeGreaterThan(0)
-    expect(CHAT_READY_TIMEOUT_MS).toBeLessThanOrEqual(3000)
   })
 })

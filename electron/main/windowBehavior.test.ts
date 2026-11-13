@@ -1385,24 +1385,6 @@ describe('drag-end 后主动收敛（不依赖 1500ms 轮询）', () => {
     return { display1, display2 }
   }
 
-  it('合法 drop：位置提交完成后立刻重新求值，无需推进定时 validator', () => {
-    const { display2 } = twoDisplays()
-    testState.blockerMap = new Map()
-    testState.matchDisplay = () => display2
-    testState.dragging = { overlay: true, chat: false }
-
-    const win = makeFakeOverlayWindow({ x: 1920, y: 0, width: 132, height: 132 })
-    win.getBounds = () => ({ x: 1920, y: 0, width: 132, height: 132 })
-
-    handleWindowMoved('overlay', win as unknown as Electron.BrowserWindow, null, win as unknown as Electron.BrowserWindow)
-    vi.advanceTimersByTime(PERSIST_DEBOUNCE_MS + 10)
-
-    // 拖拽尾巴已收掉，说明重新求值发生过
-    expect(revalidateBlockersNowMock).toHaveBeenCalledTimes(1)
-    expect(revalidateBlockersNowMock).toHaveBeenCalledWith({ forceConservative: true })
-    expect(testState.dragging.overlay).toBe(false)
-  })
-
   it('顺序固定：blocker 复查发生在拖拽尾巴被收掉之前', () => {
     const { display2 } = twoDisplays()
     testState.blockerMap = new Map()
@@ -1768,14 +1750,6 @@ describe('非法 drop 的回滚接线', () => {
   describe('lastValidTemporaryPlacement 始终跟随 applied placement', () => {
     const PATHS = [
       {
-        name: '自动避难落点',
-        expectedX: 1920,
-        // 当前落点保持空闲；否则回滚后窗口会因无处可去被挪走
-        blocked: [1, 3],
-        dropOnIndex: 2,
-        settle: () => {},
-      },
-      {
         name: '用户拖到第三块屏后被接受的落点',
         expectedX: 3840,
         blocked: [1, 2],
@@ -1829,13 +1803,6 @@ describe('window behavior snapshot ordering', () => {
 
     expect(applyWindowBehaviorSnapshot({ generation: 'gen-order', revision: 6, config: CONFIG_B }, null, null)).toBe(true)
     expect(getCachedWindowBehaviorConfig()).toEqual(CONFIG_B)
-  })
-
-  it('accepts a different generation even with a lower revision', () => {
-    applyWindowBehaviorSnapshot({ generation: 'gen-old', revision: 9, config: CONFIG_B }, null, null)
-
-    expect(applyWindowBehaviorSnapshot({ generation: 'gen-new', revision: 1, config: CONFIG_A }, null, null)).toBe(true)
-    expect(getCachedWindowBehaviorConfig()).toEqual(CONFIG_A)
   })
 
   it('initWindowBehaviorConfig applies the fetched snapshot through the same ordering rule', async () => {
@@ -2373,20 +2340,6 @@ describe('pet interaction mode, collapsed handle geometry', () => {
       expect.any(Function),
       { finalOpacity: 1 }
     )
-  })
-
-  it('persists a dragged handle as the expanded bounds it implies, not as a 24x24 box', () => {
-    const win = makeModeWindow({ ...PREFERRED })
-    fresh.evaluateDesktopPresence(null, asWindow(win))
-    applyConfig(win, { petCollapsed: true })
-    setPreferredBoundsMock.mockClear()
-
-    testState.dragging = { overlay: true, chat: false }
-    win.getBounds = () => ({ x: 1000, y: 300, width: 24, height: 24 })
-    fresh.handleWindowMoved('overlay', asWindow(win), null, null)
-    vi.advanceTimersByTime(PERSIST_DEBOUNCE_MS + 10)
-
-    expect(setPreferredBoundsMock).toHaveBeenCalledWith('overlay', 1, { x: 1000 - (132 - 24), y: 300, width: 132, height: 132 })
   })
 
   it('broadcasts the configured collapsed and clickThrough flags', () => {

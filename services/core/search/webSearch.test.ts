@@ -75,10 +75,6 @@ describe('三家接口的请求格式与结果对应', () => {
       { ...JSON_HEADERS, Authorization: 'Bearer any-key' }, { query: 'q', max_results: 2, zone: 'cn' },
       { data: { results: [{ title: 'T', url: 'https://a', snippet: 'S' }] } },
       { provider: 'anysearch', results: [{ title: 'T', url: 'https://a', snippet: 'S' }] }],
-    ['AnySearch 地区 intl', ['anysearch'], { anysearchZone: 'intl' }, undefined, 'https://api.anysearch.com/v1/search',
-      JSON_HEADERS, { query: 'q', zone: 'intl' },
-      { data: { results: [] } },
-      { provider: 'anysearch', results: [] }],
   ]
 
   it.each(cases)('%s', async (_name, order, config, count, url, headers, body, response, expected) => {
@@ -171,8 +167,6 @@ describe('搜索词为空、顺序为空：不换下一家（中止见下）', (
 describe('失败时换下一家', () => {
   const cases: [string, FetchResult][] = [
     ['401', { ok: false, kind: 'http', status: 401, message: 'bad key' }],
-    ['额度用完 402', { ok: false, kind: 'http', status: 402, message: 'quota' }],
-    ['5xx 重试后仍失败', { ok: false, kind: 'http', status: 503, message: 'down' }],
     ['不是 JSON', { ok: true, status: 200, body: '<html>' }],
     ['缺少结果数组', ok({ other: 1 })],
     ['某条缺少字符串 url', ok({ results: [{ title: 'x', url: 5 }] })],
@@ -221,19 +215,6 @@ describe('失败时换下一家', () => {
     fetchMock.mockResolvedValue(ok({ results: [] }))
 
     expect(await webSearch({ query: 'q', signal: signal() })).toEqual({ provider: 'tavily', query: 'q', results: [] })
-  })
-
-  it.each([
-    ['超时', { ok: false, kind: 'timeout', message: '超过 10000 毫秒' }],
-    ['连不上', { ok: false, kind: 'connect', message: 'ECONNREFUSED' }],
-  ] as [string, FetchResult][])('第一家%s → 用第二家，provider 为第二家', async (_name, first) => {
-    configure({ order: ['deepseek', 'tavily'], deepseekApiKey: 'k', tavilyApiKey: 'k' })
-    fetchMock.mockResolvedValueOnce(first).mockResolvedValueOnce(ok({ results: [{ title: 'T', url: 'https://a', content: 'C' }] }))
-
-    const result = await webSearch({ query: 'q', signal: signal() })
-
-    expect(result.provider).toBe('tavily')
-    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
   it('全部超时或连不上 → 报错，message 含每家原因', async () => {

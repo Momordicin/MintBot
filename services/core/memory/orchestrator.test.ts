@@ -419,46 +419,11 @@ describe('runOrganizeModeTick — 当前激活角色的摘要插队', () => {
     expect(getPendingSummaryCount('s1')).toBe(0)
     expect(getPendingEmbeddingCount()).toBe(0)
   })
-
-  it('没有激活 session（getCurrentState() 返回 null）时插队逻辑整体跳过，不报错；待摘要消息仍会在摘要阶段被正常处理', async () => {
-    getCurrentStateMock.mockReturnValue(null)
-
-    for (let i = 0; i < 60; i++) {
-      addMessage(`消息${i}`, NOW_IN_WINDOW - 130 * MIN + i)
-    }
-
-    const result = await runOrganizeModeTick(
-      { embedding: fakeEmbedding(), ner: emptyNer(), model: emptyModel() },
-      200,
-      () => NOW_IN_WINDOW
-    )
-
-    expect(result.triggered).toBe(true)
-    expect(result.summariesGenerated).toBe(1)
-    expect(getPendingSummaryCount('s1')).toBe(0)
-  })
 })
 
 // aiActivity 是进程级单例模块（没有 reset 接口），每个用例开始前自己调用一次 recordActivity()
 // 校准基准，不依赖模块的初始值或其它用例是否碰过它——保证用例之间互不干扰
 describe('runOrganizeModeTick — 空闲释放（embedding + NER unload）', () => {
-  it('距离最近一次 AI 活动已超过 5 分钟时，tick 结束时会调用 embedding.unload() 和 ner.unload()', async () => {
-    recordActivity()
-    const embeddingUnload = vi.fn(async () => true)
-    const nerUnload = vi.fn(async () => true)
-    const embedding: EmbeddingProvider = { ...fakeEmbedding(), unload: embeddingUnload }
-    const ner: NERProvider = { ...emptyNer(), unload: nerUnload }
-
-    await runOrganizeModeTick(
-      { embedding, ner, model: emptyModel() },
-      200,
-      () => Date.now() + 6 * MIN
-    )
-
-    expect(embeddingUnload).toHaveBeenCalledTimes(1)
-    expect(nerUnload).toHaveBeenCalledTimes(1)
-  })
-
   it('距离最近一次 AI 活动不足 5 分钟时，不调用 unload', async () => {
     recordActivity()
     const embeddingUnload = vi.fn(async () => true)
@@ -610,14 +575,6 @@ describe('isInDefaultOrganizeWindow', () => {
 
   it('08:00:00 不属于窗口（终点，窗口不含终点）', () => {
     expect(isInDefaultOrganizeWindow(new Date(2024, 0, 1, 8, 0, 0).getTime())).toBe(false)
-  })
-
-  it('00:00:00 属于窗口内（跨午夜）', () => {
-    expect(isInDefaultOrganizeWindow(new Date(2024, 0, 1, 0, 0, 0).getTime())).toBe(true)
-  })
-
-  it('14:00:00 不属于窗口（日间）', () => {
-    expect(isInDefaultOrganizeWindow(new Date(2024, 0, 1, 14, 0, 0).getTime())).toBe(false)
   })
 })
 

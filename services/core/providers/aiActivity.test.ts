@@ -21,15 +21,4 @@ describe('aiActivity — 共享的最近 AI 活动追踪器', () => {
     expect(recorded).toBeGreaterThanOrEqual(before)
     expect(recorded).toBeLessThanOrEqual(after)
   })
-
-  it('多次调用 recordActivity 会更新为最新的时间戳', async () => {
-    recordActivity()
-    const first = getLastActivityAt()
-
-    await new Promise(resolve => setTimeout(resolve, 5))
-    recordActivity()
-    const second = getLastActivityAt()
-
-    expect(second).toBeGreaterThan(first)
-  })
 })

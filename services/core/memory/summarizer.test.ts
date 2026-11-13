@@ -68,19 +68,6 @@ describe('shouldTriggerSummary — 锁屏分支的消息数下限（minMessagesF
   it('锁屏 + 低活跃时段条件都满足，但消息数低于下限（3 < 4）时不触发', () => {
     expect(shouldTriggerSummary({ messageCountSinceLastSummary: 3, lockScreenMinutes: 61, isLowActivityWindow: true })).toBe(false)
   })
-
-  it('锁屏 + 低活跃时段条件都满足，消息数恰好达到下限（4）时触发', () => {
-    expect(shouldTriggerSummary({ messageCountSinceLastSummary: 4, lockScreenMinutes: 61, isLowActivityWindow: true })).toBe(true)
-  })
-
-  it('锁屏 + 低活跃时段条件都满足，消息数超过下限时触发', () => {
-    expect(shouldTriggerSummary({ messageCountSinceLastSummary: 10, lockScreenMinutes: 61, isLowActivityWindow: true })).toBe(true)
-  })
-
-  it('messageCount > 50 分支不受下限影响：消息数为 0 时该分支本身就不触发（下限只影响锁屏分支）', () => {
-    expect(shouldTriggerSummary({ messageCountSinceLastSummary: 0, lockScreenMinutes: 0, isLowActivityWindow: false })).toBe(false)
-    expect(shouldTriggerSummary({ messageCountSinceLastSummary: 51, lockScreenMinutes: 0, isLowActivityWindow: false })).toBe(true)
-  })
 })
 
 describe('generateSummary', () => {

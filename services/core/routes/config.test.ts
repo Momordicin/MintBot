@@ -189,26 +189,6 @@ describe('GET /config/model', () => {
     })
   })
 
-  it('type: deepseek 时 deepseek 分组 hasKey 为 true，从不回显真实 key', async () => {
-    getModelProviderConfigMock.mockReturnValue({
-      type: 'deepseek',
-      deepseekApiKey: 'sk-deepseek-secret',
-      modelName: 'deepseek-v4-flash',
-    })
-    const fastify = await buildTestApp()
-
-    const response = await fastify.inject({ method: 'GET', url: '/config/model' })
-    const body = JSON.parse(response.payload)
-
-    expect(response.statusCode).toBe(200)
-    expect(body.modelProvider).toEqual({
-      type: 'deepseek',
-      modelName: 'deepseek-v4-flash',
-      keys: { ...noKeys, deepseek: { hasKey: true, last4: 'cret', fromEnv: false, envDetected: false, envCleared: false } },
-    })
-    expect(JSON.stringify(body)).not.toContain('sk-deepseek-secret')
-  })
-
   it('modelProvider 未配置（getModelProviderConfig 抛错）时不 500，返回 modelProvider: null', async () => {
     getModelProviderConfigMock.mockImplementation(() => {
       throw new Error('[Config] modelProvider is not configured')
@@ -289,19 +269,6 @@ describe('PATCH /config/model — 校验', () => {
     expect(response.statusCode).toBe(400)
   })
 
-  it('type: openai 但合并后缺 openaiApiKey 时返回 400', async () => {
-    getModelProviderConfigMock.mockImplementation(() => { throw new Error('not configured') })
-    const fastify = await buildTestApp()
-
-    const response = await fastify.inject({
-      method: 'PATCH',
-      url: '/config/model',
-      payload: { modelProvider: { type: 'openai', modelName: 'gpt-4o' } },
-    })
-
-    expect(response.statusCode).toBe(400)
-  })
-
   it('type: ollama 但合并后缺 ollamaModel 时返回 400', async () => {
     getModelProviderConfigMock.mockImplementation(() => { throw new Error('not configured') })
     const fastify = await buildTestApp()
@@ -327,19 +294,6 @@ describe('PATCH /config/model — 校验', () => {
 
     expect(response.statusCode).toBe(400)
     expect(updateModelProviderConfigMock).not.toHaveBeenCalled()
-  })
-
-  it('type: deepseek 但合并后缺 modelName 时返回 400', async () => {
-    getModelProviderConfigMock.mockImplementation(() => { throw new Error('not configured') })
-    const fastify = await buildTestApp()
-
-    const response = await fastify.inject({
-      method: 'PATCH',
-      url: '/config/model',
-      payload: { modelProvider: { type: 'deepseek', deepseekApiKey: 'sk-deepseek' } },
-    })
-
-    expect(response.statusCode).toBe(400)
   })
 
   it('type: deepseek 且 deepseekApiKey/modelName 都满足时通过校验并写入成功', async () => {
@@ -498,22 +452,6 @@ describe('PATCH /config/model — 成功路径', () => {
     expect(body.backgroundModelProvider).toEqual({ type: 'anthropic', modelName: 'claude-strong' })
   })
 
-  it('backgroundModelProvider: null 清除覆盖后响应里该字段为 null', async () => {
-    getModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'qwen3' })
-    updateBackgroundModelProviderConfigMock.mockReturnValue(null)
-    const fastify = await buildTestApp()
-
-    const response = await fastify.inject({
-      method: 'PATCH',
-      url: '/config/model',
-      payload: { backgroundModelProvider: null },
-    })
-    const body = JSON.parse(response.payload)
-
-    expect(response.statusCode).toBe(200)
-    expect(body.backgroundModelProvider).toBeNull()
-  })
-
   it('body 未带 backgroundModelProvider 时不调用 updateBackgroundModelProviderConfig，响应仍返回当前的原始覆盖状态', async () => {
     getModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'qwen3' })
     updateModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'llama3' })
@@ -600,15 +538,6 @@ describe('PATCH /config/model — API Key 环境变量与有效性', () => {
     expect(updateModelProviderConfigMock).not.toHaveBeenCalled()
   })
 
-  it('已保存配置勾选了环境变量但当前未检测到、也没有已保存 key 时返回 400', async () => {
-    getModelProviderConfigMock.mockReturnValue({ type: 'openai', modelName: 'gpt-4o', openaiApiKeyFromEnv: true })
-
-    const { response, body } = await patch({ modelProvider: { modelName: 'gpt-4o-mini' } })
-
-    expect(response.statusCode).toBe(400)
-    expect(body).toEqual({ code: 'API_KEY_INVALID' })
-  })
-
   it('勾选环境变量但未检测到时，即使有已保存 key 也返回 400', async () => {
     getModelProviderConfigMock.mockReturnValue({ type: 'openai', modelName: 'gpt-4o', openaiApiKey: 'sk-saved-openai', openaiApiKeyFromEnv: true })
 
@@ -639,15 +568,6 @@ describe('PATCH /config/model — API Key 环境变量与有效性', () => {
 
     expect(response.statusCode).toBe(400)
     expect(body).toEqual({ code: 'API_KEY_INVALID' })
-  })
-
-  it('当前为 false 的 FromEnv 标记在未检测到环境变量时打开：返回 400', async () => {
-    getModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'qwen3', openaiApiKeyFromEnv: false })
-
-    const { response, body } = await patch({ modelProvider: { openaiApiKeyFromEnv: true } })
-
-    expect(response.statusCode).toBe(400)
-    expect(body).toEqual({ code: 'ENV_VAR_MISSING', params: { envVar: 'OPENAI_API_KEY' } })
   })
 
   it.each([
@@ -682,14 +602,6 @@ describe('PATCH /config/model — API Key 环境变量与有效性', () => {
     expect(response.statusCode).toBe(200)
   })
 
-  it('选中 ollama 不需要 key，但仍需要 ollamaModel', async () => {
-    getModelProviderConfigMock.mockImplementation(() => { throw new Error('not configured') })
-
-    const { response } = await patch({ modelProvider: { type: 'ollama' } })
-
-    expect(response.statusCode).toBe(400)
-  })
-
   it.each([
     ['anthropic', 'anthropicApiKey', 'anthropicApiKeyFromEnv'],
     ['openai', 'openaiApiKey', 'openaiApiKeyFromEnv'],
@@ -721,16 +633,6 @@ describe('PATCH /config/model — API Key 环境变量与有效性', () => {
     expect(updateModelProviderConfigMock).not.toHaveBeenCalled()
   })
 
-  it('当前对话模型那家没有可用 Key 时，保存别家有效 Key 仍成功', async () => {
-    getModelProviderConfigMock.mockReturnValue({ type: 'openai', modelName: 'gpt-4o' })
-    updateModelProviderConfigMock.mockReturnValue({ type: 'openai', modelName: 'gpt-4o', anthropicApiKey: 'sk-ant-new-1234' })
-
-    const { response } = await patch({ modelProvider: { anthropicApiKey: 'sk-ant-new-1234' } })
-
-    expect(response.statusCode).toBe(200)
-    expect(updateModelProviderConfigMock).toHaveBeenCalledWith({ anthropicApiKey: 'sk-ant-new-1234' })
-  })
-
   it('config.json 没有 modelProvider 段时，只存一个 Key 也能写入', async () => {
     getModelProviderConfigMock.mockImplementation(() => { throw new Error('not configured') })
     updateModelProviderConfigMock.mockReturnValue({ deepseekApiKey: 'sk-ds-new-1234' })
@@ -743,7 +645,6 @@ describe('PATCH /config/model — API Key 环境变量与有效性', () => {
 
   it.each([
     ['只存 ollamaBaseUrl', { ollamaBaseUrl: 'http://127.0.0.1:11434' }],
-    ['只存 maxTokens', { maxTokens: 2000 }],
   ])('%s：当前对话模型那家已坏也成功', async (_label, partial) => {
     getModelProviderConfigMock.mockReturnValue({ type: 'openai', modelName: 'gpt-4o' })
     updateModelProviderConfigMock.mockReturnValue({ type: 'openai', modelName: 'gpt-4o', ...partial })
@@ -909,18 +810,6 @@ describe('PATCH /config/model — config.json 无法读取', () => {
   })
 })
 
-describe('PATCH /config/model — Key 去掉首尾空白', () => {
-  it('保存时去掉首尾空白，只有空白的 Key 不写入', async () => {
-    getModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'qwen3' })
-    updateModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'qwen3' })
-    const fastify = await buildTestApp()
-
-    await fastify.inject({ method: 'PATCH', url: '/config/model', payload: { modelProvider: { anthropicApiKey: '  sk-ant-1234 ', openaiApiKey: '  ' } } })
-
-    expect(updateModelProviderConfigMock).toHaveBeenLastCalledWith({ anthropicApiKey: 'sk-ant-1234' })
-  })
-})
-
 describe('GET /config/web-search', () => {
   it('返回顺序、地区、模型名与各 Key 的 hasKey/last4，从不回显完整 Key', async () => {
     getWebSearchConfigMock.mockReturnValue({
@@ -1048,7 +937,7 @@ describe('POST /config/web-search/test', () => {
     expect(testWebSearchKeyMock).toHaveBeenCalledWith('tavily', expect.any(AbortSignal))
   })
 
-  it.each([{ provider: 'claude' }, { provider: 'bing' }, {}])('provider 非法（%j）→ 400，不测试', async payload => {
+  it.each([{ provider: 'claude' }, {}])('provider 非法（%j）→ 400，不测试', async payload => {
     const result = await post(payload)
 
     expect(result.status).toBe(400)

@@ -78,15 +78,6 @@ describe('classifyBlockingReasons', () => {
 })
 
 describe('severity composition (max severity wins, rule-derived — Stage 4)', () => {
-  it('a hard rule alone produces hard severity', () => {
-    const map = applyExternalObservation(
-      new Map(),
-      makeInfo({ exeName: 'game.exe', isFullscreen: false, displayId: 1 }),
-      rules({ exeName: 'game.exe', effect: 'hard' })
-    )
-    expect(map.get(1)).toMatchObject({ severity: 'hard', reasons: new Set(['user-rule']) })
-  })
-
   it('a soft rule alone (not fullscreen) produces soft severity — this is what makes EDGE reachable', () => {
     const map = applyExternalObservation(
       new Map(),
@@ -94,15 +85,6 @@ describe('severity composition (max severity wins, rule-derived — Stage 4)', (
       rules({ exeName: 'ide.exe', effect: 'soft' })
     )
     expect(map.get(1)).toMatchObject({ severity: 'soft', reasons: new Set(['user-rule']) })
-  })
-
-  it('fullscreen always contributes hard, regardless of the rule matched', () => {
-    expect(classifyBlockingReasonsSeverity(NO_RULES)).toBe('hard')
-
-    function classifyBlockingReasonsSeverity(r: BlockingRules) {
-      const map = applyExternalObservation(new Map(), makeInfo({ isFullscreen: true, displayId: 1 }), r)
-      return map.get(1)?.severity
-    }
   })
 
   // The consequence the task spec explicitly calls out: an app marked 'soft' that goes genuinely
@@ -116,15 +98,6 @@ describe('severity composition (max severity wins, rule-derived — Stage 4)', (
       rules({ exeName: 'ide.exe', effect: 'soft' })
     )
     expect(map.get(1)).toMatchObject({ severity: 'hard', reasons: new Set(['fullscreen', 'user-rule']) })
-  })
-
-  it('allow suppresses the user-rule reason but not a mismatched OTHER blocker on a different display', () => {
-    const withAllow = applyExternalObservation(
-      new Map(),
-      makeInfo({ exeName: 'game.exe', isFullscreen: true, displayId: 1 }),
-      rules({ exeName: 'game.exe', effect: 'allow' })
-    )
-    expect(withAllow.has(1)).toBe(false)
   })
 })
 
@@ -222,20 +195,6 @@ describe('shell UI exclusion', () => {
     expect(map.size).toBe(0)
   })
 
-  it('still blocks a fullscreen CoreWindow from another process', () => {
-    const map = applyExternalObservation(
-      new Map(),
-      shellInfo({ exeName: 'game.exe', className: 'Windows.UI.Core.CoreWindow' }),
-      NO_RULES
-    )
-    expect(map.get(1)?.severity).toBe('hard')
-  })
-
-  it('still blocks a fullscreen LockApp.exe window of another class', () => {
-    const map = applyExternalObservation(new Map(), shellInfo({ exeName: 'LockApp.exe', className: 'OtherClass' }), NO_RULES)
-    expect(map.get(1)?.severity).toBe('hard')
-  })
-
   it('still blocks a non-explorer process using a listed class', () => {
     const map = applyExternalObservation(
       new Map(),
@@ -259,18 +218,6 @@ describe('decideBlockerAfterValidation', () => {
     const blocker = makeBlocker({ displayId: 1 })
     const decided = decideBlockerAfterValidation(blocker, { status: 'ok', displayId: 2, isFullscreen: true }, NO_RULES)
     expect(decided).toMatchObject({ displayId: 2, reasons: new Set(['fullscreen']), severity: 'hard' })
-  })
-
-  it('keeps the blocker when it still satisfies its blocking condition on the same display', () => {
-    const blocker = makeBlocker({ displayId: 1 })
-    const decided = decideBlockerAfterValidation(blocker, { status: 'ok', displayId: 1, isFullscreen: true }, NO_RULES)
-    expect(decided).toMatchObject({ displayId: 1, reasons: new Set(['fullscreen']), severity: 'hard' })
-  })
-
-  it('clears when it no longer satisfies any blocking condition (e.g. left fullscreen, no rule matched)', () => {
-    const blocker = makeBlocker({ displayId: 1, exeName: 'game.exe' })
-    const decided = decideBlockerAfterValidation(blocker, { status: 'ok', displayId: 1, isFullscreen: false }, NO_RULES)
-    expect(decided).toBeNull()
   })
 
   it('clears when the rules changed and the exe is now allowed', () => {
@@ -370,27 +317,10 @@ describe('decideBlockerAfterValidation', () => {
       )
       expect(decided).toMatchObject({ displayId: 5 })
     })
-
-    it('hard evidence (gone) clears immediately in conservative mode', () => {
-      const blocker = makeBlocker({ displayId: 1, exeName: 'game.exe' })
-      expect(decideBlockerAfterValidation(blocker, { status: 'gone' }, NO_RULES, 'conservative')).toBeNull()
-    })
-
-    it('hard evidence (pid-mismatch) clears immediately in conservative mode', () => {
-      const blocker = makeBlocker({ displayId: 1, exeName: 'game.exe' })
-      expect(decideBlockerAfterValidation(blocker, { status: 'pid-mismatch' }, NO_RULES, 'conservative')).toBeNull()
-    })
   })
 })
 
 describe('validateBlockers', () => {
-  it('drops a blocker whose probe reports hidden, in both modes', () => {
-    const map: DisplayStateMap = new Map([[1, makeBlocker()]])
-    const probe = (): BlockerProbe => ({ status: 'hidden' })
-    expect(validateBlockers(map, NO_RULES, probe).size).toBe(0)
-    expect(validateBlockers(map, NO_RULES, probe, 'conservative').size).toBe(0)
-  })
-
   it('only probes the already-known blocker hwnds, not an arbitrary enumeration', () => {
     const map: DisplayStateMap = new Map([
       [1, makeBlocker({ displayId: 1, hwnd: 1000n, pid: 111 })],

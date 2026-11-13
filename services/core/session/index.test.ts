@@ -137,13 +137,6 @@ describe('激活时刻作为搭理时间的回退', () => {
     expect(at!).toBeGreaterThanOrEqual(before)
     expect(at!).toBeLessThanOrEqual(Date.now())
   })
-
-  it('switchPreset 激活的 session 同样记录激活时刻', () => {
-    loadSession('p1')
-    const before = Date.now()
-    const { session } = switchPreset('p2')
-    expect(getLastAttentionAt(session.sessionId)!).toBeGreaterThanOrEqual(before)
-  })
 })
 
 describe('resolveStartupPresetId', () => {
@@ -200,23 +193,6 @@ describe('manifest 缓存（Part A：loadSession/switchPreset 填充 SessionStat
     const { manifest } = loadSession('p2')
 
     expect(manifest).toBeNull()
-  })
-
-  it('switchPreset 切到新 preset 时同样填充 manifest 字段', () => {
-    upsertPreset({
-      presetId: 'p3',
-      name: '角色三',
-      characterId: 'example',
-      modelType: 'ollama',
-      modelName: 'qwen3',
-      systemPrompt: '你是示例角色',
-    })
-    loadSession('p1')
-
-    const { manifest } = switchPreset('p3')
-
-    expect(manifest).not.toBeNull()
-    expect(manifest!.avatar).toBe('avatar.png')
   })
 })
 

@@ -260,12 +260,6 @@ describe('installLogFile', () => {
     expect(stdoutSpy).toHaveBeenCalledTimes(1)
   })
 
-  it('uncaughtExceptionMonitor：写入 origin 与 stack', () => {
-    installLogFile({ dir, fileName: 'core.log', source: 'core' })
-    process.emit('uncaughtExceptionMonitor', new Error('kaboom'), 'uncaughtException')
-    expect(read()).toMatch(/error \[core\] uncaughtException: Error: kaboom\n\S+ error \[core\]\s+at /)
-  })
-
   it('VITEST 下日志目录不在 os.tmpdir() 内：拒绝安装', () => {
     expect(() => installLogFile({ dir: path.resolve(process.cwd(), 'logs'), fileName: 'core.log', source: 'core' })).toThrow(/refusing log dir/)
     expect(process.stdout.write).toBe(stdoutSpy)

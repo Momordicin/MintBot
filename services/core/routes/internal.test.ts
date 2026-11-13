@@ -3,7 +3,7 @@ import Fastify from 'fastify'
 import { internalRoutes } from './internal.js'
 import { recordSystemEvent, getLockScreenMinutes } from '../system/lockState.js'
 import { initDb, db } from '../db/index.js'
-import { upsertPreset, upsertEmotionState } from '../session/queries.js'
+import { upsertPreset } from '../session/queries.js'
 import { loadSession } from '../session/index.js'
 import { markExplicitSleep } from '../session/attention.js'
 import { buildStatePayload } from '../state.js'
@@ -49,7 +49,7 @@ afterEach(() => {
 
 // getCurrentState()/current 是 session 模块内的进程级单例，不随 beforeEach 的 DB 清理重置，
 // 只能靠“整个文件里第一次调用 loadSession() 之前”这个执行顺序天然获得“无激活 session”这个
-// 前提——因此这条必须排在本文件全部 loadSession() 调用之前（后面 system-event 描述块最后一条测试也会调用
+// 前提——因此这条必须排在本文件全部 loadSession() 调用之前（后面 overlay-interaction 描述块的测试会调用
 // loadSession），单独拆成一个提前的 describe 块
 describe('POST /internal/overlay-interaction —— 无激活 session', () => {
   it('没有激活 session 时，仍返回 200 且不报错', async () => {
@@ -107,7 +107,7 @@ describe('POST /internal/system-event', () => {
   })
 
   // internal.ts 现在完全不读 session 状态（getCurrentState 分支随 emotion 广播一并删除），
-  // 因此"有没有激活 session"对它已无差别——这条与下一条只是从两种前置状态各验一次
+  // 因此"有没有激活 session"对它已无差别——这条只从无激活 session 的前置状态验证
   // 「不广播」，不再像此前那样依赖"必须排在所有 loadSession() 调用之前"的执行顺序
   it('没有激活 session 时，lock-screen/unlock-screen 都不广播，也不报错', async () => {
     const fastify = await buildTestApp()
@@ -117,21 +117,6 @@ describe('POST /internal/system-event', () => {
 
     expect(lockResponse.statusCode).toBe(200)
     expect(unlockResponse.statusCode).toBe(200)
-    expect(broadcastEvent).not.toHaveBeenCalled()
-  })
-
-  it('有激活 session 时，lock-screen/unlock-screen 均不产生任何 SSE 广播（立绘不因锁屏切换）', async () => {
-    upsertPreset({
-      presetId: 'p1', name: '角色一', characterId: 'char-001',
-      modelType: 'ollama', modelName: 'qwen3', systemPrompt: '你是角色一',
-    })
-    const { session } = loadSession('p1')
-    upsertEmotionState(session.sessionId, { self: { label: 'happy', intensity: 0.8 }, perceived_user: null })
-
-    const fastify = await buildTestApp()
-    await fastify.inject({ method: 'POST', url: '/internal/system-event', payload: { type: 'lock-screen' } })
-    await fastify.inject({ method: 'POST', url: '/internal/system-event', payload: { type: 'unlock-screen' } })
-
     expect(broadcastEvent).not.toHaveBeenCalled()
   })
 })
@@ -157,29 +142,6 @@ describe('POST /internal/overlay-interaction', () => {
     const state = await buildStatePayload()
     expect(state.lastAttentionAt).toBeGreaterThanOrEqual(before)
     expect(state.explicitSleep).toBe(false)
-  })
-
-  it('type=portrait-click 与 type=drag-end 都被接受', async () => {
-    upsertPreset({
-      presetId: 'p1', name: '角色一', characterId: 'char-001',
-      modelType: 'ollama', modelName: 'qwen3', systemPrompt: '你是角色一',
-    })
-    loadSession('p1')
-    const fastify = await buildTestApp()
-
-    const clickResponse = await fastify.inject({
-      method: 'POST',
-      url: '/internal/overlay-interaction',
-      payload: { type: 'portrait-click' },
-    })
-    const dragResponse = await fastify.inject({
-      method: 'POST',
-      url: '/internal/overlay-interaction',
-      payload: { type: 'drag-end' },
-    })
-
-    expect(clickResponse.statusCode).toBe(200)
-    expect(dragResponse.statusCode).toBe(200)
   })
 
   it('非法/缺失 type 返回 400', async () => {

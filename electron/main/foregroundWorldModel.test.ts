@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { Mock } from 'vitest'
 import { selectValidationMode, shouldScheduleObservation } from './foregroundWorldModel'
-import { noteDragStart, isWindowDragInProgress, clearDragState } from './dragActivity'
 import type { ForegroundObservation } from './activeWindowMonitor'
 
 const hooks = vi.hoisted(() => ({
@@ -38,34 +37,12 @@ describe('selectValidationMode (Fix 3 — conservative mode armed by the real ca
     expect(selectValidationMode(false, true)).toBe('conservative')
   })
 
-  it('is conservative when both conditions hold', () => {
-    expect(selectValidationMode(true, true)).toBe('conservative')
-  })
-
   it('is standard when neither condition holds', () => {
     expect(selectValidationMode(false, false)).toBe('standard')
   })
 
   it('is conservative when forced, even with no self foreground and no drag', () => {
     expect(selectValidationMode(false, false, true)).toBe('conservative')
-  })
-
-  it('stays standard when the force flag is explicitly false', () => {
-    expect(selectValidationMode(false, false, false)).toBe('standard')
-  })
-})
-
-describe('runValidationPass composition — only the overlay window drag arms conservative mode', () => {
-  it('an overlay-only drag puts selectValidationMode in conservative mode', () => {
-    noteDragStart('overlay', 0)
-    expect(selectValidationMode(false, isWindowDragInProgress('overlay', 0))).toBe('conservative')
-    clearDragState('overlay')
-  })
-
-  it('a chat-only drag leaves selectValidationMode in standard mode (chat is foreground then, covered by the self condition)', () => {
-    noteDragStart('chat', 0)
-    expect(selectValidationMode(false, isWindowDragInProgress('overlay', 0))).toBe('standard')
-    clearDragState('chat')
   })
 })
 

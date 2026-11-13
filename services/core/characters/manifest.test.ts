@@ -4,11 +4,8 @@ import os from 'os'
 import path from 'path'
 import { loadCharacterManifest, CHARACTERS_ROOT } from './manifest.js'
 
-// Aemeath 是本地专属、未提交进 git 的真实角色包
-const AEMEATH_FIXTURE_PATH = path.resolve(process.cwd(), 'assets', 'characters', 'Aemeath', 'manifest.json')
-
 describe('loadCharacterManifest — 真实角色包 fixture（assets/characters/ 下的实际文件）', () => {
-  const copiedIds = ['Aemeath', 'Mint']
+  const copiedIds = ['Mint']
 
   beforeAll(() => {
     for (const id of copiedIds) {
@@ -26,51 +23,7 @@ describe('loadCharacterManifest — 真实角色包 fixture（assets/characters/
     }
   })
 
-  it.skipIf(!fs.existsSync(AEMEATH_FIXTURE_PATH))(
-    'Aemeath（manifest schema v3 全字段，仅本地存在真实素材时运行）各层级结构与类型解析正确', 
-    () => {
-      const manifest = loadCharacterManifest('Aemeath')
-
-      expect(manifest).not.toBeNull()
-      if (!manifest) return
-
-      expect(manifest.schemaVersion).toBe(3)
-      expect(manifest.name).toBe('Aemeath')
-      expect(manifest.displayName).toBe('Aemeath')
-      expect(typeof manifest.description).toBe('string')
-      expect(Array.isArray(manifest.tags)).toBe(true)
-      expect(typeof manifest.avatar).toBe('string')
-      expect(manifest.avatar.length).toBeGreaterThan(0)
-      expect(typeof manifest.userAvatar).toBe('string')
-      expect(Array.isArray(manifest.emotionVocabulary)).toBe(true)
-      expect(manifest.emotionVocabulary.length).toBeGreaterThan(0)
-      expect(Array.isArray(manifest.emoteTagVocabulary)).toBe(true)
-
-      expect(typeof manifest.portraits.pixel.fallback).toBe('string')
-      expect(typeof manifest.portraits.pixel.emotions).toBe('object')
-      const pixelEmotionEntries = Object.values(manifest.portraits.pixel.emotions)
-      expect(pixelEmotionEntries.length).toBeGreaterThan(0)
-      for (const files of pixelEmotionEntries) {
-        expect(Array.isArray(files)).toBe(true)
-      }
-
-      expect(typeof manifest.portraits.illustration.fallback).toBe('string')
-      expect(typeof manifest.portraits.illustration.emotions).toBe('object')
-
-      for (const form of [manifest.portraits.pixel, manifest.portraits.illustration]) {
-        expect(typeof form.interactionStates).toBe('object')
-        expect(typeof form.reservedStates).toBe('object')
-      }
-
-      expect(Array.isArray(manifest.emotePool)).toBe(true)
-      for (const entry of manifest.emotePool) {
-        expect(typeof entry.file).toBe('string')
-        expect(Array.isArray(entry.tags)).toBe(true)
-      }
-    }
-  )
-
-  // Mint 跟 Aemeath 同样是本地专属、未提交进 git 的真实角色包
+  // Mint 是本地专属、未提交进 git 的真实角色包
   const MINT_FIXTURE_PATH = path.resolve(process.cwd(), 'assets', 'characters', 'Mint', 'manifest.json')
 
   it.skipIf(!fs.existsSync(MINT_FIXTURE_PATH))(

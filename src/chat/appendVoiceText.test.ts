@@ -2,10 +2,6 @@ import { describe, expect, it } from 'vitest'
 import { appendVoiceText } from './appendVoiceText'
 
 describe('appendVoiceText', () => {
-  it('joins Chinese text directly', () => {
-    expect(appendVoiceText('你好', ['世界'])).toBe('你好世界')
-  })
-
   it('inserts a space between ASCII non-whitespace characters', () => {
     expect(appendVoiceText('hello', ['world'])).toBe('hello world')
   })

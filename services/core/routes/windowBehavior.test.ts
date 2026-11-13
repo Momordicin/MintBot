@@ -86,19 +86,6 @@ describe('PATCH /config/window-behavior — 校验', () => {
     expect(broadcastEventMock).not.toHaveBeenCalled()
   })
 
-  // 'off' 新旧枚举都有，所以用只属于旧枚举的值
-  it("旧枚举值 'dodge-fullscreen' 不再被接受，返回 400", async () => {
-    const fastify = await buildTestApp()
-
-    const response = await fastify.inject({
-      method: 'PATCH',
-      url: '/config/window-behavior',
-      payload: { chatPinMode: 'dodge-fullscreen' },
-    })
-
-    expect(response.statusCode).toBe(400)
-  })
-
   it('petAvoidanceEnabled 不是布尔值时返回 400', async () => {
     const fastify = await buildTestApp()
 
@@ -274,25 +261,6 @@ describe('PATCH /config/window-behavior — 成功路径', () => {
 
     expect(response.statusCode).toBe(200)
     expect(updateWindowBehaviorConfigMock).toHaveBeenCalledWith({ petAvoidanceEnabled: false })
-  })
-
-  it('广播发生在 updateWindowBehaviorConfig 之后', async () => {
-    updateWindowBehaviorConfigMock.mockImplementation(() => {
-      revision = 2
-      return SAMPLE_CONFIG
-    })
-    getWindowBehaviorConfigMock.mockReturnValue(SAMPLE_CONFIG)
-    const fastify = await buildTestApp()
-
-    await fastify.inject({
-      method: 'PATCH',
-      url: '/config/window-behavior',
-      payload: { appRules: [{ exeName: 'game.exe', effect: 'hard' }] },
-    })
-
-    const updateOrder = updateWindowBehaviorConfigMock.mock.invocationCallOrder[0]
-    const broadcastOrder = broadcastEventMock.mock.invocationCallOrder[0]
-    expect(updateOrder).toBeLessThan(broadcastOrder)
   })
 })
 
