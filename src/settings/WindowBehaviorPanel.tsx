@@ -1,6 +1,6 @@
-// src/settings/WindowBehaviorPanel.tsx — 设置窗口的"窗口行为"面板：聊天窗口置顶模式、桌宠智能避让开关、应用规则
-// 用法：SettingsApp 里渲染 <WindowBehaviorPanel />；读写 GET/PATCH /config/window-behavior，监听 SSE window-behavior-changed；添加规则时调用 electronAPI.selectExeFile
-// 对应文件：shared/windowBehavior.ts（快照契约）/ src/eventsWatchdog.ts / src/errorText.ts / services/core/routes/windowBehavior.ts / electron/main/index.ts（select-exe-file、托盘同一组开关）
+// src/settings/WindowBehaviorPanel.tsx — 设置窗口的"窗口行为"面板：聊天窗口置顶模式、角色智能避让开关、应用规则、专注模式 / 角色智能避让快捷键
+// 用法：SettingsApp 里渲染 <WindowBehaviorPanel />；读写 GET/PATCH /config/window-behavior，监听 SSE window-behavior-changed；添加规则时调用 electronAPI.selectExeFile；快捷键分区交给 HotkeysSection
+// 对应文件：shared/windowBehavior.ts（快照契约）/ src/eventsWatchdog.ts / src/errorText.ts / src/settings/HotkeysSection.tsx / services/core/routes/windowBehavior.ts / electron/main/index.ts（select-exe-file、托盘同一组开关）
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import './settings.css'
@@ -10,6 +10,7 @@ import { createWatchdogEventSource } from '../eventsWatchdog.js'
 import { isNewerSnapshot } from '../../shared/windowBehavior.js'
 import { isErrorBody } from '../../shared/errorCodes.js'
 import { errorText } from '../errorText.js'
+import { HotkeysSection } from './HotkeysSection.js'
 import type {
   AppRuleEffect,
   ChatPinMode,
@@ -154,7 +155,7 @@ export function WindowBehaviorPanel() {
     <div className="window-behavior-panel">
       <div className="window-behavior-panel__section">
         <div className="window-behavior-panel__section-label">{t('聊天窗口置顶')}</div>
-        <div className="character-panel__hint">{t('只影响聊天窗口，不影响桌宠。')}</div>
+        <div className="character-panel__hint">{t('只影响聊天窗口，不影响角色。')}</div>
         {chatPinModeOptions.map(option => (
           <label key={option.value} className="window-behavior-panel__choice">
             <input
@@ -171,7 +172,7 @@ export function WindowBehaviorPanel() {
       </div>
 
       <div className="window-behavior-panel__section">
-        <div className="window-behavior-panel__section-label">{t('智能避让')}</div>
+        <div className="window-behavior-panel__section-label">{t('角色智能避让')}</div>
         <label className="window-behavior-panel__choice">
           <input
             type="checkbox"
@@ -183,15 +184,15 @@ export function WindowBehaviorPanel() {
         </label>
         <div className="character-panel__hint">
           {config.petAvoidanceEnabled
-            ? t('桌宠会避让全屏或指定应用，必要时自动移动到其他屏幕、贴边或暂时隐藏。')
-            : t('桌宠保持悬浮，但不会再自动避让其他应用。')}
+            ? t('角色会避让全屏或指定应用，必要时自动移动到其他屏幕、贴边或暂时隐藏。')
+            : t('角色保持在桌面上，但不会再自动避让其他应用。')}
         </div>
       </div>
 
       <div className="window-behavior-panel__section">
         <div className="window-behavior-panel__section-label">{t('应用规则')}</div>
         <div className="character-panel__hint">
-          {t('为单个程序指定避让方式。「不避让」表示即使它全屏，桌宠也照常显示。')}
+          {t('为单个程序指定避让方式。「不避让」表示即使它全屏，角色也照常显示。')}
         </div>
         <div className="memory-list">
           {config.appRules.length === 0 && <div className="memory-empty">{t('暂无')}</div>}
@@ -216,6 +217,8 @@ export function WindowBehaviorPanel() {
         </div>
         <button className="memory-btn" disabled={saving} onClick={handleAddRule}>{t('添加')}</button>
       </div>
+
+      <HotkeysSection actions={[{ action: 'focus', label: t('专注模式') }, { action: 'avoidance', label: t('角色智能避让') }]} />
 
       {errorMessage && <div className="character-panel__error">{errorMessage}</div>}
     </div>

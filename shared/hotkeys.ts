@@ -1,29 +1,31 @@
-// shared/voiceHotkeys.ts — 语音输入全局快捷键的取值、默认值、校验规范化，以及键盘事件到 Electron accelerator 的转换
-// 用法：Electron 主进程 voiceHotkeys.ts 用 normalizeVoiceHotkey 校验并用类型声明 IPC 载荷；设置窗口 VoicePanel.tsx 用 acceleratorFromKeyEvent / DEFAULT_VOICE_HOTKEYS；通道 voice-hotkeys:get / voice-hotkeys:set / voice-hotkeys:capture
-// 对应文件：electron/main/voiceHotkeys.ts / src/settings/VoicePanel.tsx / src/electron-api.d.ts / electron/preload/index.ts / shared/voiceHotkeys.test.ts
-export const VOICE_HOTKEY_ACTIONS = ['listen', 'transcribe'] as const
+// shared/hotkeys.ts — 全局快捷键（语音输入聆听 / 转写、专注模式、角色智能避让）的取值、默认值、校验规范化，以及键盘事件到 Electron accelerator 的转换
+// 用法：Electron 主进程 hotkeys.ts 用 normalizeHotkey 校验并用类型声明 IPC 载荷；设置窗口 HotkeysSection.tsx 用 acceleratorFromKeyEvent / resolveHotkeyCapture / DEFAULT_HOTKEYS；通道 hotkeys:get / hotkeys:set / hotkeys:capture
+// 对应文件：electron/main/hotkeys.ts / src/settings/HotkeysSection.tsx / src/settings/VoicePanel.tsx / src/settings/WindowBehaviorPanel.tsx / src/electron-api.d.ts / electron/preload/index.ts / shared/hotkeys.test.ts
+export const HOTKEY_ACTIONS = ['listen', 'transcribe', 'focus', 'avoidance'] as const
 
-export type VoiceHotkeyAction = typeof VOICE_HOTKEY_ACTIONS[number]
+export type HotkeyAction = typeof HOTKEY_ACTIONS[number]
 
-export const DEFAULT_VOICE_HOTKEYS: Record<VoiceHotkeyAction, string> = {
+export const DEFAULT_HOTKEYS: Record<HotkeyAction, string> = {
   listen: 'Ctrl+Alt+L',
   transcribe: 'Ctrl+Alt+T',
+  focus: 'F9',
+  avoidance: 'F8',
 }
 
-export interface VoiceHotkeysState {
-  listen: string
-  transcribe: string
-  listenRegistered: boolean
-  transcribeRegistered: boolean
+export interface HotkeysState {
+  keys: Record<HotkeyAction, string>
+  registered: Record<HotkeyAction, boolean>
 }
 
-export type VoiceHotkeyFailure = 'invalid' | 'duplicate' | 'taken'
+export type HotkeyFailure = 'invalid' | 'duplicate' | 'taken'
 
-export type VoiceHotkeySetResult =
-  | { ok: true; state: VoiceHotkeysState }
-  | { ok: false; reason: VoiceHotkeyFailure; state: VoiceHotkeysState }
+export type HotkeySetResult =
+  | { ok: true; state: HotkeysState }
+  | { ok: false; reason: HotkeyFailure; state: HotkeysState }
 
 const MODIFIERS = ['Ctrl', 'Alt', 'Shift'] as const
+
+const FUNCTION_KEY_PATTERN = /^F(?:[1-9]|1[0-9]|2[0-4])$/
 
 const KEY_PATTERN = /^(?:[A-Z0-9]|F(?:[1-9]|1[0-9]|2[0-4])|Space|Up|Down|Left|Right|Home|End|PageUp|PageDown|Insert|Delete|Backspace|Tab|Return)$/
 
@@ -44,11 +46,11 @@ const NAMED_KEYS: Record<string, string> = {
   Enter: 'Return',
 }
 
-export function normalizeVoiceHotkey(value: unknown): string | null {
+export function normalizeHotkey(value: unknown): string | null {
   if (typeof value !== 'string') return null
   const parts = value.split('+')
   const key = parts.pop() as string
-  if (parts.length === 0 || !KEY_PATTERN.test(key)) return null
+  if (!KEY_PATTERN.test(key) || (parts.length === 0 && !FUNCTION_KEY_PATTERN.test(key))) return null
   const mods = new Set<string>()
   for (const part of parts) {
     if (!(MODIFIERS as readonly string[]).includes(part) || mods.has(part)) return null

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { acceleratorFromKeyEvent, normalizeVoiceHotkey, resolveHotkeyCapture } from './voiceHotkeys.js'
+import { acceleratorFromKeyEvent, normalizeHotkey, resolveHotkeyCapture } from './hotkeys.js'
 
 const event = (code: string, mods: { ctrl?: boolean; alt?: boolean; shift?: boolean; meta?: boolean } = {}) => ({
   code,
@@ -35,20 +35,32 @@ describe('acceleratorFromKeyEvent', () => {
   })
 })
 
-describe('normalizeVoiceHotkey', () => {
+describe('normalizeHotkey', () => {
   it('accepts modifier plus key and canonicalises modifier order', () => {
-    expect(normalizeVoiceHotkey('Ctrl+Alt+L')).toBe('Ctrl+Alt+L')
-    expect(normalizeVoiceHotkey('Shift+Alt+Ctrl+F5')).toBe('Ctrl+Alt+Shift+F5')
+    expect(normalizeHotkey('Ctrl+Alt+L')).toBe('Ctrl+Alt+L')
+    expect(normalizeHotkey('Shift+Alt+Ctrl+F5')).toBe('Ctrl+Alt+Shift+F5')
+  })
+
+  it.each([
+    ['F9', 'F9'],
+    ['F24', 'F24'],
+    ['Shift+F8', 'Shift+F8'],
+    ['L', null],
+    ['5', null],
+    ['Space', null],
+    ['F25', null],
+  ])('accepts a bare function key but no other bare key: %s', (input, expected) => {
+    expect(normalizeHotkey(input)).toBe(expected)
   })
 
   it('rejects no modifier, modifiers only, repeated or unknown parts and non-strings', () => {
-    expect(normalizeVoiceHotkey('L')).toBeNull()
-    expect(normalizeVoiceHotkey('Ctrl+Alt')).toBeNull()
-    expect(normalizeVoiceHotkey('Ctrl+Ctrl+L')).toBeNull()
-    expect(normalizeVoiceHotkey('Super+L')).toBeNull()
-    expect(normalizeVoiceHotkey('Ctrl+')).toBeNull()
-    expect(normalizeVoiceHotkey('')).toBeNull()
-    expect(normalizeVoiceHotkey(5)).toBeNull()
+    expect(normalizeHotkey('L')).toBeNull()
+    expect(normalizeHotkey('Ctrl+Alt')).toBeNull()
+    expect(normalizeHotkey('Ctrl+Ctrl+L')).toBeNull()
+    expect(normalizeHotkey('Super+L')).toBeNull()
+    expect(normalizeHotkey('Ctrl+')).toBeNull()
+    expect(normalizeHotkey('')).toBeNull()
+    expect(normalizeHotkey(5)).toBeNull()
   })
 })
 

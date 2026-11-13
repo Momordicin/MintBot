@@ -21,13 +21,13 @@ const STATE: PetMenuState = {
 describe('buildPetMenu', () => {
   it('collapsed mode offers only the show item', () => {
     expect(buildPetMenu('collapsed', { ...CONFIG, petCollapsed: true }, STATE)).toEqual([
-      { label: '显示悬浮窗', action: { kind: 'set-collapsed', value: false } },
+      { label: '显示角色', action: { kind: 'set-collapsed', value: false } },
     ])
   })
 
   it('lists the five items in order in normal mode', () => {
     const items = buildPetMenu('normal', CONFIG, STATE)
-    expect(items.map(item => item.label)).toEqual(['窗口可穿透', '窗口大小', '桌宠智能避让', '切换至立绘', '隐藏悬浮窗'])
+    expect(items.map(item => item.label)).toEqual(['专注模式', '窗口大小', '角色智能避让', '切换至立绘', '隐藏角色'])
   })
 
   it('reflects click-through and avoidance as checkboxes whose action flips the value', () => {

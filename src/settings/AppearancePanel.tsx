@@ -45,7 +45,7 @@ export function AppearancePanel({ panel }: AppearancePanelProps) {
               disabled={!canSwitchPortrait || isSwitchingPortrait || deleteTarget !== null || isDeleting}
               title={portraitForms !== null && !canSwitchPortrait
                 ? t('该角色没有{{form}}', { form: portraitFormLabels[otherPortrait] })
-                : t('切换桌宠形态')}
+                : t('切换角色形态')}
             >
               {portraitFormLabels[effectivePortrait]}
             </button>

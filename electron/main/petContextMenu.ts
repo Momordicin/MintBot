@@ -72,7 +72,7 @@ export function buildPetMenu(
   state: PetMenuState | null
 ): PetMenuItem[] {
   if (mode === 'collapsed') {
-    return [{ label: i18n.t('显示悬浮窗'), action: { kind: 'set-collapsed', value: false } }]
+    return [{ label: i18n.t('显示角色'), action: { kind: 'set-collapsed', value: false } }]
   }
 
   const currentScale = state ? state.petScale[state.effectiveForm] : null
@@ -98,19 +98,19 @@ export function buildPetMenu(
 
   return [
     {
-      label: i18n.t('窗口可穿透'),
+      label: i18n.t('专注模式'),
       type: 'checkbox',
       checked: config.petClickThrough,
       action: { kind: 'set-click-through', value: !config.petClickThrough },
     },
     { label: i18n.t('窗口大小'), enabled: state !== null, submenu: sizeItems },
     {
-      label: i18n.t('桌宠智能避让'),
+      label: i18n.t('角色智能避让'),
       type: 'checkbox',
       checked: config.petAvoidanceEnabled,
       action: { kind: 'set-avoidance', value: !config.petAvoidanceEnabled },
     },
     formItem,
-    { label: i18n.t('隐藏悬浮窗'), action: { kind: 'set-collapsed', value: true } },
+    { label: i18n.t('隐藏角色'), action: { kind: 'set-collapsed', value: true } },
   ]
 }
