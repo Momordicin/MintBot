@@ -346,6 +346,7 @@
   "角色智能避让": "Smart character avoidance",
   "角色智能避让：已开启": "Smart character avoidance: on",
   "角色智能避让：已关闭": "Smart character avoidance: off",
+  "角色换屏": "Move character to next screen",
   "角色智能避让未切换：核心服务拒绝了修改": "Smart character avoidance not switched: the core service rejected the change",
   "角色智能避让未切换：无法连接核心服务": "Smart character avoidance not switched: cannot reach the core service",
   "自由测试": "Free test",

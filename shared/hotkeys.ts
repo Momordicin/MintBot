@@ -1,7 +1,7 @@
-// shared/hotkeys.ts — 全局快捷键（语音输入聆听 / 转写、专注模式、角色智能避让）的取值、默认值、校验规范化，以及键盘事件到 Electron accelerator 的转换
+// shared/hotkeys.ts — 全局快捷键（语音输入聆听 / 转写、专注模式、角色智能避让、角色换屏）的取值、默认值、校验规范化，以及键盘事件到 Electron accelerator 的转换
 // 用法：Electron 主进程 hotkeys.ts 用 normalizeHotkey 校验并用类型声明 IPC 载荷；设置窗口 HotkeysSection.tsx 用 acceleratorFromKeyEvent / resolveHotkeyCapture / DEFAULT_HOTKEYS；通道 hotkeys:get / hotkeys:set / hotkeys:capture
 // 对应文件：electron/main/hotkeys.ts / src/settings/HotkeysSection.tsx / src/settings/VoicePanel.tsx / src/settings/WindowBehaviorPanel.tsx / src/electron-api.d.ts / electron/preload/index.ts / shared/hotkeys.test.ts
-export const HOTKEY_ACTIONS = ['listen', 'transcribe', 'focus', 'avoidance'] as const
+export const HOTKEY_ACTIONS = ['listen', 'transcribe', 'focus', 'avoidance', 'nextDisplay'] as const
 
 export type HotkeyAction = typeof HOTKEY_ACTIONS[number]
 
@@ -10,6 +10,7 @@ export const DEFAULT_HOTKEYS: Record<HotkeyAction, string> = {
   transcribe: 'Ctrl+Alt+T',
   focus: 'F9',
   avoidance: 'F8',
+  nextDisplay: 'F7',
 }
 
 export interface HotkeysState {

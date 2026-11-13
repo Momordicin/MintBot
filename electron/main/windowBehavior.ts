@@ -1,7 +1,7 @@
-// electron/main/windowBehavior.ts — 窗口行为编排：缓存 window-behavior 配置快照，按显示器阻挡表为桌宠与聊天窗口套用迁移、置顶、显示/隐藏、贴边，并处理拖拽落点持久化、overlay 尺寸与收起手柄几何、穿透与透明度
-// 用法：index.ts 启动与事件里调 initWindowBehaviorConfig / applyWindowBehaviorSnapshot / evaluateDesktopPresence / prepareChatForShow / handleWindowMoved / requestOverlayEdgeHover / applyOverlaySize / armPetSizeGate / getCurrentPetMode / noteOverlayCreatedCollapsed / setPetHandleWindow 等；向 overlay 发 desktop-presence:changed，并同步穿透手柄窗口的位置与显隐
+// electron/main/windowBehavior.ts — 窗口行为编排：缓存 window-behavior 配置快照，按显示器阻挡表为桌宠与聊天窗口套用迁移、置顶、显示/隐藏、贴边，并处理拖拽落点持久化、快捷键换屏、overlay 尺寸与收起手柄几何、穿透与透明度
+// 用法：index.ts 启动与事件里调 initWindowBehaviorConfig / applyWindowBehaviorSnapshot / evaluateDesktopPresence / movePetToNextDisplay（快捷键换屏）/ prepareChatForShow / handleWindowMoved / requestOverlayEdgeHover / applyOverlaySize / armPetSizeGate / getCurrentPetMode / noteOverlayCreatedCollapsed / setPetHandleWindow 等；向 overlay 发 desktop-presence:changed，并同步穿透手柄窗口的位置与显隐
 // 形状：输入 WindowBehaviorSnapshot（core GET/PATCH /config/window-behavior 与 SSE window-behavior-changed）和阻挡表；输出为对 BrowserWindow 的操作与 IPC 推送
-// 对应文件：electron/main/index.ts / electron/main/desktopPresence.ts / electron/main/foregroundWorldModel.ts / electron/main/windowPositions.ts / electron/main/windowAnimation.ts / electron/main/chatReveal.ts / electron/main/petHandleWindow.ts / electron/main/petTopmostGuard.ts / shared/windowBehavior.ts / electron/main/windowBehavior.test.ts
+// 对应文件：electron/main/index.ts / electron/main/desktopPresence.ts / electron/main/foregroundWorldModel.ts / electron/main/windowPositions.ts / electron/main/homeDisplayCommit.ts / electron/main/windowAnimation.ts / electron/main/chatReveal.ts / electron/main/petHandleWindow.ts / electron/main/petTopmostGuard.ts / shared/windowBehavior.ts / electron/main/windowBehavior.test.ts
 import { BrowserWindow, screen } from 'electron'
 import { animateTo } from './windowAnimation'
 import { revealChat } from './chatReveal'
@@ -22,7 +22,7 @@ import {
   PERSIST_DEBOUNCE_MS,
 } from './windowPositions'
 import type { Bounds, WindowKey } from './windowPositions'
-import { commitHomeDisplayFromDragOutcome } from './homeDisplayCommit'
+import { commitHomeDisplayFromDragOutcome, commitHomeDisplayFromHotkey } from './homeDisplayCommit'
 import { getDisplayStateMap, revalidateBlockersNow, requestObservation } from './foregroundWorldModel'
 import type { AppRule } from './displayStateMap'
 import {
@@ -32,6 +32,7 @@ import {
   diffChatState,
   resolveDragOutcome,
   deriveDragContext,
+  resolveNextDisplayTarget,
   isTemporaryPlacement,
   isProgrammaticMoveEcho,
   extendQuietUntil,
@@ -793,4 +794,26 @@ export function prepareChatForShow(mainWindow: BrowserWindow | null): boolean {
 export function evaluateDesktopPresence(mainWindow: BrowserWindow | null, overlayWindow: BrowserWindow | null): void {
   evaluatePetPresence(overlayWindow)
   evaluateChatPresence(mainWindow)
+}
+
+export function movePetToNextDisplay(mainWindow: BrowserWindow | null, overlayWindow: BrowserWindow | null): void {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return
+  if (isWindowDragInProgress('overlay')) return
+  const displays = screen.getAllDisplays()
+  const effectiveHomeDisplayId = getEffectiveHomeDisplay(displays, 'overlay').id
+  const currentDisplayId = appliedDisplayIdFor('overlay') ?? effectiveHomeDisplayId
+  const target = resolveNextDisplayTarget(
+    displays,
+    currentDisplayId,
+    effectiveHomeDisplayId,
+    getDisplayStateMap(),
+    currentConfig().petAvoidanceEnabled
+  )
+  if (target === null) return
+  commitHomeDisplayFromHotkey('overlay', target)
+  try {
+    evaluateDesktopPresence(mainWindow, overlayWindow)
+  } catch (err) {
+    console.error('[WindowBehavior] Failed to move the pet to the next display:', err)
+  }
 }

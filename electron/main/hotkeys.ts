@@ -1,5 +1,5 @@
-// electron/main/hotkeys.ts — 全局快捷键：语音输入聆听 / 转写与专注模式 / 角色智能避让的按键动作、<userData>/hotkeys.json 读写（缺失时沿用 voice-hotkeys.json 的语音键）、注册与改键、设置页录入期间的临时注销
-// 用法：index.ts 在 app ready 后 createHotkeys(...).start()，will-quit 调 stop()；IPC hotkeys:get / hotkeys:set / hotkeys:capture 调 get / set / setCapture；专注模式 / 角色智能避让经 index.ts 的 patchWindowBehavior 切换
+// electron/main/hotkeys.ts — 全局快捷键：语音输入聆听 / 转写与专注模式 / 角色智能避让 / 角色换屏的按键动作、<userData>/hotkeys.json 读写（缺失时沿用 voice-hotkeys.json 的语音键，缺 nextDisplay 时补默认键）、注册与改键、设置页录入期间的临时注销
+// 用法：index.ts 在 app ready 后 createHotkeys(...).start()，will-quit 调 stop()；IPC hotkeys:get / hotkeys:set / hotkeys:capture 调 get / set / setCapture；专注模式 / 角色智能避让经 index.ts 的 patchWindowBehavior 切换，角色换屏调 index.ts 的 moveToNextDisplay
 // 对应文件：electron/main/index.ts / electron/main/voiceTray.ts / electron/main/i18n.ts / shared/hotkeys.ts / shared/voiceInputMode.ts / shared/windowBehavior.ts / electron/main/hotkeys.test.ts
 import fs from 'fs'
 import crypto from 'crypto'
@@ -16,7 +16,7 @@ const PRESS_THROTTLE_MS = 1000
 
 type VoiceHotkeyAction = Extract<HotkeyAction, 'listen' | 'transcribe'>
 
-type WindowHotkeyAction = Exclude<HotkeyAction, VoiceHotkeyAction>
+type WindowHotkeyAction = Exclude<HotkeyAction, VoiceHotkeyAction | 'nextDisplay'>
 
 const WINDOW_FIELDS: Record<WindowHotkeyAction, 'petClickThrough' | 'petAvoidanceEnabled'> = {
   focus: 'petClickThrough',
@@ -66,6 +66,7 @@ export interface HotkeysDeps {
   switchMode: (mode: VoiceInputMode) => Promise<boolean>
   getWindowBehavior: () => WindowBehaviorConfig
   patchWindowBehavior: (partial: Partial<WindowBehaviorConfig>) => Promise<WindowBehaviorPatchResult>
+  moveToNextDisplay: () => void
 }
 
 type HotkeyMap = Record<HotkeyAction, string>
@@ -86,10 +87,12 @@ function parseStoredHotkeys(text: string, actions: readonly HotkeyAction[]): Hot
   const stored = raw as Record<string, unknown>
   const map: HotkeyMap = { ...DEFAULT_HOTKEYS }
   for (const action of actions) {
+    if (action === 'nextDisplay' && stored[action] === undefined) continue
     const value = stored[action] === '' ? '' : normalizeHotkey(stored[action])
     if (value === null) return null
     map[action] = value
   }
+  if (actions.includes('nextDisplay') && stored.nextDisplay === undefined && hasDuplicate(map)) map.nextDisplay = ''
   return hasDuplicate(map) ? null : map
 }
 
@@ -107,9 +110,9 @@ function windowFailureNotice(action: WindowHotkeyAction, reason: 'rejected' | 'u
 
 export function createHotkeys(deps: HotkeysDeps) {
   let keys: HotkeyMap = { ...DEFAULT_HOTKEYS }
-  const registered: Record<HotkeyAction, boolean> = { listen: false, transcribe: false, focus: false, avoidance: false }
+  const registered: Record<HotkeyAction, boolean> = { listen: false, transcribe: false, focus: false, avoidance: false, nextDisplay: false }
   let capturing = false
-  const lastAcceptedPress: Record<'voice' | WindowHotkeyAction, number | null> = { voice: null, focus: null, avoidance: null }
+  const lastAcceptedPress: Record<'voice' | WindowHotkeyAction | 'nextDisplay', number | null> = { voice: null, focus: null, avoidance: null, nextDisplay: null }
 
   const readFile = (io: Pick<HotkeysFileIo, 'read'>, name: string): { text: string } | { missing: boolean } => {
     try {
@@ -187,11 +190,12 @@ export function createHotkeys(deps: HotkeysDeps) {
     if (last !== null && at - last < PRESS_THROTTLE_MS) return
     lastAcceptedPress[group] = at
     if (action === 'listen' || action === 'transcribe') await pressVoice(action)
+    else if (action === 'nextDisplay') deps.moveToNextDisplay()
     else await pressWindow(action)
   }
 
   const serialize = (map: HotkeyMap): string =>
-    JSON.stringify({ listen: map.listen, transcribe: map.transcribe, focus: map.focus, avoidance: map.avoidance }, null, 2)
+    JSON.stringify({ listen: map.listen, transcribe: map.transcribe, focus: map.focus, avoidance: map.avoidance, nextDisplay: map.nextDisplay }, null, 2)
 
   const state = (): HotkeysState => ({ keys: { ...keys }, registered: { ...registered } })
 

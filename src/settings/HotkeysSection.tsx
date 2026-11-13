@@ -1,5 +1,5 @@
 // src/settings/HotkeysSection.tsx — 设置窗口的"快捷键"分区：按传入的动作列表显示各行按键、录入新按键、恢复本分区默认值
-// 用法：VoicePanel 传入聆听 / 转写、WindowBehaviorPanel 传入专注模式 / 角色智能避让，渲染 <HotkeysSection actions={...} />；electronAPI.getHotkeys / setHotkeys / setHotkeyCapture
+// 用法：VoicePanel 传入聆听 / 转写、WindowBehaviorPanel 传入专注模式 / 角色智能避让 / 角色换屏，渲染 <HotkeysSection actions={...} />；electronAPI.getHotkeys / setHotkeys / setHotkeyCapture
 // 对应文件：src/settings/VoicePanel.tsx / src/settings/WindowBehaviorPanel.tsx / src/settings/settings.css / shared/hotkeys.ts / src/electron-api.d.ts / electron/preload/index.ts / electron/main/hotkeys.ts
 import React, { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'

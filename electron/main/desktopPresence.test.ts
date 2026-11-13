@@ -7,6 +7,7 @@ import {
   resolveDragOutcome,
   canAcceptFullPlacement,
   deriveDragContext,
+  resolveNextDisplayTarget,
   isTemporaryPlacement,
   isProgrammaticMoveEcho,
   extendQuietUntil,
@@ -532,6 +533,34 @@ describe('canAcceptFullPlacement', () => {
 
   it('refuses a display with a recorded blocker', () => {
     expect(canAcceptFullPlacement(1, makeMap([[1, {}]]))).toBe(false)
+  })
+})
+
+describe('resolveNextDisplayTarget', () => {
+  const row = [
+    { id: 1, bounds: { x: 0, y: 0 } },
+    { id: 2, bounds: { x: 1920, y: 0 } },
+    { id: 3, bounds: { x: 3840, y: 0 } },
+  ]
+  const unordered = [row[2], row[0], row[1]]
+  const stacked = [
+    { id: 7, bounds: { x: 0, y: 1080 } },
+    { id: 8, bounds: { x: 0, y: 0 } },
+    { id: 9, bounds: { x: 1920, y: 0 } },
+  ]
+  const cases: Array<[string, typeof row, number, number, Array<[number, Partial<DisplayBlocker>]>, boolean, number | null]> = [
+    ['moves to the display on the right', unordered, 1, 1, [], true, 2],
+    ['wraps from the rightmost display to the leftmost', row, 3, 3, [], true, 1],
+    ['skips a display that needs avoidance', row, 1, 1, [[2, {}]], true, 3],
+    ['does not skip it with avoidance off', row, 1, 1, [[2, {}]], false, 2],
+    ['has no target when every other display needs avoidance', row, 1, 1, [[2, {}], [3, { severity: 'soft' }]], true, null],
+    ['temporary relocation, two displays, home needs avoidance: stays on the current display', row.slice(0, 2), 2, 1, [[1, {}]], true, 2],
+    ['temporary relocation, three displays: the next display without avoidance', row, 2, 1, [[1, {}]], true, 3],
+    ['has no target with a single display', row.slice(0, 1), 1, 1, [], true, null],
+    ['orders displays with the same x by y', stacked, 8, 8, [], true, 7],
+  ]
+  it.each(cases)('%s', (_name, displays, current, home, blockers, avoidanceEnabled, expected) => {
+    expect(resolveNextDisplayTarget(displays, current, home, makeMap(blockers), avoidanceEnabled)).toBe(expected)
   })
 })
 

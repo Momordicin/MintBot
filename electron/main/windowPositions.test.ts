@@ -1,4 +1,16 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import fs from 'fs'
+
+vi.mock('electron', () => ({
+  app: { getPath: () => 'window-positions-test-user-data' },
+  screen: { getAllDisplays: () => [] },
+}))
+
+vi.mock('./displayIdentity', () => ({
+  getStableDisplayKey: (display: { id: number }) => `id:${display.id}`,
+  fallbackDisplayKey: (displayId: number) => `id:${displayId}`,
+}))
+
 import {
   pickLargestDisplay,
   resolveStartupDisplay,
@@ -15,6 +27,10 @@ import {
   expandedBoundsFromHandle,
   petHandleBounds,
   parseWindowPositionsStore,
+  getPreferredBounds,
+  setPreferredBounds,
+  getEffectiveHomeDisplay,
+  commitUserChosenHomeDisplay,
 } from './windowPositions'
 
 describe('parseWindowPositionsStore', () => {
@@ -60,11 +76,10 @@ describe('parseWindowPositionsStore', () => {
   })
 })
 
-// 只测新增的纯函数（显示器挑选 + bounds 夹紧）。getPreferredBounds/setPreferredBounds/
-// getEffectiveHomeDisplay/commitUserChosenHomeDisplay 依赖 electron 的 app.getPath 与 screen，需要真实
-// Electron 运行时才能验证磁盘读写，这里不测（见任务说明：需要真实 BrowserWindow/screen
-// 的部分不在这个测试文件覆盖范围内）。commitUserChosenHomeDisplay 的 import 边界守卫见
-// windowPositionsCommitGuard.test.ts
+// 主要测纯函数（显示器挑选 + bounds 夹紧）。getPreferredBounds/setPreferredBounds/
+// getEffectiveHomeDisplay/commitUserChosenHomeDisplay 只测保存失败时不抛出、内存值照常更新
+// （electron、displayIdentity 被 mock，fs 用 spy 模拟失败，不做真实磁盘读写）。
+// commitUserChosenHomeDisplay 的 import 边界守卫见 windowPositionsCommitGuard.test.ts
 
 function makeDisplay(
   id: number,
@@ -501,5 +516,47 @@ describe('petHandleBounds', () => {
     expect(petHandleBounds({ x: 1500, y: -50, width: 132, height: 132 }, workArea)).toEqual({
       x: 1500 + 132 - 24, y: 0, width: 24, height: 24,
     })
+  })
+})
+
+describe('window-positions.json save failure', () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    vi.spyOn(fs, 'readFileSync').mockImplementation(() => {
+      throw new Error('ENOENT')
+    })
+    vi.spyOn(fs, 'rmSync').mockImplementation(() => {})
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('logs and keeps the new preferred bounds in memory when the temp-file write fails', () => {
+    const failure = new Error('write failed')
+    vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {
+      throw failure
+    })
+    const bounds = { x: 10, y: 20, width: 132, height: 132 }
+
+    expect(() => setPreferredBounds('overlay', 2, bounds)).not.toThrow()
+    expect(errorSpy).toHaveBeenCalledWith('[WindowPositions] Failed to save window-positions.json:', failure)
+    expect(getPreferredBounds('overlay', 2)).toEqual(bounds)
+  })
+
+  it('logs and keeps the new home display in memory when the rename fails', () => {
+    const failure = new Error('rename failed')
+    vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {})
+    vi.spyOn(fs, 'renameSync').mockImplementation(() => {
+      throw failure
+    })
+    const large = makeDisplay(1, { x: 0, y: 0, width: 3840, height: 2160 })
+    const small = makeDisplay(2, { x: 3840, y: 0, width: 1920, height: 1080 })
+
+    expect(() => commitUserChosenHomeDisplay('overlay', 2)).not.toThrow()
+    expect(errorSpy).toHaveBeenCalledWith('[WindowPositions] Failed to save window-positions.json:', failure)
+    expect(getEffectiveHomeDisplay([large, small], 'overlay').id).toBe(2)
   })
 })

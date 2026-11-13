@@ -1,4 +1,4 @@
-// src/settings/WindowBehaviorPanel.tsx — 设置窗口的"窗口行为"面板：聊天窗口置顶模式、角色智能避让开关、应用规则、专注模式 / 角色智能避让快捷键
+// src/settings/WindowBehaviorPanel.tsx — 设置窗口的"窗口行为"面板：聊天窗口置顶模式、角色智能避让开关、应用规则、专注模式 / 角色智能避让 / 角色换屏快捷键
 // 用法：SettingsApp 里渲染 <WindowBehaviorPanel />；读写 GET/PATCH /config/window-behavior，监听 SSE window-behavior-changed；添加规则时调用 electronAPI.selectExeFile；快捷键分区交给 HotkeysSection
 // 对应文件：shared/windowBehavior.ts（快照契约）/ src/eventsWatchdog.ts / src/errorText.ts / src/settings/HotkeysSection.tsx / services/core/routes/windowBehavior.ts / electron/main/index.ts（select-exe-file、托盘同一组开关）
 import React, { useCallback, useEffect, useRef, useState } from 'react'
@@ -218,7 +218,7 @@ export function WindowBehaviorPanel() {
         <button className="memory-btn" disabled={saving} onClick={handleAddRule}>{t('添加')}</button>
       </div>
 
-      <HotkeysSection actions={[{ action: 'focus', label: t('专注模式') }, { action: 'avoidance', label: t('角色智能避让') }]} />
+      <HotkeysSection actions={[{ action: 'focus', label: t('专注模式') }, { action: 'avoidance', label: t('角色智能避让') }, { action: 'nextDisplay', label: t('角色换屏') }]} />
 
       {errorMessage && <div className="character-panel__error">{errorMessage}</div>}
     </div>

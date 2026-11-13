@@ -10,7 +10,7 @@ import type { WindowBehaviorConfig } from '../../shared/windowBehavior.js'
 
 const AVAILABLE = { installed: true, install: { state: 'idle' }, mode: 'normal' }
 
-const DEFAULT_KEYS = ['Ctrl+Alt+L', 'Ctrl+Alt+T', 'F8', 'F9']
+const DEFAULT_KEYS = ['Ctrl+Alt+L', 'Ctrl+Alt+T', 'F7', 'F8', 'F9']
 
 function setup(options: {
   file?: string | null
@@ -55,6 +55,7 @@ function setup(options: {
   const switchMode = vi.fn(async (_mode: VoiceInputMode) => options.switchResult ?? true)
   const getWindowBehavior = vi.fn(() => ({ petClickThrough: false, petAvoidanceEnabled: true, ...options.windowBehavior }) as WindowBehaviorConfig)
   const patchWindowBehavior = vi.fn(async (_partial: Partial<WindowBehaviorConfig>) => options.patchResult ?? ({ ok: true } as WindowBehaviorPatchResult))
+  const moveToNextDisplay = vi.fn()
   const clock = { value: 10_000 }
   const hotkeys = createHotkeys({
     globalShortcut,
@@ -66,13 +67,14 @@ function setup(options: {
     switchMode,
     getWindowBehavior,
     patchWindowBehavior,
+    moveToNextDisplay,
   })
-  return { hotkeys, active, globalShortcut, notify, io, legacyIo, fetchStatus, switchMode, patchWindowBehavior, taken, clock, getFile: () => file }
+  return { hotkeys, active, globalShortcut, notify, io, legacyIo, fetchStatus, switchMode, patchWindowBehavior, moveToNextDisplay, taken, clock, getFile: () => file }
 }
 
 const keysOf = (active: Map<string, () => void>) => [...active.keys()].sort()
 
-const ALL_REGISTERED = { listen: true, transcribe: true, focus: true, avoidance: true }
+const ALL_REGISTERED = { listen: true, transcribe: true, focus: true, avoidance: true, nextDisplay: true }
 
 let errorSpy: ReturnType<typeof vi.spyOn>
 
@@ -180,6 +182,18 @@ describe('window key press', () => {
   })
 })
 
+describe('screen key press', () => {
+  it('moves the character to the next screen without a status request, patch or notification', async () => {
+    const { hotkeys, active, moveToNextDisplay, fetchStatus, patchWindowBehavior, notify } = setup()
+    hotkeys.start()
+    active.get('F7')?.()
+    await vi.waitFor(() => expect(moveToNextDisplay).toHaveBeenCalledTimes(1))
+    expect(fetchStatus).not.toHaveBeenCalled()
+    expect(patchWindowBehavior).not.toHaveBeenCalled()
+    expect(notify).not.toHaveBeenCalled()
+  })
+})
+
 describe('startup registration', () => {
   it('registers the default hotkeys when both files are missing and does not create one', () => {
     const { hotkeys, active, io, notify } = setup()
@@ -188,7 +202,7 @@ describe('startup registration', () => {
     expect(io.write).not.toHaveBeenCalled()
     expect(notify).not.toHaveBeenCalled()
     expect(hotkeys.get()).toEqual({
-      keys: { listen: 'Ctrl+Alt+L', transcribe: 'Ctrl+Alt+T', focus: 'F9', avoidance: 'F8' },
+      keys: { listen: 'Ctrl+Alt+L', transcribe: 'Ctrl+Alt+T', focus: 'F9', avoidance: 'F8', nextDisplay: 'F7' },
       registered: ALL_REGISTERED,
     })
   })
@@ -199,15 +213,26 @@ describe('startup registration', () => {
       legacy: JSON.stringify({ listen: 'Ctrl+Shift+K', transcribe: 'Ctrl+Shift+J' }),
     })
     hotkeys.start()
-    expect(keysOf(active)).toEqual(['Alt+F2', 'Ctrl+Shift+F1', 'F10'])
+    expect(keysOf(active)).toEqual(['Alt+F2', 'Ctrl+Shift+F1', 'F10', 'F7'])
     expect(legacyIo.read).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['fills the default when it is free', { listen: 'Ctrl+Shift+F1', transcribe: 'Alt+F2', focus: 'F10', avoidance: '' }, 'F7'],
+    ['leaves it empty when another key already uses the default', { listen: 'Ctrl+Shift+F1', transcribe: 'Alt+F2', focus: 'F10', avoidance: 'F7' }, ''],
+  ])('a hotkeys.json without the screen key %s and keeps the other keys', (_name, stored, nextDisplay) => {
+    const { hotkeys, io } = setup({ file: JSON.stringify(stored) })
+    hotkeys.start()
+    expect(hotkeys.get().keys).toEqual({ ...stored, nextDisplay })
+    expect(io.write).not.toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
   })
 
   it('takes the voice keys from voice-hotkeys.json when hotkeys.json is missing, without writing either file', () => {
     const legacy = JSON.stringify({ listen: 'Ctrl+Shift+K', transcribe: '' })
     const { hotkeys, io } = setup({ legacy })
     hotkeys.start()
-    expect(hotkeys.get().keys).toEqual({ listen: 'Ctrl+Shift+K', transcribe: '', focus: 'F9', avoidance: 'F8' })
+    expect(hotkeys.get().keys).toEqual({ listen: 'Ctrl+Shift+K', transcribe: '', focus: 'F9', avoidance: 'F8', nextDisplay: 'F7' })
     expect(io.write).not.toHaveBeenCalled()
   })
 
@@ -253,8 +278,8 @@ describe('startup registration', () => {
     const { hotkeys, notify, active, getFile } = setup({ taken: ['F9'] })
     hotkeys.start()
     expect(hotkeys.get().keys.focus).toBe('')
-    expect(JSON.parse(getFile() as string)).toEqual({ listen: 'Ctrl+Alt+L', transcribe: 'Ctrl+Alt+T', focus: '', avoidance: 'F8' })
-    expect(keysOf(active)).toEqual(['Ctrl+Alt+L', 'Ctrl+Alt+T', 'F8'])
+    expect(JSON.parse(getFile() as string)).toEqual({ listen: 'Ctrl+Alt+L', transcribe: 'Ctrl+Alt+T', focus: '', avoidance: 'F8', nextDisplay: 'F7' })
+    expect(keysOf(active)).toEqual(['Ctrl+Alt+L', 'Ctrl+Alt+T', 'F7', 'F8'])
     expect(notify).toHaveBeenCalledTimes(1)
     expect(notify).toHaveBeenCalledWith('MintBot', '快捷键 F9 已被其他程序占用，无法使用')
     expect(errorSpy).toHaveBeenCalled()
@@ -262,12 +287,12 @@ describe('startup registration', () => {
   })
 
   it('keeps stored empty keys empty, never registers them and does not notify', () => {
-    const { hotkeys, active, io, notify } = setup({ file: JSON.stringify({ listen: '', transcribe: 'Alt+F2', focus: '', avoidance: '' }) })
+    const { hotkeys, active, io, notify } = setup({ file: JSON.stringify({ listen: '', transcribe: 'Alt+F2', focus: '', avoidance: '', nextDisplay: '' }) })
     hotkeys.start()
     expect(keysOf(active)).toEqual(['Alt+F2'])
     expect(hotkeys.get()).toEqual({
-      keys: { listen: '', transcribe: 'Alt+F2', focus: '', avoidance: '' },
-      registered: { listen: false, transcribe: true, focus: false, avoidance: false },
+      keys: { listen: '', transcribe: 'Alt+F2', focus: '', avoidance: '', nextDisplay: '' },
+      registered: { listen: false, transcribe: true, focus: false, avoidance: false, nextDisplay: false },
     })
     expect(io.write).not.toHaveBeenCalled()
     expect(notify).not.toHaveBeenCalled()
@@ -298,8 +323,8 @@ describe('set', () => {
     const result = hotkeys.set({ listen: 'Ctrl+Shift+K' })
     expect(result.ok).toBe(true)
     expect(result.state.keys.listen).toBe('Ctrl+Shift+K')
-    expect(keysOf(active)).toEqual(['Ctrl+Alt+T', 'Ctrl+Shift+K', 'F8', 'F9'])
-    expect(JSON.parse(getFile() as string)).toEqual({ listen: 'Ctrl+Shift+K', transcribe: 'Ctrl+Alt+T', focus: 'F9', avoidance: 'F8' })
+    expect(keysOf(active)).toEqual(['Ctrl+Alt+T', 'Ctrl+Shift+K', 'F7', 'F8', 'F9'])
+    expect(JSON.parse(getFile() as string)).toEqual({ listen: 'Ctrl+Shift+K', transcribe: 'Ctrl+Alt+T', focus: 'F9', avoidance: 'F8', nextDisplay: 'F7' })
   })
 
   it.each([
@@ -319,6 +344,8 @@ describe('set', () => {
     ['a window key from a voice row', { transcribe: 'F9' }],
     ['a voice key from a window row', { avoidance: 'Ctrl+Alt+L' }],
     ['the other window key', { focus: 'F8' }],
+    ['the screen key from a window row', { focus: 'F7' }],
+    ['a voice key from the screen row', { nextDisplay: 'Ctrl+Alt+L' }],
   ])('rejects the same key as %s and keeps the old keys working', (_name, input) => {
     const { hotkeys, active, io } = setup()
     hotkeys.start()
@@ -429,6 +456,18 @@ describe('press throttle', () => {
     expect(fetchStatus).toHaveBeenCalledTimes(1)
     expect(patchWindowBehavior.mock.calls.map(call => Object.keys(call[0])[0])).toEqual(['petClickThrough', 'petAvoidanceEnabled', 'petClickThrough'])
   })
+
+  it('throttles the screen key on its own', async () => {
+    const { hotkeys, moveToNextDisplay, patchWindowBehavior, clock } = setup()
+    await hotkeys.press('nextDisplay')
+    await hotkeys.press('focus')
+    clock.value += 999
+    await hotkeys.press('nextDisplay')
+    clock.value += 1
+    await hotkeys.press('nextDisplay')
+    expect(moveToNextDisplay).toHaveBeenCalledTimes(2)
+    expect(patchWindowBehavior).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('capture', () => {
@@ -458,7 +497,7 @@ describe('capture', () => {
     expect(result.ok).toBe(true)
     expect(active.size).toBe(0)
     hotkeys.setCapture(false)
-    expect(keysOf(active)).toEqual(['Ctrl+Alt+L', 'Ctrl+Alt+T', 'F10', 'F8'])
+    expect(keysOf(active)).toEqual(['Ctrl+Alt+L', 'Ctrl+Alt+T', 'F10', 'F7', 'F8'])
   })
 
   it('marks a key unregistered when it cannot be restored after capture', () => {

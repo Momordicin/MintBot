@@ -67,6 +67,9 @@ vi.mock('./windowPositions', async () => {
 
 vi.mock('./homeDisplayCommit', () => ({
   commitHomeDisplayFromDragOutcome: vi.fn(),
+  commitHomeDisplayFromHotkey: vi.fn((_windowKey: 'overlay' | 'chat', displayId: number) => {
+    testState.homeDisplayId = displayId
+  }),
 }))
 
 vi.mock('./foregroundWorldModel', () => ({
@@ -100,7 +103,7 @@ vi.mock('./dragActivity', () => ({
   },
 }))
 
-import { commitHomeDisplayFromDragOutcome } from './homeDisplayCommit'
+import { commitHomeDisplayFromDragOutcome, commitHomeDisplayFromHotkey } from './homeDisplayCommit'
 import { animateTo } from './windowAnimation'
 import {
   evaluateDesktopPresence,
@@ -118,6 +121,7 @@ import {
   applyOverlaySize,
   armPetSizeGate,
   prepareChatForShow,
+  movePetToNextDisplay,
 } from './windowBehavior'
 
 let testRevision = 0
@@ -1579,6 +1583,54 @@ describe('关闭 petAvoidanceEnabled 后退出托管状态（Controller 层）',
       expect(win.hide).not.toHaveBeenCalled()
     })
   }
+})
+
+describe('movePetToNextDisplay', () => {
+  function blocker(displayId: number) {
+    return { hwnd: 1n, pid: 1, exeName: null, displayId, reasons: new Set(['fullscreen']), severity: 'hard' }
+  }
+
+  it('commits the next display as home before moving the pet there', () => {
+    testState.displays = [makeDisplay(1, 0), makeDisplay(2, 1920)]
+    testState.homeDisplayId = 1
+    const win = makeFakeOverlayWindow({ x: 0, y: 0, width: 132, height: 132 })
+    evaluateDesktopPresence(null, win as unknown as Electron.BrowserWindow)
+    vi.clearAllMocks()
+
+    movePetToNextDisplay(null, win as unknown as Electron.BrowserWindow)
+
+    expect(commitHomeDisplayFromHotkey).toHaveBeenCalledWith('overlay', 2)
+    expect(animateTo).toHaveBeenCalled()
+    expect(vi.mocked(commitHomeDisplayFromHotkey).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(animateTo).mock.invocationCallOrder[0])
+    expect(win.getBounds().x).toBeGreaterThanOrEqual(1920)
+  })
+
+  it('during a temporary relocation with home needing avoidance, makes the current display home and stays on it', () => {
+    testState.displays = [makeDisplay(1, 0), makeDisplay(2, 1920)]
+    testState.homeDisplayId = 1
+    testState.blockerMap = new Map([[1, blocker(1)]])
+    const win = makeFakeOverlayWindow({ x: 1920, y: 0, width: 132, height: 132 })
+    evaluateDesktopPresence(null, win as unknown as Electron.BrowserWindow)
+    vi.clearAllMocks()
+
+    movePetToNextDisplay(null, win as unknown as Electron.BrowserWindow)
+
+    expect(commitHomeDisplayFromHotkey).toHaveBeenCalledWith('overlay', 2)
+    expect(win.getBounds().x).toBeGreaterThanOrEqual(1920)
+  })
+
+  it('leaves home and position unchanged on a single display', () => {
+    testState.displays = [makeDisplay(1, 0)]
+    testState.homeDisplayId = 1
+    const win = makeFakeOverlayWindow({ x: 0, y: 0, width: 132, height: 132 })
+    evaluateDesktopPresence(null, win as unknown as Electron.BrowserWindow)
+    vi.clearAllMocks()
+
+    movePetToNextDisplay(null, win as unknown as Electron.BrowserWindow)
+
+    expect(commitHomeDisplayFromHotkey).not.toHaveBeenCalled()
+    expect(animateTo).not.toHaveBeenCalled()
+  })
 })
 
 // reject 之后窗口必须真的弹回去；否则非法位置会留在屏幕上

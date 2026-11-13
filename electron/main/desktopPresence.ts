@@ -1,5 +1,5 @@
-// electron/main/desktopPresence.ts — 桌宠与聊天窗口“桌面存在状态”的纯函数：由显示器阻挡表算出期望状态与状态差分，并含贴边几何、拖拽落点裁决
-// 用法：windowBehavior.ts 调用 resolvePetDesiredState / resolveChatDesiredState / diffPetState / diffChatState / resolveDragOutcome / computeEdgeBounds 等
+// electron/main/desktopPresence.ts — 桌宠与聊天窗口“桌面存在状态”的纯函数：由显示器阻挡表算出期望状态与状态差分，并含贴边几何、拖拽落点裁决、快捷键换屏的目标屏幕
+// 用法：windowBehavior.ts 调用 resolvePetDesiredState / resolveChatDesiredState / diffPetState / diffChatState / resolveDragOutcome / resolveNextDisplayTarget / computeEdgeBounds 等
 // 形状：PetPresence（ACTIVE/AMBIENT/EDGE/HIDDEN）、ChatPresence（SHOWN/NORMAL/SUPPRESSED）、DragOutcome（accept/reject）
 // 对应文件：electron/main/windowBehavior.ts / electron/main/displayStateMap.ts（DisplayStateMap）/ electron/main/windowPositions.ts（Bounds）/ electron/main/homeDisplayCommit.ts（DragOutcome）/ electron/main/desktopPresence.test.ts
 import type { DisplayStateMap } from './displayStateMap'
@@ -220,6 +220,21 @@ export function deriveDragContext(
 ): { currentDisplayId: number; temporaryRelocation: boolean } {
   const currentDisplayId = appliedDisplayId ?? effectiveHomeDisplayId
   return { currentDisplayId, temporaryRelocation: currentDisplayId !== effectiveHomeDisplayId }
+}
+
+export function resolveNextDisplayTarget(
+  displays: ReadonlyArray<{ id: number; bounds: { x: number; y: number } }>,
+  currentDisplayId: number,
+  effectiveHomeDisplayId: number,
+  displayStateMap: DisplayStateMap,
+  avoidanceEnabled: boolean
+): number | null {
+  const ordered = [...displays].sort((a, b) => a.bounds.x - b.bounds.x || a.bounds.y - b.bounds.y).map(display => display.id)
+  const index = ordered.indexOf(currentDisplayId)
+  if (ordered.length < 2 || index === -1) return null
+  const candidates = [...ordered.slice(index + 1), ...ordered.slice(0, index)]
+  if (currentDisplayId !== effectiveHomeDisplayId) candidates.push(currentDisplayId)
+  return candidates.find(id => !avoidanceEnabled || canAcceptFullPlacement(id, displayStateMap)) ?? null
 }
 
 export function extendQuietUntil(existingQuietUntil: number, now: number, ms: number): number {

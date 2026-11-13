@@ -84,7 +84,7 @@ function persist(store: WindowPositionsStore): void {
       fs.rmSync(tempPath, { force: true })
     } catch {
     }
-    throw err
+    console.error('[WindowPositions] Failed to save window-positions.json:', err)
   }
 }
 
