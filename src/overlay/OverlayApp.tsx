@@ -429,6 +429,8 @@ export function OverlayApp() {
 
     if (transitionLockedRef.current) return
 
+    window.electronAPI.activateFromOverlay()
+
     if (transitionInProgressRef.current === 'fall-asleep') {
       if (transitionTimerRef.current !== undefined) {
         clearTimeout(transitionTimerRef.current)
@@ -464,10 +466,7 @@ export function OverlayApp() {
       scheduleThresholdCheck(now)
 
       startTransition(trigger)
-      return
     }
-
-    window.electronAPI.activateFromOverlay()
   }
 
   function handleDragStart() {
