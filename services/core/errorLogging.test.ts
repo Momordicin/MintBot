@@ -36,7 +36,11 @@ function addRoutes(fastify: FastifyInstance) {
   })
   fastify.get('/ok-coded-then-mixed', async (_request, reply) => {
     reply.code(200)
-    throw Object.assign(new Error('mixed status message'), { status: 503, statusCode: 400 })
+    throw Object.assign(new Error('mixed status message'), { statusCode: 503, status: 400 })
+  })
+  fastify.get('/ok-coded-then-status-only', async (_request, reply) => {
+    reply.code(200)
+    throw Object.assign(new Error('status only message'), { statusCode: 200, status: 503 })
   })
   fastify.post('/validated', { schema: { body: { type: 'object', required: ['name'], properties: { name: { type: 'string' } } } } }, async () => ({ ok: true }))
   fastify.register(async child => {
@@ -85,7 +89,7 @@ describe('logServerErrors', () => {
     expect(withHandler.errorLogs()[0].err?.message).toBe('coded unavailable message')
   })
 
-  it('先设 200 再抛同时带 status 503 与 statusCode 400 的错误：按实际返回的 503 记录', async () => {
+  it('先设 200 再抛同时带 statusCode 503 与 status 400 的错误：按实际返回的 503 记录', async () => {
     const withHandler = buildApp(true)
     const without = buildApp(false)
     addRoutes(withHandler.fastify)
@@ -99,6 +103,22 @@ describe('logServerErrors', () => {
     expect(a.body).toBe(b.body)
     expect(withHandler.errorLogs()).toHaveLength(1)
     expect(withHandler.errorLogs()[0].err?.message).toBe('mixed status message')
+  })
+
+  it('先设 200 再抛同时带 statusCode 200 与 status 503 的错误：按实际返回的 503 记录', async () => {
+    const withHandler = buildApp(true)
+    const without = buildApp(false)
+    addRoutes(withHandler.fastify)
+    addRoutes(without.fastify)
+
+    const a = await withHandler.fastify.inject({ method: 'GET', url: '/ok-coded-then-status-only' })
+    const b = await without.fastify.inject({ method: 'GET', url: '/ok-coded-then-status-only' })
+
+    expect(b.statusCode).toBe(503)
+    expect(a.statusCode).toBe(503)
+    expect(a.body).toBe(b.body)
+    expect(withHandler.errorLogs()).toHaveLength(1)
+    expect(withHandler.errorLogs()[0].err?.message).toBe('status only message')
   })
 
   it('带 statusCode 400 的错误与 body schema 校验 400 的响应不变且不记录 error 日志', async () => {
