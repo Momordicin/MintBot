@@ -1,5 +1,5 @@
 // electron/main/windowReveal.ts — 聊天窗口与其子窗口的透明显示、固定延迟淡入、子窗口隐藏与页面画好时刻核对
-// 用法：index.ts / windowBehavior.ts 显示聊天窗口时调 revealWindow(win, show, { label, requestedAt, fadeStartDelayMs, onShown })，收到 chat:painted 时调 notifyWindowPainted(sender)；index.ts 创建子窗口时调 attachChildWindowReveal(win, show, requestedAt, fadeStartDelayMs, label)，用 isChildWindowRevealPending(win) 判断首次显示是否仍在等待，再次打开隐藏的子窗口时调 revealChildWindow，隐藏子窗口时调 hideChildWindow，收到 window:ready / window:painted 时调 notifyChildWindowReady / notifyChildWindowPainted(sender)；向子窗口发 window:shown / window:hidden
+// 用法：index.ts / windowBehavior.ts 显示聊天窗口时调 revealWindow(win, show, { label, requestedAt, fadeStartDelayMs, onShown })，收到 chat:painted 时调 notifyWindowPainted(sender)；index.ts 创建子窗口及子窗口页面崩溃重载时调 attachChildWindowReveal(win, show, requestedAt, fadeStartDelayMs, label)，子窗口页面崩溃不重载时调 cancelChildWindowReveal(win)，用 isChildWindowRevealPending(win) 判断首次显示是否仍在等待，用 getPendingChildWindowRequestedAt(win) 取等待中首次显示的 requestedAt，再次打开隐藏的子窗口时调 revealChildWindow，隐藏子窗口时调 hideChildWindow，收到 window:ready / window:painted 时调 notifyChildWindowReady / notifyChildWindowPainted(sender)；向子窗口发 window:shown / window:hidden
 // 对应文件：electron/main/index.ts / electron/main/windowBehavior.ts / electron/main/windowAnimation.ts / electron/main/windowReveal.test.ts / src/useWindowReveal.ts / src/settings/SettingsApp.tsx
 import type { BrowserWindow, WebContents } from 'electron'
 import { fadeIn, finishAnimation } from './windowAnimation'
@@ -62,7 +62,8 @@ export function notifyWindowPainted(sender: WebContents): void {
 }
 
 const childWindowReady = new Map<WebContents, () => void>()
-const pendingChildWindows = new Set<BrowserWindow>()
+const pendingChildWindows = new Map<BrowserWindow, number>()
+const childWindowSettles = new Map<BrowserWindow, () => void>()
 
 export function revealChildWindow(win: BrowserWindow, show: () => void, requestedAt: number, fadeStartDelayMs: number, label: string): void {
   if (win.isDestroyed()) return
@@ -72,28 +73,44 @@ export function revealChildWindow(win: BrowserWindow, show: () => void, requeste
 
 export function attachChildWindowReveal(win: BrowserWindow, show: () => void, requestedAt: number, fadeStartDelayMs: number, label: string): void {
   const webContents = win.webContents
+  const previousSettle = childWindowSettles.get(win)
+  previousSettle?.()
+  cancelPendingReveal(win)
   let done = false
-  const ready = (): void => {
-    if (done) return
+  const settle = (): void => {
     done = true
     clearTimeout(timer)
     pendingChildWindows.delete(win)
+  }
+  const ready = (): void => {
+    if (done) return
+    settle()
     revealChildWindow(win, show, requestedAt, fadeStartDelayMs, label)
   }
   const timer = setTimeout(ready, Math.max(0, requestedAt + fadeStartDelayMs - Date.now()))
+  childWindowSettles.set(win, settle)
   childWindowReady.set(webContents, ready)
-  pendingChildWindows.add(win)
+  pendingChildWindows.set(win, requestedAt)
+  if (previousSettle) return
   win.once('closed', () => {
-    done = true
-    clearTimeout(timer)
+    childWindowSettles.get(win)?.()
+    childWindowSettles.delete(win)
     childWindowReady.delete(webContents)
-    pendingChildWindows.delete(win)
     cancelPendingReveal(win)
   })
 }
 
+export function cancelChildWindowReveal(win: BrowserWindow): void {
+  childWindowSettles.get(win)?.()
+  cancelPendingReveal(win)
+}
+
 export function isChildWindowRevealPending(win: BrowserWindow): boolean {
   return pendingChildWindows.has(win)
+}
+
+export function getPendingChildWindowRequestedAt(win: BrowserWindow): number | undefined {
+  return pendingChildWindows.get(win)
 }
 
 export function hideChildWindow(win: BrowserWindow): void {

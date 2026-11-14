@@ -2,6 +2,8 @@
   "（当前跟随系统解析为日间）": "(currently following the system: day)",
   "（当前跟随系统解析为夜间）": "(currently following the system: night)",
   "（未识别）": "(not recognized)",
+  "（不进入输入框）": "(not added to the input box)",
+  "（空）": "(empty)",
   "（新导入）{{id}}": "(newly imported) {{id}}",
   "（原生）": "(native)",
   "（非录入时原生设备）": "(not the enrollment device)",

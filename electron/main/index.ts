@@ -1,5 +1,5 @@
 // electron/main/index.ts — Electron 主进程入口：app ready 后创建聊天窗口、桌宠 overlay 与托盘，注册 IPC，启动前台窗口监控与 core /events 订阅，will-quit 时收尾
-// 用法：electron.vite.config.ts 的主进程 entry；注册 autostart:get / autostart:set、app:relaunch-info / app:relaunch；监听 second-instance；注册 app 协议 protocol.handle('app')；第一条 import 为 logBootstrap；注册 chat:ready（聊天窗口首次显示）/ chat:greet（设置窗口的打招呼转发到聊天窗口）/ chat:painted；注册 window:ready（子窗口首次显示）/ window:painted（仅对 attachChildWindowReveal 登记过的窗口生效）；注册 ui:get-locale，向窗口发 ui:locale-changed；设置窗口按 open-settings-window IPC 创建或调 revealChildWindow 重新显示，关闭时调 hideChildWindow；订阅 voice-type（textOutput）与 voice-status-changed（托盘「语音输入」）；注册 hotkeys:get / hotkeys:set / hotkeys:capture，app ready 后 hotkeys.start()，will-quit 时 stop()，角色换屏快捷键调 movePetToNextDisplay；显示器拓扑变化时 handleDisplayTopologyChange 先调 clearStableDisplayKeyCache()
+// 用法：electron.vite.config.ts 的主进程 entry；注册 autostart:get / autostart:set、app:relaunch-info / app:relaunch；监听 second-instance；注册 app 协议 protocol.handle('app')；第一条 import 为 logBootstrap；注册 chat:ready（聊天窗口首次显示）/ chat:greet（设置窗口的打招呼转发到聊天窗口）/ chat:painted；注册 window:ready（子窗口首次显示）/ window:painted（仅对 attachChildWindowReveal 登记过的窗口生效）；注册 ui:get-locale，向窗口发 ui:locale-changed；设置窗口按 open-settings-window IPC 创建或调 revealChildWindow 重新显示，关闭时调 hideChildWindow，监听设置窗口 render-process-gone 并调 getPendingChildWindowRequestedAt / attachChildWindowReveal / cancelChildWindowReveal；订阅 voice-type（textOutput）与 voice-status-changed（托盘「语音输入」）；注册 hotkeys:get / hotkeys:set / hotkeys:capture，app ready 后 hotkeys.start()，will-quit 时 stop()，角色换屏快捷键调 movePetToNextDisplay；显示器拓扑变化时 handleDisplayTopologyChange 先调 clearStableDisplayKeyCache()
 // 对应文件：electron/preload/index.ts（暴露的 IPC 通道）/ electron/main/windowBehavior.ts / electron/main/petContextMenu.ts / electron/main/coreEventsConsumer.ts / electron/main/i18n.ts / electron/main/foregroundWorldModel.ts / electron/main/windowDragMonitor.ts / electron/main/nativeWindowDrag.ts / electron/main/petTopmostGuard.ts / electron/main/startupGate.ts / electron/main/displayIdentity.ts / electron/main/appOrigin.ts / electron/main/appAssetPath.ts / electron/main/coreProcess.ts / electron/main/autostart.ts / electron/main/chatFirstShow.ts / electron/main/windowReveal.ts / electron/main/textOutput.ts / electron/main/sendInput.ts / electron/main/voiceTray.ts / electron/main/hotkeys.ts / shared/hotkeys.ts / shared/voiceInputMode.ts / shared/windowBehavior.ts / shared/portraitForm.ts
 import './logBootstrap'
 import { app, BrowserWindow, Menu, Notification, Tray, clipboard, globalShortcut, powerMonitor, ipcMain, dialog, screen, nativeImage, protocol, net, shell } from 'electron'
@@ -24,7 +24,7 @@ import { resolveAppAssetPath } from './appAssetPath'
 import { ensureCoreRunning, stopSpawnedCore } from './coreProcess'
 import { AUTOSTART_FLAG, hasAutostartFlag, legacyLoginItemOptions, loginItemOptions, shouldMigrateAutostart } from './autostart'
 import { CHAT_READY_TIMEOUT_MS, shouldShowChatOnFirstReady } from './chatFirstShow'
-import { CHAT_FADE_START_DELAY_MS, CHILD_WINDOW_FADE_START_DELAY_MS, CHILD_WINDOW_FIRST_FADE_START_DELAY_MS, attachChildWindowReveal, hideChildWindow, isChildWindowRevealPending, notifyChildWindowPainted, notifyChildWindowReady, notifyWindowPainted, revealChildWindow, revealWindow } from './windowReveal'
+import { CHAT_FADE_START_DELAY_MS, CHILD_WINDOW_FADE_START_DELAY_MS, CHILD_WINDOW_FIRST_FADE_START_DELAY_MS, attachChildWindowReveal, cancelChildWindowReveal, getPendingChildWindowRequestedAt, hideChildWindow, isChildWindowRevealPending, notifyChildWindowPainted, notifyChildWindowReady, notifyWindowPainted, revealChildWindow, revealWindow } from './windowReveal'
 import type { ChatPinMode, WindowBehaviorConfig, WindowBehaviorSnapshot } from '../../shared/windowBehavior.js'
 import {
   initWindowBehaviorConfig,
@@ -593,6 +593,8 @@ function positionOnChatDisplay(win: BrowserWindow): void {
 }
 
 let settingsWindow: BrowserWindow | null = null
+let settingsNeedsReload = false
+let settingsAutoReloadUsed = false
 
 function isSettingsSender(event: IpcMainInvokeEvent): boolean {
   return settingsWindow !== null && !settingsWindow.isDestroyed() && event.sender === settingsWindow.webContents
@@ -601,6 +603,11 @@ function isSettingsSender(event: IpcMainInvokeEvent): boolean {
 function hideSettingsWindow(win: BrowserWindow): void {
   hideChildWindow(win)
   hotkeys.setCapture(false)
+}
+
+function reloadSettingsWindow(win: BrowserWindow, requestedAt: number): void {
+  win.webContents.reload()
+  attachChildWindowReveal(win, () => win.show(), requestedAt, CHILD_WINDOW_FIRST_FADE_START_DELAY_MS, 'settings')
 }
 
 function createSettingsWindow(requestedAt: number): BrowserWindow {
@@ -627,6 +634,22 @@ function createSettingsWindow(requestedAt: number): BrowserWindow {
     hotkeys.setCapture(false)
   })
 
+  win.webContents.on('render-process-gone', (_event, details) => {
+    hotkeys.setCapture(false)
+    const visible = win.isVisible()
+    const pendingRequestedAt = getPendingChildWindowRequestedAt(win)
+    const autoReload = (visible || pendingRequestedAt !== undefined) && !settingsAutoReloadUsed
+    console.error(`[Settings] renderer gone (${details.reason}, exit ${details.exitCode}), ${autoReload ? 'reloading' : 'reloading on next open'}`)
+    if (visible) win.hide()
+    if (autoReload) {
+      settingsAutoReloadUsed = true
+      reloadSettingsWindow(win, pendingRequestedAt ?? Date.now())
+      return
+    }
+    cancelChildWindowReveal(win)
+    settingsNeedsReload = true
+  })
+
   win.on('close', event => {
     if (!isQuitting) {
       event.preventDefault()
@@ -636,6 +659,8 @@ function createSettingsWindow(requestedAt: number): BrowserWindow {
 
   win.on('closed', () => {
     settingsWindow = null
+    settingsNeedsReload = false
+    settingsAutoReloadUsed = false
     hotkeys.setCapture(false)
   })
 
@@ -649,6 +674,7 @@ function createSettingsWindow(requestedAt: number): BrowserWindow {
 }
 
 ipcMain.handle('window:ready', event => {
+  if (isSettingsSender(event)) settingsAutoReloadUsed = false
   notifyChildWindowReady(event.sender)
 })
 
@@ -660,6 +686,11 @@ ipcMain.handle('open-settings-window', () => {
   const requestedAt = Date.now()
   if (settingsWindow && !settingsWindow.isDestroyed()) {
     positionOnChatDisplay(settingsWindow)
+    if (settingsNeedsReload) {
+      settingsNeedsReload = false
+      reloadSettingsWindow(settingsWindow, requestedAt)
+      return
+    }
     if (isChildWindowRevealPending(settingsWindow)) return
     if (!settingsWindow.isVisible()) {
       const win = settingsWindow

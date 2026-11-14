@@ -11,6 +11,8 @@ import {
   CHILD_WINDOW_FIRST_FADE_START_DELAY_MS,
   WINDOW_FADE_IN_MS,
   attachChildWindowReveal,
+  cancelChildWindowReveal,
+  getPendingChildWindowRequestedAt,
   hideChildWindow,
   isChildWindowRevealPending,
   notifyChildWindowPainted,
@@ -254,13 +256,17 @@ describe('child window reveal', () => {
     ['window:ready', (win: FakeWindow) => notifyChildWindowReady(asSender(win))],
     ['the deadline', () => vi.advanceTimersByTime(CHILD_WINDOW_FIRST_FADE_START_DELAY_MS)],
     ['close', (win: FakeWindow) => win.close()],
-  ])('reports the first show as pending from attach until %s', (_label, settle) => {
+  ])('reports the first show as pending with its requestedAt from attach until %s', (_label, settle) => {
     const win = makeWindow({ visible: false })
     expect(isChildWindowRevealPending(asWindow(win))).toBe(false)
-    attach(win)
+    expect(getPendingChildWindowRequestedAt(asWindow(win))).toBeUndefined()
+    const requestedAt = Date.now() - 100
+    attach(win, requestedAt)
     expect(isChildWindowRevealPending(asWindow(win))).toBe(true)
+    expect(getPendingChildWindowRequestedAt(asWindow(win))).toBe(requestedAt)
     settle(win)
     expect(isChildWindowRevealPending(asWindow(win))).toBe(false)
+    expect(getPendingChildWindowRequestedAt(asWindow(win))).toBeUndefined()
     win.close()
   })
 
@@ -284,6 +290,103 @@ describe('child window reveal', () => {
     expect(fadeIn).not.toHaveBeenCalled()
     vi.advanceTimersByTime(1)
     expect(fadeIn).toHaveBeenCalledWith(win, WINDOW_FADE_IN_MS)
+    win.close()
+  })
+
+  it.each([
+    ['window:ready', (win: FakeWindow) => notifyChildWindowReady(asSender(win))],
+    ['the deadline', () => vi.advanceTimersByTime(CHILD_WINDOW_FIRST_FADE_START_DELAY_MS)],
+  ])('re-arming a revealed window makes it pending again and %s reveals it once more with the passed delay', (_label, settle) => {
+    const win = makeWindow({ visible: false })
+    const once = vi.spyOn(win, 'once')
+    attach(win)
+    notifyChildWindowReady(asSender(win))
+    vi.advanceTimersByTime(CHILD_WINDOW_FIRST_FADE_START_DELAY_MS)
+    win.hide()
+    vi.mocked(fadeIn).mockClear()
+    win.show.mockClear()
+    win.webContents.send.mockClear()
+
+    const requestedAt = Date.now()
+    attach(win, requestedAt)
+    expect(isChildWindowRevealPending(asWindow(win))).toBe(true)
+    expect(vi.getTimerCount()).toBe(1)
+    settle(win)
+    expect(isChildWindowRevealPending(asWindow(win))).toBe(false)
+    expect(win.show).toHaveBeenCalledTimes(1)
+    expect(win.webContents.send).toHaveBeenCalledWith('window:shown')
+    vi.advanceTimersByTime(requestedAt + CHILD_WINDOW_FIRST_FADE_START_DELAY_MS - Date.now())
+    expect(fadeIn).toHaveBeenCalledTimes(1)
+    notifyChildWindowReady(asSender(win))
+    vi.advanceTimersByTime(CHILD_WINDOW_FIRST_FADE_START_DELAY_MS)
+    expect(win.show).toHaveBeenCalledTimes(1)
+    expect(fadeIn).toHaveBeenCalledTimes(1)
+    expect(once.mock.calls.filter(([event]) => event === 'closed')).toHaveLength(2)
+    win.close()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('re-arming while the first show is still pending replaces its timer and closing clears everything', () => {
+    const win = makeWindow({ visible: false })
+    attach(win)
+    vi.advanceTimersByTime(CHILD_WINDOW_FIRST_FADE_START_DELAY_MS / 2)
+    attach(win)
+    expect(vi.getTimerCount()).toBe(1)
+    vi.advanceTimersByTime(CHILD_WINDOW_FIRST_FADE_START_DELAY_MS / 2)
+    expect(win.show).not.toHaveBeenCalled()
+    win.close()
+    expect(vi.getTimerCount()).toBe(0)
+    expect(isChildWindowRevealPending(asWindow(win))).toBe(false)
+  })
+
+  it('re-arming while the shown window still waits for its fade drops the old fade and fades in once at the new deadline', () => {
+    const win = makeWindow({ visible: false })
+    attach(win)
+    vi.advanceTimersByTime(100)
+    notifyChildWindowReady(asSender(win))
+    expect(win.getOpacity()).toBe(0)
+    vi.advanceTimersByTime(200)
+    win.hide()
+    const requestedAt = Date.now()
+    attach(win, requestedAt)
+    vi.advanceTimersByTime(CHILD_WINDOW_FIRST_FADE_START_DELAY_MS - 300)
+    expect(fadeIn).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(requestedAt + CHILD_WINDOW_FIRST_FADE_START_DELAY_MS - 1 - Date.now())
+    expect(fadeIn).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+    expect(fadeIn).toHaveBeenCalledTimes(1)
+    expect(fadeIn).toHaveBeenCalledWith(win, WINDOW_FADE_IN_MS)
+    vi.advanceTimersByTime(CHILD_WINDOW_FIRST_FADE_START_DELAY_MS)
+    expect(fadeIn).toHaveBeenCalledTimes(1)
+    win.close()
+  })
+
+  it('cancelling a pending first show stops both the deadline and window:ready from showing it; a re-arm reveals it again', () => {
+    const win = makeWindow({ visible: false })
+    attach(win)
+    cancelChildWindowReveal(asWindow(win))
+    expect(isChildWindowRevealPending(asWindow(win))).toBe(false)
+    expect(vi.getTimerCount()).toBe(0)
+    notifyChildWindowReady(asSender(win))
+    vi.advanceTimersByTime(CHILD_WINDOW_FIRST_FADE_START_DELAY_MS)
+    expect(win.show).not.toHaveBeenCalled()
+
+    attach(win)
+    notifyChildWindowReady(asSender(win))
+    expect(win.show).toHaveBeenCalledTimes(1)
+    win.close()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('cancelling after the window was shown drops its pending fade-in', () => {
+    const win = makeWindow({ visible: false })
+    attach(win)
+    notifyChildWindowReady(asSender(win))
+    win.hide()
+    cancelChildWindowReveal(asWindow(win))
+    expect(vi.getTimerCount()).toBe(0)
+    vi.advanceTimersByTime(CHILD_WINDOW_FIRST_FADE_START_DELAY_MS)
+    expect(fadeIn).not.toHaveBeenCalled()
     win.close()
   })
 

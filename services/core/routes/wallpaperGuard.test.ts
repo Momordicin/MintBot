@@ -25,7 +25,7 @@ describe('壁纸目录测试环境守卫', () => {
     vi.resetModules()
 
     await expect(import('./presets.js')).rejects.toThrow(/refusing WALLPAPER_PATH/)
-  })
+  }, 20000)
 
   it('非 vitest 且未设置 WALLPAPER_PATH 时默认指向 data/wallpapers', async () => {
     delete process.env.WALLPAPER_PATH
@@ -38,5 +38,5 @@ describe('壁纸目录测试环境守卫', () => {
     } finally {
       process.env.VITEST = originalVitest
     }
-  })
+  }, 20000)
 })

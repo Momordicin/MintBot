@@ -1,6 +1,6 @@
 // src/settings/SettingsApp.tsx — 设置窗口根组件：加载当前预设并按其显示配置应用主题色，顶部自绘标题栏，左栏角色下拉框与导航切换"角色 / 外观 / 人设与模型 / 记忆 / 模型服务 / 联网搜索 / 窗口行为 / 语音 / 插件 / 通用"九个页面
-// 用法：settings/main.tsx 渲染 <SettingsApp />；GET /state；调 electronAPI.onWindowHidden / onWindowShown / setTitlebarOverlay；useWindowReveal(ready, contentReady)；useCharacterPanel 通过 onSwitched 回传新的 AppState，记忆页把 sessionId 传给 MemoryPanel
-// 对应文件：src/settings/main.tsx / src/settings/useCharacterPanel.ts / src/settings/CharacterPanel.tsx / src/settings/AppearancePanel.tsx / src/settings/PersonaModelPanel.tsx / src/settings/ModelConfigPanel.tsx / src/settings/WebSearchPanel.tsx / src/settings/WindowBehaviorPanel.tsx / src/settings/GeneralPanel.tsx / src/settings/VoicePanel.tsx / src/settings/PluginsPanel.tsx / src/settings/memory/MemoryPanel.tsx / src/settings/settings.css / src/chat/theme.ts / src/chat/themeVars.ts / services/core/index.ts / src/useWindowReveal.ts / electron/main/index.ts（open-settings-window / titlebar:set-overlay）
+// 用法：settings/main.tsx 渲染 <SettingsApp />；GET /state；GET /voice/status，POST /voice/enroll/cancel、/voice/test/stop、/voice/enroll/dismiss-interrupted；调 electronAPI.onWindowHidden / onWindowShown / setTitlebarOverlay；useWindowReveal(ready, contentReady)；useCharacterPanel 通过 onSwitched 回传新的 AppState，记忆页把 sessionId 传给 MemoryPanel
+// 对应文件：src/settings/main.tsx / src/settings/useCharacterPanel.ts / src/settings/CharacterPanel.tsx / src/settings/AppearancePanel.tsx / src/settings/PersonaModelPanel.tsx / src/settings/ModelConfigPanel.tsx / src/settings/WebSearchPanel.tsx / src/settings/WindowBehaviorPanel.tsx / src/settings/GeneralPanel.tsx / src/settings/VoicePanel.tsx / src/settings/PluginsPanel.tsx / src/settings/memory/MemoryPanel.tsx / src/settings/settings.css / src/chat/theme.ts / src/chat/themeVars.ts / services/core/index.ts / services/core/voice/routes.ts / src/useWindowReveal.ts / electron/main/index.ts（open-settings-window / titlebar:set-overlay）
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { AppState } from '../../shared/types/index.js'
 import { deriveTheme } from '../chat/theme.js'
@@ -28,6 +28,20 @@ type Page = 'character' | 'appearance' | 'persona' | 'memory' | 'modelService' |
 const PRIMARY_NAV: Page[] = ['character', 'appearance', 'persona', 'memory']
 
 const SECONDARY_NAV: Page[] = ['modelService', 'webSearch', 'window', 'voice', 'plugins']
+
+function endLeftoverVoiceSession(): void {
+  fetch(`${CORE_URL}/voice/status`)
+    .then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      return r.json()
+    })
+    .then((status: { mode: 'normal' | 'enrolling' | 'testing'; enrollInterrupted: boolean }) => {
+      const target = status.mode === 'enrolling' ? '/voice/enroll/cancel' : status.mode === 'testing' ? '/voice/test/stop' : null
+      if (target) fetch(`${CORE_URL}${target}`, { method: 'POST' }).catch(() => {})
+      if (status.enrollInterrupted) fetch(`${CORE_URL}/voice/enroll/dismiss-interrupted`, { method: 'POST' }).catch(() => {})
+    })
+    .catch(() => {})
+}
 
 function SettingsTitleBar() {
   const { t } = useTranslation()
@@ -159,6 +173,7 @@ export function SettingsApp() {
   useEffect(() => {
     if (hasFetched.current) return
     hasFetched.current = true
+    endLeftoverVoiceSession()
     loadState()
   }, [loadState])
 
