@@ -1,6 +1,6 @@
 // services/core/voice/install.ts — 语音组件（mintbot-voice-agent）的安装目录常量，以及安装、读取安装信息、读取远端版本、清理旧版本目录
-// 用法：scripts/setup-voice.ts 调 installVoice(manifest)；voice/agent.ts 调 readVoiceInstallation()、fetchRemoteManifestInfo()、removeStaleVoiceVersions()
-// 对应文件：services/core/voice/agent.ts / scripts/setup-voice.ts / services/core/voice/agent.test.ts
+// 用法：scripts/setup-voice.ts 调 installVoice(manifest)；voice/agent.ts 调 readVoiceInstallation()、fetchRemoteManifestInfo()、removeStaleVoiceVersions()；tts/manager.ts 取 VOICE_INSTALL_ROOT、resolveManifestUrl()、REMOTE_MANIFEST_TIMEOUT_MS
+// 对应文件：services/core/voice/agent.ts / services/core/tts/manager.ts / scripts/setup-voice.ts / services/core/voice/agent.test.ts
 import fs from 'fs'
 import path from 'path'
 import {
@@ -19,7 +19,7 @@ export const VOICE_INSTALL_ROOT = path.resolve(process.cwd(), 'data', 'voice-age
 export const PINNED_MANIFEST_URL: string | null =
   'https://github.com/Momordicin/mintbot-voice-agent/releases/latest/download/manifest.json'
 
-const REMOTE_MANIFEST_TIMEOUT_MS = 10_000
+export const REMOTE_MANIFEST_TIMEOUT_MS = 10_000
 
 export interface RemoteManifestInfo {
   version: string

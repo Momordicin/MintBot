@@ -1,6 +1,6 @@
 // shared/errorCodes.ts — core 返回给渲染进程的错误代码与响应体
-// 用法：services/core/routes/*.ts 与 characters/cardImport.ts 用 errorBody / invalidRequest 生成响应体；src/errorText.ts 与各面板用 isErrorBody 判断并按代码翻译
-// 对应文件：services/core/routes/chat.ts / services/core/routes/roleConfig.ts / services/core/routes/presets.ts / services/core/routes/models.ts / services/core/plugins/routes.ts / src/errorText.ts
+// 用法：services/core/routes/*.ts 与 characters/cardImport.ts 用 errorBody / invalidRequest 生成响应体；src/errorText.ts 与各面板用 isErrorBody 判断并按代码翻译；services/core/tts/routes.ts 用 @mintbot/voice-agent-client 的 TtsError.code（TTS_*）生成响应体
+// 对应文件：services/core/routes/chat.ts / services/core/routes/roleConfig.ts / services/core/routes/presets.ts / services/core/routes/models.ts / services/core/plugins/routes.ts / services/core/tts/routes.ts / src/errorText.ts / src/settings/TtsSection.tsx
 export const ERROR_CODES = {
   API_KEY_INVALID: 'API_KEY_INVALID',
   SUMMARY_API_KEY_INVALID: 'SUMMARY_API_KEY_INVALID',
@@ -29,6 +29,17 @@ export const ERROR_CODES = {
   VOICE_BUSY: 'VOICE_BUSY',
   VOICE_ENROLL_NOT_READY: 'VOICE_ENROLL_NOT_READY',
   VOICE_INSTALL_UNCONFIGURED: 'VOICE_INSTALL_UNCONFIGURED',
+  TTS_BUSY: 'TTS_BUSY',
+  TTS_DISK_SPACE: 'TTS_DISK_SPACE',
+  TTS_TARGET_EXISTS: 'TTS_TARGET_EXISTS',
+  TTS_CHECKSUM: 'TTS_CHECKSUM',
+  TTS_DOWNLOAD: 'TTS_DOWNLOAD',
+  TTS_EXTRACT: 'TTS_EXTRACT',
+  TTS_PROBE: 'TTS_PROBE',
+  TTS_EXISTING_INVALID: 'TTS_EXISTING_INVALID',
+  TTS_FAILED: 'TTS_FAILED',
+  TTS_MANIFEST: 'TTS_MANIFEST',
+  TTS_DISPOSED: 'TTS_DISPOSED',
   PLUGIN_BUSY: 'PLUGIN_BUSY',
   PLUGIN_DOWNLOAD_FAILED: 'PLUGIN_DOWNLOAD_FAILED',
   PLUGIN_PACKAGE_INVALID: 'PLUGIN_PACKAGE_INVALID',

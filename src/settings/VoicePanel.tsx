@@ -1,6 +1,6 @@
-// src/settings/VoicePanel.tsx — 设置窗口的"语音"面板：语音组件与麦克风状态、主人声纹录入、自由测试、语音输入快捷键（聆听 / 转写）
-// 用法：SettingsApp 里渲染 <VoicePanel />；GET /voice/status、GET /voice/update-check、POST /voice/enroll/*、POST /voice/test/*、GET /events 的 voice-status-changed；electronAPI.openMicSettings；聆听 / 转写快捷键交给 HotkeysSection
-// 对应文件：src/settings/SettingsApp.tsx / src/settings/VoiceEnrollProgress.tsx / src/settings/voiceTestSummary.ts / src/settings/HotkeysSection.tsx / services/core/voice/routes.ts / services/core/voice/agent.ts
+// src/settings/VoicePanel.tsx — 设置窗口的"语音"面板：语音组件与麦克风状态、主人声纹录入、自由测试、语音合成组件、语音输入快捷键（聆听 / 转写）
+// 用法：SettingsApp 里渲染 <VoicePanel />；GET /voice/status、GET /voice/update-check、POST /voice/enroll/*、POST /voice/test/*、GET /events 的 voice-status-changed；electronAPI.openMicSettings；聆听 / 转写快捷键交给 HotkeysSection，语音合成组件交给 TtsSection
+// 对应文件：src/settings/SettingsApp.tsx / src/settings/VoiceEnrollProgress.tsx / src/settings/voiceTestSummary.ts / src/settings/HotkeysSection.tsx / src/settings/TtsSection.tsx / services/core/voice/routes.ts / services/core/voice/agent.ts
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
@@ -14,6 +14,7 @@ import { errorText } from '../errorText.js'
 import { deviceLineBetween, summarizeVoiceTest, testCutoff, type VoiceTestResultLike } from './voiceTestSummary.js'
 import { EnrollSentenceList, VoiceEnrollProgress, type EnrollSentence } from './VoiceEnrollProgress.js'
 import { HotkeysSection } from './HotkeysSection.js'
+import { TtsSection } from './TtsSection.js'
 
 type VoiceMode = 'normal' | 'enrolling' | 'testing'
 
@@ -479,6 +480,8 @@ export function VoicePanel() {
           )}
         </div>
       )}
+
+      <TtsSection />
 
       <HotkeysSection actions={[{ action: 'listen', label: t('聆听') }, { action: 'transcribe', label: t('转写') }]} />
 

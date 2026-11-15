@@ -580,6 +580,15 @@ ipcMain.handle('select-exe-file', async (event) => {
   return { filename: basename(result.filePaths[0]) }
 })
 
+ipcMain.handle('select-tts-dir', async (event) => {
+  const owner = BrowserWindow.fromWebContents(event.sender)
+  if (!owner) return null
+  const result = await dialog.showOpenDialog(owner, { properties: ['openDirectory'] })
+  if (result.canceled || result.filePaths.length === 0) return null
+
+  return { dir: result.filePaths[0] }
+})
+
 function positionOnChatDisplay(win: BrowserWindow): void {
   const display = mainWindow && !mainWindow.isDestroyed()
     ? screen.getDisplayMatching(mainWindow.getBounds())

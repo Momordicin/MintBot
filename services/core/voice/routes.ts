@@ -1,10 +1,11 @@
 // services/core/voice/routes.ts — 语音识别文字的取走路由、语音设置页的状态与操作路由
-// 用法：core/index.ts 里 fastify.register(voiceRoutes)；POST /voice/take → { texts }，由 src/chat/ChatWindow.tsx 调用；POST /voice/input-mode { mode } 由 src/chat/ChatWindow.tsx 与 electron/main/index.ts 托盘调用；GET /voice/update-check 由 src/settings/VoicePanel.tsx 调用
-// 对应文件：services/core/voice/agent.ts / src/chat/ChatWindow.tsx / services/core/voice/agent.test.ts
+// 用法：core/index.ts 里 fastify.register(voiceRoutes)；POST /voice/take → { texts }，由 src/chat/ChatWindow.tsx 调用；POST /voice/input-mode { mode } 由 src/chat/ChatWindow.tsx 与 electron/main/index.ts 托盘调用；GET /voice/update-check 由 src/settings/VoicePanel.tsx 调用，调 checkVoiceUpdate() 与 tts/manager.ts 的 checkTtsUpdate()
+// 对应文件：services/core/voice/agent.ts / services/core/tts/manager.ts / src/chat/ChatWindow.tsx / services/core/voice/agent.test.ts
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { ERROR_CODES, errorBody, invalidRequest } from '../../../shared/errorCodes.js'
 import { isVoiceInputMode } from '../../../shared/voiceInputMode.js'
 import { ConfigFileUnreadableError } from '../config/configFileError.js'
+import { checkTtsUpdate } from '../tts/manager.js'
 import {
   VoiceOperationError,
   cancelEnroll,
@@ -45,7 +46,7 @@ export async function voiceRoutes(fastify: FastifyInstance) {
   })
 
   fastify.get('/voice/update-check', async (_request, reply) => {
-    await checkVoiceUpdate()
+    await Promise.all([checkVoiceUpdate(), checkTtsUpdate()])
     return reply.status(200).send({ ok: true })
   })
 

@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   selectWallpaperFile: () => ipcRenderer.invoke('select-wallpaper-file'),
   selectCharacterCardFile: () => ipcRenderer.invoke('select-character-card-file'),
   selectExeFile: () => ipcRenderer.invoke('select-exe-file'),
+  selectTtsDir: () => ipcRenderer.invoke('select-tts-dir'),
   openSettingsWindow: () => ipcRenderer.invoke('open-settings-window'),
   activateFromOverlay: () => ipcRenderer.send('overlay:activate'),
   onOverlayDragStart: (callback: () => void) => {

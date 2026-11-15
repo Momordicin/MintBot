@@ -1,6 +1,6 @@
 // services/core/index.ts — core 服务进程入口：构建 Fastify 实例，在 start() 里装配依赖并注册路由，监听 CORE_PORT
-// 用法：作为独立进程运行；start() 装配 provider、配置监听、DB、定时任务、AI 服务、Ollama 与启动会话，再注册 CORS、静态目录与各 routes，监听 CORE_PORT；注册路由后、监听前调 loadInstalledPlugins()；自带 GET /health、GET /state
-// 对应文件：services/core/logBootstrap.ts / services/core/config/ports.ts / services/core/plugins/manager.ts / services/core/plugins/routes.ts / services/core/logBootstrap.test.ts
+// 用法：作为独立进程运行；start() 装配 provider、配置监听、DB、定时任务、AI 服务、语音合成组件管理器、Ollama 与启动会话，再注册 CORS、静态目录与各 routes，监听 CORE_PORT；注册路由后、监听前调 loadInstalledPlugins()；自带 GET /health、GET /state
+// 对应文件：services/core/logBootstrap.ts / services/core/config/ports.ts / services/core/plugins/manager.ts / services/core/plugins/routes.ts / services/core/tts/manager.ts / services/core/tts/routes.ts / services/core/logBootstrap.test.ts
 import './logBootstrap.js'
 import Fastify from 'fastify'
 import path from 'path'
@@ -34,6 +34,8 @@ import { ensureOllama, shouldEnsureOllama, stopOllamaIfManaged } from './provide
 import { ensureAiService, shutdownAiService } from './providers/aiService.js'
 import { cancelInstallForShutdown, startVoice, stopVoice } from './voice/agent.js'
 import { voiceRoutes } from './voice/routes.js'
+import { disposeTts, initTts } from './tts/manager.js'
+import { ttsRoutes } from './tts/routes.js'
 import { loadInstalledPlugins } from './plugins/manager.js'
 import { pluginRoutes } from './plugins/routes.js'
 import { startOrganizeModeScheduler } from './memory/orchestrator.js'
@@ -88,6 +90,7 @@ async function start() {
     await shutdownAiService()
     await cancelInstallForShutdown()
     await stopVoice()
+    await disposeTts()
     process.exit(0)
   })
 
@@ -97,6 +100,7 @@ async function start() {
     await shutdownAiService()
     await cancelInstallForShutdown()
     await stopVoice()
+    await disposeTts()
     process.exit(0)
   })
 
@@ -112,6 +116,7 @@ async function start() {
       return fastify.embeddingProvider.embed('ping', undefined, 30000)
     })
     .catch(err => console.error('[Startup] AI service startup / embedding warm-up failed:', err))
+  initTts()
   startVoice().catch(err => console.error('[Voice] Startup failed:', err))
 
   startConfigWatcher(({ windowBehaviorChanged }) => {
@@ -173,6 +178,7 @@ async function start() {
   await fastify.register(uiRoutes)
   await fastify.register(transitionChainRoutes)
   await fastify.register(voiceRoutes)
+  await fastify.register(ttsRoutes)
   await loadInstalledPlugins()
   await fastify.register(pluginRoutes)
   await fastify.listen({ port: PORT, host: LOOPBACK_HOST })

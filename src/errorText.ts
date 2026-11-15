@@ -1,6 +1,6 @@
 // src/errorText.ts — 把 core 返回的错误响应体按当前界面语言翻成提示文字
 // 用法：聊天窗口与设置窗口各处调 errorText(body, i18n.t)，body 先经 shared/errorCodes.ts 的 isErrorBody 判断；WebSearchPanel 复用导出的 providerName
-// 对应文件：shared/errorCodes.ts / src/chat/ChatWindow.tsx / src/settings/GeneralPanel.tsx / src/settings/ModelConfigPanel.tsx / src/settings/ModelNameField.tsx / src/settings/SubscriptionLogin.tsx / src/settings/WindowBehaviorPanel.tsx / src/settings/PluginsPanel.tsx / src/settings/WebSearchPanel.tsx / src/settings/useCharacterPanel.ts
+// 对应文件：shared/errorCodes.ts / src/chat/ChatWindow.tsx / src/settings/GeneralPanel.tsx / src/settings/ModelConfigPanel.tsx / src/settings/ModelNameField.tsx / src/settings/SubscriptionLogin.tsx / src/settings/WindowBehaviorPanel.tsx / src/settings/PluginsPanel.tsx / src/settings/WebSearchPanel.tsx / src/settings/TtsSection.tsx / src/settings/useCharacterPanel.ts
 import type { TFunction } from 'i18next'
 import type { ErrorBody } from '../shared/errorCodes.js'
 import type { WebSearchProvider } from '../shared/types/index.js'
@@ -73,6 +73,10 @@ export function errorText(body: ErrorBody, t: TFunction): string {
       return t('说的话还不够，请继续说')
     case 'VOICE_INSTALL_UNCONFIGURED':
       return t('语音组件的下载地址尚未配置')
+    case 'TTS_BUSY':
+      return t('语音合成组件正在安装或试运行，请稍后再试')
+    case 'TTS_DISPOSED':
+      return t('核心服务正在退出，请稍后再试')
     case 'PLUGIN_BUSY':
       return t('已有插件正在安装或更新，请稍后再试')
     case 'PLUGIN_DOWNLOAD_FAILED':

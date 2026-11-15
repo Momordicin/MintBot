@@ -210,8 +210,8 @@ importers:
         specifier: ^10.1.10
         version: 10.1.10
       '@mintbot/voice-agent-client':
-        specifier: file:vendor/mintbot-voice-agent-client-0.3.2.tgz
-        version: file:vendor/mintbot-voice-agent-client-0.3.2.tgz
+        specifier: file:vendor/mintbot-voice-agent-client-0.3.3.tgz
+        version: file:vendor/mintbot-voice-agent-client-0.3.3.tgz
       '@renovatebot/pep440':
         specifier: ^6.0.0
         version: 6.0.0
@@ -311,6 +311,9 @@ importers:
         version: 9.5.1(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
 
 packages:
+
+  7zip-bin@5.2.0:
+    resolution: {integrity: sha512-ukTPVhqG4jNzMro2qA9HSCSSVJN3aN7tlb+hfqYCt3ER0yWroeA2VR38MNrOHLQ/cVj+DaIMad0kFCtWWowh/A==}
 
   '@anthropic-ai/sdk@0.105.0':
     resolution: {integrity: sha512-sDyu+aM9cE6uZE+HgRjjHRb+qqb87GHZOx+8bE0YlWetdL1YcVLxn8h9ltxGOflyChTe6PMEo50kMQV4cw0hfg==}
@@ -982,9 +985,9 @@ packages:
     resolution: {integrity: sha512-9I2Zn6+NJLfaGoz9jN3lpwDgAYvfGeNYdbAIjJOqzs4Tpc+VU3Jqq4IofSUBKajiDS8k9fZIg18/z13mpk1bsA==}
     engines: {node: '>=8'}
 
-  '@mintbot/voice-agent-client@file:vendor/mintbot-voice-agent-client-0.3.2.tgz':
-    resolution: {integrity: sha512-MpPo/3ywu8FI9XVz3v06uAj/XdlHx6Oph4yNRhHknEdKXgMQcX6rT5lHjS2IZCQKiDpmT9SpvA6WOXz3gqQ6IA==, tarball: file:vendor/mintbot-voice-agent-client-0.3.2.tgz}
-    version: 0.3.2
+  '@mintbot/voice-agent-client@file:vendor/mintbot-voice-agent-client-0.3.3.tgz':
+    resolution: {integrity: sha512-ncAjGA5GIBz0TkU5tsGFaLUWJXPEgAMD1sP9AaPnLYeWE8hTS278k5JvYxCVMHbRHPtD1q0/DpqCwo48NEj0kA==, tarball: file:vendor/mintbot-voice-agent-client-0.3.3.tgz}
+    version: 0.3.3
     engines: {node: '>=22'}
 
   '@napi-rs/wasm-runtime@1.2.6':
@@ -2491,6 +2494,8 @@ packages:
 
 snapshots:
 
+  7zip-bin@5.2.0: {}
+
   '@anthropic-ai/sdk@0.105.0':
     dependencies:
       json-schema-to-ts: 3.1.1
@@ -3009,7 +3014,9 @@ snapshots:
 
   '@lukeed/ms@2.0.2': {}
 
-  '@mintbot/voice-agent-client@file:vendor/mintbot-voice-agent-client-0.3.2.tgz': {}
+  '@mintbot/voice-agent-client@file:vendor/mintbot-voice-agent-client-0.3.3.tgz':
+    dependencies:
+      7zip-bin: 5.2.0
 
   '@napi-rs/wasm-runtime@1.2.6(@emnapi/core@2.0.0-beta.2)(@emnapi/runtime@2.0.0-beta.2)':
     dependencies:
