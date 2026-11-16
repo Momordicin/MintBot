@@ -22,6 +22,7 @@ function fakeManifest(overrides: Partial<CharacterManifest>): CharacterManifest 
       illustration: { fallback: '', emotions: {}, interactionStates: {}, reservedStates: {} },
     },
     emotePool: [],
+    voice: null,
     ...overrides,
   }
 }

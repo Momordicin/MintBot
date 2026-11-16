@@ -210,8 +210,8 @@ importers:
         specifier: ^10.1.10
         version: 10.1.10
       '@mintbot/voice-agent-client':
-        specifier: file:vendor/mintbot-voice-agent-client-0.3.3.tgz
-        version: file:vendor/mintbot-voice-agent-client-0.3.3.tgz
+        specifier: file:vendor/mintbot-voice-agent-client-0.3.4.tgz
+        version: file:vendor/mintbot-voice-agent-client-0.3.4.tgz
       '@renovatebot/pep440':
         specifier: ^6.0.0
         version: 6.0.0
@@ -985,9 +985,9 @@ packages:
     resolution: {integrity: sha512-9I2Zn6+NJLfaGoz9jN3lpwDgAYvfGeNYdbAIjJOqzs4Tpc+VU3Jqq4IofSUBKajiDS8k9fZIg18/z13mpk1bsA==}
     engines: {node: '>=8'}
 
-  '@mintbot/voice-agent-client@file:vendor/mintbot-voice-agent-client-0.3.3.tgz':
-    resolution: {integrity: sha512-ncAjGA5GIBz0TkU5tsGFaLUWJXPEgAMD1sP9AaPnLYeWE8hTS278k5JvYxCVMHbRHPtD1q0/DpqCwo48NEj0kA==, tarball: file:vendor/mintbot-voice-agent-client-0.3.3.tgz}
-    version: 0.3.3
+  '@mintbot/voice-agent-client@file:vendor/mintbot-voice-agent-client-0.3.4.tgz':
+    resolution: {integrity: sha512-iOiVYq0RUvU4yQ7YI1MJcvokCLoAwKkKsxH1eYPOMeL1be4qq5CUOVEj8/aUurEVSc2iPspJugsQv7VWFX3/QQ==, tarball: file:vendor/mintbot-voice-agent-client-0.3.4.tgz}
+    version: 0.3.4
     engines: {node: '>=22'}
 
   '@napi-rs/wasm-runtime@1.2.6':
@@ -3014,7 +3014,7 @@ snapshots:
 
   '@lukeed/ms@2.0.2': {}
 
-  '@mintbot/voice-agent-client@file:vendor/mintbot-voice-agent-client-0.3.3.tgz':
+  '@mintbot/voice-agent-client@file:vendor/mintbot-voice-agent-client-0.3.4.tgz':
     dependencies:
       7zip-bin: 5.2.0
 

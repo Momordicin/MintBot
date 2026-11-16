@@ -111,6 +111,7 @@ describe('loadCharacterManifest — 真实角色包 fixture（assets/characters/
       emotePool: [
         { file: 'emotes/example.jpg', tags: ['excited'] },
       ],
+      voice: null,
     })
     const manifestWarnings = warnSpy.mock.calls.filter(call => String(call[0]).startsWith('[CharacterManifest]'))
     expect(manifestWarnings).toEqual([])
@@ -288,6 +289,29 @@ describe('loadCharacterManifest — 手工构造的异常 manifest（临时目�
     const messages = warnSpy.mock.calls.map(call => String(call[0]))
     expect(messages.some(m => m.includes('顶层 interactionStates') && m.includes('旧格式'))).toBe(true)
     expect(messages.some(m => m.includes('顶层 reservedStates') && m.includes('旧格式'))).toBe(true)
+    warnSpy.mockRestore()
+  })
+
+  it.each([
+    [
+      '合法，preview.lang 缺省为 zh',
+      { gptWeights: 'voice/x.ckpt', sovitsWeights: 'voice/x.pth', preview: { audio: 'voice/中立/x.wav', text: '参考' } },
+      { gptWeights: 'voice/x.ckpt', sovitsWeights: 'voice/x.pth', preview: { audio: 'voice/中立/x.wav', text: '参考', lang: 'zh' } },
+      false,
+    ],
+    ['合法，无 preview', { gptWeights: 'x.ckpt', sovitsWeights: 'x.pth' }, { gptWeights: 'x.ckpt', sovitsWeights: 'x.pth', preview: null }, false],
+    ['不是对象', 'voice/x.ckpt', null, true],
+    ['权重类型错误', { gptWeights: 1, sovitsWeights: 'x.pth' }, null, true],
+    ['preview.text 类型错误', { gptWeights: 'x.ckpt', sovitsWeights: 'x.pth', preview: { audio: 'a.wav', text: 2 } }, null, true],
+    ['权重路径越出角色目录', { gptWeights: '../other/x.ckpt', sovitsWeights: 'x.pth' }, null, true],
+    ['参考音频是绝对路径', { gptWeights: 'x.ckpt', sovitsWeights: 'x.pth', preview: { audio: 'C:\\a.wav', text: '参考' } }, null, true],
+  ])('voice：%s', async (_name, voice, expected, warns) => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const manifest = await loadWithFixture('voice', JSON.stringify({ avatar: 'avatar.jpg', voice }))
+
+    expect(manifest?.voice).toEqual(expected)
+    expect(warnSpy.mock.calls.some(call => String(call[0]).includes('voice'))).toBe(warns)
     warnSpy.mockRestore()
   })
 

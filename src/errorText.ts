@@ -77,6 +77,12 @@ export function errorText(body: ErrorBody, t: TFunction): string {
       return t('语音合成组件正在安装或试运行，请稍后再试')
     case 'TTS_DISPOSED':
       return t('核心服务正在退出，请稍后再试')
+    case 'TTS_NOT_READY':
+      return t('语音模型还没有加载好，请稍后再试')
+    case 'TTS_SYNTHESIS':
+      return t('语音合成失败')
+    case 'TTS_VOICE_UNCONFIGURED':
+      return t('当前角色没有提供试听用的参考音频')
     case 'PLUGIN_BUSY':
       return t('已有插件正在安装或更新，请稍后再试')
     case 'PLUGIN_DOWNLOAD_FAILED':

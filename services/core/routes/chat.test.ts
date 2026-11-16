@@ -68,6 +68,7 @@ vi.mock('../characters/manifest.js', async importOriginal => {
       illustration: { fallback: '', emotions: {}, interactionStates: {}, reservedStates: {} },
     },
     emotePool: [],
+    voice: null,
     ...overrides,
   })
   return {

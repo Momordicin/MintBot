@@ -1,8 +1,17 @@
-// services/core/tts/manager.ts — 持有语音合成组件（GPT-SoVITS）的管理器：创建、状态变化广播、检查新版本、退出时释放
-// 用法：core/index.ts 的 start() 调 initTts()，SIGINT/SIGTERM 时调 disposeTts()；tts/routes.ts 调 getTtsManager()、TTS_DEFAULT_ROOT；voice/routes.ts 的 GET /voice/update-check 调 checkTtsUpdate()；状态变化时 broadcastEvent('tts-status-changed')
-// 对应文件：services/core/tts/routes.ts / services/core/voice/install.ts / services/core/voice/routes.ts / services/core/events/broadcast.ts / services/core/index.ts / services/core/tts/routes.test.ts
+// services/core/tts/manager.ts — 持有语音合成组件（GPT-SoVITS）的管理器：创建、状态变化广播与失败日志、按开关与当前角色启动/停止服务和切换语音模型、检查新版本、退出时释放
+// 用法：core/index.ts 的 start() 调 initTts()，SIGINT/SIGTERM 时调 disposeTts()；session/index.ts 的 loadSession 调 applyCharacterVoice()；tts/routes.ts 调 getTtsManager()、TTS_DEFAULT_ROOT、characterVoiceStatus()、applyTtsEnabled()、applyCharacterVoice()；voice/routes.ts 的 GET /voice/update-check 调 checkTtsUpdate()；状态变化时 broadcastEvent('tts-status-changed')
+// 对应文件：services/core/tts/routes.ts / services/core/session/index.ts / services/core/characters/manifest.ts / services/core/config/index.ts / services/core/voice/install.ts / services/core/voice/routes.ts / services/core/events/broadcast.ts / services/core/index.ts / services/core/tts/routes.test.ts
+import fs from 'fs'
 import path from 'path'
-import { createTtsManager, type TtsInstallStatus, type TtsManager } from '@mintbot/voice-agent-client'
+import {
+  createTtsManager,
+  type TtsInstallStatus,
+  type TtsManager,
+  type TtsModel,
+  type TtsServiceStatus,
+} from '@mintbot/voice-agent-client'
+import { CHARACTERS_ROOT, type CharacterManifest } from '../characters/manifest.js'
+import { getTtsEnabled, setTtsEnabled } from '../config/index.js'
 import { broadcastEvent } from '../events/broadcast.js'
 import { REMOTE_MANIFEST_TIMEOUT_MS, VOICE_INSTALL_ROOT, resolveManifestUrl } from '../voice/install.js'
 
@@ -10,8 +19,20 @@ export const TTS_DEFAULT_ROOT = path.resolve(process.cwd(), 'data', 'tts')
 
 const UPDATE_CHECK_CACHE_MS = 10 * 60 * 1000
 
+export interface TtsCharacter {
+  characterId: string
+  manifest: CharacterManifest | null
+}
+
+export interface CharacterVoiceStatus {
+  voice: 'unconfigured' | 'missing' | 'ok'
+  missing: string[]
+  model: TtsModel | null
+}
+
 let manager: TtsManager | null = null
 let lastInstall: TtsInstallStatus = { state: 'idle' }
+let lastService: TtsServiceStatus = { state: 'stopped', model: null, modelState: 'none' }
 let updateCheckedAt: number | null = null
 
 function logInstallFailure(install: TtsInstallStatus): void {
@@ -21,9 +42,49 @@ function logInstallFailure(install: TtsInstallStatus): void {
   lastInstall = install
 }
 
+function logServiceFailure(service: TtsServiceStatus): void {
+  if (service.state === 'failed' && lastService.state !== 'failed') {
+    console.error('[TTS] Service failed:', service)
+  }
+  if (service.modelState === 'failed' && lastService.modelState !== 'failed') {
+    console.error('[TTS] Model load failed:', service)
+  }
+  lastService = service
+}
+
+export function characterVoiceStatus(character: TtsCharacter | null): CharacterVoiceStatus {
+  const voice = character?.manifest?.voice
+  if (!character || !voice) return { voice: 'unconfigured', missing: [], model: null }
+  const dir = path.join(CHARACTERS_ROOT, character.characterId)
+  const missing = [voice.gptWeights, voice.sovitsWeights].filter(file => !fs.existsSync(path.join(dir, file)))
+  if (missing.length > 0) return { voice: 'missing', missing, model: null }
+  return {
+    voice: 'ok',
+    missing: [],
+    model: { gptWeights: path.join(dir, voice.gptWeights), sovitsWeights: path.join(dir, voice.sovitsWeights) },
+  }
+}
+
+export function applyCharacterVoice(character: TtsCharacter | null): void {
+  const current = manager
+  if (current === null || !getTtsEnabled() || !current.status().installed) return
+  const { model } = characterVoiceStatus(character)
+  void (model === null ? current.loadModel(null) : current.startService(model))
+}
+
+export function applyTtsEnabled(enabled: boolean, character: TtsCharacter | null): void {
+  setTtsEnabled(enabled)
+  if (enabled) {
+    applyCharacterVoice(character)
+    return
+  }
+  if (manager !== null) void manager.stopService()
+}
+
 export function initTts(root: string = VOICE_INSTALL_ROOT): void {
   const manifest = resolveManifestUrl()
   lastInstall = { state: 'idle' }
+  lastService = { state: 'stopped', model: null, modelState: 'none' }
   updateCheckedAt = null
   manager = manifest === null
     ? null
@@ -32,6 +93,7 @@ export function initTts(root: string = VOICE_INSTALL_ROOT): void {
         manifest,
         onState: status => {
           logInstallFailure(status.install)
+          logServiceFailure(status.service)
           broadcastEvent('tts-status-changed', {})
         },
       })

@@ -1,5 +1,5 @@
-// src/settings/TtsSection.tsx — 设置窗口"语音"面板里的"语音合成组件"分区：指定已下载的 GPT-SoVITS 文件夹，或由 MintBot 下载安装（v2Pro / v5），显示安装进度、安装位置、失败原因（上次下载安装的失败单独保留并可重试）、已安装位置与新版本更新
-// 用法：VoicePanel 渲染 <TtsSection />；GET /tts/status、POST /tts/use-existing、POST /tts/install、POST /tts/install/cancel、GET /events 的 tts-status-changed；electronAPI.selectTtsDir
+// src/settings/TtsSection.tsx — 设置窗口"语音"面板里的"语音合成组件"分区：指定已下载的 GPT-SoVITS 文件夹，或由 MintBot 下载安装（v2Pro / v5），显示安装进度、安装位置、失败原因（上次下载安装的失败单独保留并可重试）、已安装位置与新版本更新；开关语音合成，显示服务状态与当前角色语音模型的加载状态，试听
+// 用法：VoicePanel 渲染 <TtsSection />；GET /tts/status、POST /tts/use-existing、POST /tts/install、POST /tts/install/cancel、POST /tts/enabled、POST /tts/preview、GET /events 的 tts-status-changed 与 preset-switched；electronAPI.selectTtsDir
 // 对应文件：src/settings/VoicePanel.tsx / services/core/tts/routes.ts / services/core/tts/manager.ts / src/errorText.ts / src/electron-api.d.ts / electron/preload/index.ts / electron/main/index.ts
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -35,6 +35,19 @@ interface TtsLastDownload {
   errorDetails: Record<string, unknown>
 }
 
+interface TtsServiceStatus {
+  state: 'stopped' | 'starting' | 'running' | 'failed'
+  modelState: 'none' | 'loading' | 'loaded' | 'failed'
+  errorCode?: ErrorCode
+  errorDetails?: Record<string, unknown>
+}
+
+interface TtsCharacterStatus {
+  name: string
+  voice: 'unconfigured' | 'missing' | 'ok'
+  missing: string[]
+}
+
 interface TtsStatus {
   installed: boolean
   source: 'download' | 'existing' | null
@@ -43,6 +56,9 @@ interface TtsStatus {
   updateAvailable: boolean
   install: TtsInstallStatus
   lastDownload: TtsLastDownload | null
+  service: TtsServiceStatus
+  enabled: boolean
+  character: TtsCharacterStatus
 }
 
 type TtsFailure = Pick<TtsInstallStatus, 'errorCode' | 'errorDetails'>
@@ -114,6 +130,43 @@ function failureText(failure: TtsFailure, installed: boolean, t: TFunction): str
   }
 }
 
+function reasonText(failure: TtsFailure, t: TFunction): string {
+  if (failure.errorCode === 'TTS_NOT_INSTALLED') return t('语音合成组件未安装')
+  const details = failure.errorDetails ?? {}
+  const parts = [details.message, details.exception].filter((part): part is string => typeof part === 'string' && part !== '')
+  if (parts.length > 0) return parts.join('：')
+  if (typeof details.status === 'number') return `HTTP ${details.status}`
+  return t('未知原因')
+}
+
+function serviceText(service: TtsServiceStatus, t: TFunction): string {
+  switch (service.state) {
+    case 'starting':
+      return t('正在启动')
+    case 'running':
+      return t('运行中')
+    case 'failed':
+      return t('启动失败：{{reason}}', { reason: reasonText(service, t) })
+    default:
+      return t('未启动')
+  }
+}
+
+function modelText(status: TtsStatus, t: TFunction): string {
+  if (status.character.voice === 'unconfigured') return t('未配置')
+  if (status.character.voice === 'missing') return t('文件缺失：{{files}}', { files: status.character.missing.join('、') })
+  switch (status.service.modelState) {
+    case 'loading':
+      return t('加载中')
+    case 'loaded':
+      return t('已加载')
+    case 'failed':
+      return t('加载失败：{{reason}}', { reason: reasonText(status.service, t) })
+    default:
+      return t('未加载')
+  }
+}
+
 function FailureLines({ failure, installed }: { failure: TtsFailure; installed: boolean }) {
   const { t } = useTranslation()
   return (
@@ -139,7 +192,29 @@ export function TtsSection() {
   const [cancelError, setCancelError] = useState<string | null>(null)
   const [variant, setVariant] = useState<TtsVariant>('v2pro')
   const [root, setRoot] = useState<string | null>(null)
+  const [enabledError, setEnabledError] = useState<string | null>(null)
+  const [confirmingUpdate, setConfirmingUpdate] = useState(false)
+  const [previewing, setPreviewing] = useState(false)
+  const [previewPlaying, setPreviewPlaying] = useState(false)
+  const [previewError, setPreviewError] = useState<string | null>(null)
   const loadSeqRef = useRef(0)
+  const previewAbortRef = useRef<AbortController | null>(null)
+  const previewAudioRef = useRef<{ audio: HTMLAudioElement; url: string } | null>(null)
+
+  const stopPreview = useCallback(() => {
+    previewAbortRef.current?.abort()
+    previewAbortRef.current = null
+    const playing = previewAudioRef.current
+    previewAudioRef.current = null
+    if (playing !== null) {
+      playing.audio.onended = null
+      playing.audio.onerror = null
+      playing.audio.pause()
+      URL.revokeObjectURL(playing.url)
+    }
+    setPreviewing(false)
+    setPreviewPlaying(false)
+  }, [])
 
   const load = useCallback(async (): Promise<void> => {
     const seq = ++loadSeqRef.current
@@ -164,6 +239,11 @@ export function TtsSection() {
         'tts-status-changed': () => {
           load()
         },
+        'preset-switched': () => {
+          stopPreview()
+          setPreviewError(null)
+          load()
+        },
       },
       onOpen: () => {
         load()
@@ -172,7 +252,21 @@ export function TtsSection() {
     return () => {
       watchdog.close()
     }
-  }, [load])
+  }, [load, stopPreview])
+
+  useEffect(() => stopPreview, [stopPreview])
+
+  const updateConfirmable =
+    status !== null &&
+    status.enabled &&
+    (status.service.state === 'starting' || status.service.state === 'running') &&
+    status.source === 'download' &&
+    status.variant !== null &&
+    status.updateAvailable
+
+  useEffect(() => {
+    if (!updateConfirmable) setConfirmingUpdate(false)
+  }, [updateConfirmable])
 
   const post = async (target: string, body?: Record<string, unknown>): Promise<string | null> => {
     const response = await fetch(`${CORE_URL}${target}`, {
@@ -246,6 +340,58 @@ export function TtsSection() {
     }
   }
 
+  const saveEnabled = async (enabled: boolean) => {
+    if (!enabled) stopPreview()
+    setBusy(true)
+    setEnabledError(null)
+    try {
+      setEnabledError(await post('/tts/enabled', { enabled }))
+    } catch (err) {
+      setEnabledError(failedMessage(err))
+    } finally {
+      await load()
+      setBusy(false)
+    }
+  }
+
+  const playPreview = async () => {
+    const controller = new AbortController()
+    previewAbortRef.current = controller
+    setPreviewing(true)
+    setPreviewError(null)
+    const fail = (message: string) => {
+      if (controller.signal.aborted) return
+      stopPreview()
+      setPreviewError(message)
+    }
+    try {
+      const response = await fetch(`${CORE_URL}/tts/preview`, { method: 'POST', signal: controller.signal })
+      if (response.ok) {
+        const blob = await response.blob()
+        if (controller.signal.aborted) return
+        const url = URL.createObjectURL(blob)
+        const audio = new Audio(url)
+        audio.onended = stopPreview
+        audio.onerror = () => fail(failedMessage(null))
+        previewAudioRef.current = { audio, url }
+        await audio.play()
+        if (!controller.signal.aborted) setPreviewPlaying(true)
+        return
+      }
+      const payload = await response.json().catch(() => null)
+      if (!isErrorBody(payload)) {
+        fail(`HTTP ${response.status}`)
+      } else if (payload.code === 'TTS_SYNTHESIS') {
+        const details = (payload as { details?: Record<string, unknown> }).details
+        fail(t('合成失败：{{reason}}', { reason: reasonText({ errorCode: payload.code, errorDetails: details }, t) }))
+      } else {
+        fail(errorText(payload, t))
+      }
+    } catch (err) {
+      fail(failedMessage(err))
+    }
+  }
+
   const label = <div className="window-behavior-panel__section-label">{t('语音合成组件')}</div>
 
   if (status === null) {
@@ -267,6 +413,19 @@ export function TtsSection() {
   const existingFailed = install.state === 'failed' && install.action === 'existing'
   const { lastDownload } = status
   const downloadedVariant = status.source === 'download' ? status.variant : null
+  const { service } = status
+
+  const runUpdate = () => {
+    if (downloadedVariant !== null) startInstall({ variant: downloadedVariant })
+  }
+
+  const requestUpdate = () => {
+    if (updateConfirmable) {
+      setConfirmingUpdate(true)
+    } else {
+      runUpdate()
+    }
+  }
 
   return (
     <div className="window-behavior-panel__section">
@@ -303,8 +462,26 @@ export function TtsSection() {
           {downloadedVariant !== null && status.updateAvailable && (
             <div className="character-panel__row">
               <span>{t('有新版本')}</span>
-              <button className="memory-btn" disabled={locked} onClick={() => startInstall({ variant: downloadedVariant })}>
+              <button className="memory-btn" disabled={locked} onClick={requestUpdate}>
                 {t('更新')}
+              </button>
+            </div>
+          )}
+          {confirmingUpdate && (
+            <div className="character-panel__confirm-row">
+              <span>{t('需要重启语音合成，期间无法朗读和试听，可能需要几分钟。继续吗？')}</span>
+              <button className="memory-btn" disabled={locked} onClick={() => setConfirmingUpdate(false)}>
+                {t('取消')}
+              </button>
+              <button
+                className="memory-btn"
+                disabled={locked}
+                onClick={() => {
+                  setConfirmingUpdate(false)
+                  runUpdate()
+                }}
+              >
+                {t('继续')}
               </button>
             </div>
           )}
@@ -379,6 +556,29 @@ export function TtsSection() {
           {installError && <div className="character-panel__error">{installError}</div>}
         </>
       )}
+      <label className="model-config-panel__checkbox">
+        <input
+          type="checkbox"
+          checked={status.enabled}
+          disabled={!status.installed || locked}
+          onChange={e => saveEnabled(e.target.checked)}
+        />
+        {t('启用语音合成')}
+      </label>
+      {enabledError && <div className="character-panel__error">{enabledError}</div>}
+      <div>{t('服务：{{state}}', { state: serviceText(service, t) })}</div>
+      {service.state === 'starting' && <div className="character-panel__hint">{t('首次启动可能需要几分钟')}</div>}
+      {service.state === 'failed' &&
+        stringList(service.errorDetails?.stderr).map((line, index) => (
+          <div key={index} className="character-panel__hint">{line}</div>
+        ))}
+      <div>{t('当前角色语音模型：{{state}}', { state: modelText(status, t) })}</div>
+      <div className="character-panel__row">
+        <button className="memory-btn" disabled={service.modelState !== 'loaded' || previewing || locked} onClick={playPreview}>
+          {previewPlaying ? t('播放中…') : previewing ? t('合成中…') : t('试听')}
+        </button>
+      </div>
+      {previewError && <div className="character-panel__error">{previewError}</div>}
     </div>
   )
 }

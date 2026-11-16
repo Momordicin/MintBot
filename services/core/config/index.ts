@@ -1,5 +1,5 @@
 // services/core/config/index.ts — config.json 的读取、热重载与按段写回
-// 用法：core/index.ts 调 startConfigWatcher；其余模块用 getXxxConfig() 读取，用 update*Config / setDefaultPresetId 写回（含 getWebSearchConfig / updateWebSearchConfig 读写 webSearch 段）；界面语言由 routes/ui.ts 经 getUiLanguage / updateUiLanguage 直接读写 config.json 的 ui 段
+// 用法：core/index.ts 调 startConfigWatcher；其余模块用 getXxxConfig() 读取，用 update*Config / setDefaultPresetId 写回（含 getWebSearchConfig / updateWebSearchConfig 读写 webSearch 段）；界面语言由 routes/ui.ts 经 getUiLanguage / updateUiLanguage 直接读写 config.json 的 ui 段；tts/manager.ts 与 tts/routes.ts 经 getTtsEnabled / setTtsEnabled 读写 tts 段
 // 对应文件：services/core/config/configFileError.ts / services/core/config/index.test.ts
 import fs from 'fs'
 import path from 'path'
@@ -391,7 +391,7 @@ function readRawConfig(): Record<string, unknown> {
   return parsed as Record<string, unknown>
 }
 
-function readRawSection(section: 'modelProvider' | 'backgroundModelProvider' | 'windowBehavior' | 'ui' | 'voice' | 'webSearch'): Record<string, unknown> {
+function readRawSection(section: 'modelProvider' | 'backgroundModelProvider' | 'windowBehavior' | 'ui' | 'voice' | 'webSearch' | 'tts'): Record<string, unknown> {
   const value = readRawConfig()[section]
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
 }
@@ -403,6 +403,7 @@ type ConfigSectionValue = {
   webSearch: WebSearchConfig
   ui: { language: UiLanguage }
   voice: { inputMode: VoiceInputMode }
+  tts: { enabled: boolean }
   defaultPresetId: string
 }
 
@@ -497,6 +498,19 @@ export function getVoiceInputMode(): VoiceInputMode {
 export function setVoiceInputMode(inputMode: VoiceInputMode): void {
   const { listenEnabled: _legacy, ...rest } = readRawSection('voice')
   writeConfigSection('voice', { ...rest, inputMode })
+}
+
+export function getTtsEnabled(): boolean {
+  try {
+    return readRawSection('tts').enabled === true
+  } catch (err) {
+    if (!(err instanceof ConfigFileUnreadableError)) throw err
+    return false
+  }
+}
+
+export function setTtsEnabled(enabled: boolean): void {
+  writeConfigSection('tts', { ...readRawSection('tts'), enabled })
 }
 
 export function setDefaultPresetId(presetId: string): void {

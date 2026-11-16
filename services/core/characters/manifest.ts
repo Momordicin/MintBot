@@ -1,6 +1,6 @@
 // services/core/characters/manifest.ts — 读取 assets/characters/<角色ID>/manifest.json，与默认值合并成 CharacterManifest，并检查其素材文件与转场链
-// 用法：session/index.ts 的 loadSession 调 loadCharacterManifest(characterId)；导出 ASSET_ROOT / CHARACTERS_ROOT，index.ts 将后者挂为 /characters/ 静态目录
-// 对应文件：services/core/characters/transitionChain.ts / shared/portraitForm.ts / services/core/session/index.ts / services/core/routes/characterImport.ts / services/core/routes/transitionChain.ts / services/core/characters/manifest.test.ts
+// 用法：session/index.ts 的 loadSession 调 loadCharacterManifest(characterId)；导出 ASSET_ROOT / CHARACTERS_ROOT，index.ts 将后者挂为 /characters/ 静态目录；tts/manager.ts 与 tts/routes.ts 读 manifest.voice
+// 对应文件：services/core/characters/transitionChain.ts / shared/portraitForm.ts / services/core/session/index.ts / services/core/routes/characterImport.ts / services/core/routes/transitionChain.ts / services/core/tts/manager.ts / services/core/tts/routes.ts / services/core/characters/manifest.test.ts
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
@@ -29,6 +29,18 @@ export interface EmotePoolEntry {
   tags: string[]
 }
 
+export interface CharacterVoicePreview {
+  audio: string
+  text: string
+  lang: string
+}
+
+export interface CharacterVoice {
+  gptWeights: string
+  sovitsWeights: string
+  preview: CharacterVoicePreview | null
+}
+
 export interface CharacterManifest {
   schemaVersion: number
   name: string
@@ -47,6 +59,7 @@ export interface CharacterManifest {
     illustration: PortraitForm
   }
   emotePool: EmotePoolEntry[]
+  voice: CharacterVoice | null
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -143,7 +156,41 @@ function mergeEmotePool(value: unknown): EmotePoolEntry[] {
   return result
 }
 
-function mergeManifest(raw: unknown): CharacterManifest {
+function isInsideFolder(folder: string, file: unknown): file is string {
+  if (typeof file !== 'string' || file === '') return false
+  if (path.win32.isAbsolute(file) || path.posix.isAbsolute(file)) return false
+  const relative = path.relative(folder, path.resolve(folder, file))
+  return !(relative === '' || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
+}
+
+function mergeVoice(value: unknown, characterDir: string): CharacterVoice | null {
+  if (value === undefined) return null
+  const source = value as Record<string, unknown> | null
+  const preview = source?.preview as Record<string, unknown> | null | undefined
+  const valid =
+    typeof source === 'object' && source !== null && !Array.isArray(source) &&
+    isInsideFolder(characterDir, source.gptWeights) &&
+    isInsideFolder(characterDir, source.sovitsWeights) &&
+    (preview === undefined || (
+      typeof preview === 'object' && preview !== null && !Array.isArray(preview) &&
+      isInsideFolder(characterDir, preview.audio) &&
+      typeof preview.text === 'string' &&
+      (preview.lang === undefined || typeof preview.lang === 'string')
+    ))
+  if (!valid) {
+    console.warn('[CharacterManifest] voice 类型错误或路径越出角色目录，该角色不朗读')
+    return null
+  }
+  return {
+    gptWeights: source.gptWeights as string,
+    sovitsWeights: source.sovitsWeights as string,
+    preview: preview === undefined
+      ? null
+      : { audio: preview.audio as string, text: preview.text as string, lang: (preview.lang as string | undefined) ?? 'zh' },
+  }
+}
+
+function mergeManifest(raw: unknown, characterDir: string): CharacterManifest {
   const source = (raw ?? {}) as Record<string, unknown>
   const portraits = (source.portraits ?? {}) as Record<string, unknown>
   const emotionVocabulary = mergeOptionalStringArray(source.emotionVocabulary, 'emotionVocabulary')
@@ -172,6 +219,7 @@ function mergeManifest(raw: unknown): CharacterManifest {
       illustration: mergePortraitForm(portraits.illustration, 'portraits.illustration'),
     },
     emotePool: mergeEmotePool(source.emotePool),
+    voice: mergeVoice(source.voice, characterDir),
   }
 }
 
@@ -220,7 +268,7 @@ export function loadCharacterManifest(characterId: string): CharacterManifest | 
     return null
   }
 
-  const manifest = mergeManifest(raw)
+  const manifest = mergeManifest(raw, path.join(CHARACTERS_ROOT, characterId))
   checkManifestAssets(characterId, raw, manifest)
   return manifest
 }
