@@ -1,6 +1,6 @@
-// services/core/tts/routes.test.ts — 语音合成组件路由与管理器测试：状态透传（含开关与当前角色语音模型）、安装不等待与同步错误映射、指定文件夹的错误映射、开关、试听与错误映射、切换角色时换模型、新版本检查、退出时释放
-// 用法：pnpm test；@mintbot/voice-agent-client 的 createTtsManager 换成假管理器，config 与当前会话换成假实现，角色语音文件只建在测试临时素材目录下，不下载、不启动进程、不写 data/
-// 对应文件：services/core/tts/routes.ts / services/core/tts/manager.ts
+// services/core/tts/routes.test.ts — 语音合成组件路由与管理器测试：状态透传（含开关、当前角色语音模型与朗读状态）、安装不等待与同步错误映射、指定文件夹的错误映射、开关、试听与错误映射、朗读中状态与停止朗读、切换角色时换模型、新版本检查、退出时释放
+// 用法：pnpm test；@mintbot/voice-agent-client 的 createTtsManager 换成假管理器，config、当前会话、语音组件状态与朗读换成假实现，角色语音文件只建在测试临时素材目录下，不下载、不启动进程、不写 data/
+// 对应文件：services/core/tts/routes.ts / services/core/tts/manager.ts / services/core/tts/narration.ts / services/core/voice/agent.ts
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Fastify, { type FastifyInstance } from 'fastify'
 import fs from 'fs'
@@ -16,6 +16,11 @@ const mocks = vi.hoisted(() => ({
   getTtsEnabled: vi.fn<() => boolean>(),
   setTtsEnabled: vi.fn(),
   getCurrentState: vi.fn<() => unknown>(),
+  voiceStatus: { installed: false, phase: null, inputMode: 'off', mode: 'normal', speaker: null, install: { state: 'idle' } } as Record<string, unknown>,
+  playbackSupported: null as boolean | null,
+  isSpeaking: vi.fn<() => boolean>(),
+  stopNarration: vi.fn<() => Promise<void>>(),
+  lastError: null as unknown,
   createOptions: null as { root: string; manifest: string; onState?: (s: unknown) => void } | null,
   manager: {
     status: vi.fn(),
@@ -45,6 +50,15 @@ vi.mock('../voice/install.js', async importOriginal => ({
 vi.mock('../events/broadcast.js', () => ({ broadcastEvent: mocks.broadcastEvent }))
 vi.mock('../config/index.js', () => ({ getTtsEnabled: mocks.getTtsEnabled, setTtsEnabled: mocks.setTtsEnabled }))
 vi.mock('../session/index.js', () => ({ getCurrentState: mocks.getCurrentState }))
+vi.mock('../voice/agent.js', () => ({
+  getVoiceStatus: async () => mocks.voiceStatus,
+  getPlaybackSupported: () => mocks.playbackSupported,
+}))
+vi.mock('./narration.js', () => ({
+  isSpeaking: mocks.isSpeaking,
+  stopNarration: mocks.stopNarration,
+  getNarrationLastError: () => mocks.lastError,
+}))
 
 import { applyCharacterVoice, checkTtsUpdate, disposeTts, initTts, TTS_DEFAULT_ROOT } from './manager.js'
 import { ttsRoutes } from './routes.js'
@@ -100,6 +114,11 @@ beforeEach(async () => {
   mocks.getTtsEnabled.mockReset().mockReturnValue(false)
   mocks.setTtsEnabled.mockReset().mockImplementation((enabled: boolean) => mocks.getTtsEnabled.mockReturnValue(enabled))
   mocks.getCurrentState.mockReset().mockReturnValue(null)
+  mocks.voiceStatus = { installed: false, phase: null, inputMode: 'off', mode: 'normal', speaker: null, install: { state: 'idle' } }
+  mocks.playbackSupported = null
+  mocks.isSpeaking.mockReset().mockReturnValue(false)
+  mocks.stopNarration.mockReset().mockResolvedValue(undefined)
+  mocks.lastError = null
   mocks.resolveManifestUrl.mockReturnValue('https://example.invalid/manifest.json')
   fs.mkdirSync(path.join(CHARACTER_DIR, 'voice'), { recursive: true })
   fs.writeFileSync(MODEL.gptWeights, '')
@@ -122,6 +141,16 @@ describe('tts routes', () => {
     expect(mocks.broadcastEvent).toHaveBeenCalledWith('tts-status-changed', {})
   })
 
+  it('stops the narration when the service stops or fails', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const service = (state: string) => ttsStatus({ service: { state, model: null, modelState: 'none' } as TtsStatus['service'] })
+    for (const [state, stops] of [['starting', 0], ['running', 0], ['running', 0], ['failed', 1], ['failed', 1], ['starting', 1], ['stopped', 2]] as const) {
+      mocks.createOptions?.onState?.(service(state))
+      expect(mocks.stopNarration).toHaveBeenCalledTimes(stops)
+    }
+    expect(error).toHaveBeenCalled()
+  })
+
   it.each([
     ['no session', null, false, { name: '', voice: 'unconfigured', missing: [] }],
     ['no voice', null, true, { name: '薄荷', voice: 'unconfigured', missing: [] }],
@@ -133,7 +162,86 @@ describe('tts routes', () => {
     mocks.manager.status.mockReturnValue(installedDownload)
     const res = await app.inject({ method: 'GET', url: '/tts/status' })
     expect(res.statusCode).toBe(200)
-    expect(res.json()).toEqual({ ...installedDownload, enabled, character })
+    expect(res.json()).toEqual({
+      ...installedDownload,
+      enabled,
+      character,
+      narration: { state: 'no_voice_agent', lastError: null, voiceInstalling: false, voiceBusy: false },
+      listenWithoutVoiceprint: false,
+    })
+  })
+
+  const running = { state: 'running', modelState: 'loaded' }
+  it.each([
+    ['no_voice_agent', { installed: false }, true, fullVoice, running],
+    ['agent_starting', { installed: true, phase: 'restarting' }, true, fullVoice, running],
+    ['agent_failed', { installed: true, phase: 'failed' }, true, fullVoice, running],
+    ['agent_starting', { installed: true, phase: 'running' }, null, fullVoice, running],
+    ['unsupported', { installed: true, phase: 'running' }, false, fullVoice, running],
+    ['no_voice', { installed: true, phase: 'running' }, true, { ...fullVoice!, preview: null }, running],
+    ['no_voice', { installed: true, phase: 'running' }, true, { ...fullVoice!, gptWeights: 'voice/none.ckpt' }, running],
+    ['waiting', { installed: true, phase: 'running' }, true, fullVoice, { state: 'starting', modelState: 'none' }],
+    ['waiting', { installed: true, phase: 'running' }, true, fullVoice, { state: 'running', modelState: 'loading' }],
+    ['unavailable', { installed: true, phase: 'running' }, true, fullVoice, { state: 'failed', modelState: 'none' }],
+    ['unavailable', { installed: true, phase: 'running' }, true, fullVoice, { state: 'running', modelState: 'failed' }],
+    ['ok', { installed: true, phase: 'running' }, true, fullVoice, running],
+  ] as const)('reports the narration state %s', async (state, voice, supported, characterVoice, service) => {
+    useCharacter(characterVoice as CharacterManifest['voice'])
+    mocks.voiceStatus = { ...mocks.voiceStatus, ...voice }
+    mocks.playbackSupported = supported
+    mocks.manager.status.mockReturnValue(ttsStatus({ installed: true, service: { model: null, ...service } as TtsStatus['service'] }))
+    const res = await app.inject({ method: 'GET', url: '/tts/status' })
+    expect(res.json().narration.state).toBe(state)
+  })
+
+  it.each([
+    ['listen without a voiceprint', 'listen', { enrolled: false }, true],
+    ['listen with a voiceprint', 'listen', { enrolled: true }, false],
+    ['transcribe without a voiceprint', 'transcribe', { enrolled: false }, false],
+    ['listen while the agent is not running', 'listen', null, false],
+  ])('reports listenWithoutVoiceprint: %s', async (_name, inputMode, speaker, expected) => {
+    mocks.voiceStatus = { ...mocks.voiceStatus, installed: true, phase: 'running', inputMode, speaker }
+    const res = await app.inject({ method: 'GET', url: '/tts/status' })
+    expect(res.json().listenWithoutVoiceprint).toBe(expected)
+  })
+
+  it('reports the last narration error', async () => {
+    mocks.lastError = { code: 'AGENT_HTTP', message: 'POST /v1/play 500', status: 500, at: 1 }
+    const res = await app.inject({ method: 'GET', url: '/tts/status' })
+    expect(res.json().narration.lastError).toEqual({ code: 'AGENT_HTTP', message: 'POST /v1/play 500', status: 500, at: 1 })
+  })
+
+  it.each([
+    ['idle', false],
+    ['installing', true],
+  ])('reports voiceInstalling while the voice install state is %s', async (state, expected) => {
+    mocks.voiceStatus = { ...mocks.voiceStatus, install: { state } }
+    const res = await app.inject({ method: 'GET', url: '/tts/status' })
+    expect(res.json().narration.voiceInstalling).toBe(expected)
+  })
+
+  it.each([
+    ['normal', false],
+    ['enrolling', true],
+    ['testing', true],
+  ])('reports voiceBusy while the voice mode is %s', async (mode, expected) => {
+    mocks.voiceStatus = { ...mocks.voiceStatus, mode }
+    const res = await app.inject({ method: 'GET', url: '/tts/status' })
+    expect(res.json().narration.voiceBusy).toBe(expected)
+  })
+
+  it.each([true, false])('answers speaking %s', async speaking => {
+    mocks.isSpeaking.mockReturnValue(speaking)
+    const res = await app.inject({ method: 'GET', url: '/tts/narration' })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ speaking })
+  })
+
+  it('stops the narration', async () => {
+    const res = await app.inject({ method: 'POST', url: '/tts/narration/stop' })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ ok: true })
+    expect(mocks.stopNarration).toHaveBeenCalledOnce()
   })
 
   it.each([
@@ -279,6 +387,7 @@ describe('tts enabled', () => {
     expect(res.statusCode).toBe(statusCode)
     expect(res.json()).toEqual(body)
     expect(mocks.setTtsEnabled).toHaveBeenCalledWith(enabled)
+    expect(mocks.stopNarration).toHaveBeenCalledTimes(enabled ? 0 : 1)
     for (const name of ['startService', 'loadModel', 'stopService'] as const) {
       if (name === called) expect(mocks.manager[name]).toHaveBeenCalledWith(...args)
       else expect(mocks.manager[name]).not.toHaveBeenCalled()
@@ -313,6 +422,7 @@ describe('tts preview', () => {
     expect(res.statusCode).toBe(200)
     expect(res.headers['content-type']).toBe('audio/wav')
     expect(res.rawPayload).toEqual(Buffer.from('RIFFwav'))
+    expect(mocks.stopNarration.mock.invocationCallOrder[0]).toBeLessThan(mocks.manager.synthesize.mock.invocationCallOrder[0])
     expect(mocks.manager.synthesize).toHaveBeenCalledWith({
       text: '你好，我是薄荷，很高兴见到你。',
       textLang: 'zh',

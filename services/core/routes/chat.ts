@@ -1,9 +1,9 @@
 // services/core/routes/chat.ts — 一轮聊天：建上下文、调模型，经 SSE 把回复交给发起请求的窗口
-// 用法：core/index.ts 注册 chatRoutes；POST /chat { message }；模型调用交给 plugins/toolLoop.ts 的 runToolLoop
-// 对应文件：src/chat/ChatWindow.tsx / services/core/context/buildContext.ts / services/core/plugins/toolLoop.ts / services/core/routes/chat.test.ts / shared/errorCodes.ts
+// 用法：core/index.ts 注册 chatRoutes；POST /chat { message }；模型调用交给 plugins/toolLoop.ts 的 runToolLoop；回复发出后交给 tts/narration.ts 的 narrateReply 朗读
+// 对应文件：src/chat/ChatWindow.tsx / services/core/context/buildContext.ts / services/core/plugins/toolLoop.ts / services/core/tts/narration.ts / services/core/routes/chat.test.ts / shared/errorCodes.ts
 import type { FastifyInstance } from 'fastify'
 import type { OutgoingHttpHeaders } from 'node:http'
-import { requireCurrentState } from '../session/index.js'
+import { getCurrentState, requireCurrentState } from '../session/index.js'
 import { buildContext } from '../context/buildContext.js'
 import { parseReplyTags } from '../session/emotion.js'
 import { selectEmoteFile } from '../characters/emotePool.js'
@@ -16,6 +16,7 @@ import { runToolLoop } from '../plugins/toolLoop.js'
 import { isEmptyReply } from '../reply/interceptor.js'
 import { detectSleepiness } from '../reply/sleepDetector.js'
 import { ERROR_CODES, errorBody, invalidRequest } from '../../../shared/errorCodes.js'
+import { narrateReply } from '../tts/narration.js'
 
 let queueTail: Promise<void> = Promise.resolve()
 
@@ -183,6 +184,10 @@ export async function chatRoutes(fastify: FastifyInstance) {
           sessionId,
           ...(emoteFile ? { emote: emoteFile } : {}),
         })
+
+        if (getCurrentState()?.session.sessionId === sessionId) {
+          narrateReply(replyText, { characterId: state.preset.characterId, manifest: state.manifest })
+        }
 
         const isSleep = selfEmotion?.label === 'sleep'
         if (selfEmotion && !isSleep) {

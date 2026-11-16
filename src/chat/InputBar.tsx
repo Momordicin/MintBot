@@ -1,6 +1,6 @@
-// src/chat/InputBar.tsx — 聊天窗口底部输入区：多行输入框（Enter 发送，Shift+Enter 换行）、发送按钮、设置按钮，以及 4 个禁用的占位工具按钮
+// src/chat/InputBar.tsx — 聊天窗口底部输入区：多行输入框（Enter 发送，Shift+Enter 换行）、发送按钮、设置按钮、语音输入按钮、朗读期间的停止朗读按钮，以及禁用的占位工具按钮
 // 用法：ChatWindow 渲染 <InputBar onSend />；设置按钮调用 electronAPI.openSettingsWindow
-// 形状：props { onSend(text: string), disabled? }
+// 形状：props { onSend(text: string), disabled?, voice, voiceBusy?, onToggleVoice(), speaking, stopBusy, stopError, onStopNarration() }
 // 对应文件：src/chat/ChatWindow.tsx / electron/preload/index.ts / electron/main/index.ts（open-settings-window）
 import React, { useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -25,10 +25,14 @@ interface InputBarProps {
   voice: VoiceInputState | null
   voiceBusy?: boolean
   onToggleVoice: () => void
+  speaking: boolean
+  stopBusy: boolean
+  stopError: string | null
+  onStopNarration: () => void
   ref?: React.Ref<InputBarHandle>
 }
 
-export function InputBar({ onSend, disabled, voice, voiceBusy, onToggleVoice, ref }: InputBarProps) {
+export function InputBar({ onSend, disabled, voice, voiceBusy, onToggleVoice, speaking, stopBusy, stopError, onStopNarration, ref }: InputBarProps) {
   const { t } = useTranslation()
   const [value, setValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -140,6 +144,19 @@ export function InputBar({ onSend, disabled, voice, voiceBusy, onToggleVoice, re
             )}
           </svg>
         </button>
+        {speaking && (
+          <button
+            className="tool-btn"
+            disabled={stopBusy}
+            title={stopError === null ? t('停止朗读') : t('停止朗读失败：{{reason}}', { reason: stopError })}
+            aria-label={t('停止朗读')}
+            onClick={onStopNarration}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="6" y="6" width="12" height="12" rx="1" ry="1" />
+            </svg>
+          </button>
+        )}
         <button className="tool-btn" disabled title={t('拍照（即将推出）')}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />

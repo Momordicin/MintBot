@@ -986,7 +986,7 @@ packages:
     engines: {node: '>=8'}
 
   '@mintbot/voice-agent-client@file:vendor/mintbot-voice-agent-client-0.3.4.tgz':
-    resolution: {integrity: sha512-iOiVYq0RUvU4yQ7YI1MJcvokCLoAwKkKsxH1eYPOMeL1be4qq5CUOVEj8/aUurEVSc2iPspJugsQv7VWFX3/QQ==, tarball: file:vendor/mintbot-voice-agent-client-0.3.4.tgz}
+    resolution: {integrity: sha512-YLqwyLodBccUgqRIR6C710gwkTrVLNRQE2bLOBiuskD7buU05DiGjj2hKPfv9djpGPLWlqrRhL4eR2xyspX1lg==, tarball: file:vendor/mintbot-voice-agent-client-0.3.4.tgz}
     version: 0.3.4
     engines: {node: '>=22'}
 

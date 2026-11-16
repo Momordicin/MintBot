@@ -1,6 +1,6 @@
 // services/core/tts/manager.ts — 持有语音合成组件（GPT-SoVITS）的管理器：创建、状态变化广播与失败日志、按开关与当前角色启动/停止服务和切换语音模型、检查新版本、退出时释放
-// 用法：core/index.ts 的 start() 调 initTts()，SIGINT/SIGTERM 时调 disposeTts()；session/index.ts 的 loadSession 调 applyCharacterVoice()；tts/routes.ts 调 getTtsManager()、TTS_DEFAULT_ROOT、characterVoiceStatus()、applyTtsEnabled()、applyCharacterVoice()；voice/routes.ts 的 GET /voice/update-check 调 checkTtsUpdate()；状态变化时 broadcastEvent('tts-status-changed')
-// 对应文件：services/core/tts/routes.ts / services/core/session/index.ts / services/core/characters/manifest.ts / services/core/config/index.ts / services/core/voice/install.ts / services/core/voice/routes.ts / services/core/events/broadcast.ts / services/core/index.ts / services/core/tts/routes.test.ts
+// 用法：core/index.ts 的 start() 调 initTts()，SIGINT/SIGTERM 时调 disposeTts()；session/index.ts 的 loadSession 调 applyCharacterVoice()；tts/routes.ts 调 getTtsManager()、TTS_DEFAULT_ROOT、characterVoiceStatus()、applyTtsEnabled()、applyCharacterVoice()；tts/narration.ts 调 getTtsManager()、characterVoiceStatus()；关闭语音合成或服务停止、失败时调 tts/narration.ts 的 stopNarration()；voice/routes.ts 的 GET /voice/update-check 调 checkTtsUpdate()；状态变化时 broadcastEvent('tts-status-changed')
+// 对应文件：services/core/tts/routes.ts / services/core/tts/narration.ts / services/core/session/index.ts / services/core/characters/manifest.ts / services/core/config/index.ts / services/core/voice/install.ts / services/core/voice/routes.ts / services/core/events/broadcast.ts / services/core/index.ts / services/core/tts/routes.test.ts
 import fs from 'fs'
 import path from 'path'
 import {
@@ -14,6 +14,7 @@ import { CHARACTERS_ROOT, type CharacterManifest } from '../characters/manifest.
 import { getTtsEnabled, setTtsEnabled } from '../config/index.js'
 import { broadcastEvent } from '../events/broadcast.js'
 import { REMOTE_MANIFEST_TIMEOUT_MS, VOICE_INSTALL_ROOT, resolveManifestUrl } from '../voice/install.js'
+import { stopNarration } from './narration.js'
 
 export const TTS_DEFAULT_ROOT = path.resolve(process.cwd(), 'data', 'tts')
 
@@ -78,6 +79,7 @@ export function applyTtsEnabled(enabled: boolean, character: TtsCharacter | null
     applyCharacterVoice(character)
     return
   }
+  void stopNarration()
   if (manager !== null) void manager.stopService()
 }
 
@@ -92,8 +94,10 @@ export function initTts(root: string = VOICE_INSTALL_ROOT): void {
         root,
         manifest,
         onState: status => {
+          const serviceEnded = status.service.state !== lastService.state && (status.service.state === 'stopped' || status.service.state === 'failed')
           logInstallFailure(status.install)
           logServiceFailure(status.service)
+          if (serviceEnded) void stopNarration()
           broadcastEvent('tts-status-changed', {})
         },
       })

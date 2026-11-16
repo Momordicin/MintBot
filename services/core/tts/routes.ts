@@ -1,6 +1,6 @@
-// services/core/tts/routes.ts — 语音设置页的语音合成组件路由：读取状态（含开关与当前角色语音模型）、指定已下载的文件夹、下载安装或更新、取消安装、开关语音合成、试听
-// 用法：core/index.ts 里 fastify.register(ttsRoutes)；GET /tts/status、POST /tts/use-existing { dir }、POST /tts/install { variant, root? }、POST /tts/install/cancel、POST /tts/enabled { enabled }、POST /tts/preview（audio/wav），由 src/settings/TtsSection.tsx 调用；管理器取自 tts/manager.ts 的 getTtsManager()，当前角色取自 session/index.ts 的 getCurrentState()
-// 对应文件：services/core/tts/manager.ts / services/core/session/index.ts / services/core/config/index.ts / services/core/characters/manifest.ts / src/settings/TtsSection.tsx / services/core/tts/routes.test.ts
+// services/core/tts/routes.ts — 语音设置页的语音合成组件路由：读取状态（含开关、当前角色语音模型与朗读状态）、指定已下载的文件夹、下载安装或更新、取消安装、开关语音合成、试听；聊天窗口读取朗读中状态与停止朗读
+// 用法：core/index.ts 里 fastify.register(ttsRoutes)；GET /tts/status、POST /tts/use-existing { dir }、POST /tts/install { variant, root? }、POST /tts/install/cancel、POST /tts/enabled { enabled }、POST /tts/preview（audio/wav），由 src/settings/TtsSection.tsx 调用；GET /tts/narration、POST /tts/narration/stop 由 src/chat/ChatWindow.tsx 调用；管理器取自 tts/manager.ts 的 getTtsManager()，当前角色取自 session/index.ts 的 getCurrentState()，语音组件状态取自 voice/agent.ts 的 getVoiceStatus() / getPlaybackSupported()
+// 对应文件：services/core/tts/manager.ts / services/core/tts/narration.ts / services/core/voice/agent.ts / src/chat/ChatWindow.tsx / services/core/session/index.ts / services/core/config/index.ts / services/core/characters/manifest.ts / src/settings/TtsSection.tsx / services/core/tts/routes.test.ts
 import path from 'path'
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { TtsError, type TtsErrorCode, type TtsManager } from '@mintbot/voice-agent-client'
@@ -9,6 +9,7 @@ import { CHARACTERS_ROOT } from '../characters/manifest.js'
 import { ConfigFileUnreadableError } from '../config/configFileError.js'
 import { getTtsEnabled } from '../config/index.js'
 import { getCurrentState } from '../session/index.js'
+import { getPlaybackSupported, getVoiceStatus } from '../voice/agent.js'
 import {
   applyCharacterVoice,
   applyTtsEnabled,
@@ -17,6 +18,7 @@ import {
   TTS_DEFAULT_ROOT,
   type TtsCharacter,
 } from './manager.js'
+import { getNarrationLastError, isSpeaking, stopNarration } from './narration.js'
 
 const ERROR_STATUS: Partial<Record<TtsErrorCode, number>> = {
   TTS_BUSY: 409,
@@ -40,6 +42,34 @@ function applyCurrentCharacterVoice(): void {
   }
 }
 
+type NarrationState =
+  | 'no_voice_agent'
+  | 'agent_starting'
+  | 'agent_failed'
+  | 'unsupported'
+  | 'no_voice'
+  | 'waiting'
+  | 'unavailable'
+  | 'ok'
+
+function narrationState(
+  installed: boolean,
+  phase: string | null,
+  voiceOk: boolean,
+  service: ReturnType<TtsManager['status']>['service']
+): NarrationState {
+  if (!installed) return 'no_voice_agent'
+  if (phase === 'failed') return 'agent_failed'
+  if (phase !== 'running') return 'agent_starting'
+  const supported = getPlaybackSupported()
+  if (supported === null) return 'agent_starting'
+  if (!supported) return 'unsupported'
+  if (!voiceOk) return 'no_voice'
+  if (service.state === 'failed' || service.modelState === 'failed') return 'unavailable'
+  if (service.state !== 'running' || service.modelState !== 'loaded') return 'waiting'
+  return 'ok'
+}
+
 function withManager(reply: FastifyReply, run: (manager: TtsManager) => Promise<FastifyReply> | FastifyReply) {
   const manager = getTtsManager()
   if (manager === null) return reply.status(503).send(errorBody(ERROR_CODES.VOICE_INSTALL_UNCONFIGURED))
@@ -48,16 +78,33 @@ function withManager(reply: FastifyReply, run: (manager: TtsManager) => Promise<
 
 export async function ttsRoutes(fastify: FastifyInstance) {
   fastify.get('/tts/status', async (_request, reply) =>
-    withManager(reply, manager => {
+    withManager(reply, async manager => {
       const character = currentCharacter()
       const { voice, missing } = characterVoiceStatus(character)
+      const status = manager.status()
+      const voiceStatus = await getVoiceStatus()
+      const voiceOk = voice === 'ok' && Boolean(character?.manifest?.voice?.preview)
       return reply.status(200).send({
-        ...manager.status(),
+        ...status,
         enabled: getTtsEnabled(),
         character: { name: character?.manifest?.displayName ?? '', voice, missing },
+        narration: {
+          state: narrationState(voiceStatus.installed, voiceStatus.phase, voiceOk, status.service),
+          lastError: getNarrationLastError(),
+          voiceInstalling: voiceStatus.install.state === 'installing',
+          voiceBusy: voiceStatus.mode !== 'normal',
+        },
+        listenWithoutVoiceprint: voiceStatus.inputMode === 'listen' && voiceStatus.speaker !== null && !voiceStatus.speaker.enrolled,
       })
     })
   )
+
+  fastify.get('/tts/narration', async (_request, reply) => reply.status(200).send({ speaking: isSpeaking() }))
+
+  fastify.post('/tts/narration/stop', async (_request, reply) => {
+    await stopNarration()
+    return reply.status(200).send({ ok: true })
+  })
 
   fastify.post<{ Body: { enabled?: unknown } }>('/tts/enabled', async (request, reply) => {
     const enabled = request.body?.enabled
@@ -81,6 +128,7 @@ export async function ttsRoutes(fastify: FastifyInstance) {
 
   fastify.post('/tts/preview', async (_request, reply) =>
     withManager(reply, async manager => {
+      await stopNarration()
       const character = currentCharacter()
       const manifest = character?.manifest
       const preview = manifest?.voice?.preview

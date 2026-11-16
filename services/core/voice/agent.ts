@@ -1,6 +1,6 @@
 // services/core/voice/agent.ts — 托管语音输入进程：转写结果和声音事件追加到本地记录，聆听模式和自由测试按主人、标签、字数计算打印文字，聆听模式累积为待放入聊天输入框的文字
-// 用法：index.ts 的 start() 调 startVoice()，session/index.ts 的 loadSession 调 setHotwordsRole()，roleConfig/collect.ts 调 reloadHotwords()，SIGINT/SIGTERM 时调 stopVoice()；voice/routes.ts 调 takePending() / setInputMode()；聆听模式有新文字时 broadcastEvent('voice-pending')，转写模式 broadcastEvent('voice-type', { text })
-// 对应文件：services/core/voice/install.ts / services/core/voice/routes.ts / services/core/events/broadcast.ts / services/core/voice/agent.test.ts
+// 用法：index.ts 的 start() 调 startVoice()，session/index.ts 的 loadSession 调 setHotwordsRole()，roleConfig/collect.ts 调 reloadHotwords()，SIGINT/SIGTERM 时调 stopVoice()；voice/routes.ts 调 takePending() / setInputMode()；tts/narration.ts 调 setPlaybackListener() / playClip() / stopPlayback()，tts/routes.ts 调 getPlaybackSupported() / getVoiceStatus()；聆听模式有新文字时 broadcastEvent('voice-pending')，转写模式 broadcastEvent('voice-type', { text })
+// 对应文件：services/core/voice/install.ts / services/core/voice/routes.ts / services/core/tts/narration.ts / services/core/tts/routes.ts / services/core/events/broadcast.ts / services/core/voice/agent.test.ts
 import fs from 'fs'
 import path from 'path'
 import {
@@ -9,6 +9,7 @@ import {
   type AgentEvent,
   type DeviceEvent,
   type FinalEvent,
+  type PlaybackEvent,
   type SpeakerStatus as AgentSpeakerStatus,
   type SupervisorState,
 } from '@mintbot/voice-agent-client'
@@ -107,6 +108,13 @@ export interface VoiceStatus {
   install: InstallStatus
 }
 
+export interface PlaybackListener {
+  onPlayback(ev: PlaybackEvent): void
+  onPlaybackFailed(message: string): void
+  onPlaybackIdle(): void
+  onLeftRunning(): void
+}
+
 export class VoiceOperationError extends Error {
   constructor(readonly status: number, readonly errorCode: ErrorCode) {
     super(errorCode)
@@ -140,6 +148,30 @@ let updateCheck: { at: number; version: string | null } | null = null
 let enrollInterrupted = false
 let enrollBaseline: { enrolled: boolean; utterances: number } | null = null
 let currentDeviceName: string | null = null
+let playbackSupported: boolean | null = null
+let playbackListener: PlaybackListener | null = null
+
+export function setPlaybackListener(listener: PlaybackListener | null): void {
+  playbackListener = listener
+}
+
+export function getPlaybackSupported(): boolean | null {
+  return playbackSupported
+}
+
+export async function playClip(wav: Buffer): Promise<number> {
+  if (!supervisor) throw new VoiceOperationError(503, ERROR_CODES.VOICE_UNAVAILABLE)
+  return supervisor.play(wav)
+}
+
+export async function stopPlayback(): Promise<void> {
+  await supervisor?.stopPlayback()
+}
+
+function leaveRunning(): void {
+  playbackSupported = null
+  playbackListener?.onLeftRunning()
+}
 
 export function takePending(): string[] {
   const texts = pending
@@ -290,6 +322,26 @@ async function verifyVoiceprintKept(
 }
 
 function handleEvent(ev: AgentEvent): void {
+  if (ev.type === 'status' || ev.type === 'snapshot') {
+    const playback = (ev.data ?? {}).playback
+    if (ev.type === 'status') {
+      const supported = playback !== undefined
+      if (supported !== playbackSupported) {
+        playbackSupported = supported
+        notifyStatusChanged()
+      }
+    }
+    if (playback && playback.playing === false && playback.queued === 0) playbackListener?.onPlaybackIdle()
+    return
+  }
+  if (ev.type === 'playback') {
+    playbackListener?.onPlayback(ev.data ?? {})
+    return
+  }
+  if (ev.type === 'error') {
+    if (ev.data?.code === 'playback_failed') playbackListener?.onPlaybackFailed(nonEmptyString(ev.data?.message) ?? 'playback_failed')
+    return
+  }
   if (ev.type === 'device') {
     const device: Partial<DeviceEvent> = ev.data ?? {}
     const name = nonEmptyString(device.display_name) ?? nonEmptyString(device.name)
@@ -415,6 +467,7 @@ function resetState(): void {
   enrollInterrupted = false
   enrollBaseline = null
   currentDeviceName = null
+  leaveRunning()
 }
 
 function readSpeaker(raw: Partial<AgentSpeakerStatus>): SpeakerStatus {
@@ -631,6 +684,7 @@ export async function startVoice(dataDir: string = VOICE_DATA_DIR): Promise<void
     onEvent: handleEvent,
     onState: state => {
       const becameRunning = latestState?.phase !== 'running' && state.phase === 'running'
+      if (latestState?.phase === 'running' && state.phase !== 'running') leaveRunning()
       latestState = state
       if (becameRunning) reloadHotwords().catch(() => {})
       if (state.phase !== 'running' && mode === 'enrolling') {

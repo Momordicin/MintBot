@@ -1,6 +1,6 @@
-// src/settings/TtsSection.tsx — 设置窗口"语音"面板里的"语音合成组件"分区：指定已下载的 GPT-SoVITS 文件夹，或由 MintBot 下载安装（v2Pro / v5），显示安装进度、安装位置、失败原因（上次下载安装的失败单独保留并可重试）、已安装位置与新版本更新；开关语音合成，显示服务状态与当前角色语音模型的加载状态，试听
-// 用法：VoicePanel 渲染 <TtsSection />；GET /tts/status、POST /tts/use-existing、POST /tts/install、POST /tts/install/cancel、POST /tts/enabled、POST /tts/preview、GET /events 的 tts-status-changed 与 preset-switched；electronAPI.selectTtsDir
-// 对应文件：src/settings/VoicePanel.tsx / services/core/tts/routes.ts / services/core/tts/manager.ts / src/errorText.ts / src/electron-api.d.ts / electron/preload/index.ts / electron/main/index.ts
+// src/settings/TtsSection.tsx — 设置窗口"语音"面板里的"语音合成组件"分区：指定已下载的 GPT-SoVITS 文件夹，或由 MintBot 下载安装（v2Pro / v5），显示安装进度、安装位置、失败原因（上次下载安装的失败单独保留并可重试）、已安装位置与新版本更新；开关语音合成，显示服务状态与当前角色语音模型的加载状态，试听，朗读状态与上次朗读失败
+// 用法：VoicePanel 渲染 <TtsSection />；GET /tts/status、POST /tts/use-existing、POST /tts/install、POST /tts/install/cancel、POST /tts/enabled、POST /tts/preview、POST /voice/install、GET /events 的 tts-status-changed、preset-switched 与 voice-status-changed；electronAPI.selectTtsDir
+// 对应文件：src/settings/VoicePanel.tsx / services/core/tts/routes.ts / services/core/tts/manager.ts / services/core/tts/narration.ts / services/core/voice/routes.ts / src/errorText.ts / src/electron-api.d.ts / electron/preload/index.ts / electron/main/index.ts
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
@@ -48,6 +48,30 @@ interface TtsCharacterStatus {
   missing: string[]
 }
 
+type NarrationState =
+  | 'no_voice_agent'
+  | 'agent_starting'
+  | 'agent_failed'
+  | 'unsupported'
+  | 'no_voice'
+  | 'waiting'
+  | 'unavailable'
+  | 'ok'
+
+interface NarrationError {
+  code: string
+  message: string
+  status?: number
+  at: number
+}
+
+interface NarrationStatus {
+  state: NarrationState
+  lastError: NarrationError | null
+  voiceInstalling: boolean
+  voiceBusy: boolean
+}
+
 interface TtsStatus {
   installed: boolean
   source: 'download' | 'existing' | null
@@ -59,6 +83,8 @@ interface TtsStatus {
   service: TtsServiceStatus
   enabled: boolean
   character: TtsCharacterStatus
+  narration: NarrationStatus
+  listenWithoutVoiceprint: boolean
 }
 
 type TtsFailure = Pick<TtsInstallStatus, 'errorCode' | 'errorDetails'>
@@ -167,6 +193,46 @@ function modelText(status: TtsStatus, t: TFunction): string {
   }
 }
 
+function narrationText(state: NarrationState, t: TFunction): string {
+  switch (state) {
+    case 'no_voice_agent':
+      return t('朗读：需要先安装语音组件')
+    case 'agent_starting':
+      return t('朗读：语音组件启动中…')
+    case 'agent_failed':
+      return t('朗读：语音组件未运行')
+    case 'unsupported':
+      return t('朗读：语音组件不支持朗读，需要重新安装')
+    case 'no_voice':
+      return t('朗读：当前角色没有配置语音')
+    case 'waiting':
+      return t('朗读：模型加载完成后开始朗读')
+    case 'unavailable':
+      return t('朗读：不可用（原因见上方服务或模型一行）')
+    default:
+      return t('朗读：可用')
+  }
+}
+
+function narrationErrorText(error: NarrationError, t: TFunction): string {
+  switch (error.code) {
+    case 'TTS_SILENT':
+      return t('合成结果是静音，可能是显存不足')
+    case 'PLAYBACK_NOT_RUNNING':
+    case 'AGENT_UNREACHABLE':
+    case 'VOICE_UNAVAILABLE':
+      return t('语音组件未运行或已重启')
+    case 'PLAYBACK_UNSUPPORTED_WAV':
+      return t('合成的音频格式不受支持')
+    case 'AGENT_HTTP':
+      return t('语音组件拒绝播放（HTTP {{status}}）', { status: error.status ?? '' })
+    case 'playback_failed':
+      return t('播放设备不可用')
+  }
+  if (error.code.startsWith('TTS_')) return t('合成失败：{{reason}}', { reason: error.message !== '' ? error.message : t('未知原因') })
+  return error.message !== '' ? error.message : t('未知原因')
+}
+
 function FailureLines({ failure, installed }: { failure: TtsFailure; installed: boolean }) {
   const { t } = useTranslation()
   return (
@@ -197,6 +263,7 @@ export function TtsSection() {
   const [previewing, setPreviewing] = useState(false)
   const [previewPlaying, setPreviewPlaying] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
+  const [reinstallError, setReinstallError] = useState<string | null>(null)
   const loadSeqRef = useRef(0)
   const previewAbortRef = useRef<AbortController | null>(null)
   const previewAudioRef = useRef<{ audio: HTMLAudioElement; url: string } | null>(null)
@@ -244,6 +311,9 @@ export function TtsSection() {
           setPreviewError(null)
           load()
         },
+        'voice-status-changed': () => {
+          load()
+        },
       },
       onOpen: () => {
         load()
@@ -267,6 +337,12 @@ export function TtsSection() {
   useEffect(() => {
     if (!updateConfirmable) setConfirmingUpdate(false)
   }, [updateConfirmable])
+
+  const narrationUnsupported = status?.narration.state === 'unsupported'
+
+  useEffect(() => {
+    if (!narrationUnsupported) setReinstallError(null)
+  }, [narrationUnsupported])
 
   const post = async (target: string, body?: Record<string, unknown>): Promise<string | null> => {
     const response = await fetch(`${CORE_URL}${target}`, {
@@ -348,6 +424,20 @@ export function TtsSection() {
       setEnabledError(await post('/tts/enabled', { enabled }))
     } catch (err) {
       setEnabledError(failedMessage(err))
+    } finally {
+      await load()
+      setBusy(false)
+    }
+  }
+
+  const reinstallVoice = async () => {
+    setBusy(true)
+    setReinstallError(null)
+    try {
+      const message = await post('/voice/install')
+      setReinstallError(message)
+    } catch (err) {
+      setReinstallError(failedMessage(err))
     } finally {
       await load()
       setBusy(false)
@@ -579,6 +669,27 @@ export function TtsSection() {
         </button>
       </div>
       {previewError && <div className="character-panel__error">{previewError}</div>}
+      {status.enabled && (
+        <>
+          <div className="character-panel__row">
+            <span>{narrationText(status.narration.state, t)}</span>
+            {status.narration.state === 'unsupported' && (
+              <button className="memory-btn" disabled={locked || status.narration.voiceInstalling || status.narration.voiceBusy} onClick={reinstallVoice}>
+                {t('重新安装语音组件')}
+              </button>
+            )}
+          </div>
+          {narrationUnsupported && reinstallError && <div className="character-panel__error">{reinstallError}</div>}
+          {status.narration.lastError && (
+            <div className="character-panel__error">
+              {t('上次朗读失败：{{reason}}', { reason: narrationErrorText(status.narration.lastError, t) })}
+            </div>
+          )}
+          {status.listenWithoutVoiceprint && (
+            <div className="character-panel__hint">{t('未录入主人声纹时，聆听模式可能把朗读的声音转写进输入框')}</div>
+          )}
+        </>
+      )}
     </div>
   )
 }

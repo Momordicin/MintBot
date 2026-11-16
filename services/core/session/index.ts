@@ -1,6 +1,6 @@
 // services/core/session/index.ts — 当前活动会话状态及会话/预设切换
 // 用法：core 启动时 resolveStartupPresetId + loadSession 载入启动预设；POST /switch-preset 调 switchPreset；refreshCurrentPresetIfActive 供 PATCH /presets 的 applyNow；getCurrentState / requireCurrentState / getHistory 供 chat、state、buildContext、orchestrator 等读取当前会话
-// 对应文件：services/core/index.ts / services/core/routes/presets.ts / services/core/routes/chat.ts / services/core/state.ts / services/core/context/buildContext.ts / services/core/memory/orchestrator.ts / services/core/session/queries.ts / services/core/session/attention.ts / services/core/voice/agent.ts / services/core/tts/manager.ts / services/core/session/index.test.ts
+// 对应文件：services/core/index.ts / services/core/routes/presets.ts / services/core/routes/chat.ts / services/core/state.ts / services/core/context/buildContext.ts / services/core/memory/orchestrator.ts / services/core/session/queries.ts / services/core/session/attention.ts / services/core/voice/agent.ts / services/core/tts/manager.ts / services/core/tts/narration.ts / services/core/session/index.test.ts
 import { randomUUID } from 'crypto'
 import type { Session, Preset, Message, PresetSnapshot } from '../../../shared/types/index.js'
 import { loadCharacterManifest, type CharacterManifest } from '../characters/manifest.js'
@@ -8,6 +8,7 @@ import { broadcastEvent } from '../events/broadcast.js'
 import { setDefaultPresetId } from '../config/index.js'
 import { setHotwordsRole } from '../voice/agent.js'
 import { applyCharacterVoice } from '../tts/manager.js'
+import { stopNarration } from '../tts/narration.js'
 import { noteSessionActivated } from './attention.js'
 import {
   getPresetById,
@@ -68,6 +69,7 @@ export function loadSession(presetId: string): SessionState {
   current = { session, preset, credentials: getPresetApiKeys(presetId), manifest }
   noteSessionActivated(session.sessionId)
   setHotwordsRole(presetId)
+  void stopNarration()
   applyCharacterVoice({ characterId: preset.characterId, manifest })
   return current
 }

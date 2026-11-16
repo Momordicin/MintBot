@@ -46,7 +46,7 @@ vi.mock('@mintbot/voice-agent-client', () => ({
   },
 }))
 
-import { getVoiceStatus, setHotwordsRole, startTest, startVoice, stopVoice, takePending } from './agent.js'
+import { getPlaybackSupported, getVoiceStatus, setHotwordsRole, setPlaybackListener, startTest, startVoice, stopVoice, takePending } from './agent.js'
 import { voiceRoutes } from './routes.js'
 import { ConfigFileUnreadableError } from '../config/configFileError.js'
 import Fastify from 'fastify'
@@ -105,10 +105,32 @@ describe('voice agent', () => {
     final({ text: '录声纹', enrolling: true, end_unix_ms: 1 })
     final({ text: '   ', end_unix_ms: 2 })
     final({ end_unix_ms: 3 })
-    mocks.supervisorOptions!.onEvent({ id: 2, type: 'status', data: { text: 'x' } })
+    mocks.supervisorOptions!.onEvent({ id: 2, type: 'speech_start', data: { text: 'x' } })
     expect(takePending()).toEqual([])
     expect(mocks.broadcastEvent).not.toHaveBeenCalled()
     expect(fs.existsSync(path.join(dataDir, 'transcripts.jsonl'))).toBe(false)
+  })
+
+  it('records playback support from status events and forwards playback events to the listener', () => {
+    const listener = { onPlayback: vi.fn(), onPlaybackFailed: vi.fn(), onPlaybackIdle: vi.fn(), onLeftRunning: vi.fn() }
+    setPlaybackListener(listener)
+    const emit = (type: string, data: unknown) => mocks.supervisorOptions!.onEvent({ id: 1, type, data })
+    mocks.supervisorOptions!.onState({ phase: 'running', listening: true, restarts: 0 })
+    expect(getPlaybackSupported()).toBeNull()
+    emit('status', { listening: true })
+    expect(getPlaybackSupported()).toBe(false)
+    emit('status', { playback: { playing: false, queued: 0 } })
+    expect(getPlaybackSupported()).toBe(true)
+    expect(listener.onPlaybackIdle).toHaveBeenCalledOnce()
+    emit('playback', { state: 'end', id: 3 })
+    emit('error', { code: 'playback_failed', message: 'device gone' })
+    emit('error', { code: 'capture_failed', message: 'mic' })
+    expect(listener.onPlayback).toHaveBeenCalledWith({ state: 'end', id: 3 })
+    expect(listener.onPlaybackFailed).toHaveBeenCalledExactlyOnceWith('device gone')
+    mocks.supervisorOptions!.onState({ phase: 'restarting', listening: false, restarts: 1 })
+    expect(getPlaybackSupported()).toBeNull()
+    expect(listener.onLeftRunning).toHaveBeenCalledOnce()
+    setPlaybackListener(null)
   })
 
   const soundLine = (at: number, text: string, soundEvent: string, inputMode = 'listen', extra: Record<string, unknown> = {}) => ({

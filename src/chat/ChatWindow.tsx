@@ -1,6 +1,6 @@
 // src/chat/ChatWindow.tsx — 聊天窗口主界面：加载当前预设与历史消息，发送消息并读取回复，按预设显示配置应用壁纸、头像与主题色
-// 用法：App 渲染 <ChatWindow />；GET /state、/ai-available、/messages、/characters/:id/manifest.json，POST /chat（读 SSE：message_done / system），GET /events（preset-switched / messages-forgotten）；调用 electronAPI.setTitlebarOverlay / notifyChatReady / onChatShown / onGreeting / notifyChatPainted
-// 对应文件：src/App.tsx / src/chat/MessageList.tsx / src/chat/InputBar.tsx / src/chat/TitleBar.tsx / src/chat/MessageBubble.tsx / src/chat/mergeAfterForget.ts / src/chat/sse.ts / src/chat/theme.ts / src/eventsWatchdog.ts / src/errorText.ts / services/core/index.ts / services/core/routes/chat.ts / services/core/routes/messages.ts / services/core/routes/status.ts / services/core/routes/events.ts / electron/main/index.ts（titlebar:set-overlay / chat:ready / chat:painted / chat:greet）/ electron/main/index.ts / electron/main/windowBehavior.ts（chat:shown）
+// 用法：App 渲染 <ChatWindow />；GET /state、/ai-available、/messages、/characters/:id/manifest.json，POST /chat（读 SSE：message_done / system），GET /tts/narration、POST /tts/narration/stop，GET /events（preset-switched / messages-forgotten / narration-changed）；调用 electronAPI.setTitlebarOverlay / notifyChatReady / onChatShown / onGreeting / notifyChatPainted
+// 对应文件：src/App.tsx / src/chat/MessageList.tsx / src/chat/InputBar.tsx / src/chat/TitleBar.tsx / src/chat/MessageBubble.tsx / src/chat/mergeAfterForget.ts / src/chat/sse.ts / src/chat/theme.ts / src/eventsWatchdog.ts / src/errorText.ts / services/core/index.ts / services/core/routes/chat.ts / services/core/routes/messages.ts / services/core/routes/status.ts / services/core/routes/events.ts / services/core/tts/routes.ts / electron/main/index.ts（titlebar:set-overlay / chat:ready / chat:painted / chat:greet）/ electron/main/index.ts / electron/main/windowBehavior.ts（chat:shown）
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { MessageList } from './MessageList'
@@ -15,7 +15,7 @@ import { DEFAULT_CHAT_BG_OPACITY, DEFAULT_THEME_INPUT, resolveThemeMode, themeCs
 import { usePrefersDark } from '../usePrefersDark.js'
 import { createWatchdogEventSource } from '../eventsWatchdog.js'
 import type { AppState, PresetSnapshot } from '../../shared/types/index.js'
-import type { ErrorBody } from '../../shared/errorCodes.js'
+import { isErrorBody, type ErrorBody } from '../../shared/errorCodes.js'
 import { errorText } from '../errorText.js'
 import './chat.css'
 
@@ -115,6 +115,10 @@ export function ChatWindow() {
   const [voice, setVoice] = useState<VoiceInputState | null>(null)
   const [voiceBusy, setVoiceBusy] = useState(false)
   const voiceLoadSeqRef = useRef(0)
+  const [speaking, setSpeaking] = useState(false)
+  const [stopBusy, setStopBusy] = useState(false)
+  const [stopError, setStopError] = useState<string | null>(null)
+  const narrationSeqRef = useRef(0)
 
   function markBootPart(part: 'state' | 'wallpaper' | 'history') {
     setBootParts(prev => (prev[part] ? prev : { ...prev, [part]: true }))
@@ -202,6 +206,36 @@ export function ChatWindow() {
     } catch {
     }
   }, [])
+
+  const refreshNarration = useCallback(async () => {
+    const seq = ++narrationSeqRef.current
+    try {
+      const response = await fetch(`${CORE_URL}/tts/narration`)
+      if (!response.ok) return
+      const { speaking: next } = await response.json() as { speaking: boolean }
+      if (seq === narrationSeqRef.current) setSpeaking(next === true)
+    } catch {
+    }
+  }, [])
+
+  const stopNarration = useCallback(async () => {
+    setStopBusy(true)
+    setStopError(null)
+    try {
+      const response = await fetch(`${CORE_URL}/tts/narration/stop`, { method: 'POST' })
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null)
+        setStopError(isErrorBody(payload) ? errorText(payload, i18n.t) : `HTTP ${response.status}`)
+      }
+    } catch {
+      setStopError(i18n.t('无法连接核心服务，请确认服务已启动'))
+    }
+    setStopBusy(false)
+  }, [i18n])
+
+  useEffect(() => {
+    if (!speaking) setStopError(null)
+  }, [speaking])
 
   const toggleVoice = useCallback(async () => {
     if (!voice) return
@@ -311,11 +345,20 @@ export function ChatWindow() {
         'voice-status-changed': () => {
           refreshVoice()
         },
+        'narration-changed': (event) => {
+          try {
+            const { speaking: next }: { speaking?: boolean } = JSON.parse(event.data)
+            narrationSeqRef.current++
+            setSpeaking(next === true)
+          } catch {
+          }
+        },
       },
       onOpen: () => {
         syncSessionOnFocus()
         takeVoiceText()
         refreshVoice()
+        refreshNarration()
       },
     })
 
@@ -648,7 +691,7 @@ export function ChatWindow() {
       </div>
 
       <div className="input-area">
-        <InputBar ref={inputBarRef} onSend={sendMessage} voice={voice} voiceBusy={voiceBusy} onToggleVoice={toggleVoice} />
+        <InputBar ref={inputBarRef} onSend={sendMessage} voice={voice} voiceBusy={voiceBusy} onToggleVoice={toggleVoice} speaking={speaking} stopBusy={stopBusy} stopError={stopError} onStopNarration={stopNarration} />
       </div>
     </div>
   )
