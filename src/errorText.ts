@@ -83,6 +83,8 @@ export function errorText(body: ErrorBody, t: TFunction): string {
       return t('语音合成失败')
     case 'TTS_VOICE_UNCONFIGURED':
       return t('当前角色没有提供试听用的参考音频')
+    case 'TTS_REFERENCES_MATCHING':
+      return t('正在匹配情绪和参考音频，请稍后再试')
     case 'PLUGIN_BUSY':
       return t('已有插件正在安装或更新，请稍后再试')
     case 'PLUGIN_DOWNLOAD_FAILED':

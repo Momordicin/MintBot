@@ -75,6 +75,20 @@ describe('buildContext', () => {
     expect(ctx.messages[1].content).toBe('新消息')
   })
 
+  it.each([
+    ['情绪与表情', 'happy', 'playful', '回复\n&&happy&&\n&&playful&&'],
+    ['只有情绪', 'shy', null, '回复\n&&shy&&'],
+    ['只有表情', null, 'playful', '回复\n&&playful&&'],
+    ['没有标签', null, null, '回复'],
+  ])('助手历史消息带存下的标签时，发给模型的内容末尾补上 &&词&&：%s', async (_name, emotionTag, emoteTag, expected) => {
+    const sessionId = getCurrentState()!.session.sessionId
+    const base = { sessionId, createdAt: Date.now(), embedded: false, summarized: false, visibleToUser: true, trigger: 'user' as const, triggerEventId: null }
+    appendMessage({ ...base, role: 'user', content: '问题', emotionTag: 'happy' })
+    appendMessage({ ...base, role: 'assistant', content: '回复', emotionTag, emoteTag })
+    const ctx = await buildContext('新消息', { embedding: fakeEmbeddingProvider() })
+    expect(ctx.messages.map(m => m.content)).toEqual(['问题', expected, '新消息'])
+  })
+
   it('近期轨道被 30 分钟边界截断：超过 30 分钟的历史消息不进入 messages', async () => {
     const sessionId = getCurrentState()!.session.sessionId
     const now = Date.now()
@@ -344,6 +358,19 @@ describe('buildContext — token（字符数近似）预算裁剪', () => {
     expect(contents).not.toContain('AAAAAAAAAA')
     expect(contents).toContain('BBBBBBBBBB')
     expect(contents).toContain('新消息')
+  })
+
+  it('近期消息预算按发给模型的内容计算：助手消息补回的标签也算进字符数', async () => {
+    const sessionId = getCurrentState()!.session.sessionId
+    const now = Date.now()
+    const base = { sessionId, embedded: false, summarized: false, visibleToUser: true, trigger: 'user' as const, triggerEventId: null }
+    appendMessage({ ...base, role: 'user', content: 'AAAAAAAAAA', createdAt: now - 3 * 60 * 1000 })
+    appendMessage({ ...base, role: 'assistant', content: 'BBBBBBBBBB', emotionTag: 'happy', createdAt: now - 2 * 60 * 1000 })
+    mockMemoryConfig.contextBudget.recentMessages = 20
+
+    const ctx = await buildContext('新消息', { embedding: fakeEmbeddingProvider() })
+
+    expect(ctx.messages.map(m => m.content)).toEqual(['BBBBBBBBBB\n&&happy&&', '新消息'])
   })
 
   it('近期消息预算小于任意一条消息时，也至少保留最新的一条，不会裁到 0 条', async () => {

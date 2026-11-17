@@ -1,6 +1,6 @@
-// services/core/tts/narration.test.ts — 朗读测试：括号与断句、多条回复按顺序、各前提不满足时不朗读、停止、合成失败与失败静音、播放不可用时丢弃剩余句子、上次失败记录的代码、朗读中状态的广播
-// 用法：pnpm test；voice/agent.ts、tts/manager.ts、config、broadcast 换成假实现，不启动语音组件或 GPT-SoVITS，不写 data/
-// 对应文件：services/core/tts/narration.ts
+// services/core/tts/narration.test.ts — 朗读测试：括号与断句、多条回复按顺序、按情绪选参考音频与回退到试听参考、各前提不满足时不朗读、停止、合成失败与失败静音、播放不可用时丢弃剩余句子、上次失败记录的代码、朗读中状态的广播
+// 用法：pnpm test；voice/agent.ts、tts/manager.ts、tts/voiceRefs.ts、config、broadcast 换成假实现，不启动语音组件或 GPT-SoVITS，不写 data/
+// 对应文件：services/core/tts/narration.ts / services/core/tts/voiceRefs.ts
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import path from 'path'
 import { AgentHttpError, PlaybackError, TtsError, type PlaybackEvent } from '@mintbot/voice-agent-client'
@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
   voiceOk: true,
   enabled: true,
   broadcastEvent: vi.fn(),
+  voiceReferenceFor: vi.fn<(characterId: string, emotion: string | null) => unknown>(),
 }))
 
 vi.mock('../voice/agent.js', () => ({
@@ -45,6 +46,7 @@ vi.mock('./manager.js', () => ({
     mocks.hasManager ? { status: () => ({ service: mocks.service }), synthesize: mocks.synthesize } : null,
   characterVoiceStatus: () => ({ voice: mocks.voiceOk ? 'ok' : 'missing', missing: [], model: null }),
 }))
+vi.mock('./voiceRefs.js', () => ({ voiceReferenceFor: mocks.voiceReferenceFor }))
 vi.mock('../config/index.js', () => ({ getTtsEnabled: () => mocks.enabled }))
 vi.mock('../events/broadcast.js', () => ({ broadcastEvent: mocks.broadcastEvent }))
 
@@ -104,6 +106,7 @@ beforeEach(async () => {
   mocks.voiceOk = true
   mocks.enabled = true
   mocks.broadcastEvent.mockReset()
+  mocks.voiceReferenceFor.mockReset().mockReturnValue(null)
   mocks.synthesize.mockReset().mockResolvedValue(SPEECH)
   nextId = 0
   mocks.playClip.mockReset().mockImplementation(async () => ++nextId)
@@ -138,6 +141,17 @@ describe('narrateReply', () => {
       promptLang: 'ja',
     })
     expect(mocks.playClip).toHaveBeenCalledTimes(3)
+  })
+
+  it.each([
+    ['the emotion clip when one is mapped', { refAudio: '/refs/开心/开心.wav', refText: '开心', lang: 'ja' }, { refAudio: '/refs/开心/开心.wav', refText: '开心' }],
+    ['the preview when no clip is mapped', null, { refAudio: path.join(CHARACTERS_ROOT, 'narration-test', 'voice', 'ref.wav'), refText: '参考' }],
+  ])('reads with %s', async (_name, reference, expected) => {
+    mocks.voiceReferenceFor.mockReturnValue(reference)
+    narration.narrateReply('你好', CHARACTER, 'happy')
+    await flush()
+    expect(mocks.voiceReferenceFor).toHaveBeenCalledWith('narration-test', 'happy')
+    expect(mocks.synthesize.mock.calls[0][0]).toMatchObject({ ...expected, textLang: 'ja', promptLang: 'ja' })
   })
 
   it.each([

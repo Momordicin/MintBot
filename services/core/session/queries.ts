@@ -330,11 +330,13 @@ export function getMessagesPage(
 export function appendMessage(msg: Omit<Message, 'id'>): number {
   const result = db.prepare(`
     INSERT INTO Messages
-      (sessionId, role, content, createdAt, embedded, summarized, visibleToUser, trigger, triggerEventId)
+      (sessionId, role, content, createdAt, embedded, summarized, visibleToUser, trigger, triggerEventId, emotionTag, emoteTag)
     VALUES
-      (@sessionId, @role, @content, @createdAt, @embedded, @summarized, @visibleToUser, @trigger, @triggerEventId)
+      (@sessionId, @role, @content, @createdAt, @embedded, @summarized, @visibleToUser, @trigger, @triggerEventId, @emotionTag, @emoteTag)
   `).run({
     ...msg,
+    emotionTag: msg.emotionTag ?? null,
+    emoteTag: msg.emoteTag ?? null,
     embedded: msg.embedded ? 1 : 0,
     summarized: msg.summarized ? 1 : 0,
     visibleToUser: msg.visibleToUser ? 1 : 0,
@@ -346,12 +348,13 @@ export function appendExchange(
   sessionId: string,
   userContent: string,
   userCreatedAt: number,
-  assistantContent: string
+  assistantContent: string,
+  assistantTags: { emotion: string | null; emote: string | null } = { emotion: null, emote: null }
 ): number {
   const base = { sessionId, embedded: false, summarized: false, visibleToUser: true, trigger: 'user' as const, triggerEventId: null }
   const run = db.transaction(() => {
     appendMessage({ ...base, role: 'user', content: userContent, createdAt: userCreatedAt })
-    const assistantId = appendMessage({ ...base, role: 'assistant', content: assistantContent, createdAt: Date.now() })
+    const assistantId = appendMessage({ ...base, role: 'assistant', content: assistantContent, createdAt: Date.now(), emotionTag: assistantTags.emotion, emoteTag: assistantTags.emote })
     touchSession(sessionId)
     return assistantId
   })

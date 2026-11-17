@@ -6,6 +6,7 @@ import { getLastAttentionAt } from './attention.js'
 import * as BroadcastModule from '../events/broadcast.js'
 import * as ConfigModule from '../config/index.js'
 import * as TtsManagerModule from '../tts/manager.js'
+import * as VoiceRefsModule from '../tts/voiceRefs.js'
 
 // switchPreset 广播 preset-switched（GET /events，TDD §3.3）：与 chat.test.ts 里 mock
 // broadcastEvent 的既有约定一致，只替换掉这一个函数，不影响 broadcast.ts 自身的注册表逻辑
@@ -25,6 +26,8 @@ vi.mock('../tts/manager.js', async importOriginal => {
   const actual = await importOriginal<typeof import('../tts/manager.js')>()
   return { ...actual, applyCharacterVoice: vi.fn() }
 })
+
+vi.mock('../tts/voiceRefs.js', () => ({ loadVoiceReferences: vi.fn() }))
 
 initDb()
 
@@ -121,7 +124,7 @@ describe('switchPreset', () => {
     warnSpy.mockRestore()
   })
 
-  it('loadSession 与 switchPreset 把新角色的 characterId 和 manifest 交给语音合成切换模型', () => {
+  it('loadSession 与 switchPreset 把新角色的 characterId 和 manifest 交给语音合成切换模型并载入情绪参考音频', () => {
     const loaded = loadSession('p1')
     expect(TtsManagerModule.applyCharacterVoice).toHaveBeenCalledWith({ characterId: 'char-001', manifest: loaded.manifest })
     vi.clearAllMocks()
@@ -138,6 +141,8 @@ describe('switchPreset', () => {
     expect(switched.manifest).not.toBeNull()
     expect(TtsManagerModule.applyCharacterVoice).toHaveBeenCalledTimes(1)
     expect(TtsManagerModule.applyCharacterVoice).toHaveBeenCalledWith({ characterId: 'example', manifest: switched.manifest })
+    expect(VoiceRefsModule.loadVoiceReferences).toHaveBeenCalledTimes(1)
+    expect(VoiceRefsModule.loadVoiceReferences).toHaveBeenCalledWith({ characterId: 'example', manifest: switched.manifest }, switched)
   })
 
   it('切换到不存在的 preset 时抛错，当前会话保持不变，不广播也不持久化', () => {

@@ -1,6 +1,6 @@
-// services/core/tts/narration.ts — 朗读角色回复：去掉括号内的动作描写、逐句合成并交给语音组件按顺序播放，停止朗读，记录上次朗读失败
-// 用法：routes/chat.ts 在 message_done 后调 narrateReply()；session/index.ts 的 loadSession、tts/manager.ts 的 applyTtsEnabled() 与服务停止或失败、tts/routes.ts 的 POST /tts/preview 与 POST /tts/narration/stop 调 stopNarration()；tts/routes.ts 调 isSpeaking() / getNarrationLastError()；朗读状态变化时 broadcastEvent('narration-changed', { speaking })，上次失败变化时 broadcastEvent('tts-status-changed')
-// 对应文件：services/core/tts/manager.ts / services/core/tts/routes.ts / services/core/voice/agent.ts / services/core/routes/chat.ts / services/core/session/index.ts / services/core/events/broadcast.ts / services/core/tts/narration.test.ts
+// services/core/tts/narration.ts — 朗读角色回复：去掉括号内的动作描写、按回复的情绪选参考音频，逐句合成并交给语音组件按顺序播放，停止朗读，记录上次朗读失败
+// 用法：routes/chat.ts 在 message_done 后调 narrateReply(text, character, emotion)，参考音频取 tts/voiceRefs.ts 的 voiceReferenceFor()；session/index.ts 的 loadSession、tts/manager.ts 的 applyTtsEnabled() 与服务停止或失败、tts/routes.ts 的 POST /tts/preview 与 POST /tts/narration/stop 调 stopNarration()；tts/routes.ts 调 isSpeaking() / getNarrationLastError()；朗读状态变化时 broadcastEvent('narration-changed', { speaking })，上次失败变化时 broadcastEvent('tts-status-changed')
+// 对应文件：services/core/tts/manager.ts / services/core/tts/voiceRefs.ts / services/core/tts/routes.ts / services/core/voice/agent.ts / services/core/routes/chat.ts / services/core/session/index.ts / services/core/events/broadcast.ts / services/core/tts/narration.test.ts
 import path from 'path'
 import { AgentHttpError, PlaybackError, TtsError, type PlaybackEvent } from '@mintbot/voice-agent-client'
 import { CHARACTERS_ROOT } from '../characters/manifest.js'
@@ -8,6 +8,7 @@ import { getTtsEnabled } from '../config/index.js'
 import { broadcastEvent } from '../events/broadcast.js'
 import { getPlaybackSupported, playClip, setPlaybackListener, stopPlayback, VoiceOperationError } from '../voice/agent.js'
 import { characterVoiceStatus, getTtsManager, type TtsCharacter } from './manager.js'
+import { voiceReferenceFor } from './voiceRefs.js'
 
 const ENDED_BUFFER_LIMIT = 16
 const FAILURE_SILENCE_RATE = 16000
@@ -121,10 +122,10 @@ function fail(label: string, err: unknown, text: string, error: NarrationError):
   setLastError(error)
 }
 
-function narrationVoice(character: TtsCharacter): NarrationVoice | null {
+function narrationVoice(character: TtsCharacter, emotion: string | null): NarrationVoice | null {
   const preview = character.manifest?.voice?.preview
   if (characterVoiceStatus(character).voice !== 'ok' || !preview) return null
-  return {
+  return voiceReferenceFor(character.characterId, emotion) ?? {
     refAudio: path.join(CHARACTERS_ROOT, character.characterId, preview.audio),
     refText: preview.text,
     lang: preview.lang,
@@ -208,10 +209,10 @@ async function work(): Promise<void> {
   }
 }
 
-export function narrateReply(text: string, character: TtsCharacter): void {
+export function narrateReply(text: string, character: TtsCharacter, emotion: string | null = null): void {
   try {
     if (!canNarrate()) return
-    const voice = narrationVoice(character)
+    const voice = narrationVoice(character, emotion)
     if (voice === null) return
     const sentences = splitSentences(text)
     if (sentences.length === 0) return

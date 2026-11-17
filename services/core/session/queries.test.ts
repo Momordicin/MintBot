@@ -348,6 +348,14 @@ describe('Messages', () => {
     expect(db.prepare('SELECT COUNT(*) as count FROM Messages WHERE sessionId = ?').get('s1')).toEqual({ count: 0 })
   })
 
+  it('appendExchange 把情绪词与表情词写在助手回复上，用户消息为 null', () => {
+    appendExchange('s1', '用户这句', 1000, '回复', { emotion: 'happy', emote: 'playful' })
+    expect(db.prepare('SELECT role, emotionTag, emoteTag FROM Messages WHERE sessionId = ? ORDER BY id').all('s1')).toEqual([
+      { role: 'user', emotionTag: null, emoteTag: null },
+      { role: 'assistant', emotionTag: 'happy', emoteTag: 'playful' },
+    ])
+  })
+
   it('boolean 字段 0/1 转换正确', () => {
     appendMessage({ sessionId: 's1', role: 'user', content: '测试', createdAt: Date.now(), embedded: true, summarized: false, visibleToUser: true, trigger: 'user', triggerEventId: null })
     const msgs = getRecentMessages('s1')

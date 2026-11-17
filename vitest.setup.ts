@@ -10,6 +10,7 @@ const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mintbot-vitest-'))
 process.env.ASSET_PATH = path.join(testRoot, 'assets')
 process.env.WALLPAPER_PATH = path.join(testRoot, 'wallpapers')
 process.env.PLUGINS_PATH = path.join(testRoot, 'plugins-root')
+process.env.VOICE_REFERENCES_PATH = path.join(testRoot, 'voice-references')
 fs.mkdirSync(path.join(testRoot, 'assets', 'characters'), { recursive: true })
 fs.mkdirSync(path.join(testRoot, 'wallpapers'), { recursive: true })
 

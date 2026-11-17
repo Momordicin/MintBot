@@ -1,6 +1,6 @@
-// services/core/tts/routes.ts — 语音设置页的语音合成组件路由：读取状态（含开关、当前角色语音模型与朗读状态）、指定已下载的文件夹、下载安装或更新、取消安装、开关语音合成、试听；聊天窗口读取朗读中状态与停止朗读
-// 用法：core/index.ts 里 fastify.register(ttsRoutes)；GET /tts/status、POST /tts/use-existing { dir }、POST /tts/install { variant, root? }、POST /tts/install/cancel、POST /tts/enabled { enabled }、POST /tts/preview（audio/wav），由 src/settings/TtsSection.tsx 调用；GET /tts/narration、POST /tts/narration/stop 由 src/chat/ChatWindow.tsx 调用；管理器取自 tts/manager.ts 的 getTtsManager()，当前角色取自 session/index.ts 的 getCurrentState()，语音组件状态取自 voice/agent.ts 的 getVoiceStatus() / getPlaybackSupported()
-// 对应文件：services/core/tts/manager.ts / services/core/tts/narration.ts / services/core/voice/agent.ts / src/chat/ChatWindow.tsx / services/core/session/index.ts / services/core/config/index.ts / services/core/characters/manifest.ts / src/settings/TtsSection.tsx / services/core/tts/routes.test.ts
+// services/core/tts/routes.ts — 语音设置页的语音合成组件路由：读取状态（含开关、当前角色语音模型、情绪参考音频与朗读状态）、重新匹配情绪参考音频、指定已下载的文件夹、下载安装或更新、取消安装、开关语音合成、试听；聊天窗口读取朗读中状态与停止朗读
+// 用法：core/index.ts 里 fastify.register(ttsRoutes)；GET /tts/status、POST /tts/use-existing { dir }、POST /tts/install { variant, root? }、POST /tts/install/cancel、POST /tts/enabled { enabled }、POST /tts/preview（audio/wav）、POST /tts/references/rematch，由 src/settings/TtsSection.tsx 调用；GET /tts/narration、POST /tts/narration/stop 由 src/chat/ChatWindow.tsx 调用；管理器取自 tts/manager.ts 的 getTtsManager()，当前角色取自 session/index.ts 的 getCurrentState()，语音组件状态取自 voice/agent.ts 的 getVoiceStatus() / getPlaybackSupported()，情绪参考音频取自 tts/voiceRefs.ts
+// 对应文件：services/core/tts/manager.ts / services/core/tts/narration.ts / services/core/tts/voiceRefs.ts / services/core/voice/agent.ts / src/chat/ChatWindow.tsx / services/core/session/index.ts / services/core/config/index.ts / services/core/characters/manifest.ts / src/settings/TtsSection.tsx / services/core/tts/routes.test.ts
 import path from 'path'
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { TtsError, type TtsErrorCode, type TtsManager } from '@mintbot/voice-agent-client'
@@ -19,6 +19,7 @@ import {
   type TtsCharacter,
 } from './manager.js'
 import { getNarrationLastError, isSpeaking, stopNarration } from './narration.js'
+import { getVoiceReferencesStatus, rematchVoiceReferences } from './voiceRefs.js'
 
 const ERROR_STATUS: Partial<Record<TtsErrorCode, number>> = {
   TTS_BUSY: 409,
@@ -95,9 +96,17 @@ export async function ttsRoutes(fastify: FastifyInstance) {
           voiceBusy: voiceStatus.mode !== 'normal',
         },
         listenWithoutVoiceprint: voiceStatus.inputMode === 'listen' && voiceStatus.speaker !== null && !voiceStatus.speaker.enrolled,
+        references: getVoiceReferencesStatus(),
       })
     })
   )
+
+  fastify.post('/tts/references/rematch', async (_request, reply) => {
+    if (rematchVoiceReferences(currentCharacter(), getCurrentState()) === 'busy') {
+      return reply.status(409).send(errorBody(ERROR_CODES.TTS_REFERENCES_MATCHING))
+    }
+    return reply.status(202).send({ ok: true })
+  })
 
   fastify.get('/tts/narration', async (_request, reply) => reply.status(200).send({ speaking: isSpeaking() }))
 

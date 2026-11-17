@@ -2,9 +2,18 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { db, initDb, checkpointTruncate } from './index.js'
 
 describe('DB 迁移 (runMigrations)', () => {
-  it('迁移链跑完后 user_version 为 13', () => {
+  it('迁移链跑完后 user_version 为 14', () => {
     initDb()
-    expect(db.pragma('user_version', { simple: true })).toBe(13)
+    expect(db.pragma('user_version', { simple: true })).toBe(14)
+  })
+
+  it('Messages 带可为空的 emotionTag / emoteTag 列（v14）', () => {
+    initDb()
+    const columns = db.pragma('table_info(Messages)') as { name: string; notnull: number }[]
+    expect(columns.filter(c => c.name === 'emotionTag' || c.name === 'emoteTag')).toEqual([
+      expect.objectContaining({ name: 'emotionTag', notnull: 0 }),
+      expect.objectContaining({ name: 'emoteTag', notnull: 0 }),
+    ])
   })
 
   it('PresetApiKeys 表按 v12/v13 定义存在（主键 presetId + provider，provider 受 CHECK 约束，fromEnv 默认 0）', () => {
@@ -201,7 +210,7 @@ describe('DB 迁移 v13 (角色摘要模型列)', () => {
 })
 
 describe('DB 迁移 v13 从 v12 升级', () => {
-  it('v12 库升级后保留既有 Presets 与 PresetApiKeys 数据，新增列取默认值，user_version 为 13', () => {
+  it('v12 库升级后保留既有 Presets 与 PresetApiKeys 数据，新增列取默认值，user_version 为 14', () => {
     initDb()
     db.exec(`DELETE FROM Presets; DELETE FROM PresetApiKeys`)
     db.prepare(`INSERT INTO Presets (presetId, name, characterId, modelType, modelName, systemPrompt, createdAt, updatedAt) VALUES ('p1', '角色一', 'char-001', 'openai', 'gpt-4o', '你是角色一', 1, 2)`).run()
@@ -211,13 +220,15 @@ describe('DB 迁移 v13 从 v12 升级', () => {
       ALTER TABLE PresetApiKeys DROP COLUMN summaryFromEnv;
       ALTER TABLE Presets DROP COLUMN summaryModelType;
       ALTER TABLE Presets DROP COLUMN summaryModelName;
+      ALTER TABLE Messages DROP COLUMN emotionTag;
+      ALTER TABLE Messages DROP COLUMN emoteTag;
     `)
     db.pragma('user_version = 12')
     expect((db.pragma('table_info(Presets)') as { name: string }[]).map(c => c.name)).not.toContain('summaryModelType')
 
     initDb()
 
-    expect(db.pragma('user_version', { simple: true })).toBe(13)
+    expect(db.pragma('user_version', { simple: true })).toBe(14)
     expect(db.prepare(`SELECT * FROM Presets WHERE presetId = 'p1'`).get()).toMatchObject({
       modelType: 'openai', modelName: 'gpt-4o', createdAt: 1, updatedAt: 2, summaryModelType: null, summaryModelName: null,
     })

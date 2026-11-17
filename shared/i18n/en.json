@@ -580,5 +580,18 @@
   "语音组件未运行或已重启": "The voice component is not running or has restarted",
   "合成的音频格式不受支持": "The synthesized audio format is not supported",
   "语音组件拒绝播放（HTTP {{status}}）": "The voice component refused to play it (HTTP {{status}})",
-  "播放设备不可用": "The playback device is unavailable"
+  "播放设备不可用": "The playback device is unavailable",
+  "正在匹配情绪和参考音频，请稍后再试": "Matching emotions to reference audio. Please try again shortly.",
+  "无法连接模型": "cannot reach the model",
+  "模型的回答格式不对": "the model answered in the wrong format",
+  "模型调用出错": "the model call failed",
+  "{{path}}：缺少原文": "{{path}}: no transcript in the file name",
+  "{{path}}：时长不在 3–10 秒": "{{path}}: length is not between 3 and 10 seconds",
+  "{{path}}：无法读取": "{{path}}: cannot be read",
+  "情绪参考音频": "Emotion reference audio",
+  "没有按情绪分的参考音频文件夹，全部使用试听参考音频": "No per-emotion reference audio folders; the preview reference audio is used for everything.",
+  "正在匹配情绪和参考音频…": "Matching emotions to reference audio…",
+  "{{emotion}} → 默认（试听参考）": "{{emotion}} → default (preview reference)",
+  "匹配失败：{{reason}}，全部使用试听参考音频": "Matching failed: {{reason}}. The preview reference audio is used for everything.",
+  "重新匹配": "Match again"
 }

@@ -1,7 +1,7 @@
-// services/core/context/buildContext.ts — 为一次聊天请求组装发给模型的 BuiltContext：system（角色设定 + 情绪 + 历史摘要 + 检索到的旧对话）、outputRules（词表/称呼/末尾标签写法）与按条数、时间、字符预算裁剪的最近消息
+// services/core/context/buildContext.ts — 为一次聊天请求组装发给模型的 BuiltContext：system（角色设定 + 情绪 + 历史摘要 + 检索到的旧对话）、outputRules（词表/称呼/末尾标签写法）与按条数、时间、字符预算裁剪的最近消息（助手消息末尾补回存下的情绪、表情标签）
 // 用法：routes/chat.ts 的 POST /chat 每次请求 await buildContext(message, { embedding, signal })；读取当前会话状态（requireCurrentState）与 session/queries.ts，检索走 memory/retrieval.ts，预算取自 getMemoryConfig()
 // 对应文件：services/core/routes/chat.ts / services/core/memory/retrieval.ts / services/core/session/index.ts / services/core/session/queries.ts / services/core/config/index.ts / services/core/context/buildContext.test.ts
-import type { BuiltContext, ChatMessage, MessageEntity } from '../../../shared/types/index.js'
+import type { BuiltContext, ChatMessage, Message, MessageEntity } from '../../../shared/types/index.js'
 import { requireCurrentState, getHistory } from '../session/index.js'
 import { shouldTriggerRetrieval, retrieveMemories } from '../memory/retrieval.js'
 import { getEmotionState, getSummaries, getCurrentEntities, getSupersededMessageIds } from '../session/queries.js'
@@ -32,6 +32,15 @@ const ENTITY_TYPE_LABELS: Record<MessageEntity['type'], string> = {
 }
 const ENTITY_TYPE_ORDER: MessageEntity['type'][] = ['person', 'event', 'preference', 'place', 'other']
 
+function withReplyTags(message: Message): string {
+  const tags = [message.emotionTag, message.emoteTag].filter((tag): tag is string => typeof tag === 'string' && tag !== '')
+  return [message.content, ...tags.map(tag => `&&${tag}&&`)].join('\n')
+}
+
+function sentContent(message: Message): string {
+  return message.role === 'assistant' ? withReplyTags(message) : message.content
+}
+
 export async function buildContext(
   userInput: string,
   deps: { embedding: EmbeddingProvider; signal?: AbortSignal }
@@ -43,12 +52,12 @@ export async function buildContext(
     getHistory(memoryConfig.recentTrackMaxMessages)
       .filter(m => m.createdAt >= Date.now() - memoryConfig.recentTrackMaxMinutes * 60_000),
     memoryConfig.contextBudget.recentMessages,
-    m => m.content,
+    sentContent,
     'oldest'
   )
 
   const messages: ChatMessage[] = [
-    ...history.map(m => ({ role: m.role, content: m.content })),
+    ...history.map(m => ({ role: m.role, content: sentContent(m) })),
     { role: 'user' as const, content: userInput },
   ]
 

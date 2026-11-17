@@ -164,6 +164,7 @@ Projects this project learned from or builds on:
 - [AstrBot](https://github.com/AstrBotDevs/AstrBot)
 - [wangfenjin/simple](https://github.com/wangfenjin/simple) (libsimple) — the SQLite FTS5 Chinese tokenizer this project vendors
 - [SenseVoice](https://github.com/FunAudioLLM/SenseVoice) and [FunASR](https://github.com/modelscope/FunASR) — the speech recognition and voice activity detection behind the voice component
+- [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) — the speech synthesis engine behind reading replies aloud
 - [3D-Speaker](https://github.com/modelscope/3D-Speaker) (CAM++) — the owner voiceprint model
 - [ggml](https://github.com/ggml-org/ggml) — the very lightweight foundation that runs the models
 - [asr-hotword](https://github.com/HaujetZhao/asr-hotword) — the hotword list format and matching rules the voice component follows

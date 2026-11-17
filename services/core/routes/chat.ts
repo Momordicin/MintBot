@@ -168,7 +168,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
           return
         }
 
-        const messageId = appendExchange(sessionId, message, sentAt, replyText)
+        const messageId = appendExchange(sessionId, message, sentAt, replyText, { emotion: selfEmotion?.label ?? null, emote: emoteTag })
 
         recordAttention(sessionId)
 
@@ -186,7 +186,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
         })
 
         if (getCurrentState()?.session.sessionId === sessionId) {
-          narrateReply(replyText, { characterId: state.preset.characterId, manifest: state.manifest })
+          narrateReply(replyText, { characterId: state.preset.characterId, manifest: state.manifest }, selfEmotion?.label ?? null)
         }
 
         const isSleep = selfEmotion?.label === 'sleep'

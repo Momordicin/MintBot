@@ -78,6 +78,8 @@ export interface Message{
   visibleToUser: boolean
   trigger?: 'user' | 'scheduler' | 'emotion' | 'admin'  // Phase 6 预留
   triggerEventId: number | null     // Phase 6 预留
+  emotionTag?: string | null
+  emoteTag?: string | null
 }
 
 // 建议索引（写 SQLite schema 时建立）：

@@ -1,6 +1,6 @@
-// services/core/tts/routes.test.ts — 语音合成组件路由与管理器测试：状态透传（含开关、当前角色语音模型与朗读状态）、安装不等待与同步错误映射、指定文件夹的错误映射、开关、试听与错误映射、朗读中状态与停止朗读、切换角色时换模型、新版本检查、退出时释放
+// services/core/tts/routes.test.ts — 语音合成组件路由与管理器测试：状态透传（含开关、当前角色语音模型、情绪参考音频与朗读状态）、重新匹配的应答、安装不等待与同步错误映射、指定文件夹的错误映射、开关、试听与错误映射、朗读中状态与停止朗读、切换角色时换模型、新版本检查、退出时释放
 // 用法：pnpm test；@mintbot/voice-agent-client 的 createTtsManager 换成假管理器，config、当前会话、语音组件状态与朗读换成假实现，角色语音文件只建在测试临时素材目录下，不下载、不启动进程、不写 data/
-// 对应文件：services/core/tts/routes.ts / services/core/tts/manager.ts / services/core/tts/narration.ts / services/core/voice/agent.ts
+// 对应文件：services/core/tts/routes.ts / services/core/tts/manager.ts / services/core/tts/narration.ts / services/core/tts/voiceRefs.ts / services/core/voice/agent.ts
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Fastify, { type FastifyInstance } from 'fastify'
 import fs from 'fs'
@@ -21,6 +21,8 @@ const mocks = vi.hoisted(() => ({
   isSpeaking: vi.fn<() => boolean>(),
   stopNarration: vi.fn<() => Promise<void>>(),
   lastError: null as unknown,
+  references: { state: 'none', entries: [], skipped: [] } as unknown,
+  rematch: vi.fn<(character: unknown, model: unknown) => 'started' | 'busy'>(),
   createOptions: null as { root: string; manifest: string; onState?: (s: unknown) => void } | null,
   manager: {
     status: vi.fn(),
@@ -53,6 +55,10 @@ vi.mock('../session/index.js', () => ({ getCurrentState: mocks.getCurrentState }
 vi.mock('../voice/agent.js', () => ({
   getVoiceStatus: async () => mocks.voiceStatus,
   getPlaybackSupported: () => mocks.playbackSupported,
+}))
+vi.mock('./voiceRefs.js', () => ({
+  getVoiceReferencesStatus: () => mocks.references,
+  rematchVoiceReferences: mocks.rematch,
 }))
 vi.mock('./narration.js', () => ({
   isSpeaking: mocks.isSpeaking,
@@ -119,6 +125,8 @@ beforeEach(async () => {
   mocks.isSpeaking.mockReset().mockReturnValue(false)
   mocks.stopNarration.mockReset().mockResolvedValue(undefined)
   mocks.lastError = null
+  mocks.references = { state: 'none', entries: [], skipped: [] }
+  mocks.rematch.mockReset().mockReturnValue('started')
   mocks.resolveManifestUrl.mockReturnValue('https://example.invalid/manifest.json')
   fs.mkdirSync(path.join(CHARACTER_DIR, 'voice'), { recursive: true })
   fs.writeFileSync(MODEL.gptWeights, '')
@@ -168,6 +176,7 @@ describe('tts routes', () => {
       character,
       narration: { state: 'no_voice_agent', lastError: null, voiceInstalling: false, voiceBusy: false },
       listenWithoutVoiceprint: false,
+      references: { state: 'none', entries: [], skipped: [] },
     })
   })
 
@@ -203,6 +212,28 @@ describe('tts routes', () => {
     mocks.voiceStatus = { ...mocks.voiceStatus, installed: true, phase: 'running', inputMode, speaker }
     const res = await app.inject({ method: 'GET', url: '/tts/status' })
     expect(res.json().listenWithoutVoiceprint).toBe(expected)
+  })
+
+  it('reports the emotion references of the current character', async () => {
+    mocks.references = {
+      state: 'ok',
+      entries: [{ emotion: 'happy', group: '开心', clip: '开心/你好呀.wav' }, { emotion: 'shy', group: null }],
+      skipped: [{ path: '忧伤/a_1.wav', reason: 'missing_text' }],
+    }
+    const res = await app.inject({ method: 'GET', url: '/tts/status' })
+    expect(res.json().references).toEqual(mocks.references)
+  })
+
+  it.each([
+    ['started', 202, { ok: true }],
+    ['busy', 409, { code: 'TTS_REFERENCES_MATCHING' }],
+  ] as const)('answers a rematch that is %s', async (outcome, statusCode, body) => {
+    useCharacter(fullVoice)
+    mocks.rematch.mockReturnValue(outcome)
+    const res = await app.inject({ method: 'POST', url: '/tts/references/rematch' })
+    expect(res.statusCode).toBe(statusCode)
+    expect(res.json()).toEqual(body)
+    expect(mocks.rematch).toHaveBeenCalledWith(expect.objectContaining({ characterId: CHARACTER_ID }), mocks.getCurrentState.mock.results[0].value)
   })
 
   it('reports the last narration error', async () => {

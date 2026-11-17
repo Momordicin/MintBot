@@ -1,5 +1,5 @@
-// src/settings/TtsSection.tsx — 设置窗口"语音"面板里的"语音合成组件"分区：指定已下载的 GPT-SoVITS 文件夹，或由 MintBot 下载安装（v2Pro / v5），显示安装进度、安装位置、失败原因（上次下载安装的失败单独保留并可重试）、已安装位置与新版本更新；开关语音合成，显示服务状态与当前角色语音模型的加载状态，试听，朗读状态与上次朗读失败
-// 用法：VoicePanel 渲染 <TtsSection />；GET /tts/status、POST /tts/use-existing、POST /tts/install、POST /tts/install/cancel、POST /tts/enabled、POST /tts/preview、POST /voice/install、GET /events 的 tts-status-changed、preset-switched 与 voice-status-changed；electronAPI.selectTtsDir
+// src/settings/TtsSection.tsx — 设置窗口"语音"面板里的"语音合成组件"分区：指定已下载的 GPT-SoVITS 文件夹，或由 MintBot 下载安装（v2Pro / v5），显示安装进度、安装位置、失败原因（上次下载安装的失败单独保留并可重试）、已安装位置与新版本更新；开关语音合成，显示服务状态与当前角色语音模型的加载状态，试听，情绪参考音频的匹配结果与重新匹配，朗读状态与上次朗读失败
+// 用法：VoicePanel 渲染 <TtsSection />；GET /tts/status、POST /tts/use-existing、POST /tts/install、POST /tts/install/cancel、POST /tts/enabled、POST /tts/preview、POST /tts/references/rematch、POST /voice/install、GET /events 的 tts-status-changed、preset-switched 与 voice-status-changed；electronAPI.selectTtsDir
 // 对应文件：src/settings/VoicePanel.tsx / services/core/tts/routes.ts / services/core/tts/manager.ts / services/core/tts/narration.ts / services/core/voice/routes.ts / src/errorText.ts / src/electron-api.d.ts / electron/preload/index.ts / electron/main/index.ts
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -72,6 +72,15 @@ interface NarrationStatus {
   voiceBusy: boolean
 }
 
+type VoiceReferenceEntry = { emotion: string; group: string; clip: string } | { emotion: string; group: null }
+
+interface VoiceReferencesStatus {
+  state: 'none' | 'matching' | 'ok' | 'failed'
+  error?: 'network' | 'model_error' | 'invalid_answer'
+  entries: VoiceReferenceEntry[]
+  skipped: { path: string; reason: 'missing_text' | 'duration' | 'invalid_wav' }[]
+}
+
 interface TtsStatus {
   installed: boolean
   source: 'download' | 'existing' | null
@@ -85,6 +94,7 @@ interface TtsStatus {
   character: TtsCharacterStatus
   narration: NarrationStatus
   listenWithoutVoiceprint: boolean
+  references: VoiceReferencesStatus
 }
 
 type TtsFailure = Pick<TtsInstallStatus, 'errorCode' | 'errorDetails'>
@@ -233,6 +243,28 @@ function narrationErrorText(error: NarrationError, t: TFunction): string {
   return error.message !== '' ? error.message : t('未知原因')
 }
 
+function referenceFailureText(error: VoiceReferencesStatus['error'], t: TFunction): string {
+  switch (error) {
+    case 'network':
+      return t('无法连接模型')
+    case 'invalid_answer':
+      return t('模型的回答格式不对')
+    default:
+      return t('模型调用出错')
+  }
+}
+
+function skippedText(skipped: VoiceReferencesStatus['skipped'][number], t: TFunction): string {
+  switch (skipped.reason) {
+    case 'missing_text':
+      return t('{{path}}：缺少原文', { path: skipped.path })
+    case 'duration':
+      return t('{{path}}：时长不在 3–10 秒', { path: skipped.path })
+    default:
+      return t('{{path}}：无法读取', { path: skipped.path })
+  }
+}
+
 function FailureLines({ failure, installed }: { failure: TtsFailure; installed: boolean }) {
   const { t } = useTranslation()
   return (
@@ -264,6 +296,8 @@ export function TtsSection() {
   const [previewPlaying, setPreviewPlaying] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [reinstallError, setReinstallError] = useState<string | null>(null)
+  const [rematching, setRematching] = useState(false)
+  const [rematchError, setRematchError] = useState<string | null>(null)
   const loadSeqRef = useRef(0)
   const previewAbortRef = useRef<AbortController | null>(null)
   const previewAudioRef = useRef<{ audio: HTMLAudioElement; url: string } | null>(null)
@@ -309,6 +343,7 @@ export function TtsSection() {
         'preset-switched': () => {
           stopPreview()
           setPreviewError(null)
+          setRematchError(null)
           load()
         },
         'voice-status-changed': () => {
@@ -337,6 +372,12 @@ export function TtsSection() {
   useEffect(() => {
     if (!updateConfirmable) setConfirmingUpdate(false)
   }, [updateConfirmable])
+
+  const referencesState = status?.references.state
+
+  useEffect(() => {
+    setRematchError(null)
+  }, [referencesState])
 
   const narrationUnsupported = status?.narration.state === 'unsupported'
 
@@ -444,6 +485,19 @@ export function TtsSection() {
     }
   }
 
+  const rematchReferences = async () => {
+    setRematching(true)
+    setRematchError(null)
+    try {
+      setRematchError(await post('/tts/references/rematch'))
+    } catch (err) {
+      setRematchError(failedMessage(err))
+    } finally {
+      await load()
+      setRematching(false)
+    }
+  }
+
   const playPreview = async () => {
     const controller = new AbortController()
     previewAbortRef.current = controller
@@ -503,7 +557,7 @@ export function TtsSection() {
   const existingFailed = install.state === 'failed' && install.action === 'existing'
   const { lastDownload } = status
   const downloadedVariant = status.source === 'download' ? status.variant : null
-  const { service } = status
+  const { service, references } = status
 
   const runUpdate = () => {
     if (downloadedVariant !== null) startInstall({ variant: downloadedVariant })
@@ -688,6 +742,37 @@ export function TtsSection() {
           {status.listenWithoutVoiceprint && (
             <div className="character-panel__hint">{t('未录入主人声纹时，聆听模式可能把朗读的声音转写进输入框')}</div>
           )}
+        </>
+      )}
+      {status.character.voice === 'ok' && (
+        <>
+          <div className="window-behavior-panel__section-label">{t('情绪参考音频')}</div>
+          {references.state === 'none' && <div>{t('没有按情绪分的参考音频文件夹，全部使用试听参考音频')}</div>}
+          {references.state === 'matching' && <div>{t('正在匹配情绪和参考音频…')}</div>}
+          {references.state === 'ok' &&
+            references.entries.map(entry => (
+              <div key={entry.emotion}>
+                {entry.group === null
+                  ? t('{{emotion}} → 默认（试听参考）', { emotion: entry.emotion })
+                  : `${entry.emotion} → ${entry.clip}`}
+              </div>
+            ))}
+          {references.state === 'failed' && (
+            <div className="character-panel__error">
+              {t('匹配失败：{{reason}}，全部使用试听参考音频', { reason: referenceFailureText(references.error, t) })}
+            </div>
+          )}
+          {(references.state === 'ok' || references.state === 'failed') && (
+            <div className="character-panel__row">
+              <button className="memory-btn" disabled={rematching} onClick={rematchReferences}>
+                {t('重新匹配')}
+              </button>
+            </div>
+          )}
+          {rematchError && <div className="character-panel__error">{rematchError}</div>}
+          {references.skipped.map(skipped => (
+            <div key={skipped.path} className="character-panel__hint">{skippedText(skipped, t)}</div>
+          ))}
         </>
       )}
     </div>

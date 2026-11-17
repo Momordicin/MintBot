@@ -137,12 +137,12 @@ MintBot/
 │   │   ├── memory/         # 记忆系统（embedding 队列、召回、摘要、实体抽取）
 │   │   ├── providers/      # ModelProvider（Anthropic/OpenAI/Ollama）
 │   │   ├── routes/         # REST + SSE 路由
-│   │   └── session/        # Session 管理、消息读写
+│   │   ├── session/        # Session 管理、消息读写
+│   │   ├── tts/            # GPT-SoVITS 语音合成：安装、加载模型、朗读、情绪参考音频
+│   │   └── voice/          # 语音组件（mintbot-voice-agent）：语音输入、聆听 / 转写、声纹、播放
 │   └── ai/                 # Python FastAPI AI 模型服务
 │       ├── embedding/      # bge-m3 向量 embedding
-│       ├── ner/            # 本地 NER 实体抽取（bert4ner-base-chinese）
-│       ├── asr/            # faster-whisper 语音识别（Phase 4，目录占位，尚未实现）
-│       └── tts/            # GPT-SoVITS v2 语音合成（Phase 4，目录占位，尚未实现）
+│       └── ner/            # 本地 NER 实体抽取（bert4ner-base-chinese）
 ├── shared/
 │   └── types/              # 跨进程共用 TypeScript 类型定义
 ├── assets/
@@ -308,9 +308,9 @@ assets/characters/my-character/
   },
   "fallback": "idle",
   "voice": {
-    "tts_model": "GPT-SoVITS-v2",
-    "reference_audio": "voice_ref.wav",
-    "language": "zh"
+    "gptWeights": "voice/my-character-e15.ckpt",
+    "sovitsWeights": "voice/my-character_e8_s488.pth",
+    "preview": { "audio": "voice/中立/参考音频的原文.wav", "text": "参考音频的原文", "lang": "zh" }
   }
 }
 ```
@@ -319,6 +319,7 @@ assets/characters/my-character/
 - 立绘资产为**原创**或 **CC0 授权**，版权清晰
 - 情绪标签覆盖至少：`idle`、`happy`、`curious`、`sleep`
 - 建议包含完整的 `manifest.json`
+- 语音（可选）：`voice/` 下每个子文件夹是一种情绪的参考音频，文件名写参考音频的原文，每段 3–10 秒
 - 不包含任何违反 AGPL-3.0 的内容
 
 ---

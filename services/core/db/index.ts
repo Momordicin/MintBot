@@ -223,6 +223,17 @@ function runMigrations(): { needsFtsBackfill: boolean } {
     console.log('[DB] Migration v13: added role summary model columns to Presets and PresetApiKeys')
   }
 
+  if (current < 14) {
+    db.transaction(() => {
+      db.exec(`
+        ALTER TABLE Messages ADD COLUMN emotionTag TEXT;
+        ALTER TABLE Messages ADD COLUMN emoteTag TEXT;
+      `)
+      db.pragma('user_version = 14')
+    })()
+    console.log('[DB] Migration v14: added emotionTag and emoteTag to Messages')
+  }
+
   return { needsFtsBackfill }
 }
 
