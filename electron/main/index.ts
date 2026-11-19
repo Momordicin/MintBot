@@ -595,10 +595,12 @@ function positionOnChatDisplay(win: BrowserWindow): void {
     : screen.getPrimaryDisplay()
   const { x: workAreaX, y: workAreaY, width: workAreaWidth, height: workAreaHeight } = display.workArea
   const [winWidth, winHeight] = win.getSize()
-  win.setPosition(
-    Math.round(workAreaX + (workAreaWidth - winWidth) / 2),
-    Math.round(workAreaY + (workAreaHeight - winHeight) / 2)
-  )
+  win.setBounds(clampBoundsToWorkArea({
+    x: Math.round(workAreaX + (workAreaWidth - winWidth) / 2),
+    y: Math.round(workAreaY + (workAreaHeight - winHeight) / 2),
+    width: winWidth,
+    height: winHeight,
+  }, display.workArea))
 }
 
 let settingsWindow: BrowserWindow | null = null

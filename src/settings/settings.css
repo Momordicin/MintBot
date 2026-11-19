@@ -159,7 +159,8 @@ option {
   min-width: 0;
   padding: 12px 10px;
   border-right: 1px solid var(--input-border);
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .settings-sidebar__preset {
