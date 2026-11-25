@@ -5,7 +5,7 @@ import type { PetScale } from '../portraitForm.js'
 // CREATE INDEX idx_messages_visible ON Messages(sessionId, visibleToUser)
 
 export interface ModelConfig {
-  type: 'anthropic' | 'openai' | 'ollama' | 'deepseek'
+  type: 'anthropic' | 'openai' | 'ollama' | 'deepseek' | 'custom'
   anthropicApiKey?: string
   anthropicApiKeyFromEnv?: boolean
   openaiApiKey?: string
@@ -16,8 +16,11 @@ export interface ModelConfig {
   deepseekBaseUrl?: string
   ollamaBaseUrl?: string
   ollamaModel?: string
+  customUrl?: string
+  customFormat?: 'openai' | 'anthropic'
+  customApiKey?: string
   modelName?: string
-  maxTokens?: number   // max_tokens 上限，对话和整理模式公用，空值默认各自落回1000
+  maxTokens?: number   // max_tokens 上限，对话和整理模式公用，空值默认各自落回16000
   
 }
 
@@ -111,9 +114,9 @@ export interface Preset {
   presetId: string
   name: string                 // 用户起的名字，建议唯一
   characterId: string
-  modelType: 'anthropic' | 'openai' | 'ollama' | 'deepseek' | null   // null = 未自定义，跟随全局 modelProvider 配置
+  modelType: 'anthropic' | 'openai' | 'ollama' | 'deepseek' | 'custom' | null   // null = 未自定义，跟随全局 modelProvider 配置
   modelName: string | null
-  summaryModelType: 'anthropic' | 'openai' | 'ollama' | 'deepseek' | null   // null = 后台整理沿用该角色的对话配置
+  summaryModelType: 'anthropic' | 'openai' | 'ollama' | 'deepseek' | 'custom' | null   // null = 后台整理沿用该角色的对话配置
   summaryModelName: string | null
   wallpaperPath?: string
   displayConfig: PresetDisplayConfig  // 读时永远补齐默认值，下游无需处理 null（见 session/displayConfig.ts）
@@ -133,9 +136,9 @@ export interface PresetSnapshot {
   presetId: string
   name: string
   characterId: string
-  modelType: 'anthropic' | 'openai' | 'ollama' | 'deepseek' | null   // null = 未自定义，跟随全局 modelProvider 配置
+  modelType: 'anthropic' | 'openai' | 'ollama' | 'deepseek' | 'custom' | null   // null = 未自定义，跟随全局 modelProvider 配置
   modelName: string | null
-  summaryModelType?: 'anthropic' | 'openai' | 'ollama' | 'deepseek' | null
+  summaryModelType?: 'anthropic' | 'openai' | 'ollama' | 'deepseek' | 'custom' | null
   summaryModelName?: string | null
   wallpaperPath?: string
   displayConfig?: PresetDisplayConfig  // 可选：已存在的冻结快照 blob 确实没有这个字段（v7 之前创建的 session）

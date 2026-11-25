@@ -21,10 +21,12 @@ import { getClaudeLoginStatus } from '../agents/claudeCode.js'
 import { getCodexLoginStatus } from '../agents/codex.js'
 import { testWebSearchKey, WebSearchError } from '../search/webSearch.js'
 import { getBaseConfig, listProviderModels } from './models.js'
+import { getAllPresets } from '../session/queries.js'
 import type { ModelConfig, WebSearchConfig, WebSearchProvider } from '../../../shared/types/index.js'
 import { ERROR_CODES, errorBody, invalidRequest, type ErrorBody } from '../../../shared/errorCodes.js'
+import { customUrlRoot } from '../../../shared/customUrl.js'
 
-const VALID_MODEL_TYPES: readonly string[] = ['anthropic', 'openai', 'ollama', 'deepseek']
+const VALID_MODEL_TYPES: readonly string[] = ['anthropic', 'openai', 'ollama', 'deepseek', 'custom']
 const MIN_MAX_TOKENS = 1
 const MAX_MAX_TOKENS = 32000
 const KEY_PROVIDERS: readonly KeyProvider[] = ['anthropic', 'openai', 'deepseek']
@@ -33,7 +35,10 @@ const KEY_FIELD = {
   anthropic: { key: 'anthropicApiKey', fromEnv: 'anthropicApiKeyFromEnv' },
   openai: { key: 'openaiApiKey', fromEnv: 'openaiApiKeyFromEnv' },
   deepseek: { key: 'deepseekApiKey', fromEnv: 'deepseekApiKeyFromEnv' },
+  custom: { key: 'customApiKey' },
 } as const
+
+const SAVED_KEY_PROVIDERS = [...KEY_PROVIDERS, 'custom'] as const
 
 interface KeySummary {
   hasKey: boolean
@@ -44,18 +49,20 @@ interface KeySummary {
 }
 
 export interface ModelConfigSummary {
-  type: 'anthropic' | 'openai' | 'ollama' | 'deepseek'
+  type: ModelConfig['type']
   modelName?: string
   ollamaModel?: string
   ollamaBaseUrl?: string
   openaiBaseUrl?: string
   deepseekBaseUrl?: string
+  customUrl?: string
+  customFormat?: 'openai' | 'anthropic'
   maxTokens?: number
-  keys: Record<KeyProvider, KeySummary>
+  keys: Record<KeyProvider | 'custom', KeySummary>
 }
 
 export interface BackgroundModelSummary {
-  type: 'anthropic' | 'openai' | 'ollama' | 'deepseek'
+  type: ModelConfig['type']
   modelName?: string
   ollamaModel?: string
 }
@@ -78,11 +85,14 @@ function toSummary(config: ModelConfig): ModelConfigSummary {
     ollamaBaseUrl: config.ollamaBaseUrl,
     openaiBaseUrl: config.openaiBaseUrl,
     deepseekBaseUrl: config.deepseekBaseUrl,
+    customUrl: config.customUrl,
+    customFormat: config.customFormat,
     maxTokens: config.maxTokens,
     keys: {
       anthropic: summarizeKey(config, 'anthropic'),
       openai: summarizeKey(config, 'openai'),
       deepseek: summarizeKey(config, 'deepseek'),
+      custom: { ...summarizeSavedKey(config.customApiKey), fromEnv: false, envDetected: false, envCleared: false },
     },
   }
 }
@@ -104,6 +114,11 @@ function validateProviderSelection(selected: Partial<ModelConfig>, global: Parti
     if (!selected.ollamaModel) return invalidRequest('ollamaModel is required when type is ollama')
     return null
   }
+  if (selected.type === 'custom') {
+    if (!global.customUrl) return errorBody(ERROR_CODES.CUSTOM_URL_MISSING)
+    if (!trimmedModelName) return invalidRequest('modelName is required when type is custom')
+    return null
+  }
   if (selected.type === 'anthropic' || selected.type === 'openai' || selected.type === 'deepseek') {
     if (!isProviderConfigured(global, selected.type)) return errorBody(ERROR_CODES.API_KEY_INVALID)
     if (!trimmedModelName) return invalidRequest(`modelName is required when type is ${selected.type}`)
@@ -115,7 +130,7 @@ function validateProviderSelection(selected: Partial<ModelConfig>, global: Parti
 function dropEmptyKeys(partial: Partial<ModelConfig> | undefined): Partial<ModelConfig> | undefined {
   if (!partial || typeof partial !== 'object') return partial
   const cleaned = { ...partial }
-  for (const provider of KEY_PROVIDERS) {
+  for (const provider of SAVED_KEY_PROVIDERS) {
     const field = KEY_FIELD[provider].key
     const value = cleaned[field]
     if (typeof value !== 'string') continue
@@ -127,7 +142,7 @@ function dropEmptyKeys(partial: Partial<ModelConfig> | undefined): Partial<Model
 
 function validateType(type: string | undefined): ErrorBody | null {
   if (type !== undefined && !VALID_MODEL_TYPES.includes(type)) {
-    return invalidRequest('type must be one of anthropic, openai, ollama, deepseek')
+    return invalidRequest('type must be one of anthropic, openai, ollama, deepseek, custom')
   }
   return null
 }
@@ -154,6 +169,33 @@ function validateKeySourceInUse(
   return null
 }
 
+function validateCustomUrl(partial: Partial<ModelConfig>, current: Partial<ModelConfig>): ErrorBody | null {
+  if (partial.customFormat !== undefined && partial.customFormat !== 'openai' && partial.customFormat !== 'anthropic') {
+    return invalidRequest('customFormat must be one of openai, anthropic')
+  }
+  if (partial.customUrl !== undefined && typeof partial.customUrl !== 'string') {
+    return invalidRequest('customUrl must be a string')
+  }
+  if (partial.customUrl === undefined && partial.customFormat === undefined) return null
+  const url = partial.customUrl ?? current.customUrl ?? ''
+  if (url !== '' && customUrlRoot(url, partial.customFormat ?? current.customFormat ?? 'openai') === null) {
+    return invalidRequest('customUrl must be an http(s) address ending with the path of its format')
+  }
+  return null
+}
+
+function validateCustomUrlInUse(
+  partial: Partial<ModelConfig>,
+  current: Partial<ModelConfig>,
+  background: BackgroundModelConfig | null
+): ErrorBody | null {
+  if (partial.customUrl !== '' || !current.customUrl) return null
+  const inUse = { ...current, ...partial }.type === 'custom'
+    || background?.type === 'custom'
+    || getAllPresets().some(p => p.modelType === 'custom' || (p.modelType !== null && p.summaryModelType === 'custom'))
+  return inUse ? errorBody(ERROR_CODES.CUSTOM_URL_IN_USE) : null
+}
+
 async function validateNewKeys(partial: Partial<ModelConfig>): Promise<ErrorBody | null> {
   for (const provider of KEY_PROVIDERS) {
     const { key, fromEnv } = KEY_FIELD[provider]
@@ -162,11 +204,15 @@ async function validateNewKeys(partial: Partial<ModelConfig>): Promise<ErrorBody
     const result = await listProviderModels(provider, { ...getBaseConfig(provider), [key]: given, [fromEnv]: false })
     if ('code' in result) return errorBody(result.code, result.params)
   }
+  if (typeof partial.customApiKey === 'string') {
+    const result = await listProviderModels('custom', { ...getBaseConfig('custom'), ...partial })
+    if ('code' in result) return errorBody(result.code, result.params)
+  }
   return null
 }
 
 function validateGlobalPartial(partial: Partial<ModelConfig>, current: Partial<ModelConfig>, checkSelection: boolean): ErrorBody | null {
-  const typeError = validateType(partial.type)
+  const typeError = validateType(partial.type) ?? validateCustomUrl(partial, current)
   if (typeError) return typeError
 
   if (partial.maxTokens !== undefined) {
@@ -338,6 +384,7 @@ export async function configRoutes(fastify: FastifyInstance) {
     if (modelProvider !== undefined) {
       const error = validateGlobalPartial(modelProvider, currentModelProvider, touchesModelSelection(modelProvider))
         ?? validateKeySourceInUse(modelProvider, currentModelProvider, getRawBackgroundModelProviderConfig())
+        ?? validateCustomUrlInUse(modelProvider, currentModelProvider, getRawBackgroundModelProviderConfig())
         ?? await validateNewKeys(modelProvider)
       if (error) {
         return reply.status(400).send(error)

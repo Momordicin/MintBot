@@ -151,7 +151,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
           return
         }
 
-        const finalReply = modelType === 'ollama' ? stripThinkTags(fullReply) : fullReply
+        const finalReply = modelType === 'ollama' || modelType === 'custom' ? stripThinkTags(fullReply) : fullReply
 
         const { text: replyText, emotion: selfEmotion, emote: emoteTag } = parseReplyTags(
           finalReply,

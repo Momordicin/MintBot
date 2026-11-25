@@ -9,7 +9,8 @@ import fs from 'fs'
 import crypto from 'crypto'
 import * as dotenv from 'dotenv'
 import { getAllPresets, getPresetById, createPreset, updatePresetWallpaper, updatePresetName, updatePresetDisplayConfig, updatePresetSystemPrompt, updatePresetModelConfig, deletePresetWithData, getMostRecentOtherPresetId, getPresetApiKeys, upsertPresetApiKey, type PresetKeyProvider, type PresetApiKeyUpdate, type PresetModelType } from '../session/queries.js'
-import { ENV_VAR_BY_PROVIDER, isEnvCredentialDetected } from '../providers/envCredentials.js'
+import { ENV_VAR_BY_PROVIDER, isEnvCredentialDetected, type KeyProvider } from '../providers/envCredentials.js'
+import { getModelProviderConfig } from '../config/index.js'
 import { summarizeSavedKey } from '../config/keySummary.js'
 import { switchPreset, refreshCurrentPresetIfActive, getCurrentState, PresetNotFoundError } from '../session/index.js'
 import { buildStatePayload } from '../state.js'
@@ -37,10 +38,18 @@ if (process.env.VITEST && !WALLPAPER_DIR.startsWith(os.tmpdir() + path.sep)) {
 }
 
 const ALLOWED_WALLPAPER_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif'])
-const VALID_MODEL_TYPES: readonly string[] = ['anthropic', 'openai', 'ollama', 'deepseek']
+const VALID_MODEL_TYPES: readonly string[] = ['anthropic', 'openai', 'ollama', 'deepseek', 'custom']
 
-function isKeyProvider(type: string | null): type is PresetKeyProvider {
+function isKeyProvider(type: string | null): type is KeyProvider {
   return type === 'anthropic' || type === 'openai' || type === 'deepseek'
+}
+
+function isGlobalCustomUrlSaved(): boolean {
+  try {
+    return !!getModelProviderConfig().customUrl
+  } catch {
+    return false
+  }
 }
 
 export async function presetRoutes(fastify: FastifyInstance) {
@@ -69,6 +78,7 @@ export async function presetRoutes(fastify: FastifyInstance) {
       anthropic: summarize('anthropic'),
       openai: summarize('openai'),
       deepseek: summarize('deepseek'),
+      custom: summarize('custom'),
     }
   })
 
@@ -219,7 +229,7 @@ export async function presetRoutes(fastify: FastifyInstance) {
       name?: string
       displayConfig?: Partial<PresetDisplayConfig>
       systemPrompt?: string
-      modelType?: 'anthropic' | 'openai' | 'ollama' | 'deepseek' | null
+      modelType?: PresetModelType | null
       modelName?: string | null
       apiKey?: string
       apiKeyFromEnv?: boolean
@@ -305,7 +315,7 @@ export async function presetRoutes(fastify: FastifyInstance) {
       return reply.status(400).send(invalidRequest('modelType and modelName must be provided together'))
     }
 
-    let modelConfig: { modelType: 'anthropic' | 'openai' | 'ollama' | 'deepseek' | null; modelName: string | null } | undefined
+    let modelConfig: { modelType: PresetModelType | null; modelName: string | null } | undefined
     if (modelType !== undefined) {
       if (modelType === null) {
         if (modelName !== null) {
@@ -314,7 +324,7 @@ export async function presetRoutes(fastify: FastifyInstance) {
         modelConfig = { modelType: null, modelName: null }
       } else {
         if (!VALID_MODEL_TYPES.includes(modelType)) {
-          return reply.status(400).send(invalidRequest('modelType must be one of anthropic, openai, ollama, deepseek, or null'))
+          return reply.status(400).send(invalidRequest('modelType must be one of anthropic, openai, ollama, deepseek, custom, or null'))
         }
         const trimmedModelName = (modelName ?? '').trim()
         if (!trimmedModelName) {
@@ -337,7 +347,7 @@ export async function presetRoutes(fastify: FastifyInstance) {
         summaryConfig = { modelType: null, modelName: null }
       } else {
         if (!VALID_MODEL_TYPES.includes(summaryModelType)) {
-          return reply.status(400).send(invalidRequest('summaryModelType must be one of anthropic, openai, ollama, deepseek, or null'))
+          return reply.status(400).send(invalidRequest('summaryModelType must be one of anthropic, openai, ollama, deepseek, custom, or null'))
         }
         const trimmedSummaryModelName = (summaryModelName ?? '').trim()
         if (!trimmedSummaryModelName) {
@@ -350,8 +360,16 @@ export async function presetRoutes(fastify: FastifyInstance) {
     const resultingModelType = modelConfig !== undefined ? modelConfig.modelType : preset.modelType
     const keyFieldsSent = apiKey !== undefined || apiKeyFromEnv !== undefined
     let keyUpdate: { provider: PresetKeyProvider; apiKey?: string; fromEnv?: boolean } | undefined
-    if (keyFieldsSent && !isKeyProvider(resultingModelType)) {
-      return reply.status(400).send(invalidRequest('apiKey and apiKeyFromEnv only apply to anthropic, openai or deepseek'))
+    if (resultingModelType === 'custom') {
+      if (apiKeyFromEnv !== undefined) {
+        return reply.status(400).send(invalidRequest('apiKeyFromEnv does not apply to custom'))
+      }
+      if (modelConfig !== undefined && !isGlobalCustomUrlSaved()) {
+        return reply.status(400).send(errorBody(ERROR_CODES.CUSTOM_URL_MISSING))
+      }
+      if (apiKey !== undefined) keyUpdate = { provider: 'custom', apiKey }
+    } else if (keyFieldsSent && !isKeyProvider(resultingModelType)) {
+      return reply.status(400).send(invalidRequest('apiKey and apiKeyFromEnv only apply to anthropic, openai, deepseek or custom'))
     }
     if (isKeyProvider(resultingModelType)) {
       const saved = getPresetApiKeys(presetId)[resultingModelType]
@@ -377,8 +395,16 @@ export async function presetRoutes(fastify: FastifyInstance) {
       return reply.status(400).send(invalidRequest('summary settings require a role-specific model config'))
     }
     const resultingSummaryType = summaryConfig !== undefined ? summaryConfig.modelType : preset.summaryModelType
-    if (summaryKeyFieldsSent && !isKeyProvider(resultingSummaryType)) {
-      return reply.status(400).send(invalidRequest('summaryApiKey and summaryApiKeyFromEnv only apply to anthropic, openai or deepseek'))
+    if (resultingSummaryType === 'custom') {
+      if (summaryApiKeyFromEnv !== undefined) {
+        return reply.status(400).send(invalidRequest('summaryApiKeyFromEnv does not apply to custom'))
+      }
+      if (summaryConfig !== undefined && !isGlobalCustomUrlSaved()) {
+        return reply.status(400).send(errorBody(ERROR_CODES.CUSTOM_URL_MISSING))
+      }
+      if (summaryApiKey !== undefined) summaryKeyUpdate = { provider: 'custom', summaryApiKey }
+    } else if (summaryKeyFieldsSent && !isKeyProvider(resultingSummaryType)) {
+      return reply.status(400).send(invalidRequest('summaryApiKey and summaryApiKeyFromEnv only apply to anthropic, openai, deepseek or custom'))
     }
     if (resultingModelType !== null && isKeyProvider(resultingSummaryType)) {
       const saved = getPresetApiKeys(presetId)[resultingSummaryType]

@@ -53,6 +53,7 @@ const noCredentials: PresetCredentials = {
   anthropic: { fromEnv: false },
   openai: { fromEnv: false },
   deepseek: { fromEnv: false },
+  custom: { fromEnv: false },
 }
 
 function credentialsWith(overrides: Partial<PresetCredentials>): PresetCredentials {
@@ -197,7 +198,7 @@ describe('SDK 构造参数', () => {
 
   it('openai：全部参数显式传入，baseURL 用 openaiBaseUrl', async () => {
     openaiCreateMock.mockResolvedValue(openaiCompletion('x'))
-    await createModelProvider({ type: 'openai', openaiApiKey: 'k-o', openaiBaseUrl: 'https://proxy.example/v1' }).completeSync(context)
+    await createModelProvider({ type: 'openai', modelName: 'gpt-4o', openaiApiKey: 'k-o', openaiBaseUrl: 'https://proxy.example/v1' }).completeSync(context)
 
     expect(openaiCtorMock).toHaveBeenCalledTimes(1)
     expect(openaiCtorMock.mock.calls[0][0]).toEqual({
@@ -214,14 +215,14 @@ describe('SDK 构造参数', () => {
 
   it('openai：openaiBaseUrl 为空串时 baseURL 回落到官方地址', async () => {
     openaiCreateMock.mockResolvedValue(openaiCompletion('x'))
-    await createModelProvider({ type: 'openai', openaiApiKey: 'k-o', openaiBaseUrl: '' }).completeSync(context)
+    await createModelProvider({ type: 'openai', modelName: 'gpt-4o', openaiApiKey: 'k-o', openaiBaseUrl: '' }).completeSync(context)
 
     expect(openaiCtorMock.mock.calls[0][0].baseURL).toBe('https://api.openai.com/v1')
   })
 
   it('deepseek：全部参数显式传入，baseURL 默认 https://api.deepseek.com', async () => {
     openaiCreateMock.mockResolvedValue(openaiCompletion('x'))
-    await createModelProvider({ type: 'deepseek', deepseekApiKey: 'k-d' }).completeSync(context)
+    await createModelProvider({ type: 'deepseek', modelName: 'deepseek-v4-flash', deepseekApiKey: 'k-d' }).completeSync(context)
 
     expect(openaiCtorMock.mock.calls[0][0]).toEqual({
       apiKey: 'k-d',
@@ -237,7 +238,7 @@ describe('SDK 构造参数', () => {
 
   it('deepseek：deepseekBaseUrl 覆盖默认地址', async () => {
     openaiCreateMock.mockResolvedValue(openaiCompletion('x'))
-    await createModelProvider({ type: 'deepseek', deepseekApiKey: 'k-d', deepseekBaseUrl: 'https://ds.example' }).completeSync(context)
+    await createModelProvider({ type: 'deepseek', modelName: 'deepseek-v4-flash', deepseekApiKey: 'k-d', deepseekBaseUrl: 'https://ds.example' }).completeSync(context)
 
     expect(openaiCtorMock.mock.calls[0][0].baseURL).toBe('https://ds.example')
   })
@@ -310,7 +311,7 @@ describe('流式', () => {
 
   it('openai 流式：拼接 choices[0].delta.content，system 作为首条消息，signal 作为请求选项传入', async () => {
     openaiCreateMock.mockResolvedValue(openaiStream('hel', 'lo'))
-    const provider = createModelProvider({ type: 'openai', openaiApiKey: 'key' })
+    const provider = createModelProvider({ type: 'openai', modelName: 'gpt-4o', openaiApiKey: 'key' })
     const signal = new AbortController().signal
 
     let text = ''
@@ -339,19 +340,24 @@ describe('流式', () => {
   })
 })
 
-describe('默认模型名', () => {
-  it('deepseek 未配置 modelName 时使用 deepseek-v4-flash', async () => {
-    openaiCreateMock.mockResolvedValue(openaiStream('hi'))
-    await drain(createModelProvider({ type: 'deepseek', deepseekApiKey: 'sk-deepseek' }))
+describe('未配置 modelName', () => {
+  const context: BuiltContext = { system: '', messages: [{ role: 'user', content: 'hi' }] }
+  const calls = {
+    complete: (provider: ReturnType<typeof createModelProvider>) => drain(provider),
+    completeSync: (provider: ReturnType<typeof createModelProvider>) => provider.completeSync(context),
+    chatTurn: (provider: ReturnType<typeof createModelProvider>) => provider.chatTurn({ system: '', messages: [{ role: 'user', content: 'hi' }], tools: [], stream: false }),
+  }
 
-    expect(openaiCreateMock.mock.calls[0][0].model).toBe('deepseek-v4-flash')
-  })
-
-  it('openai 未配置 modelName 时使用 gpt-4o', async () => {
-    openaiCreateMock.mockResolvedValue(openaiStream('hi'))
-    await drain(createModelProvider({ type: 'openai', openaiApiKey: 'key' }))
-
-    expect(openaiCreateMock.mock.calls[0][0].model).toBe('gpt-4o')
+  it.each([
+    { config: { type: 'openai', openaiApiKey: 'key' } as ModelConfig, call: 'complete' as const },
+    { config: { type: 'openai', openaiApiKey: 'key' } as ModelConfig, call: 'completeSync' as const },
+    { config: { type: 'openai', openaiApiKey: 'key' } as ModelConfig, call: 'chatTurn' as const },
+    { config: { type: 'deepseek', deepseekApiKey: 'sk-deepseek' } as ModelConfig, call: 'complete' as const },
+    { config: { type: 'deepseek', deepseekApiKey: 'sk-deepseek' } as ModelConfig, call: 'completeSync' as const },
+    { config: { type: 'deepseek', deepseekApiKey: 'sk-deepseek' } as ModelConfig, call: 'chatTurn' as const },
+  ])('$config.type $call：抛出 modelName 缺失错误且不发请求', async ({ config, call }) => {
+    await expect(calls[call](createModelProvider(config))).rejects.toThrow('[ModelProvider] modelName is required in config')
+    expect(openaiCreateMock).not.toHaveBeenCalled()
   })
 })
 
@@ -378,18 +384,18 @@ describe('provider 专属请求体（response_format / max_completion_tokens / t
 
   it('deepseek：始终带 thinking: disabled，用 max_tokens，jsonMode 未传时无 response_format', async () => {
     openaiCreateMock.mockResolvedValue(openaiStream('hi'))
-    await drainWith(createModelProvider({ type: 'deepseek', deepseekApiKey: 'sk-deepseek' }), context, {})
+    await drainWith(createModelProvider({ type: 'deepseek', modelName: 'deepseek-v4-flash', deepseekApiKey: 'sk-deepseek' }), context, {})
 
     const [body] = openaiCreateMock.mock.calls[0]
     expect(body.thinking).toEqual({ type: 'disabled' })
-    expect(body.max_tokens).toBe(1000)
+    expect(body.max_tokens).toBe(16000)
     expect(body.max_completion_tokens).toBeUndefined()
     expect(body.response_format).toBeUndefined()
   })
 
   it('deepseek：jsonMode 为 true 时也不带 response_format，thinking 仍存在', async () => {
     openaiCreateMock.mockResolvedValue(openaiStream('hi'))
-    await drainWith(createModelProvider({ type: 'deepseek', deepseekApiKey: 'sk-deepseek' }), context, { jsonMode: true })
+    await drainWith(createModelProvider({ type: 'deepseek', modelName: 'deepseek-v4-flash', deepseekApiKey: 'sk-deepseek' }), context, { jsonMode: true })
 
     const [body] = openaiCreateMock.mock.calls[0]
     expect(body.thinking).toEqual({ type: 'disabled' })
@@ -453,7 +459,7 @@ describe('provider 专属请求体（response_format / max_completion_tokens / t
 
   it('completeSync 路径同样生效：deepseek 始终带 thinking: disabled', async () => {
     openaiCreateMock.mockResolvedValue(openaiCompletion('reply'))
-    await createModelProvider({ type: 'deepseek', deepseekApiKey: 'sk-deepseek' }).completeSync(context)
+    await createModelProvider({ type: 'deepseek', modelName: 'deepseek-v4-flash', deepseekApiKey: 'sk-deepseek' }).completeSync(context)
 
     expect(openaiCreateMock.mock.calls[0][0].thinking).toEqual({ type: 'disabled' })
   })
@@ -480,13 +486,13 @@ describe('resolveMaxTokens 三级 fallback', () => {
     expect(openaiCreateMock.mock.calls[0][0].max_completion_tokens).toBe(2000)
   })
 
-  it('调用方未传 maxTokens 且 provider 自身也未配置时，回落到默认值 1000', async () => {
+  it('调用方未传 maxTokens 且 provider 自身也未配置时，回落到默认值 16000', async () => {
     openaiCreateMock.mockResolvedValue(openaiCompletion('reply'))
     const provider = createModelProvider({ type: 'openai', modelName: 'gpt-4o-mini', openaiApiKey: 'key' })
 
     await provider.completeSync(context)
 
-    expect(openaiCreateMock.mock.calls[0][0].max_completion_tokens).toBe(1000)
+    expect(openaiCreateMock.mock.calls[0][0].max_completion_tokens).toBe(16000)
   })
 })
 
@@ -1325,7 +1331,7 @@ describe('chatTurn：四家服务商的工具请求与返回转换', () => {
   })
 
   it.each([
-    { name: 'openai', config: { type: 'openai', openaiApiKey: 'k' } as ModelConfig },
+    { name: 'openai', config: { type: 'openai', modelName: 'gpt-4o', openaiApiKey: 'k' } as ModelConfig },
     { name: 'ollama', config: { type: 'ollama', ollamaModel: 'qwen3' } as ModelConfig },
   ])('$name：不带工具的请求不带 response_format', async row => {
     openaiCreateMock.mockResolvedValue(openaiSyncMessage)
@@ -1338,5 +1344,181 @@ describe('chatTurn：四家服务商的工具请求与返回转换', () => {
       : JSON.parse((vi.mocked(fetch).mock.calls[0][1] as RequestInit).body as string)
     expect(body.tools).toBeUndefined()
     expect(body.response_format).toBeUndefined()
+  })
+})
+
+describe('自定义服务', () => {
+  const context: BuiltContext = { system: 'sys', messages: [{ role: 'user', content: 'hi' }] }
+  const openaiUrl = 'http://100.1.2.3:8080/v1/chat/completions'
+  const anthropicUrl = 'http://100.1.2.3:8080/v1/messages'
+
+  it.each([
+    { name: '有 key', key: 'custom-key-123', bearer: 'Bearer custom-key-123' },
+  ])('openai 格式（$name）：请求完整地址，不带 max_tokens，Bearer 为 key', async row => {
+    const fetchSpy = vi.fn().mockResolvedValue(fakeNonStreamResponse('ok'))
+    vi.stubGlobal('fetch', fetchSpy)
+    const provider = createModelProvider({ type: 'custom', customUrl: openaiUrl, customFormat: 'openai', customApiKey: row.key, modelName: 'm1', maxTokens: 500, openaiApiKey: 'other-key' })
+
+    await provider.completeSync(context)
+
+    const [url, options] = fetchSpy.mock.calls[0]
+    expect(url).toBe(openaiUrl)
+    expect(options.headers.Authorization).toBe(row.bearer)
+    const body = JSON.parse(options.body)
+    expect(body.model).toBe('m1')
+    expect(body.max_tokens).toBeUndefined()
+    expect(body.max_completion_tokens).toBeUndefined()
+  })
+
+  it.each([
+    { name: '无 key', key: undefined, apiKey: 'ollama' },
+  ])('anthropic 格式（$name）：SDK baseURL 为根地址，apiKey 为占位串 ollama，带 max_tokens', async row => {
+    anthropicCreateMock.mockResolvedValue({ content: [{ type: 'thinking', thinking: 'x' }, { type: 'text', text: 'reply' }] })
+    const provider = createModelProvider({ type: 'custom', customUrl: anthropicUrl, customFormat: 'anthropic', customApiKey: row.key, modelName: 'm1', maxTokens: 700, anthropicApiKey: 'other-key' })
+
+    const result = await provider.completeSync(context)
+
+    expect(result).toBe('reply')
+    expect(anthropicCtorMock.mock.calls[0][0]).toEqual({
+      apiKey: row.apiKey,
+      authToken: null,
+      baseURL: 'http://100.1.2.3:8080',
+      logLevel: 'warn',
+      webhookKey: null,
+      maxRetries: 0,
+      timeout: 300000,
+    })
+    const [params, requestOptions] = anthropicCreateMock.mock.calls[0]
+    expect(params.model).toBe('m1')
+    expect(params.max_tokens).toBe(700)
+    expect(requestOptions.timeout).toBe(300000)
+  })
+
+  it.each([
+    { name: '摘要', build: createSummaryModelProviderForPreset, preset: { modelType: 'custom' as const, modelName: 'm-role', summaryModelType: 'custom' as const, summaryModelName: 'm-sum' }, credentials: { custom: { fromEnv: false, apiKey: 'role-key-123', summaryApiKey: 'role-summary-123' } }, bearer: 'Bearer role-summary-123' },
+    { name: '角色无 key', build: createModelProviderForPreset, preset: { modelType: 'custom' as const, modelName: 'm-role' }, credentials: {}, bearer: 'Bearer ollama' },
+  ])('角色（$name）：用角色自己的 custom key，不回退全局 key，地址继承全局', async row => {
+    const fetchSpy = vi.fn().mockResolvedValue(fakeNonStreamResponse('ok'))
+    vi.stubGlobal('fetch', fetchSpy)
+    const globalConfig: ModelConfig = { type: 'anthropic', customUrl: openaiUrl, customFormat: 'openai', customApiKey: 'global-key-123' }
+
+    await row.build(fakePreset(row.preset), globalConfig, credentialsWith(row.credentials)).completeSync(context)
+
+    const [url, options] = fetchSpy.mock.calls[0]
+    expect(url).toBe(openaiUrl)
+    expect(options.headers.Authorization).toBe(row.bearer)
+  })
+})
+
+describe('自定义服务 anthropic 格式流式计时', () => {
+  const context: BuiltContext = { system: 'sys', messages: [{ role: 'user', content: 'hi' }] }
+  const provider = () => createModelProvider({ type: 'custom', customUrl: 'http://100.1.2.3:8080/v1/messages', customFormat: 'anthropic', modelName: 'm1' })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  function controlledAnthropicStream() {
+    const events: unknown[] = []
+    let ended = false
+    let wake = () => {}
+    anthropicStreamMock.mockImplementation(async (_params: unknown, options: { signal: AbortSignal }) => (async function* () {
+      while (true) {
+        while (events.length > 0) yield events.shift()
+        if (ended) return
+        await new Promise<void>((resolve, reject) => {
+          wake = resolve
+          if (options.signal.aborted) reject(options.signal.reason)
+          else options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true })
+        })
+      }
+    })())
+    return {
+      text(text: string) {
+        events.push({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } })
+        wake()
+      },
+      end() {
+        ended = true
+        wake()
+      },
+    }
+  }
+
+  const paths = [
+    {
+      name: 'complete',
+      run: async (signal?: AbortSignal) => {
+        let out = ''
+        for await (const chunk of provider().complete(context, { signal })) out += chunk
+        return out
+      },
+    },
+    {
+      name: 'chatTurn',
+      run: async (signal?: AbortSignal) => (await provider().chatTurn({ system: 'sys', messages: [{ role: 'user', content: 'hi' }], tools: [], stream: true, signal })).text,
+    },
+  ]
+
+  it.each([paths[0]])('$name：120 秒内没有任何输出，以 "Custom endpoint produced no output within 120s" 失败', async row => {
+    vi.useFakeTimers()
+    controlledAnthropicStream()
+    const caller = new AbortController()
+
+    let settled = false
+    const assertion = expect(row.run(caller.signal).finally(() => { settled = true })).rejects.toThrow('Custom endpoint produced no output within 120s')
+    await vi.advanceTimersByTimeAsync(119999)
+    expect(settled).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+
+    await assertion
+    expect(caller.signal.aborted).toBe(false)
+  })
+
+  it.each(paths)('$name：收到输出后停顿 60 秒，以 "Custom endpoint stream stalled for 60s" 失败', async row => {
+    vi.useFakeTimers()
+    const stream = controlledAnthropicStream()
+    const caller = new AbortController()
+
+    let settled = false
+    const assertion = expect(row.run(caller.signal).finally(() => { settled = true })).rejects.toThrow('Custom endpoint stream stalled for 60s')
+    await vi.advanceTimersByTimeAsync(0)
+    stream.text('a')
+    await vi.advanceTimersByTimeAsync(59999)
+    expect(settled).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+
+    await assertion
+    expect(caller.signal.aborted).toBe(false)
+  })
+
+  it.each([paths[0]])('$name：调用方主动取消原样传出 AbortError，计时器被清除', async row => {
+    vi.useFakeTimers()
+    controlledAnthropicStream()
+    const caller = new AbortController()
+
+    const assertion = expect(row.run(caller.signal)).rejects.toMatchObject({ name: 'AbortError' })
+    await vi.advanceTimersByTimeAsync(1000)
+    caller.abort()
+
+    await assertion
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it.each([
+    { name: 'complete 正常结束', run: paths[0].run },
+    { name: 'chatTurn 正常结束', run: paths[1].run },
+  ])('$name 后计时器被清除', async row => {
+    vi.useFakeTimers()
+    const stream = controlledAnthropicStream()
+
+    const result = row.run()
+    await vi.advanceTimersByTimeAsync(0)
+    stream.text('a')
+    await vi.advanceTimersByTimeAsync(0)
+    stream.end()
+
+    await expect(result).resolves.toBe('a')
+    expect(vi.getTimerCount()).toBe(0)
   })
 })

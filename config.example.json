@@ -4,7 +4,7 @@
     "ollamaBaseUrl": "http://localhost:11434",
     "ollamaModel": "qwen3",
     "modelName": "",
-    "maxTokens": 1000,
+    "maxTokens": 16000,
     "anthropicApiKey": "",
     "anthropicApiKeyFromEnv": false,
     "openaiApiKey": "",

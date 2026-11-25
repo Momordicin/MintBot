@@ -761,3 +761,69 @@ describe('GET /models?purpose=summary', () => {
     expect(openaiListMock).not.toHaveBeenCalled()
   })
 })
+
+describe('type=custom', () => {
+  const globalConfig = { type: 'anthropic', customUrl: 'http://100.1.2.3:8080/v1/chat/completions', customFormat: 'openai' }
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it.each([
+    { name: '角色摘要 key', config: { ...globalConfig, customApiKey: 'global-key-123' }, url: '/models?type=custom&presetId=p1&purpose=summary', rowKeys: { apiKey: 'role-key-123', summaryApiKey: 'role-summary-123', fromEnv: false }, auth: 'Bearer role-summary-123' },
+    { name: '角色无 key 不回退全局', config: { ...globalConfig, customApiKey: 'global-key-123' }, url: '/models?type=custom&presetId=p1', rowKeys: { fromEnv: false }, auth: undefined },
+  ])('$name：请求 {root}/v1/models 并取 data[].id', async row => {
+    getModelProviderConfigMock.mockReturnValue(row.config)
+    getPresetByIdMock.mockReturnValue({ presetId: 'p1' })
+    getPresetApiKeysMock.mockReturnValue({ ...noKeys, custom: row.rowKeys ?? { fromEnv: false } })
+    const fetchSpy = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [{ id: 'm-b' }, { id: 'm-a' }] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchSpy)
+
+    const fastify = await buildTestApp()
+    const response = await fastify.inject({ method: 'GET', url: row.url })
+
+    expect(JSON.parse(response.payload)).toEqual({ models: ['m-a', 'm-b'] })
+    const [url, init] = fetchSpy.mock.calls[0]
+    expect(url).toBe('http://100.1.2.3:8080/v1/models')
+    expect(init.headers.Authorization).toBe(row.auth)
+  })
+
+  it.each([
+    { format: 'openai', url: 'http://100.1.2.3:8080/v1/chat/completions', headers: { Authorization: 'Bearer key-123' } },
+    { format: 'anthropic', url: 'http://100.1.2.3:8080/v1/messages', headers: { 'anthropic-version': '2023-06-01', 'x-api-key': 'key-123' } },
+  ])('$format 格式按对应方式带认证请求头', async row => {
+    getModelProviderConfigMock.mockReturnValue({ type: 'anthropic', customUrl: row.url, customFormat: row.format, customApiKey: 'key-123' })
+    const fetchSpy = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchSpy)
+
+    await getModels('custom')
+
+    const [url, init] = fetchSpy.mock.calls[0]
+    expect(url).toBe('http://100.1.2.3:8080/v1/models')
+    expect(init.headers).toEqual(row.headers)
+  })
+
+  it.each([
+    { name: '401', fetchImpl: () => Promise.resolve(new Response('', { status: 401 })), code: 'API_KEY_INVALID' },
+    { name: '连不上', fetchImpl: () => Promise.reject(new TypeError('fetch failed')), code: 'PROVIDER_UNREACHABLE' },
+  ])('失败（$name）返回 $code', async row => {
+    getModelProviderConfigMock.mockReturnValue(globalConfig)
+    vi.stubGlobal('fetch', vi.fn(row.fetchImpl))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const { body } = await getModels('custom')
+
+    expect(body).toEqual({ models: [], code: row.code })
+  })
+
+  it('POST 用请求体里的 key 测试', async () => {
+    getModelProviderConfigMock.mockReturnValue({ ...globalConfig, customApiKey: 'global-key-123' })
+    const fetchSpy = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [{ id: 'm' }] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchSpy)
+
+    const { body } = await postModels({ type: 'custom', apiKey: ' typed-key-123 ' })
+
+    expect(body).toEqual({ models: ['m'] })
+    expect(fetchSpy.mock.calls[0][1].headers.Authorization).toBe('Bearer typed-key-123')
+  })
+})

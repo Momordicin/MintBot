@@ -109,6 +109,10 @@ export function errorText(body: ErrorBody, t: TFunction): string {
       return t('模型设置里没有已保存的 DeepSeek Key')
     case 'PROVIDER_UNREACHABLE':
       return t('连不上服务，请检查网络')
+    case 'CUSTOM_URL_MISSING':
+      return t('未填写自定义服务地址')
+    case 'CUSTOM_URL_IN_USE':
+      return t('自定义服务正在使用中，不能清空地址')
     case 'WEB_SEARCH_TEST_FAILED':
       return t('测试失败：{{reason}}', { reason: body.params?.reason ?? '' })
     case 'INVALID_REQUEST':

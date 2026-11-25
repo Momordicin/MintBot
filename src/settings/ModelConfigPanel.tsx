@@ -5,6 +5,7 @@ import React, { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ModelConfig } from '../../shared/types/index.js'
 import { isErrorBody } from '../../shared/errorCodes.js'
+import { customUrlRoot, type CustomFormat } from '../../shared/customUrl.js'
 import { errorText } from '../errorText.js'
 import './settings.css'
 
@@ -13,7 +14,9 @@ import { ApiKeyField, ENV_VAR, TestResultIcon, type ApiKeyTestResult, type KeyPr
 import { ModelNameField } from './ModelNameField.js'
 import { SubscriptionLogin } from './SubscriptionLogin.js'
 
-type ProviderType = 'anthropic' | 'openai' | 'ollama' | 'deepseek'
+type ProviderType = 'anthropic' | 'openai' | 'ollama' | 'deepseek' | 'custom'
+
+type SavedKeyProvider = KeyProvider | 'custom'
 
 interface KeySummary {
   hasKey: boolean
@@ -28,8 +31,10 @@ interface ModelConfigSummary {
   modelName?: string
   ollamaModel?: string
   ollamaBaseUrl?: string
+  customUrl?: string
+  customFormat?: CustomFormat
   maxTokens?: number
-  keys: Record<KeyProvider, KeySummary>
+  keys: Record<SavedKeyProvider, KeySummary>
 }
 
 interface BackgroundSummary {
@@ -49,8 +54,14 @@ interface ModelSelection {
   ollamaModel: string
 }
 
+interface CustomUrlDraft {
+  format: CustomFormat
+  url: string
+}
+
 interface FormState {
   ollamaBaseUrl: string
+  custom: CustomUrlDraft
   maxTokens: string
   chat: ModelSelection
   sameAsChat: boolean
@@ -59,6 +70,7 @@ interface FormState {
 
 const MIN_MAX_TOKENS = 1
 const MAX_MAX_TOKENS = 32000
+const DEFAULT_MAX_TOKENS = 16000
 
 const KEY_PROVIDERS: readonly KeyProvider[] = ['anthropic', 'openai', 'deepseek']
 
@@ -66,30 +78,44 @@ const KEY_FIELD = {
   anthropic: { key: 'anthropicApiKey', fromEnv: 'anthropicApiKeyFromEnv' },
   openai: { key: 'openaiApiKey', fromEnv: 'openaiApiKeyFromEnv' },
   deepseek: { key: 'deepseekApiKey', fromEnv: 'deepseekApiKeyFromEnv' },
+  custom: { key: 'customApiKey' },
 } as const
 
 const RELOAD_FIELDS: readonly string[] = [
   ...KEY_PROVIDERS.flatMap(provider => [KEY_FIELD[provider].key, KEY_FIELD[provider].fromEnv]),
   'ollamaBaseUrl',
+  'customUrl',
+  'customFormat',
+  KEY_FIELD.custom.key,
 ]
 
 type ItemId = 'chat' | 'maxTokens' | 'summary'
 
 type PatchBody = { modelProvider?: Partial<ModelConfig>; backgroundModelProvider?: Partial<ModelConfig> | null }
 
-const PROVIDER_LABEL: Record<ProviderType, string> = {
+function usesBudget(type: ProviderType, customFormat: CustomFormat | undefined): boolean {
+  return type === 'anthropic' || type === 'openai' || type === 'deepseek' || (type === 'custom' && customFormat === 'anthropic')
+}
+
+const PROVIDER_LABEL: Record<Exclude<ProviderType, 'custom'>, string> = {
   anthropic: 'Anthropic',
   openai: 'OpenAI',
   deepseek: 'DeepSeek',
   ollama: 'Ollama',
 }
 
+const CUSTOM_URL_PLACEHOLDER: Record<CustomFormat, string> = {
+  openai: 'http://100.x.x.x:8080/v1/chat/completions',
+  anthropic: 'http://100.x.x.x:8080/v1/messages',
+}
+
 const BLANK_KEY_SUMMARY: KeySummary = { hasKey: false, last4: null, fromEnv: false, envDetected: false, envCleared: false }
 
-const BLANK_KEYS: Record<KeyProvider, KeySummary> = {
+const BLANK_KEYS: Record<SavedKeyProvider, KeySummary> = {
   anthropic: BLANK_KEY_SUMMARY,
   openai: BLANK_KEY_SUMMARY,
   deepseek: BLANK_KEY_SUMMARY,
+  custom: BLANK_KEY_SUMMARY,
 }
 
 function toSelection(source: { type: ProviderType; modelName?: string; ollamaModel?: string } | null, fallbackType: ProviderType): ModelSelection {
@@ -104,11 +130,16 @@ function toFormState(data: ConfigModelResponse): FormState {
   const chat = data.modelProvider
   return {
     ollamaBaseUrl: chat?.ollamaBaseUrl ?? '',
+    custom: customFromSaved(data),
     maxTokens: chat?.maxTokens !== undefined ? String(chat.maxTokens) : '',
     chat: toSelection(chat, 'anthropic'),
     sameAsChat: data.backgroundModelProvider === null,
     summary: toSelection(data.backgroundModelProvider, chat?.type ?? 'anthropic'),
   }
+}
+
+function customFromSaved(data: ConfigModelResponse): CustomUrlDraft {
+  return { format: data.modelProvider?.customFormat ?? 'openai', url: data.modelProvider?.customUrl ?? '' }
 }
 
 function buildSelectionPatch(selection: ModelSelection): Partial<ModelConfig> {
@@ -266,6 +297,108 @@ function OllamaUrlField({ saved, onCommit, onTest }: OllamaUrlFieldProps) {
   )
 }
 
+interface CustomUrlFieldProps {
+  saved: CustomUrlDraft
+  onCommit: (draft: CustomUrlDraft) => Promise<string | null>
+  onTest: () => Promise<ApiKeyTestResult>
+}
+
+function CustomUrlField({ saved, onCommit, onTest }: CustomUrlFieldProps) {
+  const { t } = useTranslation()
+  const inputId = useId()
+  const [draft, setDraft] = useState<CustomUrlDraft>(saved)
+  const [error, setError] = useState<string | null>(null)
+  const [test, setTest] = useState<{ state: TestState; reason: string | null }>({ state: 'idle', reason: null })
+  const testSeqRef = useRef(0)
+
+  useEffect(() => {
+    setDraft(saved)
+  }, [saved])
+
+  useEffect(() => {
+    testSeqRef.current += 1
+    setTest({ state: 'idle', reason: null })
+  }, [saved, draft])
+
+  const commit = async (next: CustomUrlDraft) => {
+    const trimmed = { format: next.format, url: next.url.trim() }
+    if (trimmed.url === saved.url && trimmed.format === saved.format) {
+      if (next.url !== trimmed.url) setDraft(trimmed)
+      setError(null)
+      return
+    }
+    if (trimmed.url !== '' && customUrlRoot(trimmed.url, trimmed.format) === null) {
+      setError(t('地址格式不对，未保存'))
+      return
+    }
+    setError(null)
+    const reason = await onCommit(trimmed)
+    if (reason !== null) setError(reason)
+  }
+
+  const runTest = async () => {
+    const seq = testSeqRef.current
+    setTest({ state: 'testing', reason: null })
+    const result = await onTest()
+    if (seq !== testSeqRef.current) return
+    setTest(result.ok ? { state: 'ok', reason: null } : { state: 'fail', reason: result.reason })
+  }
+
+  const draftIsSaved = draft.url.trim() === saved.url && draft.format === saved.format
+
+  return (
+    <div className="api-key-field">
+      <label className="api-key-field__label" htmlFor={inputId}>{t('自定义服务')}</label>
+      <div className="model-config-panel__field api-key-field__box">
+        <div className="model-config-panel__field model-config-panel__field--provider">
+          <select
+            aria-label={t('消息格式')}
+            value={draft.format}
+            onChange={e => {
+              const next = { ...draft, format: e.target.value as CustomFormat }
+              setError(null)
+              setDraft(next)
+              void commit(next)
+            }}
+          >
+            <option value="openai">{t('OpenAI 格式')}</option>
+            <option value="anthropic">{t('Anthropic 格式')}</option>
+          </select>
+        </div>
+        <input
+          id={inputId}
+          value={draft.url}
+          placeholder={CUSTOM_URL_PLACEHOLDER[draft.format]}
+          spellCheck={false}
+          onChange={e => {
+            setError(null)
+            setDraft({ ...draft, url: e.target.value })
+          }}
+          onBlur={() => void commit(draft)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              e.currentTarget.blur()
+            }
+          }}
+        />
+      </div>
+      <span />
+      <button
+        type="button"
+        className="rename-btn"
+        disabled={test.state === 'testing' || saved.url === '' || !draftIsSaved}
+        onClick={() => void runTest()}
+      >
+        {t('测试')}
+      </button>
+      <TestResultIcon state={test.state} reason={test.reason} />
+      {error !== null && <div className="api-key-field__note character-panel__error">{error}</div>}
+      {test.state === 'fail' && <div className="api-key-field__note api-key-field__note--fail" title={test.reason ?? undefined}>{test.reason}</div>}
+    </div>
+  )
+}
+
 interface ModelSelectionFieldsProps {
   selection: ModelSelection
   providerOptions: ProviderType[]
@@ -277,6 +410,7 @@ interface ModelSelectionFieldsProps {
 
 function ModelSelectionFields({ selection, providerOptions, reloadKey, fromEnvs, onChange, onCommit }: ModelSelectionFieldsProps) {
   const { t } = useTranslation()
+  const keyFromEnv = selection.type === 'ollama' || selection.type === 'custom' ? undefined : fromEnvs[selection.type]
   const typeId = useId()
   const current = selection.type === 'ollama' ? selection.ollamaModel : selection.modelName
 
@@ -290,7 +424,7 @@ function ModelSelectionFields({ selection, providerOptions, reloadKey, fromEnvs,
           onChange={e => onChange({ ...selection, type: e.target.value as ProviderType, modelName: '', ollamaModel: '' })}
         >
           {providerOptions.map(option => (
-            <option key={option} value={option}>{PROVIDER_LABEL[option]}</option>
+            <option key={option} value={option}>{option === 'custom' ? t('自定义服务') : PROVIDER_LABEL[option]}</option>
           ))}
         </select>
       </div>
@@ -298,7 +432,7 @@ function ModelSelectionFields({ selection, providerOptions, reloadKey, fromEnvs,
         type={selection.type}
         current={current}
         apiKey=""
-        fromEnv={selection.type === 'ollama' ? undefined : fromEnvs[selection.type]}
+        fromEnv={keyFromEnv}
         reloadKey={reloadKey}
         onChange={name => {
           const next = selection.type === 'ollama'
@@ -317,11 +451,11 @@ export function ModelConfigPanel() {
   const maxTokensId = useId()
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [keys, setKeys] = useState<Record<KeyProvider, KeySummary>>(BLANK_KEYS)
+  const [keys, setKeys] = useState<Record<SavedKeyProvider, KeySummary>>(BLANK_KEYS)
   const [form, setForm] = useState<FormState>(() => toFormState({ modelProvider: null, backgroundModelProvider: null }))
   const [saving, setSaving] = useState(false)
-  const [keyInputs, setKeyInputs] = useState<Record<KeyProvider, string>>({ anthropic: '', openai: '', deepseek: '' })
-  const [keyEditing, setKeyEditing] = useState<Record<KeyProvider, boolean>>({ anthropic: false, openai: false, deepseek: false })
+  const [keyInputs, setKeyInputs] = useState<Record<SavedKeyProvider, string>>({ anthropic: '', openai: '', deepseek: '', custom: '' })
+  const [keyEditing, setKeyEditing] = useState<Record<SavedKeyProvider, boolean>>({ anthropic: false, openai: false, deepseek: false, custom: false })
   const [envErrors, setEnvErrors] = useState<Record<KeyProvider, string | null>>({ anthropic: null, openai: null, deepseek: null })
   const [itemErrors, setItemErrors] = useState<Record<ItemId, string | null>>({ chat: null, maxTokens: null, summary: null })
   const [modelsReloadKey, setModelsReloadKey] = useState(0)
@@ -401,6 +535,20 @@ export function ModelConfigPanel() {
     return reason
   }
 
+  const saveCustomUrl = async (draft: CustomUrlDraft): Promise<string | null> => {
+    const reason = await patchConfig({ modelProvider: { customFormat: draft.format, customUrl: draft.url } })
+    if (reason === null) {
+      const saved = savedRef.current
+      setForm(prev => ({
+        ...prev,
+        custom: customFromSaved(saved),
+        chat: draft.url === '' && prev.chat.type === 'custom' ? toSelection(saved.modelProvider, 'anthropic') : prev.chat,
+        summary: draft.url === '' && prev.summary.type === 'custom' ? toSelection(saved.backgroundModelProvider, saved.modelProvider?.type ?? 'anthropic') : prev.summary,
+      }))
+    }
+    return reason
+  }
+
   const saveChat = (next: ModelSelection) =>
     saveItem('chat', { modelProvider: buildSelectionPatch(next) }, chatFromSaved)
 
@@ -430,7 +578,7 @@ export function ModelConfigPanel() {
     void saveItem('maxTokens', { modelProvider: { maxTokens: parsed } }, maxTokensFromSaved)
   }
 
-  const handleKeyCommit = (provider: KeyProvider) => (key: string) =>
+  const handleKeyCommit = (provider: SavedKeyProvider) => (key: string) =>
     patchConfig({ modelProvider: { [KEY_FIELD[provider].key]: key } })
 
   const handleEnvChange = async (provider: KeyProvider, checked: boolean) => {
@@ -443,7 +591,7 @@ export function ModelConfigPanel() {
     }
   }
 
-  const testKey = async (provider: KeyProvider | 'ollama'): Promise<ApiKeyTestResult> => {
+  const testKey = async (provider: SavedKeyProvider | 'ollama'): Promise<ApiKeyTestResult> => {
     try {
       const response = await fetch(`${CORE_URL}/models?type=${provider}`)
       if (!response.ok) return { ok: false, reason: `HTTP ${response.status}` }
@@ -471,10 +619,18 @@ export function ModelConfigPanel() {
     deepseek: keys.deepseek.fromEnv,
   }
 
-  const providerOptionsFor = (current: ProviderType): ProviderType[] => {
+  const providerOptionsFor = (current: ProviderType, savedType: ProviderType | undefined): ProviderType[] => {
     const options: ProviderType[] = [...KEY_PROVIDERS.filter(isConfigured), 'ollama']
+    if (form.custom.url !== '' || savedType === 'custom') options.push('custom')
     return options.includes(current) ? options : [current, ...options]
   }
+
+  const savedCustomFormat = savedRef.current.modelProvider?.customFormat
+  const budgetApplies = usesBudget(form.chat.type, savedCustomFormat)
+    || usesBudget(form.sameAsChat ? form.chat.type : form.summary.type, savedCustomFormat)
+  const maxTokensHint = !budgetApplies
+    ? t('当前选择的全局模型无需设置')
+    : form.maxTokens.trim() === '' ? t('未填写时使用默认值 {{value}}', { value: DEFAULT_MAX_TOKENS }) : null
 
   return (
     <fieldset className="model-config-panel" disabled={saving}>
@@ -522,13 +678,29 @@ export function ModelConfigPanel() {
         <OllamaUrlField saved={form.ollamaBaseUrl} onCommit={saveOllamaUrl} onTest={() => testKey('ollama')} />
       </div>
 
+      <div className="model-config-panel__section">
+        <CustomUrlField saved={form.custom} onCommit={saveCustomUrl} onTest={() => testKey('custom')} />
+        <ApiKeyField
+          label={t('API Key')}
+          summary={keys.custom}
+          keyInput={keyInputs.custom}
+          onKeyInputChange={value => setKeyInputs(prev => ({ ...prev, custom: value }))}
+          editing={keyEditing.custom}
+          onEditingChange={editing => setKeyEditing(prev => ({ ...prev, custom: editing }))}
+          emptyPlaceholder={t('输入 API Key（可留空）')}
+          onCommit={handleKeyCommit('custom')}
+          onTest={() => testKey('custom')}
+          checkKeyLength={false}
+        />
+      </div>
+
       <SubscriptionLogin />
 
       <div className="model-config-panel__section">
         <div className="model-config-panel__section-label">{t('对话模型')}</div>
         <ModelSelectionFields
           selection={form.chat}
-          providerOptions={providerOptionsFor(form.chat.type)}
+          providerOptions={providerOptionsFor(form.chat.type, savedRef.current.modelProvider?.type)}
           reloadKey={modelsReloadKey}
           fromEnvs={fromEnvs}
           onChange={chat => {
@@ -539,14 +711,14 @@ export function ModelConfigPanel() {
         />
         {itemErrors.chat !== null && <div className="character-panel__error">{itemErrors.chat}</div>}
         <div className="model-config-panel__field model-config-panel__field--short">
-          <label htmlFor={maxTokensId}>{t('最大回复 token 数（max_tokens）')}</label>
+          <label htmlFor={maxTokensId}>{t('最大回复预算（token）')}</label>
           <input
             id={maxTokensId}
             type="number"
             min={MIN_MAX_TOKENS}
             max={MAX_MAX_TOKENS}
             step={1}
-            placeholder={t('默认 1000')}
+            placeholder={t('默认 {{value}}', { value: DEFAULT_MAX_TOKENS })}
             value={form.maxTokens}
             onChange={e => {
               setForm(prev => ({ ...prev, maxTokens: e.target.value }))
@@ -554,7 +726,7 @@ export function ModelConfigPanel() {
             }}
             onBlur={handleMaxTokensBlur}
           />
-          <span className="model-config-panel__inline-hint">{t('Ollama 不受此限制')}</span>
+          {maxTokensHint !== null && <span className="model-config-panel__inline-hint">{maxTokensHint}</span>}
         </div>
         {itemErrors.maxTokens !== null && <div className="character-panel__error">{itemErrors.maxTokens}</div>}
       </div>
@@ -573,7 +745,7 @@ export function ModelConfigPanel() {
           <>
             <ModelSelectionFields
               selection={form.summary}
-              providerOptions={providerOptionsFor(form.summary.type)}
+              providerOptions={providerOptionsFor(form.summary.type, savedRef.current.backgroundModelProvider?.type)}
               reloadKey={modelsReloadKey}
               fromEnvs={fromEnvs}
               onChange={summary => {
@@ -582,7 +754,7 @@ export function ModelConfigPanel() {
               }}
               onCommit={next => void saveSummary({ backgroundModelProvider: buildSelectionPatch(next) })}
             />
-            {form.summary.type === 'ollama' && (
+            {(form.summary.type === 'ollama' || form.summary.type === 'custom') && (
               <div className="character-panel__hint">{t('内容较多或较复杂的整理建议使用线上模型')}</div>
             )}
           </>

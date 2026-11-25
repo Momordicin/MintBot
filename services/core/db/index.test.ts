@@ -2,9 +2,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { db, initDb, checkpointTruncate } from './index.js'
 
 describe('DB 迁移 (runMigrations)', () => {
-  it('迁移链跑完后 user_version 为 14', () => {
+  it('迁移链跑完后 user_version 为 15', () => {
     initDb()
-    expect(db.pragma('user_version', { simple: true })).toBe(14)
+    expect(db.pragma('user_version', { simple: true })).toBe(15)
   })
 
   it('Messages 带可为空的 emotionTag / emoteTag 列（v14）', () => {
@@ -210,7 +210,7 @@ describe('DB 迁移 v13 (角色摘要模型列)', () => {
 })
 
 describe('DB 迁移 v13 从 v12 升级', () => {
-  it('v12 库升级后保留既有 Presets 与 PresetApiKeys 数据，新增列取默认值，user_version 为 14', () => {
+  it('v12 库升级后保留既有 Presets 与 PresetApiKeys 数据，新增列取默认值，user_version 为 15', () => {
     initDb()
     db.exec(`DELETE FROM Presets; DELETE FROM PresetApiKeys`)
     db.prepare(`INSERT INTO Presets (presetId, name, characterId, modelType, modelName, systemPrompt, createdAt, updatedAt) VALUES ('p1', '角色一', 'char-001', 'openai', 'gpt-4o', '你是角色一', 1, 2)`).run()
@@ -228,7 +228,7 @@ describe('DB 迁移 v13 从 v12 升级', () => {
 
     initDb()
 
-    expect(db.pragma('user_version', { simple: true })).toBe(14)
+    expect(db.pragma('user_version', { simple: true })).toBe(15)
     expect(db.prepare(`SELECT * FROM Presets WHERE presetId = 'p1'`).get()).toMatchObject({
       modelType: 'openai', modelName: 'gpt-4o', createdAt: 1, updatedAt: 2, summaryModelType: null, summaryModelName: null,
     })
@@ -236,6 +236,49 @@ describe('DB 迁移 v13 从 v12 升级', () => {
       presetId: 'p1', provider: 'openai', apiKey: 'sk-old', fromEnv: 1, summaryApiKey: null, summaryFromEnv: 0,
     })
     expect(() => db.prepare(`UPDATE Presets SET summaryModelType = 'bogus'`).run()).toThrow()
+    db.exec(`DELETE FROM Presets; DELETE FROM PresetApiKeys`)
+  })
+})
+
+describe('DB 迁移 v15 从 v14 升级（自定义服务）', () => {
+  it('保留既有角色与角色 key，之后 modelType / summaryModelType = custom 与 provider = custom 可写入', () => {
+    initDb()
+    db.exec(`
+      DROP TABLE Presets;
+      CREATE TABLE Presets (
+        presetId TEXT PRIMARY KEY, name TEXT NOT NULL, characterId TEXT NOT NULL,
+        modelType TEXT CHECK(modelType IS NULL OR modelType IN ('anthropic', 'openai', 'ollama', 'deepseek')),
+        modelName TEXT, wallpaperPath TEXT, displayConfig TEXT, systemPrompt TEXT NOT NULL,
+        createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL, addressForms TEXT,
+        summaryModelType TEXT CHECK(summaryModelType IS NULL OR summaryModelType IN ('anthropic', 'openai', 'ollama', 'deepseek')),
+        summaryModelName TEXT
+      );
+      DROP TABLE PresetApiKeys;
+      CREATE TABLE PresetApiKeys (
+        presetId TEXT NOT NULL, provider TEXT NOT NULL CHECK(provider IN ('anthropic', 'openai', 'deepseek')),
+        apiKey TEXT, fromEnv INTEGER NOT NULL DEFAULT 0, summaryApiKey TEXT, summaryFromEnv INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (presetId, provider)
+      );
+    `)
+    db.prepare(`INSERT INTO Presets VALUES ('p1', '角色一', 'char-001', 'openai', 'gpt-4o', 'bg.png', '{}', '你是角色一', 1, 2, '["主人"]', 'deepseek', 'ds')`).run()
+    db.prepare(`INSERT INTO PresetApiKeys VALUES ('p1', 'openai', 'sk-old', 1, 'sk-sum', 0)`).run()
+    expect(() => db.prepare(`UPDATE Presets SET modelType = 'custom'`).run()).toThrow()
+    db.pragma('user_version = 14')
+
+    initDb()
+
+    expect(db.pragma('user_version', { simple: true })).toBe(15)
+    expect(db.prepare(`SELECT * FROM Presets WHERE presetId = 'p1'`).get()).toEqual({
+      presetId: 'p1', name: '角色一', characterId: 'char-001', modelType: 'openai', modelName: 'gpt-4o', wallpaperPath: 'bg.png',
+      displayConfig: '{}', systemPrompt: '你是角色一', createdAt: 1, updatedAt: 2, addressForms: '["主人"]', summaryModelType: 'deepseek', summaryModelName: 'ds',
+    })
+    expect(db.prepare(`SELECT * FROM PresetApiKeys WHERE presetId = 'p1'`).get()).toEqual({
+      presetId: 'p1', provider: 'openai', apiKey: 'sk-old', fromEnv: 1, summaryApiKey: 'sk-sum', summaryFromEnv: 0,
+    })
+    expect(() => db.prepare(`UPDATE Presets SET modelType = 'custom', summaryModelType = 'custom'`).run()).not.toThrow()
+    expect(() => db.prepare(`INSERT INTO PresetApiKeys (presetId, provider, apiKey) VALUES ('p1', 'custom', 'k')`).run()).not.toThrow()
+    expect(() => db.prepare(`UPDATE Presets SET modelType = 'bogus'`).run()).toThrow()
+    expect(() => db.prepare(`INSERT INTO PresetApiKeys (presetId, provider) VALUES ('p1', 'ollama')`).run()).toThrow()
     db.exec(`DELETE FROM Presets; DELETE FROM PresetApiKeys`)
   })
 })

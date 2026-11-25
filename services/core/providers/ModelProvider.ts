@@ -8,11 +8,13 @@ import type { ChatMessage, ModelConfig, CompletionOptions, BuiltContext, Preset 
 import { getEnvCredential, type KeyProvider } from './envCredentials.js'
 import { ollamaSupportsTools } from './ollama.js'
 import type { PresetCredentials } from '../session/queries.js'
+import { customUrlRoot } from '../../../shared/customUrl.js'
 
 const STREAM_TIMEOUT_MS = 30000
 const OLLAMA_FIRST_OUTPUT_TIMEOUT_MS = 120000
 const OLLAMA_STALL_TIMEOUT_MS = 60000
 const OLLAMA_SYNC_TIMEOUT_MS = 300000
+const DEFAULT_MAX_TOKENS = 16000
 
 type DeepSeekExtras = { thinking: { type: 'disabled' } }
 
@@ -51,6 +53,29 @@ export function createAnthropicClient(config: ModelConfig): Anthropic {
     logLevel: 'warn',
     webhookKey: null,
     maxRetries: 2,
+  })
+}
+
+function customEndpoint(config: ModelConfig): { root: string; format: 'openai' | 'anthropic' } {
+  const format = config.customFormat ?? 'openai'
+  const root = config.customUrl ? customUrlRoot(config.customUrl, format) : null
+  if (!root) throw new Error('[ModelProvider] custom URL is not configured')
+  return { root, format }
+}
+
+function customApiKey(config: ModelConfig): string {
+  return config.customApiKey || 'ollama'
+}
+
+function createCustomAnthropicClient(config: ModelConfig): Anthropic {
+  return new Anthropic({
+    apiKey: customApiKey(config),
+    authToken: null,
+    baseURL: customEndpoint(config).root,
+    logLevel: 'warn',
+    webhookKey: null,
+    maxRetries: 0,
+    timeout: OLLAMA_SYNC_TIMEOUT_MS,
   })
 }
 
@@ -132,6 +157,42 @@ export function stripThinkTags(text: string): string {
     const end = rest.indexOf('</think>', open + '<think>'.length)
     if (end < 0) return out.trim()
     rest = rest.slice(end + '</think>'.length)
+  }
+}
+
+class StallGuard {
+  private controller = new AbortController()
+  private timer: ReturnType<typeof setTimeout> | undefined
+  private timeoutError: Error | undefined
+  readonly signal: AbortSignal
+
+  constructor(private callerSignal?: AbortSignal) {
+    this.signal = callerSignal ? AbortSignal.any([callerSignal, this.controller.signal]) : this.controller.signal
+    this.arm(OLLAMA_FIRST_OUTPUT_TIMEOUT_MS, `Custom endpoint produced no output within ${OLLAMA_FIRST_OUTPUT_TIMEOUT_MS / 1000}s`)
+  }
+
+  private arm(ms: number, message: string): void {
+    clearTimeout(this.timer)
+    this.timer = setTimeout(() => {
+      this.timeoutError = new Error(message)
+      this.controller.abort()
+    }, ms)
+  }
+
+  pause(): void {
+    clearTimeout(this.timer)
+  }
+
+  waitNext(): void {
+    this.arm(OLLAMA_STALL_TIMEOUT_MS, `Custom endpoint stream stalled for ${OLLAMA_STALL_TIMEOUT_MS / 1000}s`)
+  }
+
+  translate(err: unknown): unknown {
+    return this.timeoutError && !this.callerSignal?.aborted ? this.timeoutError : err
+  }
+
+  dispose(): void {
+    clearTimeout(this.timer)
   }
 }
 
@@ -294,7 +355,7 @@ export class ModelProvider {
   }
 
   private resolveMaxTokens(options: CompletionOptions): number {
-    return options.maxTokens ?? this.config.maxTokens ?? 1000
+    return options.maxTokens ?? this.config.maxTokens ?? DEFAULT_MAX_TOKENS
   }
 
   private createAnthropicClient(): Anthropic {
@@ -315,14 +376,14 @@ export class ModelProvider {
     const responseFormat = options.jsonMode ? { response_format: { type: 'json_object' as const } } : {}
     if (kind === 'openai') {
       return {
-        model: this.config.modelName ?? 'gpt-4o',
+        model: this.requireModelName(),
         max_completion_tokens: maxTokens,
         messages: mapped,
         ...responseFormat,
       }
     }
     return {
-      model: this.config.modelName ?? 'deepseek-v4-flash',
+      model: this.requireModelName(),
       max_tokens: maxTokens,
       messages: mapped,
       thinking: { type: 'disabled' as const },
@@ -379,6 +440,10 @@ export class ModelProvider {
       case 'ollama':
         yield* this.completeOllama(messagesWithSystem, options)
         break
+      case 'custom':
+        if (customEndpoint(this.config).format === 'anthropic') yield* this.completeAnthropic(context.messages, options, context.system)
+        else yield* this.completeCustomOpenAI(messagesWithSystem, options)
+        break
       default:
         throw new Error(`Unknown model provider type: ${this.config.type}`)
     }
@@ -401,12 +466,17 @@ export class ModelProvider {
         return this.completeSyncDeepSeek(messagesWithSystem, options)
       case 'ollama':
         return this.completeSyncOllama(messagesWithSystem, options)
+      case 'custom':
+        return customEndpoint(this.config).format === 'anthropic'
+          ? this.completeSyncAnthropic(context.messages, options, context.system)
+          : this.completeSyncCustomOpenAI(messagesWithSystem, options)
       default:
         throw new Error(`Unknown model provider type: ${this.config.type}`)
     }
   }
 
   async supportsTools(): Promise<boolean> {
+    if (this.config.type === 'custom') return ollamaSupportsTools(customEndpoint(this.config).root, this.requireModelName())
     if (this.config.type !== 'ollama') return true
     return ollamaSupportsTools(this.config.ollamaBaseUrl || 'http://localhost:11434', this.config.ollamaModel ?? 'qwen3')
   }
@@ -430,29 +500,47 @@ export class ModelProvider {
         } catch (err) {
           throw mapOllamaTimeout(err, request.signal)
         }
+      case 'custom': {
+        const { root, format } = customEndpoint(this.config)
+        if (format === 'anthropic') return this.chatTurnAnthropic(request)
+        try {
+          return await ModelProvider.callOpenAICompatibleTurn(`${root}/v1`, customApiKey(this.config), this.requireModelName(), request)
+        } catch (err) {
+          throw mapOllamaTimeout(err, request.signal)
+        }
+      }
       default:
         throw new Error(`Unknown model provider type: ${this.config.type}`)
     }
+  }
+
+  private requireModelName(): string {
+    if (!this.config.modelName) throw new Error('[ModelProvider] modelName is required in config')
+    return this.config.modelName
+  }
+
+  private anthropicClientForType(): Anthropic {
+    return this.config.type === 'custom' ? createCustomAnthropicClient(this.config) : this.createAnthropicClient()
   }
 
   private buildOpenAITurnBody(
     kind: 'openai' | 'deepseek',
     request: ChatTurnRequest
   ): ChatCompletionCreateParamsBase | (ChatCompletionCreateParamsBase & DeepSeekExtras) {
-    const maxTokens = request.maxTokens ?? this.config.maxTokens ?? 1000
+    const maxTokens = request.maxTokens ?? this.config.maxTokens ?? DEFAULT_MAX_TOKENS
     const messages = toOpenAIMessages(request.system, request.messages)
     const hasTools = request.tools.length > 0
     const tools = hasTools ? { tools: toOpenAITools(request.tools) } : {}
     if (kind === 'openai') {
       return {
-        model: this.config.modelName ?? 'gpt-4o',
+        model: this.requireModelName(),
         max_completion_tokens: maxTokens,
         messages,
         ...tools,
       }
     }
     return {
-      model: this.config.modelName ?? 'deepseek-v4-flash',
+      model: this.requireModelName(),
       max_tokens: maxTokens,
       messages,
       thinking: { type: 'disabled' as const },
@@ -486,12 +574,13 @@ export class ModelProvider {
   }
 
   private async chatTurnAnthropic(request: ChatTurnRequest): Promise<ChatTurnResult> {
-    const client = this.createAnthropicClient()
+    const client = this.anthropicClientForType()
+    const custom = this.config.type === 'custom'
     const params = {
       model: this.config.modelName ?? (() => {
         throw new Error('[ModelProvider] modelName is required in config')
       })(),
-      max_tokens: request.maxTokens ?? this.config.maxTokens ?? 1000,
+      max_tokens: request.maxTokens ?? this.config.maxTokens ?? DEFAULT_MAX_TOKENS,
       system: request.system || undefined,
       messages: toAnthropicMessages(request.messages),
       tools: request.tools.length > 0
@@ -503,7 +592,7 @@ export class ModelProvider {
         : undefined,
     }
     if (!request.stream) {
-      const message = await client.messages.create(params, { signal: request.signal })
+      const message = await client.messages.create(params, custom ? { signal: request.signal, timeout: OLLAMA_SYNC_TIMEOUT_MS } : { signal: request.signal })
       const text = message.content
         .filter((block): block is Anthropic.TextBlock => block.type === 'text')
         .map(block => block.text)
@@ -513,19 +602,30 @@ export class ModelProvider {
         .map(block => ({ id: block.id, name: block.name, args: parseToolArgs(block.input) }))
       return { text, toolCalls }
     }
-    const stream = await client.messages.stream(params, { signal: request.signal, timeout: STREAM_TIMEOUT_MS })
+    const guard = custom ? new StallGuard(request.signal) : null
     let text = ''
     const pending = new Map<number, { id: string; name: string; json: string }>()
-    for await (const event of stream) {
-      if (event.type === 'content_block_start' && event.content_block.type === 'tool_use') {
-        pending.set(event.index, { id: event.content_block.id, name: event.content_block.name, json: '' })
-      } else if (event.type === 'content_block_delta') {
-        if (event.delta.type === 'text_delta') text += event.delta.text
-        else if (event.delta.type === 'input_json_delta') {
-          const call = pending.get(event.index)
-          if (call) call.json += event.delta.partial_json
+    try {
+      const stream = await client.messages.stream(params, guard
+        ? { signal: guard.signal, timeout: OLLAMA_SYNC_TIMEOUT_MS }
+        : { signal: request.signal, timeout: STREAM_TIMEOUT_MS })
+      for await (const event of stream) {
+        guard?.pause()
+        if (event.type === 'content_block_start' && event.content_block.type === 'tool_use') {
+          pending.set(event.index, { id: event.content_block.id, name: event.content_block.name, json: '' })
+        } else if (event.type === 'content_block_delta') {
+          if (event.delta.type === 'text_delta') text += event.delta.text
+          else if (event.delta.type === 'input_json_delta') {
+            const call = pending.get(event.index)
+            if (call) call.json += event.delta.partial_json
+          }
         }
+        guard?.waitNext()
       }
+    } catch (err) {
+      throw guard ? guard.translate(err) : err
+    } finally {
+      guard?.dispose()
     }
     const toolCalls = [...pending.entries()]
       .sort((a, b) => a[0] - b[0])
@@ -538,29 +638,40 @@ export class ModelProvider {
     options: CompletionOptions,
     system?: string
   ): AsyncIterable<string> {
-    const client = this.createAnthropicClient()
+    const client = this.anthropicClientForType()
 
     const chatMessages = messages.filter(m => m.role !== 'system')
 
-    const stream = await client.messages.stream({
-      model: this.config.modelName ?? (() => {
-        throw new Error('[ModelProvider] modelName is required in config')
-      })(),
-      max_tokens: this.resolveMaxTokens(options),
-      system: system || undefined,
-      messages: chatMessages.map(m => ({
-        role: m.role as 'user' | 'assistant',
-        content: m.content,
-      })),
-    }, { signal: options.signal, timeout: STREAM_TIMEOUT_MS })
+    const guard = this.config.type === 'custom' ? new StallGuard(options.signal) : null
+    try {
+      const stream = await client.messages.stream({
+        model: this.config.modelName ?? (() => {
+          throw new Error('[ModelProvider] modelName is required in config')
+        })(),
+        max_tokens: this.resolveMaxTokens(options),
+        system: system || undefined,
+        messages: chatMessages.map(m => ({
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+        })),
+      }, guard
+        ? { signal: guard.signal, timeout: OLLAMA_SYNC_TIMEOUT_MS }
+        : { signal: options.signal, timeout: STREAM_TIMEOUT_MS })
 
-    for await (const event of stream) {
-      if (
-        event.type === 'content_block_delta' &&
-        event.delta.type === 'text_delta'
-      ) {
-        yield event.delta.text
+      for await (const event of stream) {
+        guard?.pause()
+        if (
+          event.type === 'content_block_delta' &&
+          event.delta.type === 'text_delta'
+        ) {
+          yield event.delta.text
+        }
+        guard?.waitNext()
       }
+    } catch (err) {
+      throw guard ? guard.translate(err) : err
+    } finally {
+      guard?.dispose()
     }
   }
 
@@ -569,7 +680,7 @@ export class ModelProvider {
     options: CompletionOptions,
     system?: string
   ): Promise<string> {
-    const client = this.createAnthropicClient()
+    const client = this.anthropicClientForType()
 
     const chatMessages = messages.filter(m => m.role !== 'system')
 
@@ -583,7 +694,7 @@ export class ModelProvider {
         role: m.role as 'user' | 'assistant',
         content: m.content,
       })),
-    }, { signal: options.signal })
+    }, this.config.type === 'custom' ? { signal: options.signal, timeout: OLLAMA_SYNC_TIMEOUT_MS } : { signal: options.signal })
 
     return message.content
       .filter((block): block is Anthropic.TextBlock => block.type === 'text')
@@ -646,6 +757,42 @@ export class ModelProvider {
         (this.config.ollamaBaseUrl || 'http://localhost:11434') + '/v1',
         'ollama',
         this.config.ollamaModel ?? 'qwen3',
+        messages,
+        options,
+        ModelProvider.ollamaRequestOverrides(options)
+      )
+    } catch (err) {
+      throw mapOllamaTimeout(err, options.signal)
+    }
+  }
+
+  private async *completeCustomOpenAI(
+    messages: ChatMessage[],
+    options: CompletionOptions
+  ): AsyncIterable<string> {
+    try {
+      yield* ModelProvider.callOpenAICompatible(
+        `${customEndpoint(this.config).root}/v1`,
+        customApiKey(this.config),
+        this.requireModelName(),
+        messages,
+        options,
+        ModelProvider.ollamaRequestOverrides(options)
+      )
+    } catch (err) {
+      throw mapOllamaTimeout(err, options.signal)
+    }
+  }
+
+  private async completeSyncCustomOpenAI(
+    messages: ChatMessage[],
+    options: CompletionOptions
+  ): Promise<string> {
+    try {
+      return await ModelProvider.callOpenAICompatibleSync(
+        `${customEndpoint(this.config).root}/v1`,
+        customApiKey(this.config),
+        this.requireModelName(),
         messages,
         options,
         ModelProvider.ollamaRequestOverrides(options)
@@ -915,6 +1062,9 @@ export function createModelProviderForPreset(
   const config: ModelConfig = { ...globalConfig, type: preset.modelType }
   if (preset.modelType === 'ollama') {
     config.ollamaModel = preset.modelName
+  } else if (preset.modelType === 'custom') {
+    config.modelName = preset.modelName
+    config.customApiKey = credentials.custom?.apiKey
   } else {
     config.modelName = preset.modelName
     const { key, fromEnv } = KEY_FIELD[preset.modelType]
@@ -936,6 +1086,9 @@ export function createSummaryModelProviderForPreset(
   const config: ModelConfig = { ...globalConfig, type: preset.summaryModelType }
   if (preset.summaryModelType === 'ollama') {
     config.ollamaModel = preset.summaryModelName
+  } else if (preset.summaryModelType === 'custom') {
+    config.modelName = preset.summaryModelName
+    config.customApiKey = credentials.custom?.summaryApiKey
   } else {
     config.modelName = preset.summaryModelName
     const { key, fromEnv } = KEY_FIELD[preset.summaryModelType]

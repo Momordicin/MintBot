@@ -234,6 +234,46 @@ function runMigrations(): { needsFtsBackfill: boolean } {
     console.log('[DB] Migration v14: added emotionTag and emoteTag to Messages')
   }
 
+  if (current < 15) {
+    db.transaction(() => {
+      db.exec(`
+        CREATE TABLE Presets_new (
+          presetId     TEXT    PRIMARY KEY,
+          name         TEXT    NOT NULL,
+          characterId  TEXT    NOT NULL,
+          modelType    TEXT    CHECK(modelType IS NULL OR modelType IN ('anthropic', 'openai', 'ollama', 'deepseek', 'custom')),
+          modelName    TEXT,
+          wallpaperPath TEXT,
+          displayConfig TEXT,
+          systemPrompt TEXT    NOT NULL,
+          createdAt    INTEGER NOT NULL,
+          updatedAt    INTEGER NOT NULL,
+          addressForms TEXT,
+          summaryModelType TEXT CHECK(summaryModelType IS NULL OR summaryModelType IN ('anthropic', 'openai', 'ollama', 'deepseek', 'custom')),
+          summaryModelName TEXT
+        );
+        INSERT INTO Presets_new SELECT presetId, name, characterId, modelType, modelName, wallpaperPath, displayConfig, systemPrompt, createdAt, updatedAt, addressForms, summaryModelType, summaryModelName FROM Presets;
+        DROP TABLE Presets;
+        ALTER TABLE Presets_new RENAME TO Presets;
+
+        CREATE TABLE PresetApiKeys_new (
+          presetId TEXT NOT NULL,
+          provider TEXT NOT NULL CHECK(provider IN ('anthropic', 'openai', 'deepseek', 'custom')),
+          apiKey   TEXT,
+          fromEnv  INTEGER NOT NULL DEFAULT 0,
+          summaryApiKey TEXT,
+          summaryFromEnv INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (presetId, provider)
+        );
+        INSERT INTO PresetApiKeys_new SELECT presetId, provider, apiKey, fromEnv, summaryApiKey, summaryFromEnv FROM PresetApiKeys;
+        DROP TABLE PresetApiKeys;
+        ALTER TABLE PresetApiKeys_new RENAME TO PresetApiKeys;
+      `)
+      db.pragma('user_version = 15')
+    })()
+    console.log('[DB] Migration v15: Presets model type and PresetApiKeys provider CHECK constraints now allow custom')
+  }
+
   return { needsFtsBackfill }
 }
 

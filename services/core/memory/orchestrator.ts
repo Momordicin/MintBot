@@ -123,7 +123,7 @@ export interface OrganizeModeTickResult {
 }
 
 function isOllamaModel(model: EntityModelProvider): boolean {
-  return model.providerType === 'ollama'
+  return model.providerType === 'ollama' || model.providerType === 'custom'
 }
 
 function summaryMaxMessages(model: EntityModelProvider): number {

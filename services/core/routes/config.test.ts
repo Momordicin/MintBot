@@ -22,6 +22,7 @@ const {
   getCodexLoginStatusMock,
   testWebSearchKeyMock,
   listProviderModelsMock,
+  getAllPresetsMock,
 } = vi.hoisted(() => ({
   getModelProviderConfigMock: vi.fn(),
   getRawBackgroundModelProviderConfigMock: vi.fn(),
@@ -35,7 +36,10 @@ const {
   getCodexLoginStatusMock: vi.fn(),
   testWebSearchKeyMock: vi.fn(),
   listProviderModelsMock: vi.fn(),
+  getAllPresetsMock: vi.fn(),
 }))
+
+vi.mock('../session/queries.js', () => ({ getAllPresets: getAllPresetsMock }))
 
 vi.mock('../config/index.js', () => ({
   getModelProviderConfig: getModelProviderConfigMock,
@@ -87,6 +91,8 @@ beforeEach(() => {
   testWebSearchKeyMock.mockReset()
   listProviderModelsMock.mockReset()
   listProviderModelsMock.mockResolvedValue({ models: ['m'] })
+  getAllPresetsMock.mockReset()
+  getAllPresetsMock.mockReturnValue([])
   getRawBackgroundModelProviderConfigMock.mockReturnValue(null)
   getBackgroundModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'qwen3' })
   isEnvCredentialDetectedMock.mockReturnValue(false)
@@ -103,6 +109,7 @@ const noKeys = {
   anthropic: { hasKey: false, last4: null, fromEnv: false, envDetected: false, envCleared: false },
   openai: { hasKey: false, last4: null, fromEnv: false, envDetected: false, envCleared: false },
   deepseek: { hasKey: false, last4: null, fromEnv: false, envDetected: false, envCleared: false },
+  custom: { hasKey: false, last4: null, fromEnv: false, envDetected: false, envCleared: false },
 }
 
 describe('GET /config/model', () => {
@@ -943,5 +950,82 @@ describe('POST /config/web-search/test', () => {
     expect(result.status).toBe(400)
     expect(result.body).toMatchObject({ code: 'INVALID_REQUEST' })
     expect(testWebSearchKeyMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('PATCH /config/model — 自定义服务', () => {
+  const openaiUrl = 'http://100.1.2.3:8080/v1/chat/completions'
+  const anthropicUrl = 'http://100.1.2.3:8080/v1/messages'
+
+  async function patch(modelProvider: Record<string, unknown>) {
+    const fastify = await buildTestApp()
+    const response = await fastify.inject({ method: 'PATCH', url: '/config/model', payload: { modelProvider } })
+    return { status: response.statusCode, body: JSON.parse(response.payload) }
+  }
+
+  it.each([
+    { customFormat: 'openai', customUrl: openaiUrl, status: 200 },
+    { customFormat: 'openai', customUrl: anthropicUrl, status: 400 },
+  ])('$customFormat 格式的地址 $customUrl → $status', async row => {
+    getModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'qwen3' })
+    updateModelProviderConfigMock.mockImplementation(partial => ({ type: 'ollama', ollamaModel: 'qwen3', ...partial }))
+
+    const { status, body } = await patch({ customFormat: row.customFormat, customUrl: row.customUrl })
+
+    expect(status).toBe(row.status)
+    if (row.status === 400) {
+      expect(body.code).toBe('INVALID_REQUEST')
+      expect(updateModelProviderConfigMock).not.toHaveBeenCalled()
+    } else {
+      expect(body.modelProvider).toMatchObject({ customFormat: row.customFormat, customUrl: row.customUrl })
+    }
+  })
+
+  it('未保存地址时选 custom 返回 CUSTOM_URL_MISSING', async () => {
+    getModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'qwen3' })
+
+    const { status, body } = await patch({ type: 'custom', modelName: 'm1' })
+
+    expect(status).toBe(400)
+    expect(body.code).toBe('CUSTOM_URL_MISSING')
+  })
+
+  it('已保存地址、没有 key 也能选 custom', async () => {
+    getModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'qwen3', customUrl: openaiUrl })
+    updateModelProviderConfigMock.mockImplementation(partial => ({ type: 'ollama', customUrl: openaiUrl, ...partial }))
+
+    const { status, body } = await patch({ type: 'custom', modelName: 'm1' })
+
+    expect(status).toBe(200)
+    expect(body.modelProvider).toMatchObject({ type: 'custom', modelName: 'm1', customUrl: openaiUrl })
+    expect(body.modelProvider.keys.custom).toEqual(noKeys.custom)
+  })
+
+  it.each([
+    { name: '全局对话', current: { type: 'custom', modelName: 'm1' }, background: null, presets: [] },
+    { name: '全局后台', current: { type: 'ollama', ollamaModel: 'qwen3' }, background: { type: 'custom', modelName: 'm1' }, presets: [] },
+    { name: '角色对话', current: { type: 'ollama', ollamaModel: 'qwen3' }, background: null, presets: [{ modelType: 'custom', summaryModelType: null }] },
+    { name: '角色摘要', current: { type: 'ollama', ollamaModel: 'qwen3' }, background: null, presets: [{ modelType: 'openai', summaryModelType: 'custom' }] },
+  ])('$name 正在使用时清空地址返回 CUSTOM_URL_IN_USE', async row => {
+    getModelProviderConfigMock.mockReturnValue({ ...row.current, customUrl: openaiUrl })
+    getRawBackgroundModelProviderConfigMock.mockReturnValue(row.background)
+    getAllPresetsMock.mockReturnValue(row.presets)
+
+    const { status, body } = await patch({ customUrl: '' })
+
+    expect(status).toBe(400)
+    expect(body.code).toBe('CUSTOM_URL_IN_USE')
+    expect(updateModelProviderConfigMock).not.toHaveBeenCalled()
+  })
+
+  it('新填的 customApiKey 用 custom 列表实测', async () => {
+    getModelProviderConfigMock.mockReturnValue({ type: 'ollama', ollamaModel: 'qwen3', customUrl: openaiUrl })
+    listProviderModelsMock.mockResolvedValue({ models: [], code: 'API_KEY_INVALID' })
+
+    const { status, body } = await patch({ customApiKey: 'custom-key-123' })
+
+    expect(status).toBe(400)
+    expect(body.code).toBe('API_KEY_INVALID')
+    expect(listProviderModelsMock).toHaveBeenCalledWith('custom', expect.objectContaining({ customApiKey: 'custom-key-123' }))
   })
 })

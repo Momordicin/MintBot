@@ -1154,7 +1154,7 @@ describe('POST /chat — max_tokens 配置入口（Fix 2）', () => {
     }
   })
 
-  it('未配置 maxTokens 时，透传 undefined（各 ModelProvider 调用点自行回落到既有默认值 1000，行为不变）', async () => {
+  it('未配置 maxTokens 时，透传 undefined（各 ModelProvider 调用点自行回落到既有默认值 16000，行为不变）', async () => {
     loadSession('p1')
     const completeSyncMock = vi.fn(async () => '嗯嗯')
     const createSpy = vi.spyOn(ModelProviderModule, 'createModelProviderForPreset')

@@ -111,6 +111,7 @@ interface ApiKeyFieldProps {
   onCommit?: (key: string) => Promise<string | null>
   onTest: () => Promise<ApiKeyTestResult>
   canTestWithoutKey?: boolean
+  checkKeyLength?: boolean
   secondRow?: ReactNode
   editAction?: ReactNode
   notice?: string
@@ -119,7 +120,7 @@ interface ApiKeyFieldProps {
 
 export function ApiKeyField({
   label, summary, keyStatus = 'ready', keyInput, onKeyInputChange, editing, onEditingChange, env, emptyPlaceholder,
-  onCommit, onTest, canTestWithoutKey = false, secondRow, editAction, notice, compact = false,
+  onCommit, onTest, canTestWithoutKey = false, checkKeyLength = true, secondRow, editAction, notice, compact = false,
 }: ApiKeyFieldProps) {
   const { t } = useTranslation()
   const inputId = useId()
@@ -190,7 +191,7 @@ export function ApiKeyField({
       return
     }
     if (fromBlur && trimmed === failedKeyRef.current) return
-    if (trimmed.length < MIN_KEY_LENGTH) {
+    if (checkKeyLength && trimmed.length < MIN_KEY_LENGTH) {
       setLengthError(true)
       return
     }

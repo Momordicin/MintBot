@@ -39,11 +39,12 @@ afterEach(() => {
 })
 
 describe('getPresetApiKeys / upsertPresetApiKey', () => {
-  it('没有任何行时三家都返回无 key、fromEnv 为 false', () => {
+  it('没有任何行时各提供方都返回无 key、fromEnv 为 false', () => {
     expect(getPresetApiKeys('p1')).toEqual({
       anthropic: { fromEnv: false, summaryFromEnv: false },
       openai: { fromEnv: false, summaryFromEnv: false },
       deepseek: { fromEnv: false, summaryFromEnv: false },
+      custom: { fromEnv: false, summaryFromEnv: false },
     })
   })
 

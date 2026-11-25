@@ -14,6 +14,7 @@ import { presetRoutes, WALLPAPER_DIR } from './presets.js'
 import { buildStatePayload } from '../state.js'
 import * as BroadcastModule from '../events/broadcast.js'
 import { isEnvCredentialDetected } from '../providers/envCredentials.js'
+import { getModelProviderConfig } from '../config/index.js'
 
 vi.mock('../providers/envCredentials.js', async importOriginal => {
   const actual = await importOriginal<typeof import('../providers/envCredentials.js')>()
@@ -1254,6 +1255,7 @@ describe('GET /presets/:presetId/model-keys', () => {
       anthropic: { hasKey: false, last4: null, fromEnv: true, summary: { hasKey: false, last4: null, fromEnv: false } },
       openai: { hasKey: true, last4: '7890', fromEnv: false, summary: { hasKey: false, last4: null, fromEnv: false } },
       deepseek: { hasKey: true, last4: null, fromEnv: false, summary: { hasKey: false, last4: null, fromEnv: false } },
+      custom: { hasKey: false, last4: null, fromEnv: false, summary: { hasKey: false, last4: null, fromEnv: false } },
     })
     expect(response.payload).not.toContain('sk-openai-1234567890')
     expect(response.payload).not.toContain('short')
@@ -1484,6 +1486,7 @@ describe('角色摘要模型与摘要 key', () => {
       anthropic: { hasKey: false, last4: null, fromEnv: false, summary: { hasKey: false, last4: null, fromEnv: false } },
       openai: { hasKey: true, last4: '-key', fromEnv: false, summary: { hasKey: true, last4: '7890', fromEnv: true } },
       deepseek: { hasKey: false, last4: null, fromEnv: false, summary: { hasKey: true, last4: null, fromEnv: false } },
+      custom: { hasKey: false, last4: null, fromEnv: false, summary: { hasKey: false, last4: null, fromEnv: false } },
     })
     expect(response.payload).not.toContain('sk-summary-1234567890')
     expect(response.payload).not.toContain('sk-chat-key')
@@ -1721,5 +1724,43 @@ describe('PATCH /presets/:presetId — 错误文案', () => {
     for (const field of ['name', 'displayConfig', 'systemPrompt', 'modelType', 'modelName', 'apiKey', 'apiKeyFromEnv', 'summaryModelType', 'summaryModelName', 'summaryApiKey', 'summaryApiKeyFromEnv']) {
       expect(message).toContain(field)
     }
+  })
+})
+
+describe('PATCH /presets/:presetId — 自定义服务', () => {
+  async function patch(payload: Record<string, unknown>) {
+    const fastify = await buildTestApp()
+    const response = await fastify.inject({ method: 'PATCH', url: '/presets/p1', payload })
+    return { status: response.statusCode, body: JSON.parse(response.payload) }
+  }
+
+  beforeEach(() => {
+    db.exec(`DELETE FROM PresetApiKeys`)
+    vi.mocked(getModelProviderConfig).mockReturnValue({ type: 'ollama', customUrl: 'http://100.1.2.3:8080/v1/chat/completions' })
+  })
+
+  afterEach(() => {
+    vi.mocked(getModelProviderConfig).mockReturnValue({ type: 'ollama' })
+  })
+
+  it.each([
+    { name: '对话', payload: { modelType: 'custom', modelName: 'm1' } },
+    { name: '摘要', payload: { modelType: 'openai', modelName: 'gpt-4o', apiKey: 'sk-role-openai', summaryModelType: 'custom', summaryModelName: 'm1' } },
+  ])('全局未保存地址时角色选 custom（$name）返回 CUSTOM_URL_MISSING，不写入', async row => {
+    vi.mocked(getModelProviderConfig).mockReturnValue({ type: 'ollama' })
+
+    const { status, body } = await patch(row.payload)
+
+    expect(status).toBe(400)
+    expect(body.code).toBe('CUSTOM_URL_MISSING')
+    expect(getPresetById('p1')!.modelType).toBe('ollama')
+  })
+
+  it('全局已保存地址时角色选 custom 成功，对话与摘要 key 写入 provider=custom', async () => {
+    const { status } = await patch({ modelType: 'custom', modelName: 'm1', apiKey: ' role-key-123 ', summaryModelType: 'custom', summaryModelName: 'm2', summaryApiKey: 'role-sum-123' })
+
+    expect(status).toBe(200)
+    expect(getPresetById('p1')!.modelType).toBe('custom')
+    expect(getPresetApiKeys('p1').custom).toEqual({ apiKey: 'role-key-123', fromEnv: false, summaryApiKey: 'role-sum-123', summaryFromEnv: false })
   })
 })

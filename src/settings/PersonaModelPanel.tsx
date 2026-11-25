@@ -21,7 +21,9 @@ interface ModelRowProps {
   modelName: string
   presetId?: string
   purpose?: 'summary'
-  keyProvider: KeyProvider | null
+  customAvailable: boolean
+  error: string | null
+  keyProvider: KeyProvider | 'custom' | null
   keySummary: ApiKeySummary
   envDetected: boolean
   fromEnv: boolean
@@ -37,10 +39,11 @@ interface ModelRowProps {
 }
 
 function ModelRow({
-  label, type, modelName, presetId, purpose, keyProvider, keySummary, envDetected, fromEnv, keyInput, keyEditing,
+  label, type, modelName, presetId, purpose, customAvailable, error, keyProvider, keySummary, envDetected, fromEnv, keyInput, keyEditing,
   keyStatus, envStatus, onTypeChange, onModelNameChange, onKeyInputChange, onKeyEditingChange, onFromEnvChange,
 }: ModelRowProps) {
   const { t, i18n } = useTranslation()
+  const envKeyProvider = keyProvider !== null && keyProvider !== 'custom' ? keyProvider : null
 
   const testKey = async (): Promise<ApiKeyTestResult> => {
     const typed = keyInput.trim()
@@ -51,7 +54,7 @@ function ModelRow({
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ type, apiKey: typed }),
           })
-        : await fetch(`${CORE_URL}/models?type=${type}${presetId ? `&presetId=${encodeURIComponent(presetId)}` : ''}${purpose ? `&purpose=${purpose}` : ''}&fromEnv=${fromEnv ? 1 : 0}`)
+        : await fetch(`${CORE_URL}/models?type=${type}${presetId ? `&presetId=${encodeURIComponent(presetId)}` : ''}${purpose ? `&purpose=${purpose}` : ''}${envKeyProvider ? `&fromEnv=${fromEnv ? 1 : 0}` : ''}`)
       if (!response.ok) return { ok: false, reason: `HTTP ${response.status}` }
       const body: unknown = await response.json()
       return isErrorBody(body) ? { ok: false, reason: errorText(body, i18n.t) } : { ok: true }
@@ -70,6 +73,7 @@ function ModelRow({
           <option value="openai">OpenAI</option>
           <option value="deepseek">DeepSeek</option>
           <option value="ollama">Ollama</option>
+          {customAvailable && <option value="custom">{t('自定义服务')}</option>}
         </select>
       </div>
       <ModelNameField
@@ -79,7 +83,7 @@ function ModelRow({
         apiKey={keyProvider ? keyInput.trim() : ''}
         presetId={presetId}
         purpose={purpose}
-        fromEnv={keyProvider !== null ? fromEnv : undefined}
+        fromEnv={envKeyProvider !== null ? fromEnv : undefined}
         onChange={onModelNameChange}
       />
       {keyProvider && (
@@ -91,12 +95,13 @@ function ModelRow({
           onKeyInputChange={onKeyInputChange}
           editing={keyEditing}
           onEditingChange={onKeyEditingChange}
-          env={{ envVar: ENV_VAR[keyProvider], detected: envDetected, fromEnv, status: envStatus, onChange: onFromEnvChange }}
+          env={envKeyProvider ? { envVar: ENV_VAR[envKeyProvider], detected: envDetected, fromEnv, status: envStatus, onChange: onFromEnvChange } : undefined}
           onTest={testKey}
         />
       )}
     </div>
-    {purpose === 'summary' && type === 'ollama' && (
+    {error !== null && <div className="character-panel__error">{error}</div>}
+    {purpose === 'summary' && (type === 'ollama' || type === 'custom') && (
       <div className="character-panel__hint">{t('内容较多或较复杂的整理建议使用线上模型')}</div>
     )}
     </>
@@ -113,7 +118,8 @@ export function PersonaModelPanel({ panel }: PersonaModelPanelProps) {
     setOverrideKeyEditing, handleOverrideFromEnvChange, overrideKeysReady, modelKeysStatus, envStatus, retryModelKeys,
     loadEnvDetected, summarySameAsChat, setSummarySameAsChat, summaryModelType, summaryModelName, setSummaryModelName,
     handleSummaryModelTypeChange, summaryKeyProvider, summaryKeySummary, summaryEnvDetected, summaryFromEnv,
-    summaryKeyInput, setSummaryKeyInput, summaryKeyEditing, setSummaryKeyEditing, handleSummaryFromEnvChange, modelOverrideNotice, handleSystemPromptEditStart, handleSystemPromptEditCancel, handleSystemPromptSaveClick,
+    summaryKeyInput, setSummaryKeyInput, summaryKeyEditing, setSummaryKeyEditing, handleSummaryFromEnvChange, modelOverrideNotice,
+    customUrlSaved, modelRowError, handleSystemPromptEditStart, handleSystemPromptEditCancel, handleSystemPromptSaveClick,
     handleSystemPromptConfirmSaveCancel, handleSystemPromptConfirmSaveConfirm, handleSystemPromptConfirmApplyCancel,
     handleSystemPromptSend, handleModelOverrideEditStart, handleModelOverrideEditCancel,
     handleModelOverrideSaveClick, handleModelOverrideChooseApplyCancel, handleModelOverrideSend,
@@ -202,6 +208,8 @@ export function PersonaModelPanel({ panel }: PersonaModelPanelProps) {
                     type={overrideModelType}
                     modelName={overrideModelName}
                     presetId={presetSnapshot?.presetId}
+                    customAvailable={customUrlSaved || presetSnapshot?.modelType === 'custom'}
+                    error={modelRowError?.row === 'chat' ? modelRowError.text : null}
                     keyProvider={overrideKeyProvider}
                     keySummary={overrideKeySummary}
                     envDetected={overrideEnvDetected}
@@ -231,6 +239,8 @@ export function PersonaModelPanel({ panel }: PersonaModelPanelProps) {
                       modelName={summaryModelName}
                       presetId={presetSnapshot?.presetId}
                       purpose="summary"
+                      customAvailable={customUrlSaved || presetSnapshot?.summaryModelType === 'custom'}
+                      error={modelRowError?.row === 'summary' ? modelRowError.text : null}
                       keyProvider={summaryKeyProvider}
                       keySummary={summaryKeySummary}
                       envDetected={summaryEnvDetected}

@@ -5,7 +5,7 @@ import { db, checkpointTruncate } from '../db/index.js'
 import { DEFAULT_DISPLAY_CONFIG, parseDisplayConfig } from './displayConfig.js'
 import type { Message, Session, Preset, PresetSnapshot, MessageEntity, Summary, EmotionState, PresetDisplayConfig } from '../../../shared/types/index.js'
 
-export type PresetKeyProvider = 'anthropic' | 'openai' | 'deepseek'
+export type PresetKeyProvider = 'anthropic' | 'openai' | 'deepseek' | 'custom'
 
 export interface PresetProviderCredential {
   apiKey?: string
@@ -24,14 +24,14 @@ export interface PresetApiKeyUpdate {
   summaryFromEnv?: boolean
 }
 
-export type PresetModelType = 'anthropic' | 'openai' | 'ollama' | 'deepseek'
+export type PresetModelType = 'anthropic' | 'openai' | 'ollama' | 'deepseek' | 'custom'
 
 export interface PresetSummaryUpdate {
   model?: { modelType: PresetModelType | null; modelName: string | null }
   keyUpdate?: PresetApiKeyUpdate
 }
 
-const KEY_PROVIDER_LIST: readonly PresetKeyProvider[] = ['anthropic', 'openai', 'deepseek']
+const KEY_PROVIDER_LIST: readonly PresetKeyProvider[] = ['anthropic', 'openai', 'deepseek', 'custom']
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every(item => typeof item === 'string')
@@ -148,6 +148,7 @@ export function getPresetApiKeys(presetId: string): PresetCredentials {
     anthropic: { fromEnv: false, summaryFromEnv: false },
     openai: { fromEnv: false, summaryFromEnv: false },
     deepseek: { fromEnv: false, summaryFromEnv: false },
+    custom: { fromEnv: false, summaryFromEnv: false },
   }
   const rows = db.prepare(`SELECT provider, apiKey, fromEnv, summaryApiKey, summaryFromEnv FROM PresetApiKeys WHERE presetId = ?`)
     .all(presetId) as { provider: string; apiKey: string | null; fromEnv: number; summaryApiKey: string | null; summaryFromEnv: number }[]
